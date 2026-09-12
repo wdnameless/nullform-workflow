@@ -5,11 +5,19 @@ requirements traceability, 60+ skills, curated MCP fleet, shared Hindsight memor
 and a single Nullform model gateway. Battle-tested, with an autopilot-derived
 execution protocol (context ceilings, handoffs, blind acceptance).
 
-## One-command install (Windows)
+## One-line deploy (Windows)
+
 
 ```powershell
-git clone <this-repo> ; cd omp-paseo-nullform-workflow
-copy secrets.example.env secrets.env   # fill in your keys first (or be prompted)
+powershell -ExecutionPolicy Bypass -Command "git clone https://github.com/wdnameless/omp-paseo-nullform-workflow.git $env:USERPROFILE\nullform-workflow; & $env:USERPROFILE\nullform-workflow\install.ps1"
+```
+
+Installs the full harness (deps check, secrets prompt, all files, junction, Paseo profile). Afterwards: `verify.ps1` from the same folder.
+
+## One-command install (from a clone)
+
+```powershell
+copy secrets.example.env secrets.env   # fill keys, or be prompted by installer
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
