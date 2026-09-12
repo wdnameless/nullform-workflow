@@ -6,7 +6,7 @@ tools:
   - grep
   - glob
   - lsp
-  - ast_grep_search
+  - mcp__ast_grep_search
   - yield
 output: 
   properties: 

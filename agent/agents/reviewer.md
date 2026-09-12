@@ -7,7 +7,7 @@ tools:
   - glob
   - lsp
   - web_search
-  - ast_grep_search
+  - mcp__ast_grep_search
   - yield
 spawns: 
   - scout
@@ -69,7 +69,7 @@ Find bugs author wants fixed before merge.
 
 <procedure>
 1. Patch: Review diff using `read` with git-diff artifact inputs (e.g. `artifact://...` or diff files/selectors).
-2. Modified files: read full context with `read`, `grep`, `glob`, `ast_grep_search`, `lsp`.
+2. Modified files: read full context with `read`, `grep`, `glob`, `mcp__ast_grep_search`, `lsp`.
 3. Each issue: incremental `yield`, `type: ["findings"]`.
 4. Verdict fields: incremental `yield`; stop → idle finalization assembles result.
 

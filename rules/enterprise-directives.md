@@ -1,3 +1,7 @@
+---
+description: "On-demand enterprise directives: vertical-slice architecture, enterprise git/PR isolation protocol, dynamic port allocation, reproducible DB migrations, visual QA timing, secrets redaction gate. Read before git branch/PR work, DB schema changes, dev-server startup, Playwright screenshots, or new external deps."
+---
+
 # Enterprise Engineering Directives & Core Architectural Philosophy
 
 > On-demand rule. The orchestrator reads this when the task touches: DB schema, git branch/PR workflow, dev-server ports, Playwright screenshots, or new external dependencies. Not auto-loaded into sessions.

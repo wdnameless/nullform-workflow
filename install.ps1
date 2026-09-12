@@ -4,6 +4,14 @@
   Nullform Workflow — one-command installer (Windows).
   Installs the OMP+Paseo orchestration harness: agent definitions, skills, rules,
   MCP configs, Paseo profile, and cost tool.
+
+  Paths are OMP-native on purpose. OMP reads MCP and models from the agent dir:
+    ~/.omp/agent/mcp.json        (MCP servers)
+    ~/.omp/agent/models.yml      (providers/models)
+    ~/.omp/agent/agents/*.md     (task agents, via junction to the harness root)
+    ~/.omp/agent/rules/*.md      (rules, addressable as rule://<name>)
+    ~/.omp/agent/AGENTS.md       (orchestrator law, auto-loaded user context)
+    ~/.agents/skills/*/SKILL.md  (skills, agents provider)
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File install.ps1
   powershell -ExecutionPolicy Bypass -File install.ps1 -SecretsFile .\secrets.env -HarnessRoot D:\ohmypi
@@ -50,34 +58,89 @@ foreach ($k in 'NULLFORM_GATEWAY_KEY', 'HINDSIGHT_TOKEN', 'CRAWL4AI_TOKEN', 'GOO
   }
 }
 function Patch([string]$text) {
-  return $text.Replace('__NULLFORM_GATEWAY_KEY__', $secrets['NULLFORM_GATEWAY_KEY']) `
-              .Replace('__HINDSIGHT_TOKEN__', $secrets['HINDSIGHT_TOKEN']) `
-              .Replace('__CRAWL4AI_TOKEN__', $secrets['CRAWL4AI_TOKEN']) `
-              .Replace('__GOOGLE_AI_STUDIO_KEY__', $secrets['GOOGLE_AI_STUDIO_KEY'])
+  $text = $text.Replace('__NULLFORM_GATEWAY_KEY__', $secrets['NULLFORM_GATEWAY_KEY'])
+  $text = $text.Replace('__HINDSIGHT_TOKEN__', $secrets['HINDSIGHT_TOKEN'])
+  $text = $text.Replace('__CRAWL4AI_TOKEN__', $secrets['CRAWL4AI_TOKEN'])
+  $text = $text.Replace('__GOOGLE_AI_STUDIO_KEY__', $secrets['GOOGLE_AI_STUDIO_KEY'])
+  return $text
+}
+# UTF8 without BOM: a BOM makes the first YAML/JSON key unparsable.
+$script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+function WriteText([string]$path, [string]$text) {
+  [System.IO.File]::WriteAllText($path, $text, $script:Utf8NoBom)
 }
 
 # ---------- 3. Files ----------
 Write-Host "-- Installing files"
-$dirs = @("$HarnessRoot\agent", "$HarnessRoot\mcp", "$HarnessRoot\tools",
-          "$HOME\.omp\agent", "$HOME\.agents\skills", "$HOME\.agents\rules",
-          "$HOME\.local\share\opencode")
+$agentDir = "$HOME\.omp\agent"
+$dirs = @("$HarnessRoot\agent", "$HarnessRoot\agent\agents", "$HarnessRoot\tools",
+          $agentDir, "$agentDir\rules", "$HOME\.agents\skills")
 $dirs | ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }
 
 Copy-Item "$PSScriptRoot\agent\AGENTS.md" "$HarnessRoot\agent\AGENTS.md" -Force
+Copy-Item "$PSScriptRoot\agent\AGENTS.md" "$agentDir\AGENTS.md" -Force
 Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
-Copy-Item "$PSScriptRoot\skills\*" "$HOME\.agents\skills\" -Force -Recurse
-Copy-Item "$PSScriptRoot\rules\*" "$HOME\.agents\rules\" -Force -Recurse
-Copy-Item "$PSScriptRoot\mcp\*" "$HarnessRoot\mcp\" -Force -Recurse
 Copy-Item "$PSScriptRoot\tools\*" "$HarnessRoot\tools\" -Force -Recurse
-Ok "agent defs, skills, rules, mcp helpers, tools copied"
 
-(Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw)) | Set-Content "$HarnessRoot\agent\models.yml" -Encoding UTF8
-(Patch (Get-Content "$PSScriptRoot\agent\mcp.json.example" -Raw)) | Set-Content "$HarnessRoot\agent\mcp.json" -Encoding UTF8
-(Patch (Get-Content "$PSScriptRoot\agent\opencode-auth.json.example" -Raw)) | Set-Content "$HOME\.local\share\opencode\auth.json" -Encoding UTF8
-Ok "models.yml, mcp.json, opencode auth patched with secrets"
+# Skills: skip marketplace-lock-managed skills so the install does not desync ~/.agents/.skill-lock.json.
+$lockPath = "$HOME\.agents\.skill-lock.json"
+$skipSkills = @()
+if (Test-Path $lockPath) {
+  # A lock entry alone is not proof of an installed skill: skip only when the
+  # locked skill is actually present, or a locked-but-missing skill is dropped.
+  $lockPathLocal = $lockPath
+  $lockedNames = @((Get-Content $lockPathLocal -Raw -Encoding UTF8 | ConvertFrom-Json).skills.PSObject.Properties.Name)
+  $skipSkills = @($lockedNames | Where-Object { Test-Path "$HOME\.agents\skills\$_\SKILL.md" })
+}
+$copied = 0; $skipped = @()
+Get-ChildItem "$PSScriptRoot\skills" -Directory | ForEach-Object {
+  if ($skipSkills -contains $_.Name) { $skipped += $_.Name; return }
+  Copy-Item $_.FullName "$HOME\.agents\skills\" -Force -Recurse
+  $script:copied++
+}
+Ok "agent defs, skills ($copied copied$(if ($skipped) { ", $(($skipped).Count) lock-managed skipped: $($skipped -join ', ')" })), tools copied"
 
-if (-not (Test-Path "$HOME\.omp\agent\config.yml")) {
-  Copy-Item "$PSScriptRoot\agent\config.yml" "$HOME\.omp\agent\config.yml"
+# Rule -> native user rules dir (highest-priority source; resolvable as rule://<name>).
+Copy-Item "$PSScriptRoot\rules\*" "$agentDir\rules\" -Force -Recurse
+Ok "rules -> $agentDir\rules"
+
+# models.yml: MUST be map-form (providers.<id>) or the provider registers under the
+# first model-id segment instead of its declared name, breaking every role selector.
+$models = Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw)
+WriteText "$agentDir\models.yml" $models
+Ok "models.yml -> $agentDir\models.yml"
+
+# mcp.json
+$mcp = Patch (Get-Content "$PSScriptRoot\agent\mcp.json.example" -Raw)
+if (-not $secrets['HINDSIGHT_TOKEN']) {
+  # Drop the empty bearer header entirely; sending "Bearer " is worse than no header.
+  $mcpObj = $mcp | ConvertFrom-Json
+  $mcpObj.mcpServers.hindsight.headers.PSObject.Properties.Remove('Authorization')
+  $mcp = $mcpObj | ConvertTo-Json -Depth 30
+  Warn "HINDSIGHT_TOKEN empty -> hindsight Authorization header omitted"
+}
+if (-not $secrets['CRAWL4AI_TOKEN']) {
+  # Same reasoning as hindsight: never send an empty "Bearer " header.
+  $mcpObj = $mcp | ConvertFrom-Json
+  $mcpObj.mcpServers.crawl4ai.headers.PSObject.Properties.Remove('Authorization')
+  $mcp = $mcpObj | ConvertTo-Json -Depth 30
+  Warn "CRAWL4AI_TOKEN empty -> crawl4ai Authorization header omitted (endpoint still requires auth; set the token and re-run)"
+}
+WriteText "$agentDir\mcp.json" $mcp
+Ok "mcp.json -> $agentDir\mcp.json"
+
+# OpenCode auth is only written when the key is real; an empty key would break OpenCode's Google auth.
+if ($secrets['GOOGLE_AI_STUDIO_KEY']) {
+  $authDir = "$HOME\.local\share\opencode"
+  New-Item -ItemType Directory -Force -Path $authDir | Out-Null
+  WriteText "$authDir\auth.json" (Patch (Get-Content "$PSScriptRoot\agent\opencode-auth.json.example" -Raw))
+  Ok "opencode auth.json written"
+} else {
+  Warn "GOOGLE_AI_STUDIO_KEY empty -> opencode auth.json not written (left untouched)"
+}
+
+if (-not (Test-Path "$agentDir\config.yml")) {
+  Copy-Item "$PSScriptRoot\agent\config.yml" "$agentDir\config.yml"
   Ok "config.yml installed (fresh)"
 } else {
   Warn "config.yml exists -> left untouched (merge by hand if needed)"
@@ -85,7 +148,7 @@ if (-not (Test-Path "$HOME\.omp\agent\config.yml")) {
 
 # ---------- 4. Junction: single source for agent defs ----------
 Write-Host "-- Agent defs junction"
-$junction = "$HOME\.omp\agent\agents"
+$junction = "$agentDir\agents"
 if (Test-Path $junction) {
   $item = Get-Item $junction -Force
   if ($item.LinkType -eq 'Junction') { Ok "junction already present" }
@@ -100,11 +163,17 @@ if (-not $SkipPaseo -and (Get-Command paseo -ErrorAction SilentlyContinue)) {
   Write-Host "-- Paseo profile"
   $paseoCfg = "$HOME\.paseo\config.json"
   if (Test-Path $paseoCfg) {
-    $cfg = Get-Content $paseoCfg -Raw | ConvertFrom-Json
-    $profiles = Get-Content "$PSScriptRoot\paseo\profiles.json" -Raw | ConvertFrom-Json
+    Copy-Item $paseoCfg "$paseoCfg.nullform-backup" -Force
+    # -Encoding UTF8 is required: the default ANSI read mangles the non-ASCII
+    # lane glyphs in the profile notes and the daemon system prompt.
+    $cfg = Get-Content $paseoCfg -Raw -Encoding UTF8 | ConvertFrom-Json
+    # PS 5.1 ConvertFrom-Json returns an array that Add-Member/ConvertTo-Json
+    # re-wraps as {"value":[...],"Count":N}; copy into a plain array first.
+    $profiles = @()
+    Get-Content "$PSScriptRoot\paseo\profiles.json" -Raw -Encoding UTF8 | ConvertFrom-Json | ForEach-Object { $profiles += $_ }
     if (-not $cfg.daemon) { $cfg | Add-Member -NotePropertyName daemon -NotePropertyValue ([pscustomobject]@{}) }
     $cfg.daemon | Add-Member -NotePropertyName agentProfiles -NotePropertyValue $profiles -Force
-    $cfg | ConvertTo-Json -Depth 30 | Set-Content $paseoCfg -Encoding UTF8
+    WriteText $paseoCfg ($cfg | ConvertTo-Json -Depth 30)
     try { & paseo daemon reload | Out-Null; Ok "profile 'Orchestrator' installed + daemon reloaded" }
     catch { Warn "profile written; run 'paseo daemon reload' manually" }
   } else { Warn "~/.paseo/config.json not found -> install Paseo first, then re-run" }

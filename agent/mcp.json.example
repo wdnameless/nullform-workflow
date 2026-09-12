@@ -9,16 +9,6 @@
       ],
       "env": {}
     },
-    "playwright": {
-      "command": "cmd.exe",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@executeautomation/playwright-mcp-server"
-      ],
-      "env": {}
-    },
     "ast-grep": {
       "command": "cmd.exe",
       "args": [
@@ -41,7 +31,7 @@
       "command": "cmd.exe",
       "args": [
         "/c",
-        "C:/Users/Administrator/AppData/Local/hermes/node/codegraph.cmd",
+        "codegraph",
         "serve",
         "--mcp"
       ],

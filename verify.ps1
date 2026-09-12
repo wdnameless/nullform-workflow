@@ -14,22 +14,82 @@ function Check($name, [scriptblock]$test) {
   catch { $script:results += [pscustomobject]@{ Check = $name; Result = 'FAIL'; Detail = $_.Exception.Message } }
 }
 
+$agentDir = "$HOME\.omp\agent"
 Write-Host "`n=== Nullform Workflow verification ===`n"
 
 Check 'openspec installed' { (& openspec --version) -match '^\d+\.' }
 Check 'skills registry (>= 50)' { (Get-ChildItem "$HOME\.agents\skills" -Directory).Count -ge 50 }
-Check 'agent defs junction/copies' { (Get-ChildItem "$HarnessRoot\agent\agents" -Filter *.md).Count -ge 10 }
-Check 'rules present' { Test-Path "$HOME\.agents\rules\enterprise-directives.md" }
-Check 'mcp.json valid + 8 servers' {
-  $m = Get-Content "$HarnessRoot\agent\mcp.json" -Raw | ConvertFrom-Json
-  ($m.mcpServers.PSObject.Properties.Name).Count -ge 8
+Check 'agent defs junction/copies' {
+  $n = (Get-ChildItem "$agentDir\agents" -Filter *.md -ErrorAction SilentlyContinue).Count
+  $n -ge 10
 }
-Check 'models.yml valid, no placeholders' {
-  $y = Get-Content "$HarnessRoot\agent\models.yml" -Raw
-  ($y -notmatch '__NULLFORM_GATEWAY_KEY__') -and ($y -match 'nullform-gateway')
+# OMP rejects an agent file without `description`; the file is skipped entirely,
+# so a missing description silently removes an agent from the roster.
+Check 'agent defs parse (name + description on every file)' {
+  $bad = @()
+  Get-ChildItem "$agentDir\agents" -Filter *.md -ErrorAction SilentlyContinue | ForEach-Object {
+    $head = (Get-Content $_.FullName -TotalCount 6) -join "`n"
+    if ($head -notmatch '(?m)^name:' -or $head -notmatch '(?m)^description:') { $bad += $_.Name }
+  }
+  if ($bad.Count) { throw "missing name/description: $($bad -join ', ')" }
+  $true
+}
+# A description opened with a quote but not closed makes the whole SKILL.md
+# frontmatter unparsable, so the skill is dropped from the registry.
+Check 'skills frontmatter valid (no unclosed quote)' {
+  $bad = @()
+  Get-ChildItem "$HOME\.agents\skills" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    $f = Join-Path $_.FullName 'SKILL.md'
+    if (-not (Test-Path $f)) { return }
+    $line = (Get-Content $f -TotalCount 12 -ErrorAction SilentlyContinue) |
+            Where-Object { $_ -match '^description:' } | Select-Object -First 1
+    if ($line) {
+      $v = $line.Substring($line.IndexOf(':') + 1).Trim()
+      if ($v.StartsWith('"') -and -not $v.EndsWith('"')) { $bad += $_.Name }
+    }
+  }
+  if ($bad.Count) { throw "unclosed description quote: $($bad -join ', ')" }
+  $true
+}
+# Catches a config copied from another machine (a hardcoded tool path that does
+# not exist here), which makes that MCP server silently never connect.
+Check 'mcp stdio commands resolvable' {
+  $m = Get-Content "$agentDir\mcp.json" -Raw | ConvertFrom-Json
+  $bad = @()
+  foreach ($p in $m.mcpServers.PSObject.Properties) {
+    $s = $p.Value
+    if ($s.url) { continue }
+    $bin = $s.args | Where-Object { $_ -notmatch '^/' -and $_ -notmatch '^-' } | Select-Object -First 1
+    if (-not $bin) { continue }
+    if (-not (Get-Command $bin -ErrorAction SilentlyContinue) -and -not (Test-Path $bin)) { $bad += "$($p.Name):$bin" }
+  }
+  if ($bad.Count) { throw "not found: $($bad -join ', ')" }
+  $true
+}
+Check 'rules present + addressable (description frontmatter)' {
+  $p = "$agentDir\rules\enterprise-directives.md"
+  (Test-Path $p) -and ((Get-Content $p -TotalCount 3) -match 'description:')
+}
+Check 'mcp.json valid + 7 servers' {
+  $m = Get-Content "$agentDir\mcp.json" -Raw | ConvertFrom-Json
+  ($m.mcpServers.PSObject.Properties.Name).Count -ge 7
+}
+# Map-form matters: list-form registers the provider under the first model-id segment,
+# so role selectors like nullform-gateway/... stop resolving.
+Check 'models.yml map-form, no placeholders, provider id intact' {
+  $y = Get-Content "$agentDir\models.yml" -Raw
+  ($y -notmatch '__NULLFORM_GATEWAY_KEY__') -and ($y -match 'nullform-gateway:')
+}
+Check 'models.yml resolves declared provider (live registry)' {
+  # Invoke the .cmd shim: PowerShell resolves `omp` to omp.ps1, which calls a
+  # bun.exe that does not exist next to it, so a bare `& omp` always fails.
+  $omp = Join-Path $env:APPDATA 'npm\omp.cmd'
+  if (-not (Test-Path $omp)) { $omp = 'omp.cmd' }
+  $out = & cmd.exe /c "`"$omp`" models find nullform-gateway" 2>&1 | Out-String
+  $out -match 'nullform-gateway'
 }
 Check 'session_cost selftest' {
-  $out = & python "$HarnessRoot\tools\session_cost.py" --selftest 2>&1
+  $out = & python "$HarnessRoot\tools\session_cost.py" --selftest 2>&1 | Out-String
   $LASTEXITCODE -eq 0 -and ($out -match '7/7')
 }
 Check 'hindsight memory health (200)' {
@@ -42,15 +102,51 @@ Check 'crawl4ai MCP endpoint (200/401)' {
   } catch { $_.Exception.Response.StatusCode.value__ -eq 401 }
 }
 Check 'gateway models list (200)' {
-  $key = (Select-String -Path "$HarnessRoot\agent\models.yml" -Pattern 'apiKey:\s*(\S+)' | Select-Object -First 1).Matches.Groups[1].Value
+  $key = (Select-String -Path "$agentDir\models.yml" -Pattern 'apiKey:\s*(\S+)' | Select-Object -First 1).Matches.Groups[1].Value
   (Invoke-WebRequest -UseBasicParsing -Uri 'https://ai-gateway.nullform.cv/v1/models' -Headers @{ Authorization = "Bearer $key" } -TimeoutSec 20).StatusCode -eq 200
 }
 Check 'grill chain (grill-me + grilling)' {
   (Test-Path "$HOME\.agents\skills\grill-me\SKILL.md") -and (Test-Path "$HOME\.agents\skills\grilling\SKILL.md")
 }
-Check 'project-test-safety skill' { Test-Path "$HOME\.agents\skills\project-test-safety\SKILL.md" }
+# Live check: a real session must produce no MCP connection failures. The MCP tool
+# catalog travels in the system prompt (not the transcript), so the observable
+# signal is the absence of `MCP tool load failed` in the session's log.
+Check 'MCP servers connect in a live session (no load failures)' {
+  $omp = Join-Path $env:APPDATA 'npm\omp.cmd'
+  if (-not (Test-Path $omp)) { $omp = 'omp.cmd' }
+  $logDir = "$HOME\.omp\logs"
+  $before = @(Get-ChildItem $logDir -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+  $tmp = Join-Path $env:TEMP ("nf-verify-" + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  try {
+    $prev = Get-Location
+    Set-Location $tmp
+    & cmd.exe /c "`"$omp`" -p --no-session --no-title --model ollama-cloud/deepseek-v4-flash `"say ok`"" 2>&1 | Out-Null
+    Set-Location $prev
+  } finally {
+    Set-Location $env:TEMP
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+  }
+  $new = Get-ChildItem $logDir -Filter *.log -ErrorAction SilentlyContinue |
+         Where-Object { $before -notcontains $_.Name } | Sort-Object LastWriteTime -Descending
+  if (-not $new) { throw 'no new session log written' }
+  $fails = @()
+  foreach ($l in $new) {
+    $m = Select-String -Path $l.FullName -Pattern 'MCP tool load failed' -ErrorAction SilentlyContinue
+    foreach ($hit in $m) {
+      $p = [regex]::Match($hit.Line, '"path":"mcp:([^"]+)"')
+      if ($p.Success) { $fails += $p.Groups[1].Value }
+    }
+  }
+  # No browser MCP server is shipped: OMP's native browser tool covers that, and
+  # OMP suppresses browser MCP servers (filterBrowser) while that tool is active.
+  if ($fails.Count) { throw "failed to load: $(($fails | Sort-Object -Unique) -join ', ')" }
+  'no MCP load failures'
+}
 
 $results | Format-Table -AutoSize
-$fail = ($results | Where-Object Result -eq 'FAIL').Count
+# PS 5.1: a single-object pipeline result is not an array and has no .Count,
+# so `12 - $null` silently reported 12/12 and exited 0 on a real FAIL.
+$fail = @($results | Where-Object { $_.Result -eq 'FAIL' }).Count
 Write-Host ("`n{0}/{1} checks passed" -f ($results.Count - $fail), $results.Count)
-exit $(if ($fail) { 1 } else { 0 })
+exit $(if ($fail -gt 0) { 1 } else { 0 })

@@ -51,7 +51,7 @@ agent/
   agents/              11 role definitions (orchestrator, designer, fixer, oracle, scout, …)
   config.yml           OMP settings (model roles, timeouts, isolation)
   models.yml.example   single provider: nullform-gateway, 28 models, no dupes
-  mcp.json.example     8 MCP servers (hindsight, crawl4ai, codebase-index, playwright,
+  mcp.json.example     7 MCP servers (hindsight, crawl4ai, codebase-index,
                        ast-grep, dap-debugger, codegraph, context7)
 skills/                60+ skills incl. grill-me + grilling, design-taste-frontend,
                        project-test-safety, nullform-workflow-full

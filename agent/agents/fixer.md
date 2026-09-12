@@ -1,7 +1,7 @@
 ---
 name: fixer
 description: "Core logic, backend, algorithm, and TDD specialist"
-tools: [read, edit, write, bash, grep, glob, lsp, ast_grep_search, yield]
+tools: [read, edit, write, bash, grep, glob, lsp, mcp__ast_grep_search, yield]
 model:
   - "@fixer"
 output:
