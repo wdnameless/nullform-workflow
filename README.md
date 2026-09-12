@@ -49,7 +49,6 @@ skills/                60+ skills incl. grill-me + grilling, design-taste-fronte
                        project-test-safety, nullform-workflow-full
 rules/
   enterprise-directives.md   on-demand rule (git/PR, ports, DB, secrets redaction gate)
-mcp/gbrain-lite.ts     optional MCP tool-filter proxy pattern
 tools/session_cost.py  session cost reporter (tokens per model/day; --selftest 7/7)
 paseo/profiles.json    Orchestrator (LEAN) launch profile
 ```
