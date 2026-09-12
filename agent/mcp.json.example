@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json.schemastore.org/mcp-settings.json",
+  "mcpServers": {
+    "codebase-index": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "opencode-codebase-index-mcp"
+      ],
+      "env": {}
+    },
+    "playwright": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@executeautomation/playwright-mcp-server"
+      ],
+      "env": {}
+    },
+    "ast-grep": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "ast-grep-mcp"
+      ],
+      "env": {}
+    },
+    "dap-debugger": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "dap-mcp-server@latest"
+      ],
+      "env": {}
+    },
+    "codegraph": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "C:/Users/Administrator/AppData/Local/hermes/node/codegraph.cmd",
+        "serve",
+        "--mcp"
+      ],
+      "env": {}
+    },
+    "context7": {
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "env": {
+        "CONTEXT7_API_KEY": "ctx7sk-579078d5-366e-4af3-905f-df46fc277c89"
+      }
+    },
+    "hindsight": {
+      "type": "http",
+      "url": "https://memory.88-99-90-19.sslip.io/mcp/",
+      "headers": {
+        "Authorization": "Bearer __HINDSIGHT_TOKEN__"
+      }
+    },
+    "crawl4ai": {
+      "type": "sse",
+      "url": "https://crawl.88-99-90-19.sslip.io/mcp/sse",
+      "headers": {
+        "Authorization": "Bearer __CRAWL4AI_TOKEN__"
+      }
+    }
+  }
+}

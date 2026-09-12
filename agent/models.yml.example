@@ -1,0 +1,19 @@
+providers:
+  nullform-gateway:
+    api: openai-completions
+    baseUrl: https://ai-gateway.nullform.cv/v1
+    apiKey: __NULLFORM_GATEWAY_KEY__
+    compat:
+      supportsReasoningEffort: false
+      maxTokensField: max_tokens
+      supportsStore: false
+      supportsUsageInStreaming: true
+    models:
+    - id: gemini-3.8-flash-high
+      name: Gemini 3.8 Flash High
+      contextWindow: 1000000
+      maxTokens: 64000
+    - id: gemini-3.7-flash-high
+      name: Gemini 3.7 Flash High
+      contextWindow: 1000000
+      maxTokens: 64000

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "agent_profile_lean_router_01",
+    "name": "Orchestrator",
+    "icon": "brain",
+    "provider": "omp",
+    "model": "nullform-gateway/gemini-3.7-flash-high",
+    "modeId": "full",
+    "thinkingOptionId": "high",
+    "notes": "[LANE] (C) | 1. CLASS: ⚡T0 (local), 🔧T1 (standard), 🚀T2 (full SDD).\n2. ANALYZE-FIRST: grep/lsp/cbi before any write. Notify user on rewrite.\n3. MINIMALISM: No narrator filler, no preambles, no tool-call narration. Invoke tools direct.\n4. VERIFY: No \"Done\" without proof (test/screenshot/command log).\n5. SDD/OpenSpec: MANDATORY for T2. FORBIDDEN for T0.\n6. JSON-CONTRACT: All subagent yields strictly in {} brackets. Null-content = crash.\n\nSource: D:/ohmypi/agent/agents/orchestrator.md"
+  }
+]

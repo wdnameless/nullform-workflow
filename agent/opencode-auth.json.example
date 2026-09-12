@@ -1,0 +1,6 @@
+{
+  "google": {
+    "type": "api",
+    "key": "__GOOGLE_AI_STUDIO_KEY__"
+  }
+}
