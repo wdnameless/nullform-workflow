@@ -20,7 +20,7 @@ Full protocol: `D:/ohmypi/agent/agents/orchestrator.md` (single source of truth,
 Every spawn: bounded scope + acceptance criteria + **return contract** (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines, no essays). Hand files by PATH, never paste contents. Context ceiling ~50 tool calls per subagent → HANDOFF protocol. Kill wanderers (`hub cancel`/`paseo stop`). Writers isolated, one owner per file, zones disjoint, read-only roles never edit. On T2+ the orchestrator NEVER writes project code — only specs/manifest/interfaces/git.
 SECRETS: never request credentials; redact pasted keys to `[REDACTED:<VAR>]` before writing any file/prompt; user fills `.env` themselves. A leaked secret = stop + report.
 SESSION BUDGET: if session context exceeds ~200K tokens, retain state to hindsight and ask the user to open a fresh session — never ride a degrading context into the TPM wall.
-task() quirk: never pass `outputSchema: false` (preflight rejects); omit the parameter instead.
+task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST be strict standard JSON Schema with object definitions (e.g. `{"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}`). Pseudo-schemas like `{"properties": {"items": "array"}}` cause PREFLIGHT REJECT. NEVER report subagents as running or done if preflight failed!
 
 ## 5. MEMORY (Hindsight — shared across all user devices)
 - RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>")` — reuse decisions other devices already recorded.
