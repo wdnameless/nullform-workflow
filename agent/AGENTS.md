@@ -23,8 +23,8 @@ SESSION BUDGET: if session context exceeds ~200K tokens, retain state to hindsig
 task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST be strict standard JSON Schema with object definitions (e.g. `{"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}`). Pseudo-schemas like `{"properties": {"items": "array"}}` cause PREFLIGHT REJECT. NEVER report subagents as running or done if preflight failed!
 
 ## 5. MEMORY (Hindsight — shared across all user devices)
-- RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>")` — reuse decisions other devices already recorded.
-- RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions")` — bank `main`.
+- RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>", bank_id="main")` — reuse decisions other devices already recorded. The bank parameter is `bank_id` (NOT `bank`): an unknown parameter is silently ignored and the call falls back to bank `default`, so memories silently scatter across banks.
+- RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions", bank_id="main")` — always pass `bank_id`, never `bank`.
 ---
 
 # ON-DEMAND RULES (read only when the task touches the topic)
