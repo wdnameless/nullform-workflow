@@ -2,9 +2,9 @@ providers:
   streamFirstEventTimeoutSeconds: 120
   streamIdleTimeoutSeconds: 180
   webSearchOrder:
-    - brave
-    - google
-    - tavily
+  - brave
+  - google
+  - tavily
 modelRoles:
   default: nullform-gateway/gemini-3.8-flash-high
   smol: nullform-gateway/gemini-3.8-flash-high
@@ -13,6 +13,11 @@ modelRoles:
   designer: nullform-gateway/gemini-3.8-flash-high
   task: nullform-gateway/gemini-3.8-flash-high
   advisor: nullform-gateway/gemini-3.8-flash-high
+  tiny: nullform-gateway/gemini-3.8-flash-high
+  explorer: nullform-gateway/gemini-3.8-flash-high
+  fixer: nullform-gateway/gemini-3.8-flash-high
+  oracle: nullform-gateway/gemini-3.8-flash-high
+  reviewer: nullform-gateway/gemini-3.8-flash-high
 task:
   isolation:
     mode: auto
@@ -47,4 +52,6 @@ theme:
   light: light
 setupVersion: 2
 memory:
-  backend: off
+  backend: false
+tools:
+  format: native
