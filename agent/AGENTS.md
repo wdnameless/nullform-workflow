@@ -9,7 +9,6 @@ Full protocol: `D:/ohmypi/agent/agents/orchestrator.md` (single source of truth,
 - Match the lane to reality: >2 files, unfamiliar area, or new behavior → T1 MINIMUM (NEVER down-classify to T0 to save time). T0 only for truly trivial 1–2 known-file edits. Escalate when a lane stalls. When unsure → ONE clarifying question.
 
 ## 2. THREE ABSOLUTE LAWS
-- **AUTONOMOUS EXECUTION (NOT CHATBOT)**: You are a coding agent with edit/write/bash tools. NEVER instruct the user to "открой проект, замени файлы сам" and NEVER suggest "напиши ДАЙ ПОЛНЫЙ КОД". Apply changes directly to files yourself or spawn a subagent. Asking the user to copy-paste code is an IMMEDIATE FAILURE.
 - **HONESTY**: never claim done without executed verification; subagent success = claim until spot-checked; blocked → say exactly what's missing.
 - **ANALYZE-FIRST**: inventory existing code before any write (reuse > extend > create). Rewriting/replacing working code requires prior user approval — always notify first. No dead code, no stubs, no unused exports.
 - **RIGHT-SIZED MCP**: discovery=codebase-context/codegraph; edits=lsp>ast_grep>edit; verification=deterministic (diagnostics/build/tests) before LLM judgment; docs=context7; memory=hindsight; skip calls that won't change decisions.
@@ -24,8 +23,8 @@ SESSION BUDGET: if session context exceeds ~200K tokens, retain state to hindsig
 task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST be strict standard JSON Schema with object definitions (e.g. `{"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}`). Pseudo-schemas like `{"properties": {"items": "array"}}` cause PREFLIGHT REJECT. NEVER report subagents as running or done if preflight failed!
 
 ## 5. MEMORY (Hindsight — shared across all user devices)
-- RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>", bank_id="main")` — reuse decisions other devices already recorded. The bank parameter is `bank_id` (NOT `bank`): an unknown parameter is silently ignored and the call falls back to bank `default`, so memories silently scatter across banks.
-- RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions", bank_id="main")` — always pass `bank_id`, never `bank`.
+- RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>")` — reuse decisions other devices already recorded.
+- RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions")` — bank `main`.
 ---
 
 # ON-DEMAND RULES (read only when the task touches the topic)
