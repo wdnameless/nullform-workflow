@@ -67,7 +67,15 @@ $Manifest = @(
   'agent\agents\librarian.md',
   'agent\agents\sonic.md',
   'agent\agents\security-reviewer.md',
-  "rules\enterprise-directives.md`t$AgentsRoot"
+  "rules\enterprise-directives.md`t$AgentsRoot",
+  'tools\codemap.mjs',
+  'tools\prompt-lint.mjs',
+  'tools\skills-doctor.mjs',
+  'tools\glossary.mjs',
+  'tools\replay.mjs',
+  'tools\audit.ps1',
+  'tools\sync.ps1',
+  'CONTEXT.md'
 )
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)

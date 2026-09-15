@@ -139,7 +139,7 @@ For location-aware results, add these headers. **Lat/Long is sufficient** when c
 | `web.results[].thumbnail.original` | string? | Original full-size image URL |
 | `web.results[].thumbnail.logo` | bool? | Whether the thumbnail is a logo |
 | `web.results[].profile` | object? | Publisher identity (`name`, `url`, `long_name`, `img`) |
-| `web.results[].page_age` | string? | ISO datetime of publication (e.g., `"2025-04-12T14:22:41"`) |
+| `web.results[].page_age` | string? | ISO datetime of publication (e.g., `"2025-04-12T14:22:41"`) <!-- prompt-lint:allow --> |
 | `web.results[].extra_snippets` | list[str]? | Up to 5 additional excerpts |
 | `web.results[].deep_results` | object? | Additional links (`buttons`, `links`) from the page |
 | `web.results[].schemas` | list? | Raw schema.org structured data |

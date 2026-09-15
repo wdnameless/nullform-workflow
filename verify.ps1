@@ -124,6 +124,57 @@ Check 'engineering skills registered (domain/design/bugs/codemap/deepwork)' {
   $missing = $want | Where-Object { -not (Test-Path "$HOME\.agents\skills\$_\SKILL.md") }
   if ($missing) { "missing: $($missing -join ', ')" } else { $true }
 }
+# A skill with unparsable frontmatter is dropped from the registry SILENTLY, and a
+# truncated install still "looks" valid. skills-doctor finds both, plus orphans.
+Check 'skills registry healthy (frontmatter/truncation/parity/orphans)' {
+  $out = & node "$HarnessRoot\tools\skills-doctor.mjs" --installed "$HOME\.agents\skills" --repo "$PSScriptRoot\skills" 2>&1 | Out-String
+  if ($LASTEXITCODE -eq 0) { "healthy" } else { throw ($out -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 6 | Out-String).Trim() }
+}
+# A volatile literal in a prompt surface changes the prefix every render and
+# silently re-bills the whole session at full price.
+Check 'prompt surfaces have no volatile literals' {
+  $out = & node "$HarnessRoot\tools\prompt-lint.mjs" scan --root $HarnessRoot 2>&1 | Out-String
+  if ($LASTEXITCODE -eq 0) { "clean" } else { throw ($out -split "`n" | Where-Object { $_ -match 'volatile|\S{10}' } | Select-Object -First 4 | Out-String).Trim() }
+}
+# Prompt surfaces must match the recorded baseline: an unrecorded edit breaks
+# provider prompt caches for every live session.
+Check 'prompt surfaces match baseline (cache-prefix stable)' {
+  $out = & node "$HarnessRoot\tools\prompt-lint.mjs" check --root $HarnessRoot 2>&1 | Out-String
+  if ($LASTEXITCODE -eq 0) { "baseline matches" } else { throw "surface drift - re-run prompt-lint baseline if the edit was intentional" }
+}
+# The replay harness must actually distinguish a covered path from an uncovered
+# one; otherwise the Oracle's network gate is satisfiable by a no-op.
+Check 'replay harness detects uncovered network paths' {
+  $tmp = Join-Path $env:TEMP ("replay-check-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  $cass = Join-Path $tmp 'c.json'
+  @'
+{"version":1,"recordedAt":"2026-01-01","target":"http://x","interactions":[{"key":"GET /known [-]","request":{"method":"GET","url":"/known"},"response":{"status":200,"body":"{}"}}]}
+'@ | Set-Content -Path $cass -Encoding UTF8
+  $leak = Join-Path $tmp 'leak.json'
+  '{"version":1,"recordedAt":"2026-01-01","interactions":[{"key":"GET /a [-]","request":{"method":"GET","url":"/a"},"response":{"status":200,"body":"{\"token\":\"sk-real-LEAKED1234567890\"}"}}]}' | Set-Content -Path $leak -Encoding UTF8
+
+  # Run each invocation through Start-Process so the exit code comes from the
+  # OS, not from $LASTEXITCODE (which is clobbered by intermediate cmdlets).
+  function Invoke-Node([string]$script, [string[]]$nodeArgs) {
+    $out = Join-Path $tmp ([guid]::NewGuid().ToString('N').Substring(0,8) + '.out')
+    $err = "$out.err"
+    $p = Start-Process -FilePath 'node' -ArgumentList (@($script) + $nodeArgs) `
+         -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $text = ((Get-Content $out -Raw -ErrorAction SilentlyContinue) + (Get-Content $err -Raw -ErrorAction SilentlyContinue))
+    return @{ Code = $p.ExitCode; Text = [string]$text }
+  }
+
+  $verifyScript = "$HarnessRoot\tools\replay.mjs"
+  $clean = Invoke-Node $verifyScript @('verify', '--cassette', $cass)
+  $leaked = Invoke-Node $verifyScript @('verify', '--cassette', $leak)
+  Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+
+  $okClean = $clean.Code -eq 0 -and $clean.Text -match 'structurally valid'
+  $okLeak  = $leaked.Code -ne 0 -and $leaked.Text -match 'UNREDACTED'
+  if ($okClean -and $okLeak) { "covered + leak both detected" }
+  else { throw "clean(exit=$($clean.Code)) leak(exit=$($leaked.Code) matched=$($leaked.Text -match 'UNREDACTED'))" }
+}
 Check 'hindsight memory health (200)' {
   (Invoke-WebRequest -UseBasicParsing -Uri 'https://memory.88-99-90-19.sslip.io/health' -TimeoutSec 15).StatusCode -eq 200
 }
