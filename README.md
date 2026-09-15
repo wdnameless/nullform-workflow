@@ -27,7 +27,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 powershell -ExecutionPolicy Bypass -File verify.ps1
 ```
 
-Expected: `12/12 checks passed` (openspec, skills count, junction, configs valid,
+Expected: `16/16 checks passed` (openspec, skills count, junction, configs valid,
 session_cost selftest 7/7, hindsight 200, crawl4ai 200/401, gateway models 200,
 grill chain, test-safety skill).
 
@@ -53,13 +53,47 @@ agent/
   models.yml.example   single provider: nullform-gateway, 28 models, no dupes
   mcp.json.example     7 MCP servers (hindsight, crawl4ai, codebase-index,
                        ast-grep, dap-debugger, codegraph, context7)
-skills/                60+ skills incl. grill-me + grilling, design-taste-frontend,
-                       project-test-safety, nullform-workflow-full
+skills/                65+ skills incl. grill-me + grilling, design-taste-frontend,
+                       project-test-safety, nullform-workflow-full, and the
+                       engineering disciplines: domain-modeling, codebase-design,
+                       diagnosing-bugs, codemap, deepwork
 rules/
-  enterprise-directives.md   on-demand rule (git/PR, ports, DB, secrets redaction gate)
-tools/session_cost.py  session cost reporter (tokens per model/day; --selftest 7/7)
+  enterprise-directives.md   on-demand rule (git/PR, ports, DB, secrets redaction gate);
+                             sections 10+ point to the single authoritative source per
+                             topic instead of duplicating agent/skill text
+tools/
+  session_cost.py      session cost reporter (tokens per model/day; --selftest 7/7)
+  codemap.mjs          hierarchical repo cartography + change tracking (no deps)
+  sync.ps1             drift control between this repo and the live harness
+templates/paseo.json   Paseo workspace-script template (supervised dev servers)
 paseo/profiles.json    Orchestrator (LEAN) launch profile
 ```
+
+## Drift control
+
+The harness exists in two trees: the live install (`D:\ohmypi`) and this
+distributable repo. They are kept identical by `tools/sync.ps1`:
+
+```powershell
+powershell -File tools/sync.ps1              # report drift (exit 1 if any)
+powershell -File tools/sync.ps1 -Promote     # live  -> repo
+powershell -File tools/sync.ps1 -Deploy      # repo  -> live
+powershell -File tools/sync.ps1 -Promote -Only orchestrator   # one file
+```
+
+`config.yml` is deliberately excluded (provider prefixes are machine-specific).
+`verify.ps1` fails if the two trees have drifted.
+
+## Repository cartography
+
+```bash
+node D:\ohmypi\tools\codemap.mjs init    --root . --include "src/**/*.ts"
+node D:\ohmypi\tools\codemap.mjs changes --root .   # affected folders
+node D:\ohmypi\tools\codemap.mjs update  --root .   # commit hashes
+```
+
+`changes` names the folders to re-map; delegate one `@fixer` per folder to write
+its `CODEMAP.md`. State lives in `.codemap/` (gitignored).
 
 ## How the workflow runs (short)
 
@@ -69,9 +103,16 @@ paseo/profiles.json    Orchestrator (LEAN) launch profile
    user quotes (R01…) → OpenSpec change (`openspec validate`) → G-gates (G2/G4 by an
    independent reader, blind vs the brief, never vs our spec) → parallel build waves
    (≤3 in flight, disjoint zones, `interfaces.md` shared contract) → blind @oracle.
-3. Subagents: fresh context each, ~50 tool-call ceiling, HANDOFF protocol,
-   ≤25-line return contract (STATUS/FILES/TESTS было→стало/INTERFACES/REQUIREMENTS).
-4. Memory: recall at task start, retain at task end (hindsight, bank `main`).
+3. Subagents: fresh context each, HANDOFF protocol at **40–45 tool calls** (the
+   gateway caps at 60/30min regardless of the internal budget), ≤25-line return
+   contract (STATUS/FILES/TESTS было→стало/INTERFACES/REQUIREMENTS).
+4. Engineering disciplines are enforced, not just documented: `CONTEXT.md` glossary
+   drift is an Oracle REJECT (`domain-modeling`); module interfaces pass the deletion
+   test (`codebase-design`); bugs are diagnosed by the 6-phase protocol before any
+   code is touched (`diagnosing-bugs`).
+5. Long-lived services (dev servers, watchers) are supervised by Paseo workspace
+   scripts — never owned by a subagent that dies and leaks the port.
+6. Memory: recall at task start, retain at task end (hindsight, bank `main`).
 
 Full law: `agent/AGENTS.md` + `agent/agents/orchestrator.md`.
 
