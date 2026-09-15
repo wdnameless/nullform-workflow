@@ -77,7 +77,7 @@ Sections previously duplicated here now live in exactly one place each. Read the
 
 | Topic | Authority |
 |---|---|
-| Lane classification, wave protocol, tool budget | `D:/ohmypi/agent/agents/orchestrator.md` |
+| Lane classification, wave protocol, tool budget | `<HARNESS>/agent/agents/orchestrator.md` |
 | Context hygiene (checkpoint/rewind in recon) | `orchestrator.md` § T2 Wave 1 + `skill://codemap` |
 | Deep modules, seams, deletion test | `skill://codebase-design` |
 | Ubiquitous language, `CONTEXT.md`, ADRs | `skill://domain-modeling` |

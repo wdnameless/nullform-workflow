@@ -123,7 +123,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 const home = process.env.USERPROFILE || process.env.HOME || "";
 installedRoot = installedRoot || join(home, ".agents", "skills");
-repoRoot = repoRoot || "D:/ohmypi/workflow-repo/skills";
+repoRoot = repoRoot || "<harness>/workflow-repo/skills";
 
 if (!existsSync(installedRoot)) {
   console.error(`skills-doctor: installed root not found: ${installedRoot}`);

@@ -26,7 +26,7 @@ Implement/review UI designs; edit files, create components, run commands as need
 - Isolation: MUST run isolated (`isolated: true` on spawn).
 - File Ownership Lock: Locked strictly to UI/CSS/layout/frontend presentation files.
 - Boundaries: NEVER touch backend logic, database schemas, server APIs, or non-UI business logic.
-- Contract: read `interfaces.md` first if present; return public component/prop signatures in INTERFACES. Return contract ≤25 lines: STATUS · FILES (paths) · TESTS (было→стало or screenshots BEFORE/AFTER) · INTERFACES · CONCERNS. Context ceiling ~50 tool calls → HANDOFF with РЕШЕНИЯ/ТУПИКИ/ДАЛЬШЕ.
+- Contract: read `interfaces.md` first if present; return public component/prop signatures in INTERFACES. Return contract ≤25 lines: STATUS · FILES (paths) · TESTS (было→стало or screenshots BEFORE/AFTER) · INTERFACES · CONCERNS. Context ceiling ~45 tool calls (rate-limit ceiling; see orchestrator) → HANDOFF with РЕШЕНИЯ/ТУПИКИ/ДАЛЬШЕ.
 </constraints>
 
 <strengths>

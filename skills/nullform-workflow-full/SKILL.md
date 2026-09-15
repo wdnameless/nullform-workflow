@@ -36,6 +36,7 @@ When active or triggered, the lead agent acts STRICTLY as an Orchestrator.
 - NEVER use slash-commands like `/paseo-handoff` — they are skills, not commands. Delegation = native `task()` tool.
 
 ## 5. Wave 4: Oracle Verification Gate
-- Spawn `agent: "oracle"` for independent blind acceptance against `proposal.md`. Subagent `status: success` is a CLAIM until spot-checked.
-- Verify diff test coverage of changed behavior; run deterministic checks (diagnostics/build/tests) before LLM judgment.
+- Spawn `agent: "oracle"` for independent blind acceptance — against the **manifest** (verbatim user quotes) and the running product, NEVER against `proposal.md` or `specs/`: judging our build by our own paraphrase confirms the plan, not the product.
+- Subagent `status: success` is a CLAIM until spot-checked.
+- Verify diff test coverage of changed behavior; run deterministic checks (diagnostics/build/tests) before LLM judgment. For any network-path change, require a replay cassette (`node tools/replay.mjs verify --cassette <file>`) — a mock written by the same process as the code is not evidence.
 - On approval: synthesize → report → `openspec archive <name> --yes`.

@@ -1,66 +1,62 @@
 {
   "$schema": "https://json.schemastore.org/mcp-settings.json",
+  "$comment": "OPTIONAL MCP fleet. None of these are required for the workflow: agent definitions, rules, skills, and tools all work without them. Keep a server only if you actually use it, and delete the rest — every stdio server is a process OMP must start on session boot. Blank values are removed by the installer; fill them via secrets.env.",
+
   "mcpServers": {
-    "codebase-index": {
-      "command": "cmd.exe",
-      "args": [
-        "/c",
-        "opencode-codebase-index-mcp"
-      ],
-      "env": {}
-    },
     "ast-grep": {
+      "$comment": "Structural code search/rewrite. Install: npm i -g ast-grep-mcp (or point args at your own binary).",
       "command": "cmd.exe",
-      "args": [
-        "/c",
-        "ast-grep-mcp"
-      ],
+      "args": ["/c", "ast-grep-mcp"],
       "env": {}
     },
     "dap-debugger": {
+      "$comment": "Interactive debugging (breakpoints, stepping). Pin the version: `@latest` forces a registry round-trip on every cold start and intermittently fails to connect.",
       "command": "cmd.exe",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "dap-mcp-server@0.1.12"
-      ],
-      "env": {}
-    },
-    "codegraph": {
-      "command": "cmd.exe",
-      "args": [
-        "/c",
-        "codegraph",
-        "serve",
-        "--mcp"
-      ],
+      "args": ["/c", "npx", "-y", "dap-mcp-server@0.1.12"],
       "env": {}
     },
     "context7": {
+      "$comment": "Library documentation lookup. Works keyless at a lower rate limit; set the key for higher limits.",
       "command": "cmd.exe",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@upstash/context7-mcp"
-      ],
+      "args": ["/c", "npx", "-y", "@upstash/context7-mcp"],
       "env": {
-        "CONTEXT7_API_KEY": "ctx7sk-579078d5-366e-4af3-905f-df46fc277c89"
+        "CONTEXT7_API_KEY": "__CONTEXT7_API_KEY__"
       }
     },
-    "hindsight": {
+
+    "codebase-index": {
+      "$comment": "Semantic code index. Requires the opencode-codebase-index-mcp binary on PATH; remove this entry if you do not have it.",
+      "command": "cmd.exe",
+      "args": ["/c", "opencode-codebase-index-mcp"],
+      "env": {}
+    },
+    "codegraph": {
+      "$comment": "Symbol/call-graph index. Point the path at your own install; remove if unused.",
+      "command": "cmd.exe",
+      "args": ["/c", "codegraph", "serve", "--mcp"],
+      "env": {}
+    },
+    "playwright": {
+      "$comment": "Browser automation for UI verification. Remove if you never do front-end work.",
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@executeautomation/playwright-mcp-server"],
+      "env": {}
+    },
+
+    "memory": {
+      "$comment": "Cross-session memory (optional, external service). Point at YOUR deployment, or delete this entry — the workflow degrades to no persistent memory and still works.",
       "type": "http",
-      "url": "https://memory.88-99-90-19.sslip.io/mcp/",
+      "url": "__MEMORY_MCP_URL__",
       "headers": {
-        "Authorization": "Bearer __HINDSIGHT_TOKEN__"
+        "Authorization": "Bearer __MEMORY_TOKEN__"
       }
     },
     "crawl4ai": {
+      "$comment": "Bulk web scraping (optional, external service). `read <url>` covers single pages; delete this if you only need that.",
       "type": "sse",
-      "url": "https://crawl.88-99-90-19.sslip.io/mcp/sse",
+      "url": "__CRAWL_MCP_URL__",
       "headers": {
-        "Authorization": "Bearer __CRAWL4AI_TOKEN__"
+        "Authorization": "Bearer __CRAWL_TOKEN__"
       }
     }
   }

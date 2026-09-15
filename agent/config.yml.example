@@ -1,0 +1,72 @@
+# config.yml — OMP settings for the workflow.
+#
+# `modelRoles` selectors are `<provider-id>/<model-id>`, matching the keys in
+# models.yml. If you kept a single provider, every role points at the same model
+# (that is fine and is the default). Split them later for cost control: put the
+# cheap/fast model on `smol`/`task`/`explorer` and the strongest one on `slow`/`plan`.
+#
+# The installer rewrites __DEFAULT_MODEL__ to `<provider-id>/<model-id>` for you.
+
+providers:
+  streamFirstEventTimeoutSeconds: 120
+  streamIdleTimeoutSeconds: 180
+  webSearchOrder:
+    - brave
+    - google
+    - tavily
+
+modelRoles:
+  default:   __DEFAULT_MODEL__
+  smol:      __DEFAULT_MODEL__
+  slow:      __DEFAULT_MODEL__
+  plan:      __DEFAULT_MODEL__
+  designer:  __DEFAULT_MODEL__
+  task:      __DEFAULT_MODEL__
+  advisor:   __DEFAULT_MODEL__
+  tiny:      __DEFAULT_MODEL__
+  explorer:  __DEFAULT_MODEL__
+  fixer:     __DEFAULT_MODEL__
+  oracle:    __DEFAULT_MODEL__
+  reviewer:  __DEFAULT_MODEL__
+
+task:
+  isolation:
+    mode: auto
+    apply: true
+    merge: patch
+  enableLsp: true
+  maxRuntimeMs: 1800000
+  maxConcurrency: 8
+  showResolvedModelBadge: true
+  agentModelOverrides:
+    oracle: __DEFAULT_MODEL__
+    fixer: __DEFAULT_MODEL__
+    explorer: __DEFAULT_MODEL__
+  # Internal per-run tool-call ceiling. NOTE: this is NOT the real limit — a
+  # hosted gateway may cap requests per minute. Subagent lanes emit HANDOFF at
+  # ~45 calls to leave headroom for reconciliation (see agent/agents/orchestrator.md).
+  softRequestBudget: 100
+
+commands:
+  enableOpencodeUser: false
+  enableOpencodeProject: false
+checkpoint:
+  enabled: true
+display:
+  showTurnTime: true
+  showTokenUsage: true
+terminal:
+  showProgress: true
+secrets:
+  enabled: true
+symbolPreset: unicode
+composer:
+  shape: band
+theme:
+  dark: titanium
+  light: light
+setupVersion: 2
+memory:
+  backend: false
+tools:
+  format: native

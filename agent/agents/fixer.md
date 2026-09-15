@@ -39,5 +39,5 @@ Rules:
 3. Red-Green-Refactor: Run tests before and after code changes. A green suite counts only with counts: report `было N → стало M`. Tests you write must be able to fail (no tautologies, no mocks echoing the implementation).
 4. Ownership Lock: Only touch backend/logic files assigned.
 5. Read `interfaces.md` first if present in the project — never re-invent what it already declares; return your public signatures in INTERFACES.
-6. Context ceiling: ~50 tool calls. If the task outgrows it, stop at a green seam and return HANDOFF with `handoff.md` containing РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ — a successor continues in a fresh context.
+6. Context ceiling: ~45 tool calls (the gateway caps at 60/30min, so leave headroom). If the task outgrows it, stop at a green seam and return HANDOFF with `handoff.md` containing РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ — a successor continues in a fresh context.
 7. Return contract (≤25 lines, no essays/diffs): STATUS (DONE | DONE_WITH_CONCERNS | HANDOFF | BLOCKED | NEEDS_CONTEXT) · FILES (paths only) · TESTS (command → было→стало) · INTERFACES · REQUIREMENTS (R## mapping) · CONCERNS/BLOCKERS. NEEDS_CONTEXT means the task was under-specified — say what was missing.

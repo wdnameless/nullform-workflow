@@ -21,8 +21,8 @@
   powershell -File audit.ps1 -Scope src,lib     # glossary scope for a project
 #>
 param(
-  [string]$HarnessRoot = 'D:\ohmypi',
-  [string]$RepoRoot    = 'D:\ohmypi\workflow-repo',
+  [string]$HarnessRoot = (Join-Path $HOME 'omp-workflow'),
+  [string]$RepoRoot    = (Split-Path -Parent $PSScriptRoot),
   [string[]]$Scope     = @(),
   [switch]$Json
 )

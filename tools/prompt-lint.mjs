@@ -206,9 +206,9 @@ switch (cmd) {
   case "check":    code = cmdCheck(root, home); break;
   default:
     console.log("prompt-lint.mjs — prompt-cache safety\n");
-    console.log("  node prompt-lint.mjs scan     --root D:/ohmypi   # volatile literals");
-    console.log("  node prompt-lint.mjs baseline --root D:/ohmypi   # record golden hashes");
-    console.log("  node prompt-lint.mjs check    --root D:/ohmypi   # fail on drift");
+    console.log("  node prompt-lint.mjs scan     --root <harness>   # volatile literals");
+    console.log("  node prompt-lint.mjs baseline --root <harness>   # record golden hashes");
+    console.log("  node prompt-lint.mjs check    --root <harness>   # fail on drift");
     code = 0;
 }
 process.exit(code);

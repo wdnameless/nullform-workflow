@@ -6,3 +6,4 @@ Thumbs.db
 .codemap/
 .prompt-lint/
 .probe/
+agent/config.yml

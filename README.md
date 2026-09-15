@@ -1,123 +1,136 @@
-# Nullform Workflow — OMP + Paseo orchestration harness
+# OMP Workflow — an agentic-engineering harness for Oh My Pi
 
-A complete AI-agent orchestration stack: lane classifier (T0–T3), 4-Wave SDD with
-requirements traceability, 60+ skills, curated MCP fleet, shared Hindsight memory,
-and a single Nullform model gateway. Battle-tested, with an autopilot-derived
-execution protocol (context ceilings, handoffs, blind acceptance).
+A complete orchestration stack for OMP: lane classifier (T0–T3), 4-Wave SDD with
+requirements traceability, a role fleet, 65+ skills, drift control, prompt-cache
+safety, and runtime verification tooling.
 
-## One-line deploy (Windows)
+**Provider-agnostic.** Nothing here assumes a particular vendor: you supply an
+OpenAI-compatible endpoint and a model id. The MCP fleet is optional — the agent
+definitions, rules, skills, and tools all work without a single MCP server.
 
+## Install (one prompt)
 
-```powershell
-powershell -ExecutionPolicy Bypass -Command "git clone https://github.com/wdnameless/omp-paseo-nullform-workflow.git $env:USERPROFILE\nullform-workflow; & $env:USERPROFILE\nullform-workflow\install.ps1"
+Paste this into any agent that can run shell commands (OMP, Claude Code, Cursor):
+
+```
+Clone https://github.com/wdnameless/omp-workflow to ~/omp-workflow, then run
+`powershell -ExecutionPolicy Bypass -File ~/omp-workflow/install.ps1` and answer
+its prompts (model provider base URL, API key, model id — all optional, and the
+optional MCP service URLs can be left blank).
 ```
 
-Installs the full harness (deps check, secrets prompt, all files, junction, Paseo profile). Afterwards: `verify.ps1` from the same folder.
-
-## One-command install (from a clone)
+The installer is interactive by default and idempotent — re-run it after a
+`git pull` to update. Non-interactive from a filled-in secrets file:
 
 ```powershell
-copy secrets.example.env secrets.env   # fill keys, or be prompted by installer
-powershell -ExecutionPolicy Bypass -File install.ps1
+copy secrets.example.env secrets.env   # then edit
+powershell -ExecutionPolicy Bypass -File install.ps1 -NonInteractive
 ```
 
-## One-command verification
+## Verify
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File verify.ps1
 ```
 
-Expected: `16/16 checks passed` (openspec, skills count, junction, configs valid,
-session_cost selftest 7/7, hindsight 200, crawl4ai 200/401, gateway models 200,
-grill chain, test-safety skill).
+Prints a PASS/FAIL table; exit 0 means every layer is sound. It checks YOUR
+configuration is well-formed and that the harness mechanics work — it does not
+assert that any external service exists.
 
-## Secrets
+## What you must supply
 
-| Key | Where it goes | Get it |
+Everything is optional except a model endpoint (and you can install without one,
+then fill it in later).
+
+| Value | Goes into | Notes |
 |---|---|---|
-| `NULLFORM_GATEWAY_KEY` | `models.yml` apiKey | your nullform.cv deployment |
-| `HINDSIGHT_TOKEN` | `mcp.json` → hindsight headers | your memory server |
-| `CRAWL4AI_TOKEN` | `mcp.json` → crawl4ai headers | your crawl dedik |
-| `GOOGLE_AI_STUDIO_KEY` | `~/.local/share/opencode/auth.json` | ai.google.dev (embeddings for codebase-index) |
+| Provider base URL | `models.yml` `baseUrl` | OpenAI-compatible, usually ends in `/v1` |
+| Provider API key | `models.yml` `apiKey` | never committed; `secrets.env` is git-ignored |
+| Default model id | `models.yml` + role selectors | whatever your provider calls it |
+| Memory MCP URL + token | `mcp.json` | optional; skip and the entry is dropped |
+| Crawl MCP URL + token | `mcp.json` | optional; skip and the entry is dropped |
+| context7 API key | `mcp.json` | optional; context7 works keyless at a lower limit |
 
-Configs ship as `*.example` with `__PLACEHOLDERS__`; the installer patches them.
-Real keys never belong in git (`.gitignore` covers `secrets.env`).
+All configs ship as `*.example` with `__PLACEHOLDERS__`; the installer patches
+them. Leave an optional value blank and its entry is removed rather than left
+half-configured (a server that fails to connect on every session boot is worse
+than an absent one).
+
+## Swapping in your own provider
+
+`agent/models.yml.example` declares one provider named `my-provider`. Rename it
+freely, then update `agent/config.yml`'s `modelRoles` to match — selectors are
+`<provider-id>/<model-id>`. Point every role at the same model first; split them
+later (`smol`/`task`/`explorer` onto something cheap, `slow`/`plan` onto your
+strongest) once you know what your provider offers.
 
 ## What is inside
 
 ```
 agent/
-  AGENTS.md            orchestrator law (auto-loaded context file)
+  AGENTS.md            orchestrator law (auto-loaded every session)
   agents/              11 role definitions (orchestrator, designer, fixer, oracle, scout, …)
-  config.yml           OMP settings (model roles, timeouts, isolation)
-  models.yml.example   single provider: nullform-gateway, 28 models, no dupes
-  mcp.json.example     7 MCP servers (hindsight, crawl4ai, codebase-index,
-                       ast-grep, dap-debugger, codegraph, context7)
-skills/                65+ skills incl. grill-me + grilling, design-taste-frontend,
-                       project-test-safety, nullform-workflow-full, and the
-                       engineering disciplines: domain-modeling, codebase-design,
-                       diagnosing-bugs, codemap, deepwork
+  config.yml.example   OMP settings (model roles, timeouts, isolation)
+  models.yml.example   one OpenAI-compatible provider, edit to taste
+  mcp.json.example     optional MCP fleet, every entry documented + droppable
+  agents/*.md          role contracts: scopes, return contract, ceilings
+skills/                65+ skills: grill-me/grilling, design suite, test-safety,
+                       nullform-workflow-full, and the engineering disciplines —
+                       domain-modeling, codebase-design, diagnosing-bugs,
+                       codemap, deepwork
 rules/
-  enterprise-directives.md   on-demand rule (git/PR, ports, DB, secrets redaction gate);
-                             sections 10+ point to the single authoritative source per
-                             topic instead of duplicating agent/skill text
+  enterprise-directives.md   on-demand rule (git/PR, ports, DB, secrets redaction)
 tools/
-  session_cost.py      session cost reporter (tokens per model/day; --selftest 7/7)
-  codemap.mjs          hierarchical repo cartography + change tracking (no deps)
-  sync.ps1             drift control between this repo and the live harness
+  codemap.mjs          repo cartography + change tracking (no deps)
+  prompt-lint.mjs      prompt-cache safety: volatile-literal scan + baseline drift
+  skills-doctor.mjs    detects skills the registry would drop silently
+  glossary.mjs         CONTEXT.md bootstrap + vocabulary-drift check
+  replay.mjs           record/replay network cassettes for runtime verification
+  audit.ps1            all mechanical checks in one verdict (exit 0/1)
+  sync.ps1             drift control between a repo clone and a live install
+  session_cost.py      token/cost reporter per model per day
 templates/paseo.json   Paseo workspace-script template (supervised dev servers)
-paseo/profiles.json    Orchestrator (LEAN) launch profile
+paseo/profiles.json    Paseo launch profile
+CONTEXT.md             the workflow's own domain glossary (dogfood)
 ```
 
-## Drift control
+## How it runs
 
-The harness exists in two trees: the live install (`D:\ohmypi`) and this
-distributable repo. They are kept identical by `tools/sync.ps1`:
-
-```powershell
-powershell -File tools/sync.ps1              # report drift (exit 1 if any)
-powershell -File tools/sync.ps1 -Promote     # live  -> repo
-powershell -File tools/sync.ps1 -Deploy      # repo  -> live
-powershell -File tools/sync.ps1 -Promote -Only orchestrator   # one file
-```
-
-`config.yml` is deliberately excluded (provider prefixes are machine-specific).
-`verify.ps1` fails if the two trees have drifted.
-
-## Repository cartography
-
-```bash
-node D:\ohmypi\tools\codemap.mjs init    --root . --include "src/**/*.ts"
-node D:\ohmypi\tools\codemap.mjs changes --root .   # affected folders
-node D:\ohmypi\tools\codemap.mjs update  --root .   # commit hashes
-```
-
-`changes` names the folders to re-map; delegate one `@fixer` per folder to write
-its `CODEMAP.md`. State lives in `.codemap/` (gitignored).
-
-## How the workflow runs (short)
-
-1. Every task classifies first: `⚡T0` direct · `🔧T1` recon + 1–2 specialists ·
-   `🚀T2` full 4-Wave SDD · `🌌T3` program slices.
-2. T2: Wave 0 `grill-me` interview via ONE ask-widget → `manifest.md` with verbatim
-   user quotes (R01…) → OpenSpec change (`openspec validate`) → G-gates (G2/G4 by an
-   independent reader, blind vs the brief, never vs our spec) → parallel build waves
-   (≤3 in flight, disjoint zones, `interfaces.md` shared contract) → blind @oracle.
-3. Subagents: fresh context each, HANDOFF protocol at **40–45 tool calls** (the
-   gateway caps at 60/30min regardless of the internal budget), ≤25-line return
-   contract (STATUS/FILES/TESTS было→стало/INTERFACES/REQUIREMENTS).
-4. Engineering disciplines are enforced, not just documented: `CONTEXT.md` glossary
-   drift is an Oracle REJECT (`domain-modeling`); module interfaces pass the deletion
-   test (`codebase-design`); bugs are diagnosed by the 6-phase protocol before any
-   code is touched (`diagnosing-bugs`).
+1. Every task classifies first: `T0` direct · `T1` recon + 1–2 specialists ·
+   `T2` full 4-Wave SDD · `T3` program slices.
+2. T2: Wave 0 `grill-me` interview via ONE ask-widget → `manifest.md` with
+   verbatim user quotes (R01…) → OpenSpec change → G-gates → parallel build waves
+   (disjoint file ownership, `interfaces.md` shared contract) → blind `@oracle`.
+3. Subagents get fresh context each, a ≤25-line return contract
+   (STATUS/FILES/TESTS/INTERFACES/CONCERNS), and HANDOFF at ~45 tool calls — the
+   internal budget is 100, but a hosted gateway may cap requests per minute, so
+   lanes stop well before it.
+4. Disciplines are enforced, not just documented: an undocumented public domain
+   symbol is an Oracle REJECT (`domain-modeling`); interfaces must survive the
+   deletion test (`codebase-design`); a bug is diagnosed by the 6-phase protocol
+   before any code is touched (`diagnosing-bugs`); a network-path change needs a
+   replay cassette, because a mock written alongside the code is not evidence.
 5. Long-lived services (dev servers, watchers) are supervised by Paseo workspace
    scripts — never owned by a subagent that dies and leaks the port.
-6. Memory: recall at task start, retain at task end (hindsight, bank `main`).
 
 Full law: `agent/AGENTS.md` + `agent/agents/orchestrator.md`.
 
+## Maintenance
+
+```powershell
+powershell -File tools/audit.ps1               # one verdict across all checks
+powershell -File tools/sync.ps1                # drift between clone and live install
+powershell -File tools/sync.ps1 -Promote       #   live -> clone
+powershell -File tools/sync.ps1 -Deploy        #   clone -> live
+node tools/prompt-lint.mjs baseline --root .   # re-record cache baseline after an intentional edit
+python tools/session_cost.py <transcript.jsonl>
+```
+
 ## After install
 
-- Open a NEW OMP/Paseo session (skills/MCP mount at session start).
-- Give any T2 task — the first thing you should see is the ask widget.
-- Report cost of any session: `python D:\ohmypi\tools\session_cost.py <transcript.jsonl>`
+- Open a NEW OMP session — skills, MCP, and `AGENTS.md` load at session start.
+- Give it a real task. A T2 task should open with the ask widget, not code.
+
+## License
+
+MIT

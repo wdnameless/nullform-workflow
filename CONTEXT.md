@@ -1,6 +1,6 @@
 # CONTEXT.md — Domain Glossary
 
-Terms used in the Nullform OMP + Paseo harness. Definitions say what a term
+Terms used in this OMP workflow harness. Definitions say what a term
 **means**, not how it is implemented.
 
 ## Harness topology
@@ -8,8 +8,8 @@ Terms used in the Nullform OMP + Paseo harness. Definitions say what a term
 - **Harness** — the installed orchestration stack (agent definitions, rules,
   skills, tools) that OMP loads. Two copies exist; see *Tree*.
 - **Tree** — one of the two physical copies of the harness:
-  - **Live tree** — `D:\ohmypi`. Read by OMP at runtime. Edited during work.
-  - **Repo tree** — `D:\ohmypi\workflow-repo`. The git-tracked distributable.
+  - **Live tree** — the harness root (`$HOME/omp-workflow` by default; `install.ps1 -HarnessRoot` overrides). Read by OMP at runtime.
+  - **Repo tree** — the git clone you installed from. The distributable source of truth.
   - **Drift** — divergence between the two. Owned by `tools/sync.ps1`.
 - **Install** — copying the repo tree onto a machine (`install.ps1`). Produces
   the live tree and registers the Paseo profile.

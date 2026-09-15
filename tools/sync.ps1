@@ -6,7 +6,7 @@
 .DESCRIPTION
   Eliminates configuration drift between the two copies of the harness:
 
-    HarnessRoot (default D:\ohmypi)      <- live install, read by OMP
+    HarnessRoot (default ~/omp-workflow)  <- live install, read by OMP
     workflow-repo (this repo)            <- git-tracked distributable
 
   Direction:
@@ -23,7 +23,7 @@
   powershell -File sync.ps1 -Deploy          # repo -> live
 #>
 param(
-  [string]$HarnessRoot = 'D:\ohmypi',
+  [string]$HarnessRoot = (Join-Path $HOME 'omp-workflow'),
   [string]$AgentsRoot  = (Join-Path $HOME '.agents'),
   [switch]$Promote,
   [switch]$Deploy,
@@ -105,6 +105,9 @@ foreach ($entry in $Manifest) {
 
   $live = Read-Normalized $livePath
   $repo = Read-Normalized $repoPath
+  # Repo files ship path-templated (<HARNESS>) so an install can live anywhere;
+  # the live tree has the real path. Compare like-for-like.
+  if ($null -ne $repo) { $repo = $repo -replace '<HARNESS>', ($HarnessRoot -replace '\\','/') }
 
   if ($null -eq $live -and $null -eq $repo) { continue }
   if ($null -eq $live) { Write-Host "  [!!] missing in harness : $rel" -ForegroundColor Yellow; $drift += $rel; continue }
