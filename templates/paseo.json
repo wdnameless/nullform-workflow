@@ -1,0 +1,13 @@
+{
+  "$comment": "Template: copy to a project root as `paseo.json`. Paseo supervises these scripts; each gets a managed terminal visible in the Paseo UI and is addressable via `paseo script start|stop <name> --workspace <id>`. Use for long-lived services the ORCHESTRATOR (not a subagent) must supervise: dev servers, watchers, preview builds, local APIs.",
+  "scripts": {
+    "dev": {
+      "command": "npm run dev",
+      "port": 5173
+    },
+    "preview": {
+      "command": "npm run preview",
+      "port": 4173
+    }
+  }
+}
