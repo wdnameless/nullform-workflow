@@ -15,10 +15,34 @@
   powershell -ExecutionPolicy Bypass -File verify.ps1 -HarnessRoot D:\my-harness
 #>
 param(
-  [string]$HarnessRoot = (Join-Path $HOME 'omp-workflow')
+  # Default to the tree this script lives in: it is shipped INTO the harness
+  # root by install.ps1, so $PSScriptRoot identifies it without any assumption
+  # about where the user installed. -HarnessRoot overrides.
+  [string]$HarnessRoot = (Split-Path -Parent $PSScriptRoot)
 )
 
 $ErrorActionPreference = 'Continue'
+# Locate the harness (must contain agent\AGENTS.md) and, independently, the repo
+# clone that carries the canonical skills/ tree. They are usually different dirs.
+if (-not $PSScriptRoot) { $PSScriptRoot = (Get-Location).Path }
+# $PSScriptRoot is the harness root when this file sits there, or <harness>\tools
+# when it does not. Only step up when the parent is actually a harness.
+$dirs = New-Object System.Collections.ArrayList
+[void]$dirs.Add($PSScriptRoot)
+[void]$dirs.Add((Split-Path -Parent $PSScriptRoot))
+if (-not (Test-Path (Join-Path $HarnessRoot 'agent\AGENTS.md'))) {
+  $hit = $dirs | Where-Object { Test-Path (Join-Path $_ 'agent\AGENTS.md') } | Select-Object -First 1
+  if ($hit) { $HarnessRoot = $hit }
+}
+$selfRoot = $PSScriptRoot
+# The repo clone is the tree with install.ps1 + models.yml.example.
+$RepoRoot = @(
+  $selfRoot,
+  (Join-Path $HarnessRoot 'workflow-repo'),          # repo nested inside the harness
+  (Join-Path (Split-Path -Parent $HarnessRoot) 'workflow-repo'),  # repo as a sibling
+  $HarnessRoot
+) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'install.ps1')) } | Select-Object -First 1
+if (-not $RepoRoot) { $RepoRoot = $HarnessRoot }
 $results = @()
 # Thrown when a check cannot run because the user has not configured that part
 # yet (no provider, no MCP service). Distinct from FAIL: an unconfigured harness
@@ -100,7 +124,7 @@ Check 'skills registry populated (>= 20)' {
 }
 
 Check 'skills registry healthy (frontmatter/truncation/parity/orphans)' {
-  $r = Invoke-Capture 'node' @("$HarnessRoot\tools\skills-doctor.mjs", '--installed', "$HOME\.agents\skills", '--repo', "$PSScriptRoot\skills")
+  $r = Invoke-Capture 'node' @("$HarnessRoot\tools\skills-doctor.mjs", '--installed', "$HOME\.agents\skills", '--repo', "$RepoRoot\skills")
   if ($r.Code -ne 0) { throw (($r.Text -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 4) -join ' | ') }
   'healthy'
 }
@@ -260,9 +284,9 @@ Check 'harness/repo drift (when a repo clone is present)' {
   # Only meaningful when this harness sits beside the repo it was built from
   # (the repo carries install.ps1 + models.yml.example). A standalone install has
   # no counterpart to drift from, which is not a failure.
-  $sync = "$PSScriptRoot\tools\sync.ps1"
+  $sync = Join-Path $RepoRoot "tools\sync.ps1"
   if (-not (Test-Path $sync)) { return 'n/a (no sync tool)' }
-  if (-not (Test-Path "$PSScriptRoot\install.ps1")) { return 'n/a (standalone install)' }
+  if (-not (Test-Path (Join-Path $RepoRoot "install.ps1"))) { return 'n/a (standalone install)' }
   $r = Invoke-Capture 'powershell' @('-ExecutionPolicy', 'Bypass', '-File', $sync, '-HarnessRoot', $HarnessRoot)
   if ($r.Text -match 'sync: clean') { 'clean' }
   elseif ($r.Text -match 'Cannot locate workflow-repo') { 'n/a (no repo clone)' }

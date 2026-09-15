@@ -21,7 +21,10 @@
   powershell -File audit.ps1 -Scope src,lib     # glossary scope for a project
 #>
 param(
-  [string]$HarnessRoot = (Join-Path $HOME 'omp-workflow'),
+  # Default to the tree this script lives in: it is shipped INTO the harness
+  # root by install.ps1, so $PSScriptRoot identifies it without any assumption
+  # about where the user installed. -HarnessRoot overrides.
+  [string]$HarnessRoot = (Split-Path -Parent $PSScriptRoot),
   # Standalone installs have no repo beside them: default to the harness root
   # itself so the checks still run against a coherent tree.
   [string]$RepoRoot    = '',
@@ -30,10 +33,29 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+# Resolve the LIVE harness and the REPO independently. Running this from a repo
+# clone must still audit the installed harness, not the clone.
+#   $PSScriptRoot is <X>\tools  ->  <X> may be the harness or the repo.
+if (-not $PSScriptRoot) { $PSScriptRoot = (Get-Location).Path }
+# This file lives in <root>\tools, so the root is the parent - but only if that
+# parent is really a harness (it carries agent\AGENTS.md).
+$self = Split-Path -Parent $PSScriptRoot
+if (Test-Path (Join-Path $PSScriptRoot 'agent\AGENTS.md')) { $self = $PSScriptRoot }
+if (-not (Test-Path (Join-Path $HarnessRoot 'agent\AGENTS.md'))) {
+  if (Test-Path (Join-Path $self 'agent\AGENTS.md')) { $HarnessRoot = $self }
+}
+$harnessIsRepo = Test-Path (Join-Path $HarnessRoot 'install.ps1')
+if ($harnessIsRepo) {
+  # We are inside the repo clone. The live harness is its sibling if installed there,
+  # else the repo is the only tree we have - audit it and say so.
+  $sibling = Join-Path (Split-Path -Parent $HarnessRoot) 'omp-workflow'
+  if (Test-Path (Join-Path $sibling 'agent\AGENTS.md')) { $HarnessRoot = $sibling }
+}
 # Resolve the repo root once: prefer an explicit -RepoRoot, else the tree that
 # carries install.ps1 (a repo clone), else the harness root (standalone install).
 if (-not $RepoRoot) {
-  $cand = @((Split-Path -Parent $PSScriptRoot), (Join-Path $HarnessRoot 'workflow-repo'))
+  $cand = @((Split-Path -Parent $PSScriptRoot), (Join-Path $HarnessRoot 'workflow-repo'),
+            (Join-Path (Split-Path -Parent $HarnessRoot) 'workflow-repo'))
   $RepoRoot = ($cand | Where-Object { $_ -and (Test-Path (Join-Path $_ 'install.ps1')) } | Select-Object -First 1)
   if (-not $RepoRoot) { $RepoRoot = $HarnessRoot }
 }
@@ -72,8 +94,10 @@ function Invoke-Capture([string]$exe, [string[]]$argsList) {
 }
 
 Invoke-Check 'harness/repo drift' {
-  if (-not (Test-Path (Join-Path $RepoRoot 'install.ps1'))) {
-    return @{ Ok = $true; Detail = 'n/a (standalone install, no repo clone)' }
+  # Drift compares a live harness against a repo clone. If this script is inside
+  # the repo (a clone with no separate harness), there is nothing to compare.
+  if ($harnessIsRepo -or -not (Test-Path (Join-Path $RepoRoot 'install.ps1'))) {
+    return @{ Ok = $true; Detail = 'n/a (no separate harness to compare)' }
   }
   $r = Invoke-Capture 'powershell' @('-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'tools\sync.ps1'),'-HarnessRoot',$HarnessRoot)
   @{ Ok = ($r.Code -eq 0); Detail = $(if ($r.Code -eq 0) { 'clean' } else { 'files drifted - run sync.ps1 -Promote or -Deploy' }) }
@@ -85,8 +109,13 @@ Invoke-Check 'prompt volatile literals' {
   @{ Ok = ($r.Code -eq 0); Detail = $(if ($r.Code -eq 0) { 'none' } else { 'volatile content in a prompt surface' }) }
 }
 
+# A repo clone has no baseline of its own (the harness records one at install
+# time), so an unbaselined tree is 'n/a', not a defect.
 Invoke-Check 'prompt-cache baseline' {
-  $r = Invoke-Capture 'node' @("$HarnessRoot\tools\prompt-lint.mjs",'check','--root',$HarnessRoot)
+  if (-not (Test-Path (Join-Path $HarnessRoot '.prompt-lint\baseline.json'))) {
+    return @{ Ok = $true; Detail = 'n/a (no baseline in this tree)' }
+  }
+  $r = Invoke-Capture 'node' @((Join-Path $HarnessRoot 'tools\prompt-lint.mjs'),'check','--root',$HarnessRoot)
   @{ Ok = ($r.Code -eq 0); Detail = $(if ($r.Code -eq 0) { 'matches' } else { 'surfaces drifted - re-run baseline if intentional' }) }
 }
 
