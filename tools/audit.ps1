@@ -22,12 +22,21 @@
 #>
 param(
   [string]$HarnessRoot = (Join-Path $HOME 'omp-workflow'),
-  [string]$RepoRoot    = (Split-Path -Parent $PSScriptRoot),
+  # Standalone installs have no repo beside them: default to the harness root
+  # itself so the checks still run against a coherent tree.
+  [string]$RepoRoot    = '',
   [string[]]$Scope     = @(),
   [switch]$Json
 )
 
 $ErrorActionPreference = 'Continue'
+# Resolve the repo root once: prefer an explicit -RepoRoot, else the tree that
+# carries install.ps1 (a repo clone), else the harness root (standalone install).
+if (-not $RepoRoot) {
+  $cand = @((Split-Path -Parent $PSScriptRoot), (Join-Path $HarnessRoot 'workflow-repo'))
+  $RepoRoot = ($cand | Where-Object { $_ -and (Test-Path (Join-Path $_ 'install.ps1')) } | Select-Object -First 1)
+  if (-not $RepoRoot) { $RepoRoot = $HarnessRoot }
+}
 $findings = @()
 $results  = @()
 
@@ -63,7 +72,10 @@ function Invoke-Capture([string]$exe, [string[]]$argsList) {
 }
 
 Invoke-Check 'harness/repo drift' {
-  $r = Invoke-Capture 'powershell' @('-ExecutionPolicy','Bypass','-File',"$RepoRoot\tools\sync.ps1",'-HarnessRoot',$HarnessRoot)
+  if (-not (Test-Path (Join-Path $RepoRoot 'install.ps1'))) {
+    return @{ Ok = $true; Detail = 'n/a (standalone install, no repo clone)' }
+  }
+  $r = Invoke-Capture 'powershell' @('-ExecutionPolicy','Bypass','-File',(Join-Path $RepoRoot 'tools\sync.ps1'),'-HarnessRoot',$HarnessRoot)
   @{ Ok = ($r.Code -eq 0); Detail = $(if ($r.Code -eq 0) { 'clean' } else { 'files drifted - run sync.ps1 -Promote or -Deploy' }) }
 }
 
