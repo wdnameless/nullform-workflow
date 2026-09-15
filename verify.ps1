@@ -175,6 +175,20 @@ Check 'replay harness detects uncovered network paths' {
   if ($okClean -and $okLeak) { "covered + leak both detected" }
   else { throw "clean(exit=$($clean.Code)) leak(exit=$($leaked.Code) matched=$($leaked.Text -match 'UNREDACTED'))" }
 }
+# A stdio MCP launched as `npx <pkg>@latest` re-resolves against the registry on
+# every cold start. That extra round-trip is the difference between connecting
+# and "Server disconnected during initial connection" — and it fails
+# intermittently, so it reads as flake rather than a config defect.
+Check 'no MCP server pinned to @latest' {
+  $m = Get-Content "$agentDir\mcp.json" -Raw | ConvertFrom-Json
+  $bad = @()
+  foreach ($name in $m.mcpServers.PSObject.Properties.Name) {
+    $args = $m.mcpServers.$name.args
+    if ($args -and (($args -join ' ') -match '@latest')) { $bad += $name }
+  }
+  if ($bad.Count) { throw "unpinned: $($bad -join ', ') - pin the version to avoid cold-start races" }
+  $true
+}
 Check 'hindsight memory health (200)' {
   (Invoke-WebRequest -UseBasicParsing -Uri 'https://memory.88-99-90-19.sslip.io/health' -TimeoutSec 15).StatusCode -eq 200
 }

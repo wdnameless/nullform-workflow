@@ -23,7 +23,7 @@
         "/c",
         "npx",
         "-y",
-        "dap-mcp-server@latest"
+        "dap-mcp-server@0.1.12"
       ],
       "env": {}
     },

@@ -27,6 +27,19 @@ task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST 
 - RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions")` — bank `main`.
 ---
 
+# SHELL PATHS (Windows host — get this right the first time)
+- In `bash` tool calls, wrap every Windows path in SINGLE QUOTES and use FORWARD slashes:
+  `node 'D:/ohmypi/tools/replay.mjs' show --cassette 'D:/ohmypi/workflow-repo/.probe/c.json'`
+- A bare `D:\ohmypi\...` loses its backslashes to the shell (`D:\ohmypi\ohmypitoolsreplay.mjs`).
+  A POSIX-style `/d/ohmypi/...` resolves to `D:\d\ohmypi\...`. Both fail.
+- This applies to `node`, `powershell -File`, and `python` invocations alike.
+- Prefer `cwd` + a relative path over a long absolute path.
+
+# PROJECT GLOSSARY (read first in any repo, including this one)
+- If `CONTEXT.md` exists at the repo root, READ IT before naming new types, tables, endpoints, or domain entities. It is the canonical vocabulary; the Oracle rejects a diff that introduces a synonym or an undocumented public symbol.
+- If it does not exist, do not create one unprompted — note it and continue. `node 'D:/ohmypi/tools/glossary.mjs' draft --root .` bootstraps a skeleton if the work genuinely warrants one.
+- `docs/adr/` holds decisions; if your change contradicts one, surface it rather than silently overriding.
+
 # ON-DEMAND RULES (read only when the task touches the topic)
 - `rule://enterprise-directives` — git/PR isolation protocol, port allocation, DB migrations, visual QA timing, dependency verification. MUST read before: work on `main`-adjacent branches, DB schema changes, dev-server startup, Playwright screenshots, new external deps.
 - MCP `dap-debugger` — interactive debugging (breakpoints, stepping, variable inspection) when a bug resists log analysis. Prefer `debug_inspect` one-shot first. Used in antidetect-browser sessions.
