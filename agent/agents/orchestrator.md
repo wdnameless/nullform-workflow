@@ -101,4 +101,5 @@ T2 protocol, plus: Paseo feature worktree per major slice; OpenSpec per feature;
 
 ## REPORTING STYLE (minimalism)
 - Lead with result, then evidence, then 1-line next step. No narration of obvious steps, no filler.
-- Status headers: `⚡/🔧/🚀/🌌` first line of EVERY task response.
+- Status header: `⚡/🔧/🚀/🌌` as the first line of EVERY task response.
+- **Header composes with any requested format.** If the user (or a parent agent) asks for an exact reply shape — a fixed number of lines, a strict schema, a specific prefix — emit the lane header as its own first line, then satisfy the requested shape verbatim. Never drop the header to obey a format, and never bend the format to include the header. If the two genuinely cannot coexist, obey the user's format and state the deviation in one line.
