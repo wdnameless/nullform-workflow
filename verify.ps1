@@ -20,10 +20,19 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $results = @()
+# Thrown when a check cannot run because the user has not configured that part
+# yet (no provider, no MCP service). Distinct from FAIL: an unconfigured harness
+# is incomplete setup, and reporting it as a defect makes a clean install look
+# broken.
+class NotConfigured : System.Exception {
+  NotConfigured([string]$m) : base($m) {}
+}
 function Check($name, [scriptblock]$test) {
   try {
     $r = & $test
     $script:results += [pscustomobject]@{ Check = $name; Result = $(if ($r) { 'PASS' } else { 'FAIL' }); Detail = "$r" }
+  } catch [NotConfigured] {
+    $script:results += [pscustomobject]@{ Check = $name; Result = 'SETUP'; Detail = $_.Exception.Message }
   } catch {
     $script:results += [pscustomobject]@{ Check = $name; Result = 'FAIL'; Detail = $_.Exception.Message }
   }
@@ -148,7 +157,7 @@ Check 'no MCP server pinned to @latest' {
 # segment instead of its declared name, so role selectors stop resolving.
 Check 'models.yml is map-form with no placeholders' {
   $p = "$agentDir\models.yml"
-  if (-not (Test-Path $p)) { throw "models.yml not installed (run install.ps1 with a provider)" }
+  if (-not (Test-Path $p)) { throw [NotConfigured]::new("no provider yet - re-run install.ps1 with a base URL + key + model id") }
   $y = Get-Content $p -Raw
   $ph = [regex]::Matches($y, '__[A-Z0-9_]+__')
   if ($ph.Count) { throw "placeholders remain: $(($ph | Select-Object -First 3 | ForEach-Object { $_.Value }) -join ', ')" }
@@ -175,7 +184,7 @@ Check 'declared provider resolves in the live registry' {
   $y = Get-Content "$agentDir\models.yml" -Raw
   # First indented key under `providers:` is the provider id.
   # Skip blank lines and comments between 'providers:' and the first key.
-  if (-not (Test-Path "$agentDir\models.yml")) { throw "models.yml not installed (run install.ps1 with a provider)" }
+  if (-not (Test-Path "$agentDir\models.yml")) { throw [NotConfigured]::new("no provider yet - re-run install.ps1 with a base URL + key + model id") }
   $provId = [regex]::Match($y, '(?m)^providers:\s*$(?:\r?\n(?:\s*#.*|\s*)?)*\r?\n(?:\s*#.*\r?\n)*\s{2}([a-z0-9][a-z0-9._-]*):').Groups[1].Value
   if (-not $provId) { throw "cannot read provider id from models.yml" }
   # Invoke the .cmd shim: PowerShell resolves `omp` to omp.ps1, which calls a
@@ -191,7 +200,7 @@ Check 'declared provider resolves in the live registry' {
 # provider exists, or point at a sandbox. Verify the DECLARATION is complete and
 # report reachability without failing the suite on someone else's uptime.
 Check 'provider baseUrl declared (reachability informational)' {
-  if (-not (Test-Path "$agentDir\models.yml")) { throw "models.yml not installed (run install.ps1 with a provider)" }
+  if (-not (Test-Path "$agentDir\models.yml")) { throw [NotConfigured]::new("no provider yet - re-run install.ps1 with a base URL + key + model id") }
   $u = [regex]::Match((Get-Content "$agentDir\models.yml" -Raw), 'baseUrl:\s*(\S+)').Groups[1].Value
   if (-not $u) { throw "no baseUrl declared in models.yml" }
   if ($u -match '__[A-Z0-9_]+__') { throw "baseUrl is still a placeholder" }
@@ -264,6 +273,9 @@ Check 'harness/repo drift (when a repo clone is present)' {
 $results | Format-Table -AutoSize
 # PS 5.1: a single-object pipeline result is not an array and has no .Count, so
 # `N - $null` silently reported all-pass on a real failure.
-$fail = @($results | Where-Object { $_.Result -eq 'FAIL' }).Count
-Write-Host ("`n{0}/{1} checks passed`n" -f ($results.Count - $fail), $results.Count)
+$fail  = @($results | Where-Object { $_.Result -eq 'FAIL' }).Count
+$setup = @($results | Where-Object { $_.Result -eq 'SETUP' }).Count
+Write-Host ("`n{0}/{1} checks passed" -f ($results.Count - $fail - $setup), $results.Count)
+if ($setup -gt 0) { Write-Host "$setup awaiting configuration - see the SETUP rows above." -ForegroundColor Yellow }
+Write-Host ""
 exit $(if ($fail -gt 0) { 1 } else { 0 })
