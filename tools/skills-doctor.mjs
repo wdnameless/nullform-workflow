@@ -104,6 +104,18 @@ function run(installedRoot, repoRoot) {
     }
   }
 
+  // Mojibake check: a file written with the wrong encoding round-trips through
+  // UTF-8 as 'â€' / 'â€¦' sequences. It parses fine, so nothing else catches it,
+  // but the text is silently destroyed for every reader.
+  for (const name of installed) {
+    const text = readFileSync(join(installedRoot, name, 'SKILL.md'), 'utf8');
+    // The signature is a Latin-1 interpretation of UTF-8 continuation bytes:
+    // U+00C2/U+00C3 and U+00E2 followed by U+0080..U+00BF, e.g. 'T1\u00e2\u0080\u0093T3'.
+    if (/[\u00c2\u00c3\u00e2][\u0080-\u00bf]/.test(text)) {
+      problems.push({ skill: name, kind: 'encoding', detail: 'mojibake detected - file was written with the wrong encoding' });
+    }
+  }
+
   if (repoRoot) {
     for (const n of repo) {
       if (!installed.includes(n)) problems.push({ skill: n, kind: "orphan", detail: "in repo but NOT installed -> skill:// will not resolve" });

@@ -107,7 +107,10 @@ foreach ($entry in $Manifest) {
   $repo = Read-Normalized $repoPath
   # Repo files ship path-templated (<HARNESS>) so an install can live anywhere;
   # the live tree has the real path. Compare like-for-like.
-  if ($null -ne $repo) { $repo = $repo -replace '<HARNESS>', ($HarnessRoot -replace '\\','/') }
+  # Use literal .Replace(), never -replace: the regex form expands $&/$1 in the
+  # INPUT, silently corrupting any file that contains those sequences (every
+  # shell script does), which then reports as permanent false drift.
+  if ($null -ne $repo) { $repo = $repo.Replace('<HARNESS>', $HarnessRoot.Replace('\', '/')) }
 
   if ($null -eq $live -and $null -eq $repo) { continue }
   if ($null -eq $live) { Write-Host "  [!!] missing in harness : $rel" -ForegroundColor Yellow; $drift += $rel; continue }
