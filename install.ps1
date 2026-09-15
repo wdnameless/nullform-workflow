@@ -81,6 +81,7 @@ Copy-Item "$PSScriptRoot\agent\AGENTS.md" "$HarnessRoot\agent\AGENTS.md" -Force
 Copy-Item "$PSScriptRoot\agent\AGENTS.md" "$agentDir\AGENTS.md" -Force
 Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
 Copy-Item "$PSScriptRoot\tools\*" "$HarnessRoot\tools\" -Force -Recurse
+if (Test-Path "$PSScriptRoot\templates") { Copy-Item "$PSScriptRoot\templates\*" "$HarnessRoot\templates\" -Force -Recurse -ErrorAction SilentlyContinue }
 
 # Skills: skip marketplace-lock-managed skills so the install does not desync ~/.agents/.skill-lock.json.
 $lockPath = "$HOME\.agents\.skill-lock.json"

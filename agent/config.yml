@@ -31,7 +31,7 @@ task:
     oracle: nullform-gateway/gemini-3.8-flash-high
     fixer: nullform-gateway/gemini-3.8-flash-high
     explorer: nullform-gateway/gemini-3.8-flash-high
-  softRequestBudget: 60
+  softRequestBudget: 100
 commands:
   enableOpencodeUser: false
   enableOpencodeProject: false

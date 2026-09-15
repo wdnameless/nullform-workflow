@@ -70,3 +70,17 @@ description: "On-demand enterprise directives: vertical-slice architecture, ente
 - On hit: value → `[REDACTED:<VAR_NAME>]`, name added to `.env.example` empty, user told in one line, value NEVER echoed back.
 - A secret that reached a file or commit = stop condition: report immediately, advise rotation.
 - Machine-local note: `~/.omp/` and `~/.paseo/` contain live API keys in plaintext (models.yml, mcp.json). NEVER include them in external shares, uploads, or backup bundles.
+
+## 10. Workflow Discipline — authoritative sources
+
+Sections previously duplicated here now live in exactly one place each. Read the source, not a copy:
+
+| Topic | Authority |
+|---|---|
+| Lane classification, wave protocol, tool budget | `D:/ohmypi/agent/agents/orchestrator.md` |
+| Context hygiene (checkpoint/rewind in recon) | `orchestrator.md` § T2 Wave 1 + `skill://codemap` |
+| Deep modules, seams, deletion test | `skill://codebase-design` |
+| Ubiquitous language, `CONTEXT.md`, ADRs | `skill://domain-modeling` |
+| Scientific 6-phase bug diagnosis | `skill://diagnosing-bugs` + `agent/agents/fixer.md` |
+| Expand–Contract for wide refactors | `orchestrator.md` § Wave 2 |
+| Runtime Oracle acceptance | `agent/agents/oracle.md` |

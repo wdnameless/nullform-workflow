@@ -66,9 +66,13 @@ Check 'mcp stdio commands resolvable' {
   if ($bad.Count) { throw "not found: $($bad -join ', ')" }
   $true
 }
+# Rules are installed to the agents root (highest-priority source); the harness
+# dir is a fallback for older installs.
 Check 'rules present + addressable (description frontmatter)' {
-  $p = "$agentDir\rules\enterprise-directives.md"
-  (Test-Path $p) -and ((Get-Content $p -TotalCount 3) -match 'description:')
+  $p = "$HOME\.agents\rules\enterprise-directives.md"
+  if (-not (Test-Path $p)) { $p = "$agentDir\rules\enterprise-directives.md" }
+  if (-not (Test-Path $p)) { throw "rule not found in either location" }
+  ((Get-Content $p -TotalCount 3) -match 'description:') -ne $null
 }
 Check 'mcp.json valid + 7 servers' {
   $m = Get-Content "$agentDir\mcp.json" -Raw | ConvertFrom-Json
@@ -91,6 +95,34 @@ Check 'models.yml resolves declared provider (live registry)' {
 Check 'session_cost selftest' {
   $out = & python "$HarnessRoot\tools\session_cost.py" --selftest 2>&1 | Out-String
   $LASTEXITCODE -eq 0 -and ($out -match '7/7')
+}
+# Live check: the codemap engine must run from its installed path and complete an
+# init/update cycle in a throwaway dir. A missing node or a broken engine means
+# repository cartography silently never works.
+Check 'codemap engine init/update cycle' {
+  $tmp = Join-Path $env:TEMP ("codemap-check-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Force -Path "$tmp\src" | Out-Null
+  Set-Content -Path "$tmp\src\a.ts" -Value "export const a = 1;" -Encoding UTF8
+  $init = & node "$HarnessRoot\tools\codemap.mjs" init --root $tmp --include 'src/**/*.ts' 2>&1 | Out-String
+  $upd  = & node "$HarnessRoot\tools\codemap.mjs" update --root $tmp 2>&1 | Out-String
+  $chg  = & node "$HarnessRoot\tools\codemap.mjs" changes --root $tmp 2>&1 | Out-String
+  Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+  ($LASTEXITCODE -eq 0) -and ($init -match '1 files tracked') -and ($chg -match '\+0 ~0 -0')
+}
+# Drift check: the live agent definitions must match the distributable repo.
+# Without this, an edit to one copy silently rots the other.
+Check 'harness/repo drift (agent defs + rules)' {
+  $syncScript = "$PSScriptRoot\tools\sync.ps1"
+  if (-not (Test-Path $syncScript)) { $syncScript = "$HarnessRoot\tools\sync.ps1" }
+  if (-not (Test-Path $syncScript)) { throw "sync.ps1 not found" }
+  $sync = & powershell -ExecutionPolicy Bypass -File $syncScript 2>&1 | Out-String
+  if ($sync -match 'sync: clean') { $true } else { throw ($sync.Trim() -split "`n" | Select-Object -Last 3 | Out-String).Trim() }
+}
+# New engineering skills must actually resolve in the registry, not just sit on disk.
+Check 'engineering skills registered (domain/design/bugs/codemap/deepwork)' {
+  $want = 'domain-modeling', 'codebase-design', 'diagnosing-bugs', 'codemap', 'deepwork'
+  $missing = $want | Where-Object { -not (Test-Path "$HOME\.agents\skills\$_\SKILL.md") }
+  if ($missing) { "missing: $($missing -join ', ')" } else { $true }
 }
 Check 'hindsight memory health (200)' {
   (Invoke-WebRequest -UseBasicParsing -Uri 'https://memory.88-99-90-19.sslip.io/health' -TimeoutSec 15).StatusCode -eq 200

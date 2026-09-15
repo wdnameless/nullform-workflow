@@ -31,3 +31,12 @@ task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST 
 - `rule://enterprise-directives` — git/PR isolation protocol, port allocation, DB migrations, visual QA timing, dependency verification. MUST read before: work on `main`-adjacent branches, DB schema changes, dev-server startup, Playwright screenshots, new external deps.
 - MCP `dap-debugger` — interactive debugging (breakpoints, stepping, variable inspection) when a bug resists log analysis. Prefer `debug_inspect` one-shot first. Used in antidetect-browser sessions.
 - MCP `crawl4ai` — bulk web scraping via dedicated server (native MCP): `crawl`, `md`, `html`, `pdf`, `screenshot`, `execute_js`, `ask`. For JS-heavy pages or batch jobs. NOT for single simple reads — `read <url>` suffices.
+
+# ENGINEERING DISCIPLINES (skills; read `skill://<name>` when the trigger fires)
+- `skill://domain-modeling` — `CONTEXT.md` glossary, ubiquitous language, ADR triggers. Read when naming new types/entities or when terms conflict.
+- `skill://codebase-design` — deep modules, seams, deletion test. Read before designing or refactoring a module interface.
+- `skill://diagnosing-bugs` — 6-phase scientific diagnosis (feedback loop before code). Read before fixing any non-obvious bug.
+- `skill://codemap` — hierarchical repo cartography with change tracking (`D:/ohmypi/tools/codemap.mjs`). Read when entering an unfamiliar repo or planning a large change.
+- `skill://deepwork` — gated multi-phase delivery with Oracle review budget. Read for large or high-risk multi-phase work.
+- `skill://nullform-workflow-full` — the 4-Wave SDD protocol.
+NOTE: the skill registry is snapshotted at session start. After installing or editing a skill, start a NEW session before `skill://<name>` resolves (its rules may already be embedded in the agent files above).
