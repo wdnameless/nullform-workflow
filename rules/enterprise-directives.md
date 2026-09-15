@@ -16,7 +16,7 @@ description: "On-demand enterprise directives: vertical-slice architecture, ente
 
 ## 2. Enterprise Git Workflow: Isolated Feature Branches & PR Quality Gates
 - **Trunk-Based Isolation Protocol**:
-  - **NEVER work directly in `main` / `master`** for non-trivial tasks (T1–T3). The `main` branch is strictly production-ready code.
+  - **NEVER work directly in `main` / `master`** for non-trivial tasks (T1â€“T3). The `main` branch is strictly production-ready code.
   - For every new feature, refactoring, or bugfix created via OpenSpec:
     1. **Branch Creation**: Create a dedicated short-lived feature branch using semantic naming:
        - `feat/<feature-name>` (e.g. `feat/auth-sessions`, `feat/courses-catalog`)
@@ -66,21 +66,21 @@ description: "On-demand enterprise directives: vertical-slice architecture, ente
 
 ## 9. Secrets Redaction Gate (ingest-time, before any file write)
 - Never request credentials. *Which* provider is a question; the value never is.
-- Every pasted fragment is scanned before it reaches a file/prompt: `sk-…`, `ghp_…`, `AKIA…`, `AIza…`, `xoxb-…`, JWT (`eyJ…`), connection strings with passwords, `-----BEGIN … PRIVATE KEY-----`, ≥32-char hex/base64 next to «key/token/secret/ключ/токен/пароль».
-- On hit: value → `[REDACTED:<VAR_NAME>]`, name added to `.env.example` empty, user told in one line, value NEVER echoed back.
+- Every pasted fragment is scanned before it reaches a file/prompt: `sk-â€¦`, `ghp_â€¦`, `AKIAâ€¦`, `AIzaâ€¦`, `xoxb-â€¦`, JWT (`eyJâ€¦`), connection strings with passwords, `-----BEGIN â€¦ PRIVATE KEY-----`, â‰¥32-char hex/base64 next to Â«key/token/secret/ÐºÐ»ÑŽÑ‡/Ñ‚Ð¾ÐºÐµÐ½/Ð¿Ð°Ñ€Ð¾Ð»ÑŒÂ».
+- On hit: value â†’ `[REDACTED:<VAR_NAME>]`, name added to `.env.example` empty, user told in one line, value NEVER echoed back.
 - A secret that reached a file or commit = stop condition: report immediately, advise rotation.
 - Machine-local note: `~/.omp/` and `~/.paseo/` contain live API keys in plaintext (models.yml, mcp.json). NEVER include them in external shares, uploads, or backup bundles.
 
-## 10. Workflow Discipline — authoritative sources
+## 10. Workflow Discipline â€” authoritative sources
 
 Sections previously duplicated here now live in exactly one place each. Read the source, not a copy:
 
 | Topic | Authority |
 |---|---|
-| Lane classification, wave protocol, tool budget | `<HARNESS>/agent/agents/orchestrator.md` |
-| Context hygiene (checkpoint/rewind in recon) | `orchestrator.md` § T2 Wave 1 + `skill://codemap` |
+| Lane classification, wave protocol, tool budget | `D:/tmp/e3/harness/agent/agents/orchestrator.md` |
+| Context hygiene (checkpoint/rewind in recon) | `orchestrator.md` Â§ T2 Wave 1 + `skill://codemap` |
 | Deep modules, seams, deletion test | `skill://codebase-design` |
 | Ubiquitous language, `CONTEXT.md`, ADRs | `skill://domain-modeling` |
 | Scientific 6-phase bug diagnosis | `skill://diagnosing-bugs` + `agent/agents/fixer.md` |
-| Expand–Contract for wide refactors | `orchestrator.md` § Wave 2 |
+| Expandâ€“Contract for wide refactors | `orchestrator.md` Â§ Wave 2 |
 | Runtime Oracle acceptance | `agent/agents/oracle.md` |

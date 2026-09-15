@@ -140,7 +140,7 @@ Copy-Item "$PSScriptRoot\agent\AGENTS.md" "$HarnessRoot\agent\AGENTS.md" -Force
 $agentsText = (Get-Content "$PSScriptRoot\agent\AGENTS.md" -Raw) -replace '<HARNESS>', ($HarnessRoot -replace '\\','/')
 WriteText "$agentDir\AGENTS.md" $agentsText
 # A one-line pointer, so agent defs can be located from any working directory.
-WriteText "$agentDir\.harness-root" $HarnessRoot
+WriteText "$agentDir\.harness-root" ("$HarnessRoot" + [Environment]::NewLine)
 Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
 # Same substitution for any role/rule file that references the harness root.
 $slashRoot = $HarnessRoot -replace '\\','/'
