@@ -110,7 +110,7 @@ foreach ($entry in $Manifest) {
   # Use literal .Replace(), never -replace: the regex form expands $&/$1 in the
   # INPUT, silently corrupting any file that contains those sequences (every
   # shell script does), which then reports as permanent false drift.
-  if ($null -ne $repo) { $repo = $repo.Replace('<HARNESS>', $HarnessRoot.Replace('\', '/')) }
+  if ($null -ne $repo) { $repo = $repo.Replace('<HARNESS>', $HarnessRoot.Replace([char]92, [char]47)) }
 
   if ($null -eq $live -and $null -eq $repo) { continue }
   if ($null -eq $live) { Write-Host "  [!!] missing in harness : $rel" -ForegroundColor Yellow; $drift += $rel; continue }

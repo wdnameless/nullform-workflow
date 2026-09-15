@@ -137,13 +137,13 @@ foreach ($d in @("$HarnessRoot\agent", "$HarnessRoot\agent\agents", "$HarnessRoo
 Copy-Item "$PSScriptRoot\agent\AGENTS.md" "$HarnessRoot\agent\AGENTS.md" -Force
 # AGENTS.md ships path-templated so it survives being installed anywhere. Resolve
 # <HARNESS> at install time: without this the agent cannot find the full protocol.
-$agentsText = (Get-Content "$PSScriptRoot\agent\AGENTS.md" -Raw) .Replace('<HARNESS>', $HarnessRoot.Replace('\','/'))
+$slashRoot = $HarnessRoot.Replace([char]92, [char]47)   # backslash -> forward slash
+$agentsText = (Get-Content "$PSScriptRoot\agent\AGENTS.md" -Raw).Replace('<HARNESS>', $slashRoot)
 WriteText "$agentDir\AGENTS.md" $agentsText
 # A one-line pointer, so agent defs can be located from any working directory.
 WriteText "$agentDir\.harness-root" ("$HarnessRoot" + [Environment]::NewLine)
 Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
 # Same substitution for any role/rule file that references the harness root.
-$slashRoot = $HarnessRoot -replace '\\','/'
 Get-ChildItem "$HarnessRoot\agent\agents\*.md", "$PSScriptRoot\rules\*.md" -ErrorAction SilentlyContinue | ForEach-Object {
   $t = Get-Content $_.FullName -Raw
   if ($t -match '<HARNESS>') { WriteText $_.FullName ($t.Replace('<HARNESS>', $slashRoot)) }
