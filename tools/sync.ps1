@@ -76,6 +76,7 @@ $Manifest = @(
   'tools\replay.mjs',
   'tools\workflow.mjs',
   'tools\archmap.mjs',
+  'tools\archmap-demo.mjs',
   'tools\audit.ps1',
   'tools\sync.ps1',
   'CONTEXT.md'
