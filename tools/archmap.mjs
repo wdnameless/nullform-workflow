@@ -78,7 +78,9 @@ const DECISION = /\b(if|else\s+if|for|while|case|catch|when)\b|&&|\|\||\?\.|\?\s
 
 /* ------------------------------------------------------------------- utils */
 
-function walk(root, out = [], depth = 0) {
+let SCOPE = null;   // optional: only descend into these top-level dirs
+
+function walk(root, out = [], depth = 0, top = "") {
   if (depth > 14) return out;
   let entries;
   try { entries = readdirSync(root, { withFileTypes: true }); } catch { return out; }
@@ -86,7 +88,9 @@ function walk(root, out = [], depth = 0) {
     const full = join(root, e.name);
     if (e.isDirectory()) {
       if (SKIP.has(e.name) || e.name.startsWith(".")) continue;
-      walk(full, out, depth + 1);
+      const nextTop = top || e.name;
+      if (SCOPE && depth === 0 && !SCOPE.includes(e.name)) continue;
+      walk(full, out, depth + 1, nextTop);
     } else if (e.isFile() && LANGS[extname(e.name)]) {
       out.push(full);
     }
@@ -240,6 +244,7 @@ function scan(root) {
     version: 1,
     scannedAt: new Date().toISOString(),
     root: posix(root),
+    scope: SCOPE || null,
     totals: { files: Object.keys(filesOut).length, loc: totalLoc, avgMi },
     cycles: cycles.map((c) => c.sort()),
     files: filesOut,
@@ -587,6 +592,12 @@ function parse(argv) {
 
 const args = parse(process.argv.slice(2));
 const root = args.flags.root ? String(args.flags.root) : process.cwd();
+// A glossary/report describes what the PROJECT owns, not vendored bundles.
+if (args.flags.scope) {
+  const want = String(args.flags.scope).split(",").map((x) => x.trim()).filter(Boolean);
+  SCOPE = want.filter((d) => existsSync(join(root, d)));
+  if (!SCOPE.length) { console.error(`archmap: --scope matched no directories under ${root}`); process.exit(2); }
+}
 const cmd = args._[0] || "scan";
 const stateFile = join(root, DIR, STATE);
 const prevFile = join(root, DIR, "previous.json");
