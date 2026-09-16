@@ -246,6 +246,57 @@ Check 'prompt surfaces match baseline (cache-prefix stable)' {
   'matches'
 }
 
+# ---------------------------------------------------------------- enforcement
+# The tier gate is what makes the protocol enforceable. If it is broken or absent,
+# every prose rule it backs silently returns to being a suggestion.
+Check 'tier gate enforces artifacts (workflow.mjs)' {
+  $tmp = Join-Path $env:TEMP ("wf-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  try {
+    $wf = Join-Path $HarnessRoot 'tools\workflow.mjs'
+    if (-not (Test-Path $wf)) { throw "workflow.mjs missing" }
+    # T0 must complete with no artifacts.
+    $null = Invoke-Capture 'node' @($wf, 'start', '--tier', 'T0', '--task', 'probe', '--root', $tmp)
+    $t0 = Invoke-Capture 'node' @($wf, 'check', '--root', $tmp)
+    if ($t0.Code -ne 0) { throw "T0 should require no artifacts, got exit $($t0.Code)" }
+    # T2 must refuse to complete, and must reject a path that does not exist.
+    $null = Invoke-Capture 'node' @($wf, 'start', '--tier', 'T2', '--task', 'probe2', '--force', '--root', $tmp)
+    $t2 = Invoke-Capture 'node' @($wf, 'check', '--root', $tmp)
+    if ($t2.Code -eq 0) { throw "T2 passed with no artifacts - the gate does not work" }
+    $fake = Invoke-Capture 'node' @($wf, 'artifact', '--kind', 'manifest', '--path', 'nope/missing.md', '--root', $tmp)
+    if ($fake.Code -eq 0) { throw "a non-existent artifact path was accepted" }
+    $close = Invoke-Capture 'node' @($wf, 'close', '--root', $tmp)
+    if ($close.Code -eq 0) { throw "an incomplete tier was closed without --force" }
+    $forced = Invoke-Capture 'node' @($wf, 'close', '--force', '--reason', 'probe', '--root', $tmp)
+    if ($forced.Code -ne 0) { throw "--force --reason should close" }
+    'T0 passes, T2 blocks, fake paths rejected, forced close recorded'
+  } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+}
+
+# ---------------------------------------------------------------- visibility
+# The architecture report is the human's window into their own repo. A broken
+# engine means they silently lose it.
+Check 'archmap produces a report with graph and findings' {
+  $tmp = Join-Path $env:TEMP ("am-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Force -Path "$tmp\src" | Out-Null
+  try {
+    Set-Content -Path "$tmp\src\a.ts" -Value "import { b } from './b';`nexport const a = b;" -Encoding UTF8
+    Set-Content -Path "$tmp\src\b.ts" -Value "import { a } from './a';`nexport const b = a;" -Encoding UTF8
+    $am = Join-Path $HarnessRoot 'tools\archmap.mjs'
+    if (-not (Test-Path $am)) { throw "archmap.mjs missing" }
+    $scan = Invoke-Capture 'node' @($am, 'scan', '--root', $tmp)
+    if ($scan.Code -ne 0) { throw "scan failed" }
+    $html = Join-Path $tmp '.archmap\architecture.html'
+    if (-not (Test-Path $html)) { throw "no report written" }
+    $c = Get-Content $html -Raw
+    if ($c -notmatch '<svg' -or $c -notmatch 'maintainability') { throw "report missing graph or score" }
+    $js = Invoke-Capture 'node' @($am, 'json', '--root', $tmp)
+    # A planted two-file cycle must be detected.
+    if ($js.Text -notmatch '"cycles":\s*1') { throw "planted cycle not detected" }
+    'graph + score + cycle detection ok'
+  } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+}
+
 # ---------------------------------------------------------------- engines
 Check 'codemap engine init/update cycle' {
   $tmp = Join-Path $env:TEMP ("cm-" + [guid]::NewGuid().ToString('N').Substring(0,8))

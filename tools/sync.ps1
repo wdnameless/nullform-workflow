@@ -27,6 +27,7 @@ param(
   [string]$AgentsRoot  = (Join-Path $HOME '.agents'),
   [switch]$Promote,
   [switch]$Deploy,
+  [switch]$Force,
   [string]$Only = '',
   [switch]$Quiet
 )
@@ -93,6 +94,7 @@ function Write-Normalized([string]$Path, [string]$Text) {
 
 $drift = @()
 $checked = 0
+$suspect = @()   # repo newer than live: -Promote would destroy newer work
 
 foreach ($entry in $Manifest) {
   $parts = $entry -split "`t", 2
@@ -119,6 +121,13 @@ foreach ($entry in $Manifest) {
   if ($live -eq $repo) { continue }
 
   $drift += $rel
+  # mtime is the only cheap signal available here. If the repo copy is newer, the
+  # live tree is probably stale, and promoting would overwrite newer work.
+  try {
+    if ((Get-Item $repoPath).LastWriteTimeUtc -gt (Get-Item $livePath).LastWriteTimeUtc.AddSeconds(2)) {
+      $suspect += $rel
+    }
+  } catch { }
   if ($Promote) {
     Write-Normalized $repoPath $live
     Write-Host "  [->] promote $rel" -ForegroundColor Cyan
@@ -134,6 +143,16 @@ Write-Host ""
 if ($drift.Count -eq 0) {
   Write-Host "sync: clean ($checked files checked)" -ForegroundColor Green
   exit 0
+}
+
+if ($Promote -and $suspect.Count) {
+  Write-Host "sync: REFUSED - $($suspect.Count) repo file(s) are NEWER than the live tree:" -ForegroundColor Red
+  foreach ($x in $suspect) { Write-Host "  $x" -ForegroundColor Red }
+  Write-Host ""
+  Write-Host "Promoting would overwrite that work with a stale harness. Either:" -ForegroundColor Yellow
+  Write-Host "  -Deploy      push the repo (newer) INTO the live tree, or" -ForegroundColor Yellow
+  Write-Host "  -Promote -Force   if the live tree really is the intended source" -ForegroundColor Yellow
+  if (-not $Force) { exit 2 }
 }
 
 if ($Promote -or $Deploy) {
