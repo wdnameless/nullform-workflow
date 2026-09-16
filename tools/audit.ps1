@@ -24,7 +24,7 @@ param(
   # Default to the tree this script lives in: it is shipped INTO the harness
   # root by install.ps1, so $PSScriptRoot identifies it without any assumption
   # about where the user installed. -HarnessRoot overrides.
-  [string]$HarnessRoot = (Split-Path -Parent $PSScriptRoot),
+  [string]$HarnessRoot = '',
   # Standalone installs have no repo beside them: default to the harness root
   # itself so the checks still run against a coherent tree.
   [string]$RepoRoot    = '',
@@ -33,32 +33,38 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+if (-not $PSScriptRoot) { $PSScriptRoot = (Get-Location).Path }
+if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
+  $HarnessRoot = Split-Path -Parent $PSScriptRoot
+  if ([string]::IsNullOrWhiteSpace($HarnessRoot)) { $HarnessRoot = $PSScriptRoot }
+}
+if ($HarnessRoot) { $HarnessRoot = [System.IO.Path]::GetFullPath($HarnessRoot) }
+
 # Resolve the LIVE harness and the REPO independently. Running this from a repo
 # clone must still audit the installed harness, not the clone.
-#   $PSScriptRoot is <X>\tools  ->  <X> may be the harness or the repo.
-if (-not $PSScriptRoot) { $PSScriptRoot = (Get-Location).Path }
-# This file lives in <root>\tools, so the root is the parent - but only if that
-# parent is really a harness (it carries agent\AGENTS.md).
 $self = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($self)) { $self = $PSScriptRoot }
 if (Test-Path (Join-Path $PSScriptRoot 'agent\AGENTS.md')) { $self = $PSScriptRoot }
 if (-not (Test-Path (Join-Path $HarnessRoot 'agent\AGENTS.md'))) {
-  if (Test-Path (Join-Path $self 'agent\AGENTS.md')) { $HarnessRoot = $self }
+  if (Test-Path (Join-Path $self 'agent\AGENTS.md')) { $HarnessRoot = [System.IO.Path]::GetFullPath($self) }
 }
 $harnessIsRepo = Test-Path (Join-Path $HarnessRoot 'install.ps1')
 if ($harnessIsRepo) {
-  # We are inside the repo clone. The live harness is its sibling if installed there,
-  # else the repo is the only tree we have - audit it and say so.
-  $sibling = Join-Path (Split-Path -Parent $HarnessRoot) 'omp-workflow'
-  if (Test-Path (Join-Path $sibling 'agent\AGENTS.md')) { $HarnessRoot = $sibling }
+  if ([string]::IsNullOrWhiteSpace($RepoRoot)) { $RepoRoot = $HarnessRoot }
+} else {
+  if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $hParent = Split-Path -Parent $HarnessRoot
+    $cands = @()
+    if ($hParent) {
+      $cands += (Join-Path $hParent 'workflow-repo')
+      $cands += (Join-Path $hParent (Split-Path -Leaf $HarnessRoot) + '-repo')
+    }
+    $hit = $cands | Where-Object { $_ -and (Test-Path (Join-Path $_ 'install.ps1')) } | Select-Object -First 1
+    if ($hit) { $RepoRoot = $hit } else { $RepoRoot = $HarnessRoot }
+  }
 }
-# Resolve the repo root once: prefer an explicit -RepoRoot, else the tree that
-# carries install.ps1 (a repo clone), else the harness root (standalone install).
-if (-not $RepoRoot) {
-  $cand = @((Split-Path -Parent $PSScriptRoot), (Join-Path $HarnessRoot 'workflow-repo'),
-            (Join-Path (Split-Path -Parent $HarnessRoot) 'workflow-repo'))
-  $RepoRoot = ($cand | Where-Object { $_ -and (Test-Path (Join-Path $_ 'install.ps1')) } | Select-Object -First 1)
-  if (-not $RepoRoot) { $RepoRoot = $HarnessRoot }
-}
+if ($RepoRoot) { $RepoRoot = [System.IO.Path]::GetFullPath($RepoRoot) }
+if ($HarnessRoot) { $HarnessRoot = [System.IO.Path]::GetFullPath($HarnessRoot) }
 $findings = @()
 $results  = @()
 
@@ -154,8 +160,16 @@ Invoke-Check 'tier gate present and working' {
 
 Invoke-Check 'architecture report engine' {
   $am = Join-Path $HarnessRoot 'tools\archmap.mjs'
-  if (-not (Test-Path $am)) { return @{ Ok = $false; Detail = 'archmap.mjs missing - the user has no view of their repo' } }
-  @{ Ok = $true; Detail = 'present' }
+  $ar = Join-Path $HarnessRoot 'tools\archmap-report.mjs'
+  if (-not (Test-Path $am)) { return @{ Ok = $false; Detail = 'archmap.mjs missing' } }
+  if (-not (Test-Path $ar)) { return @{ Ok = $false; Detail = 'archmap-report.mjs missing' } }
+  @{ Ok = $true; Detail = 'archmap.mjs and archmap-report.mjs present' }
+}
+
+Invoke-Check 'portable core specification' {
+  $cp = Join-Path $HarnessRoot 'core\PORTABLE.md'
+  if (-not (Test-Path $cp)) { return @{ Ok = $false; Detail = 'core\PORTABLE.md missing' } }
+  @{ Ok = $true; Detail = 'core\PORTABLE.md present' }
 }
 
 Invoke-Check 'codemap currency' {

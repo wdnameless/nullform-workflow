@@ -18,31 +18,41 @@ param(
   # Default to the tree this script lives in: it is shipped INTO the harness
   # root by install.ps1, so $PSScriptRoot identifies it without any assumption
   # about where the user installed. -HarnessRoot overrides.
-  [string]$HarnessRoot = (Split-Path -Parent $PSScriptRoot)
+  [string]$HarnessRoot = ""
 )
 
 $ErrorActionPreference = 'Continue'
+if (-not $PSScriptRoot) { $PSScriptRoot = (Get-Location).Path }
+if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
+  $HarnessRoot = Split-Path -Parent $PSScriptRoot
+  if ([string]::IsNullOrWhiteSpace($HarnessRoot)) { $HarnessRoot = $PSScriptRoot }
+}
+if ($HarnessRoot) { $HarnessRoot = [System.IO.Path]::GetFullPath($HarnessRoot) }
+
 # Locate the harness (must contain agent\AGENTS.md) and, independently, the repo
 # clone that carries the canonical skills/ tree. They are usually different dirs.
-if (-not $PSScriptRoot) { $PSScriptRoot = (Get-Location).Path }
-# $PSScriptRoot is the harness root when this file sits there, or <harness>\tools
-# when it does not. Only step up when the parent is actually a harness.
 $dirs = New-Object System.Collections.ArrayList
 [void]$dirs.Add($PSScriptRoot)
-[void]$dirs.Add((Split-Path -Parent $PSScriptRoot))
+$pParent = Split-Path -Parent $PSScriptRoot
+if ($pParent) { [void]$dirs.Add($pParent) }
 if (-not (Test-Path (Join-Path $HarnessRoot 'agent\AGENTS.md'))) {
-  $hit = $dirs | Where-Object { Test-Path (Join-Path $_ 'agent\AGENTS.md') } | Select-Object -First 1
-  if ($hit) { $HarnessRoot = $hit }
+  $hit = $dirs | Where-Object { $_ -and (Test-Path (Join-Path $_ 'agent\AGENTS.md')) } | Select-Object -First 1
+  if ($hit) { $HarnessRoot = [System.IO.Path]::GetFullPath($hit) }
 }
 $selfRoot = $PSScriptRoot
 # The repo clone is the tree with install.ps1 + models.yml.example.
-$RepoRoot = @(
+$hParent = Split-Path -Parent $HarnessRoot
+$candidateRepoPaths = @(
   $selfRoot,
-  (Join-Path $HarnessRoot 'workflow-repo'),          # repo nested inside the harness
-  (Join-Path (Split-Path -Parent $HarnessRoot) 'workflow-repo'),  # repo as a sibling
-  $HarnessRoot
-) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'install.ps1')) } | Select-Object -First 1
+  (Join-Path $HarnessRoot 'workflow-repo')
+)
+if ($hParent) {
+  $candidateRepoPaths += (Join-Path $hParent 'workflow-repo')
+}
+$candidateRepoPaths += $HarnessRoot
+$RepoRoot = $candidateRepoPaths | Where-Object { $_ -and (Test-Path (Join-Path $_ 'install.ps1')) } | Select-Object -First 1
 if (-not $RepoRoot) { $RepoRoot = $HarnessRoot }
+if ($RepoRoot) { $RepoRoot = [System.IO.Path]::GetFullPath($RepoRoot) }
 $results = @()
 # Thrown when a check cannot run because the user has not configured that part
 # yet (no provider, no MCP service). Distinct from FAIL: an unconfigured harness
@@ -289,12 +299,23 @@ Check 'archmap produces a report with graph and findings' {
     $html = Join-Path $tmp '.archmap\architecture.html'
     if (-not (Test-Path $html)) { throw "no report written" }
     $c = Get-Content $html -Raw
-    if ($c -notmatch '<svg' -or $c -notmatch 'maintainability') { throw "report missing graph or score" }
+    if ($c -notmatch '<svg id="graph"') { throw "report missing <svg id=""graph"">" }
+    if ($c -notmatch '<html[^>]*lang="ru"') { throw "report missing <html lang=""ru"">" }
     $js = Invoke-Capture 'node' @($am, 'json', '--root', $tmp)
-    # A planted two-file cycle must be detected.
+    # A planted two-file cycle must be detected, along with analysis symbols/calls coverage.
     if ($js.Text -notmatch '"cycles":\s*1') { throw "planted cycle not detected" }
+    if ($js.Text -notmatch '"symbols"' -or $js.Text -notmatch '"calls"') { throw "json missing semantic symbols or calls" }
     'graph + score + cycle detection ok'
   } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+}
+Check 'portable core specification and adapter presence' {
+  $portable = Join-Path $HarnessRoot 'core\PORTABLE.md'
+  if (-not (Test-Path $portable)) { throw "core\PORTABLE.md missing" }
+  $paseoSetup = Join-Path $HarnessRoot 'paseo\setup-paseo.ps1'
+  if (-not (Test-Path $paseoSetup)) { throw "paseo\setup-paseo.ps1 missing" }
+  $analysisRuntime = Join-Path $HarnessRoot 'tools\archmap-analysis.mjs'
+  if (-not (Test-Path $analysisRuntime)) { throw "tools\archmap-analysis.mjs missing" }
+  'core, paseo adapter, and archmap analysis runtime present'
 }
 
 # ---------------------------------------------------------------- engines

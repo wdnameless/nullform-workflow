@@ -1,0 +1,10 @@
+{
+  "name": "ohmypi-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tools and analyzers for Oh My Pi architecture explorer",
+  "type": "module",
+  "dependencies": {
+    "typescript": "5.9.3"
+  }
+}

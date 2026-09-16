@@ -69,6 +69,7 @@ $Manifest = @(
   'agent\agents\sonic.md',
   'agent\agents\security-reviewer.md',
   "rules\enterprise-directives.md`t$AgentsRoot",
+  "skills\architecture-observability\SKILL.md`t$AgentsRoot",
   'tools\codemap.mjs',
   'tools\prompt-lint.mjs',
   'tools\skills-doctor.mjs',
@@ -76,10 +77,18 @@ $Manifest = @(
   'tools\replay.mjs',
   'tools\workflow.mjs',
   'tools\archmap.mjs',
+  'tools\archmap-report.mjs',
+  'tools\archmap-analysis.mjs',
   'tools\archmap-demo.mjs',
+  'tools\package.json',
+  'tools\package-lock.json',
   'tools\audit.ps1',
   'tools\sync.ps1',
-  'CONTEXT.md'
+  'core\PORTABLE.md',
+  'paseo\profiles.json',
+  'paseo\setup-paseo.ps1',
+  'CONTEXT.md',
+  'README.md'
 )
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)

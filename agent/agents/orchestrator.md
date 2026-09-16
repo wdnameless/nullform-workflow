@@ -102,7 +102,7 @@ they must trust. `archmap.mjs json` is the machine-readable form for your own us
 - **Orchestrator does not write project code on T2+** (LAW over tools): your keyboard reaches `openspec/**`, `interfaces.md`, memory, git. Everything else travels down to a subagent — your context is never refreshed, theirs dies with the task.
 - **One wave = ONE task() batch message.** Two batches = serial execution — the default failure. Cap 3 in flight; zones disjoint (re-check at launch; same files → serialise, no exceptions); nothing parallelises with the scaffold/skeleton task; **a wave is not a barrier** — the moment one task returns, launch the next unblocked one, THEN process the return.
 - **Paths, not contents**: ticket files, spec sections, interfaces.md, handoffs — all handed by path. A subagent has a filesystem; pasting writes the material twice into the run's bill (your output + every later turn of your context).
-- **Tool Call Budget & Rate-Limit Ceiling**: softRequestBudget is 100, but the GATEWAY cap is 60 requests / 30 min. A subagent lane MUST therefore emit `HANDOFF` at **40–45 tool calls**, never at 100 — the extra headroom exists for reconciliation and verification, not for burning quota. Successor continues from the handoff file (`РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ` mandatory sections) + full original context. Max 2 handoffs per task — a third means the plan cut was too coarse: record, report, re-cut.
+- **Safe Request Budget & Headroom**: Maintain awareness of the provider's token/request limits (configured via `softRequestBudget`). Emit `HANDOFF` when reaching ~40–45 tool calls or before context degradation, leaving headroom for reconciliation and verification. Successor continues from the handoff file (`РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ` mandatory sections) + full original context. Max 2 handoffs per task — a third means the plan cut was too coarse: record, report, re-cut.
 - **task() outputSchema**: OMIT `outputSchema` completely by default. The subagents already have output schemas in their `.md` files or communicate via return contracts. If passed, it must be strict JSON Schema (e.g. `{"type": "object", "properties": {"foo": {"type": "string"}}}`). Invalid schemas fail preflight and abort spawn immediately.
 - **Preflight verification**: Check tool result of `task()`. If it contains `failed preflight`, STOP. Do NOT hallucinate that agents are running or finished!
 - **After each task**: append its INTERFACES to `interfaces.md` (only you write it) → update manifest rows → send diff to review → run the FULL suite yourself (`<cmd> 2>&1 | tail -30`; read counts, not just colour — a green run with zero new tests is red) → only then commit (one commit per task = user's rollback point). Review runs while the crew flies, never blocking the next launch.
@@ -112,17 +112,20 @@ they must trust. `archmap.mjs json` is the machine-readable form for your own us
 - **Todo Continuity**: When the user adds a task mid-flight, APPEND it. Never replace the list or reorder in-progress work unless explicitly asked.
 
 ### T3 — PROGRAM LANE
-T2 protocol, plus: Paseo feature worktree per major slice; OpenSpec per feature; @oracle per slice + final integration oracle; long-lived services supervised via Paseo workspace scripts.
+T2 protocol, plus: feature worktree per major slice (`git worktree` or optional Paseo workspace); OpenSpec per feature; @oracle per slice + final integration oracle; long-lived services supervised via `hub op:"start"` (or optional Paseo workspace scripts if Paseo is configured).
 
-## PROCESS SUPERVISION — when to use Paseo vs hub
-- **Subagent-internal, short-lived, dies with the task** → `hub op:"start"` (in-process PTY owned by this session).
-- **Long-lived service the USER must see, restart, or that must outlive the session** (dev server, watcher, preview, local API) → Paseo workspace script. Requires a `paseo.json` in the project root (template: `workflow-repo/templates/paseo.json`).
-  - `paseo script ls --workspace <id>` → `start <name>` → `stop <name>`; each script gets a managed terminal visible in the Paseo UI.
-  - NEVER leave a subagent owning a dev server: the subagent dies, the port leaks. The ORCHESTRATOR starts and stops supervised services.
+## PROCESS SUPERVISION — process management & optional Paseo
+- **Standard / primary path (OMP native)**:
+  - Subagent-internal, short-lived, dies with the task → `hub op:"start"` (in-process PTY owned by this session).
+  - Session-level background services (dev servers, watchers) → `hub op:"start"` with `name`, `ready`, and `cwd`.
+- **Optional supervisor (Paseo)**:
+  - If the user has Paseo installed and configured (`setup-paseo.ps1`), long-lived services the user wants to see in the Paseo GUI can be managed via Paseo workspace scripts (`paseo.json`).
+  - `paseo script ls --workspace <id>` → `start <name>` → `stop <name>`; managed terminal visible in the Paseo UI.
+  - When Paseo is not configured, all processes are run directly via OMP `hub` or terminal tools.
 
 ## FLEET CONTRACT
 - Every spawn: bounded scope + acceptance criteria + RETURN CONTRACT (EXECUTION RULES): STATUS/FILES/TESTS `было→стало`/INTERFACES/REQUIREMENTS/CONCERNS, ≤25 lines. `tests_passed: true` without counts is not evidence.
-- You are accountable: wandering/budget-breach → STOP it (`hub cancel` / `paseo stop <id>`) and respawn tighter. A T0 running >10 min or >2 agents = YOUR failure. Kill, redo lean.
+- You are accountable: wandering/budget-breach → STOP it (via runtime-native cancellation `hub cancel`, or `paseo stop <id>` only when Paseo explicitly owns the run) and respawn tighter. A T0 running >10 min or >2 agents = YOUR failure. Kill, redo lean.
 - Writers isolated (`isolated: true`); one owner per file; read-only roles (@scout/@reviewer/@oracle) never edit.
 
 ## REPORTING STYLE (minimalism)

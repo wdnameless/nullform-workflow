@@ -1,5 +1,5 @@
 # ORCHESTRATOR LAW — SINGLE SMART ROUTER (supreme, overrides older templates)
-Full protocol: `D:/ohmypi/agent/agents/orchestrator.md` — the harness root is recorded in
+Full protocol: `<HARNESS>/agent/agents/orchestrator.md` — the harness root is recorded in
 `~/.omp/agent/.harness-root` (written by install.ps1). Read that one-line file, then
 `read` the full protocol BEFORE acting on a T1/T2/T3 verdict. Session cwd is a user
 project, so never resolve this path relatively. Summary:
@@ -26,7 +26,7 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
 - `⚡ [T0 FAST]` 1–2 known files, localized → direct edit or 1 specialist, ≤10 min, NO OpenSpec/interview/oracle.
 - `🔧 [T1 STANDARD]` 3+ files or unfamiliar area → quick recon, micro-plan in chat, 1–2 specialists in ONE batch.
 - `🚀 [T2 HEAVY]` architecture/new module → full 4-Wave SDD. **Wave 0 MANDATORY**: `read skill://grill-me`, then ask ALL forks/constraints/success criteria via ONE structured `ask` widget call (NEVER as chat text); DO NOT scaffold OpenSpec or write code until the user answers the widget. Then: requirements manifest (R## + verbatim user quotes) → explore → OpenSpec → parallel build → oracle **blind vs the brief, never vs our spec**.
-- `🌌 [T3 PROGRAM]` multi-feature program → T2 per slice + Paseo feature worktrees.
+- `🌌 [T3 PROGRAM]` multi-feature program → T2 per slice + feature worktrees (git worktree or optional Paseo workspace).
 - Match the lane to reality: >2 files, unfamiliar area, or new behavior → T1 MINIMUM (NEVER down-classify to T0 to save time). T0 only for truly trivial 1–2 known-file edits. Escalate when a lane stalls. When unsure → ONE clarifying question.
 
 ## 1b. ARCHITECTURE VISIBILITY — the human cannot see the repo from a diff
@@ -53,7 +53,7 @@ stop-and-say-something event even when the task succeeded.
 `@designer` UI (8-phase skill pipeline) | `@fixer` logic TDD isolated | `@explorer`/`@scout` discovery | `@librarian` docs | `@oracle` blind acceptance.
 
 ## 4. FLEET CONTRACT
-Every spawn: bounded scope + acceptance criteria + **return contract** (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines, no essays). Hand files by PATH, never paste contents. Context ceiling ~45 tool calls per subagent (gateway caps at 60/30min) → HANDOFF protocol. Kill wanderers (`hub cancel`/`paseo stop`). Writers isolated, one owner per file, zones disjoint, read-only roles never edit. On T2+ the orchestrator NEVER writes project code — only specs/manifest/interfaces/git.
+Every spawn: bounded scope + acceptance criteria + **return contract** (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines, no essays). Hand files by PATH, never paste contents. Safe context budget: emit HANDOFF before exhaustion or context degradation (reconciliation headroom) → HANDOFF protocol. Kill wanderers (`hub cancel` or optional `paseo stop`). Writers isolated, one owner per file, zones disjoint, read-only roles never edit. On T2+ the orchestrator NEVER writes project code — only specs/manifest/interfaces/git.
 SECRETS: never request credentials; redact pasted keys to `[REDACTED:<VAR>]` before writing any file/prompt; user fills `.env` themselves. A leaked secret = stop + report.
 SESSION BUDGET: if session context exceeds ~200K tokens, retain state to hindsight and ask the user to open a fresh session — never ride a degrading context into the TPM wall.
 task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST be strict standard JSON Schema with object definitions (e.g. `{"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}`). Pseudo-schemas like `{"properties": {"items": "array"}}` cause PREFLIGHT REJECT. NEVER report subagents as running or done if preflight failed!
@@ -65,15 +65,15 @@ task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST 
 
 # SHELL PATHS (Windows host — get this right the first time)
 - In `bash` tool calls, wrap every Windows path in SINGLE QUOTES and use FORWARD slashes:
-  `node 'D:/ohmypi/tools/replay.mjs' show --cassette 'D:/ohmypi/tests/c.json'`
-- A bare `D:\path\to\x.mjs` loses its backslashes to the shell (`D:\pathtox.mjs`).
-  A POSIX-style `/d/ohmypi/...` resolves to `D:\d\ohmypi\...`. Both fail.
+  `node '<HARNESS>/tools/replay.mjs' show --cassette '<HARNESS>/tests/c.json'`
+- A bare Windows path `C:\path\to\x.mjs` loses its backslashes to bash shell (`C:\pathtox.mjs`).
+  A POSIX-style `/c/...` resolves to `C:\c\...`. Both fail.
 - This applies to `node`, `powershell -File`, and `python` invocations alike.
 - Prefer `cwd` + a relative path over a long absolute path.
 
 # PROJECT GLOSSARY (read first in any repo, including this one)
 - If `CONTEXT.md` exists at the repo root, READ IT before naming new types, tables, endpoints, or domain entities. It is the canonical vocabulary; the Oracle rejects a diff that introduces a synonym or an undocumented public symbol.
-- If it does not exist, do not create one unprompted — note it and continue. `node 'D:/ohmypi/tools/glossary.mjs' draft --root .` bootstraps a skeleton if the work genuinely warrants one.
+- If it does not exist, do not create one unprompted — note it and continue. `node '<HARNESS>/tools/glossary.mjs' draft --root .` bootstraps a skeleton if the work genuinely warrants one.
 - `docs/adr/` holds decisions; if your change contradicts one, surface it rather than silently overriding.
 
 # ON-DEMAND RULES (read only when the task touches the topic)
@@ -85,7 +85,7 @@ task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST 
 - `skill://domain-modeling` — `CONTEXT.md` glossary, ubiquitous language, ADR triggers. Read when naming new types/entities or when terms conflict.
 - `skill://codebase-design` — deep modules, seams, deletion test. Read before designing or refactoring a module interface.
 - `skill://diagnosing-bugs` — 6-phase scientific diagnosis (feedback loop before code). Read before fixing any non-obvious bug.
-- `skill://codemap` — hierarchical repo cartography with change tracking (`D:/ohmypi/tools/codemap.mjs`). Read when entering an unfamiliar repo or planning a large change.
+- `skill://codemap` — hierarchical repo cartography with change tracking (`<HARNESS>/tools/codemap.mjs`). Read when entering an unfamiliar repo or planning a large change.
 - `skill://deepwork` — gated multi-phase delivery with Oracle review budget. Read for large or high-risk multi-phase work.
 - `skill://nullform-workflow-full` — the 4-Wave SDD protocol.
 NOTE: the skill registry is snapshotted at session start. After installing or editing a skill, start a NEW session before `skill://<name>` resolves (its rules may already be embedded in the agent files above).

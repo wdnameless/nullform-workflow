@@ -1,0 +1,24 @@
+# Interfaces and ownership
+
+## Existing contract retained
+
+The module mode MUST render actual visible nodes AND directed dependency edges from `files[path].deps` for ALL existing supported languages, including Python/Rust/Go/etc. Existing `members` for these languages stay available in the detail panel and are marked heuristic, not replaced by empty JS/TS-only data. The function mode MUST render actual visual nodes AND directed edges from `symbols`/`calls`; lists alone do not satisfy the brief. Non-JS/TS calls are explicitly unsupported, never fabricated as heuristic call edges. This preserves the existing overview while accurately extending JS/TS only.
+CLI `node tools/archmap.mjs scan|report|diff|json --root <path>`; offline `.archmap/architecture.html`, `state.json`, previous snapshot. Keep existing fields `files[path]: {loc,bytes,hash,complexity,exports,imports,members,deps,fanIn,fanOut,mi}`, `totals`, `cycles`, `root`, `scannedAt`. Existing `members` names/kind/line remain, extended optional `id`. Old states re-render without crashing and explicitly report missing call coverage.
+
+## New analysis state (producer Analyzer, consumer Report)
+`state.symbols: Array<{id:string,file:string,name:string,kind:string,line:number,endLine:number}>`.
+IDs unique stable within a scan, paths relative POSIX; all symbol kinds can be translated by renderer with safe fallback.
+`state.calls: Array<{from:string,to:string,file:string,line:number}>` endpoints are symbol IDs; only statically resolved executable project targets. Module initializer pseudo-symbol allowed, kind `module`. No guessed bare-name matches. External target calls do not become internal edges.
+`state.unresolvedCalls: Array<{from:string,file:string,line:number,expression:string,reason:string}>` includes dynamic/external unresolved targets with machine reason codes rendered Russian; bound expression length; no file content dumping.
+`state.analysis: {engine:string,supportedExtensions:string[],limitations:string[],diagnostics:Array<{file:string,line:number,message:string}>}`. Limitations/messages must be Russian or renderer translated. JS/TS semantic analysis uses pinned TypeScript compiler API. Scanner does NOT execute scanned code.
+
+## Rendering seam
+`tools/archmap-report.mjs` exports `renderHtml(state, delta, findings): string`. Only renderer exports this; does not import scanner, no DOM/network at module load. Scanner imports this and removes old inline renderer/layout. Renderer receives old findings structure `{shown,suppressed,total}` with `severity,kind,what,why,fix,where`; Analyzer translates findings Russian and removes ranking reliance on English prose. Escape all project-controlled text and JSON safely. Report is one HTML with embedded assets and data, works from file:// without runtime/npm/network.
+
+## Ownership
+- Analyzer: tools/archmap.mjs, tools/archmap-analysis.mjs (if needed), tools/package.json, tools/package-lock.json, tools/archmap-demo.mjs, tools/tests/archmap-analysis.test.mjs. Remove old renderer and wire new renderer; never edit renderer file. Own dependency pinned TypeScript (current source-verified stable version). Dependency install required only for scan, not offline report reading.
+- Report: tools/archmap-report.mjs only; designer takes existing inline renderer as source/reference and replaces with maintained renderer. Do not edit archmap.mjs. User-approved direction dark minimalist Russian, existing report screenshot structure as reference; refero bundled craft research before design. No dependency required by renderer.
+- Portability: agent/**, rules/**, skills workflow-related files, install.ps1, verify.ps1, tools/sync.ps1, tools/audit.ps1, README.md, CONTEXT.md, core/**, paseo/**, templates/**, .gitignore, tools/tests/portable-workflow.test.mjs or PowerShell sandbox test. Do not edit scanner/renderer/package files. Install copies tools package manifests, excludes node_modules from source copy, runs npm ci --prefix installed/tools --omit=dev with checked exit; ensure sync covers new renderer/analyzer/package files/core docs. Base install leaves Paseo untouched; separate explicit setup script merges owned profile rather than replacing unrelated profiles. Keep OMP route and optional Paseo usability. Portable core instructions may be docs; do not claim new runtime adapter.
+- Main: specs/interfaces, integration verification, deployment, git. No project code edits.
+
+All workers skip formatters, linters, builds, and test execution while siblings edit. Write narrowly justified regression tests but parent runs them once integrated. Read manifest against this contract and flag omitted requirements before editing. Send needed interface changes to Main; do not invent incompatible fields. No unapproved secrets/config writes. Return <=25 lines STATUS | FILES paths | TESTS not-run/parent-owned | INTERFACES | REQUIREMENTS | CONCERNS.

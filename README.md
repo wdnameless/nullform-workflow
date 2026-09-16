@@ -1,135 +1,145 @@
-# OMP Workflow — an agentic-engineering harness for Oh My Pi
+# OMP Workflow — переносимый агентный каркас разработки для Oh My Pi (с опциональным Paseo)
 
-A complete orchestration stack for OMP: lane classifier (T0–T3), 4-Wave SDD with
-requirements traceability, a role fleet, 65+ skills, drift control, prompt-cache
-safety, and runtime verification tooling.
+Полнофункциональный стек оркестрации для Oh My Pi (OMP): четырехуровневый классификатор задач (T0–T3), 4-волновой управляемый спецификациями процесс (SDD / OpenSpec) с трассировкой требований (R##), парк специализированных ролей, 65+ навыков, строгий контроль дрейфа (sync/audit), защита кеша промптов и офлайн-визуализатор архитектуры (`archmap`).
 
-**Provider-agnostic.** Nothing here assumes a particular vendor: you supply an
-OpenAI-compatible endpoint and a model id. The MCP fleet is optional — the agent
-definitions, rules, skills, and tools all work without a single MCP server.
+**Переносимое ядро отдельно от основной среды исполнения OMP.** Архитектурное ядро и протокол взаимодействия ролей вынесены в `core/PORTABLE.md` и сформулированы на уровне возможностей без привязки к поставщику модели (в конфигурации приводится пример OpenAI-совместимого эндпоинта). Oh My Pi — основная среда исполнения; Paseo — опциональная интеграция профилей и удобств управления (`paseo/setup-paseo.ps1`). Адаптеры для других агентных сред не верифицированы: переносимость спецификации не означает проверенную совместимость исполнения. Инструменты MCP опциональны.
 
-## Install (one prompt)
+## Установка (в одну команду)
 
-Paste this into any agent that can run shell commands (OMP, Claude Code, Cursor):
+### Основной режим: Oh My Pi
 
-```
-Clone https://github.com/wdnameless/omp-workflow to ~/omp-workflow, then run
-`powershell -ExecutionPolicy Bypass -File ~/omp-workflow/install.ps1` and answer
-its prompts (model provider base URL, API key, model id — all optional, and the
-optional MCP service URLs can be left blank).
+Вставьте команду в терминал:
+```powershell
+# Клонируйте репозиторий и запустите установщик (базовый режим OMP, Paseo не затрагивается):
+git clone https://github.com/wdnameless/omp-paseo-nullform-workflow.git "$HOME/omp-workflow-src"
+Set-Location "$HOME/omp-workflow-src"
+powershell -ExecutionPolicy Bypass -File ./install.ps1
 ```
 
-The installer is interactive by default and idempotent — re-run it after a
-`git pull` to update. Non-interactive from a filled-in secrets file:
+Исходники находятся в `$HOME/omp-workflow-src`, установленный каркас по умолчанию — в `$HOME/omp-workflow`. Это разные каталоги; не используйте каталог клона как назначение установки.
+
+Установщик интерактивен по умолчанию и идемпотентен: он запрашивает параметры поставщика модели (URL, ключ, идентификатор) и опциональные MCP-серверы (можно оставить пустыми). Для неинтерактивной установки:
 
 ```powershell
-copy secrets.example.env secrets.env   # then edit
+copy secrets.example.env secrets.env   # заполните параметры
 powershell -ExecutionPolicy Bypass -File install.ps1 -NonInteractive
 ```
 
-## Verify
+Для изолированного тестирования без пользовательских настроек и реальных секретов используйте `-UserHome` и явно заданный пустой файл:
+```powershell
+$sandbox = Join-Path $env:TEMP ("omp-test-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $sandbox | Out-Null
+$emptySecrets = Join-Path $sandbox "empty-secrets.env"
+Set-Content -Path $emptySecrets -Value "" -Encoding UTF8
+powershell -ExecutionPolicy Bypass -File install.ps1 -NonInteractive -UserHome $sandbox -SecretsFile $emptySecrets
+```
+
+### Опциональная интеграция: Paseo
+
+Базовый установщик не модифицирует настройки Paseo и не запускает фоновые демоны. Если вам требуется интеграция профилей в Paseo:
+```powershell
+powershell -ExecutionPolicy Bypass -File paseo/setup-paseo.ps1 -Model <provider/model>
+```
+Скрипт объединяет профиль OMP в `daemon.agentProfiles`, сохраняя существующие профили и настройки пользователя. Для нового профиля требуется указание `-Model <provider/model>`.
+
+Устаревший ключ `-SkipPaseo` из прежних версий установщика принимается для обратной совместимости и ничего не делает: базовый режим и так не трогает Paseo. Совместное использование `-SkipPaseo` и `-SetupPaseo` завершается ошибкой (это противоречие, а не приоритет).
+
+## Проверка (Verify)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File verify.ps1
 ```
 
-Prints a PASS/FAIL table; exit 0 means every layer is sound. It checks YOUR
-configuration is well-formed and that the harness mechanics work — it does not
-assert that any external service exists.
+Выводит таблицу PASS/FAIL. Код возврата 0 означает прохождение реализованных проверок, а не гарантию работоспособности всех слоев, внешних сервисов или адаптеров.
 
-## What you must supply
+## Карта архитектуры
 
-Everything is optional except a model endpoint (and you can install without one,
-then fill it in later).
-
-| Value | Goes into | Notes |
-|---|---|---|
-| Provider base URL | `models.yml` `baseUrl` | OpenAI-compatible, usually ends in `/v1` |
-| Provider API key | `models.yml` `apiKey` | never committed; `secrets.env` is git-ignored |
-| Default model id | `models.yml` + role selectors | whatever your provider calls it |
-| Memory MCP URL + token | `mcp.json` | optional; skip and the entry is dropped |
-| Crawl MCP URL + token | `mcp.json` | optional; skip and the entry is dropped |
-| context7 API key | `mcp.json` | optional; context7 works keyless at a lower limit |
-
-All configs ship as `*.example` with `__PLACEHOLDERS__`; the installer patches
-them. Leave an optional value blank and its entry is removed rather than left
-half-configured (a server that fails to connect on every session boot is worse
-than an absent one).
-
-## Swapping in your own provider
-
-`agent/models.yml.example` declares one provider named `my-provider`. Rename it
-freely, then update `agent/config.yml`'s `modelRoles` to match — selectors are
-`<provider-id>/<model-id>`. Point every role at the same model first; split them
-later (`smol`/`task`/`explorer` onto something cheap, `slow`/`plan` onto your
-strongest) once you know what your provider offers.
-
-## What is inside
-
-```
-agent/
-  AGENTS.md            orchestrator law (auto-loaded every session)
-  agents/              11 role definitions (orchestrator, designer, fixer, oracle, scout, …)
-  config.yml.example   OMP settings (model roles, timeouts, isolation)
-  models.yml.example   one OpenAI-compatible provider, edit to taste
-  mcp.json.example     optional MCP fleet, every entry documented + droppable
-  agents/*.md          role contracts: scopes, return contract, ceilings
-skills/                65+ skills: grill-me/grilling, design suite, test-safety,
-                       nullform-workflow-full, and the engineering disciplines —
-                       domain-modeling, codebase-design, diagnosing-bugs,
-                       codemap, deepwork
-rules/
-  enterprise-directives.md   on-demand rule (git/PR, ports, DB, secrets redaction)
-tools/
-  codemap.mjs          repo cartography + change tracking (no deps)
-  prompt-lint.mjs      prompt-cache safety: volatile-literal scan + baseline drift
-  skills-doctor.mjs    detects skills the registry would drop silently
-  glossary.mjs         CONTEXT.md bootstrap + vocabulary-drift check
-  replay.mjs           record/replay network cassettes for runtime verification
-  audit.ps1            all mechanical checks in one verdict (exit 0/1)
-  sync.ps1             drift control between a repo clone and a live install
-  session_cost.py      token/cost reporter per model per day
-templates/paseo.json   Paseo workspace-script template (supervised dev servers)
-paseo/profiles.json    Paseo launch profile
-CONTEXT.md             the workflow's own domain glossary (dogfood)
-```
-
-## How it runs
-
-1. Every task classifies first: `T0` direct · `T1` recon + 1–2 specialists ·
-   `T2` full 4-Wave SDD · `T3` program slices.
-2. T2: Wave 0 `grill-me` interview via ONE ask-widget → `manifest.md` with
-   verbatim user quotes (R01…) → OpenSpec change → G-gates → parallel build waves
-   (disjoint file ownership, `interfaces.md` shared contract) → blind `@oracle`.
-3. Subagents get fresh context each, a ≤25-line return contract
-   (STATUS/FILES/TESTS/INTERFACES/CONCERNS), and HANDOFF at ~45 tool calls — the
-   internal budget is 100, but a hosted gateway may cap requests per minute, so
-   lanes stop well before it.
-4. Disciplines are enforced, not just documented: an undocumented public domain
-   symbol is an Oracle REJECT (`domain-modeling`); interfaces must survive the
-   deletion test (`codebase-design`); a bug is diagnosed by the 6-phase protocol
-   before any code is touched (`diagnosing-bugs`); a network-path change needs a
-   replay cassette, because a mock written alongside the code is not evidence.
-5. Long-lived services (dev servers, watchers) are supervised by Paseo workspace
-   scripts — never owned by a subagent that dies and leaks the port.
-
-Full law: `agent/AGENTS.md` + `agent/agents/orchestrator.md`.
-
-## Maintenance
+Для семантического сканирования JS/TS требуются зависимости инструментов. Установщик выполняет `npm ci` в установленном каталоге `tools`; при запуске из клона выполните:
 
 ```powershell
-powershell -File tools/audit.ps1               # one verdict across all checks
-powershell -File tools/sync.ps1                # drift between clone and live install
-powershell -File tools/sync.ps1 -Promote       #   live -> clone
-powershell -File tools/sync.ps1 -Deploy        #   clone -> live
-node tools/prompt-lint.mjs baseline --root .   # re-record cache baseline after an intentional edit
+npm ci --prefix tools
+node tools/archmap.mjs scan --root PATH
+```
+
+Замените `PATH` на каталог анализируемого проекта. Отчет: `PATH/.archmap/architecture.html` — автономный HTML-файл, который можно открыть в браузере.
+
+## Требования для настройки (конфигурация моделей)
+
+Все параметры опциональны, кроме эндпоинта модели (установку можно выполнить и без него, заполнив параметры позже).
+| Параметр | Куда записывается | Примечания |
+|---|---|---|
+| Базовый URL поставщика | `models.yml` `baseUrl` | Совместимый с OpenAI, обычно оканчивается на `/v1` |
+| API-ключ поставщика | `models.yml` `apiKey` | Никогда не коммитится; `secrets.env` добавлен в `.gitignore` |
+| Идентификатор модели по умолчанию | `models.yml` + селекторы ролей | Имя модели поставщика |
+| URL и токен памяти MCP | `mcp.json` | Опционально; если пропустить, запись удаляется |
+| URL и токен Crawl MCP | `mcp.json` | Опционально; если пропустить, запись удаляется |
+| API-ключ context7 | `mcp.json` | Опционально; context7 работает и без ключа с меньшими лимитами |
+
+Все конфигурации поставляются в виде `*.example` шаблонов. Если опциональный параметр оставлен пустым, секция удаляется из конфигурации во избежание сбоев подключения при старте.
+
+## Смена и настройка поставщика моделей
+
+`agent/models.yml.example` определяет поставщика с именем `my-provider`. Вы можете переименовать его и обновить `modelRoles` в `agent/config.yml` (формат селектора: `<provider-id>/<model-id>`).
+
+## Содержимое репозитория
+
+```
+core/
+  PORTABLE.md          спецификация независимого ядра процесса разработки (W0-W4, контракты, артефакты)
+agent/
+  AGENTS.md            свод законов оркестратора OMP (загружается на каждый сеанс)
+  agents/              11 определений ролей (orchestrator, designer, fixer, oracle, scout, …)
+  config.yml.example   настройки OMP (роли моделей, таймауты, флаги изоляции)
+  models.yml.example   шаблон OpenAI-совместимого поставщика
+  mcp.json.example     шаблон конфигурации MCP-серверов
+skills/                65+ специализированных навыков (SDD, архитектура, диагностика, дизайн)
+rules/
+  enterprise-directives.md   корпоративные директивы по требованию (git/PR, порты, БД, секреты)
+tools/
+  archmap.mjs          сканер архитектуры (символы, вызовы JS/TS, циклические зависимости)
+  archmap-report.mjs   автономный HTML-репортер архитектуры (темная тема, русский язык, граф)
+  archmap-demo.mjs     демонстрационный скрипт карты архитектуры
+  codemap.mjs          картография репозитория и отслеживание изменений без внешних зависимостей
+  prompt-lint.mjs      проверка стабильности кэша промптов и дрейфа
+  skills-doctor.mjs    диагностика навыков
+  glossary.mjs         проверка дрейфа предметного словаря (CONTEXT.md)
+  replay.mjs           запись/воспроизведение сетевых кассет для верификации
+  audit.ps1            единая автоматическая проверка состояния (exit 0/1)
+  sync.ps1             синхронизация и контроль дрейфа между репозиторием и рабочей установкой
+  session_cost.py      отчет о расходе токенов по моделям
+paseo/
+  setup-paseo.ps1      скрипт опционального объединения профилей OMP в Paseo
+  profiles.json        профили агентов для Paseo
+templates/paseo.json   шаблон скрипта рабочего пространства Paseo (для долгоживущих процессов)
+CONTEXT.md             словарь терминов предметной области каркаса
+```
+
+## Принцип работы
+
+1. Классификация задач: `T0` прямая правка · `T1` разведка + 1–2 специалиста · `T2` полный 4-волновой SDD · `T3` программные срезы (декомпозиция на независимые воркдерева git; рабочие пространства Paseo опциональны).
+2. Волна SDD (T2): Wave 0 интервью через виджет `ask` (`grill-me`) → `manifest.md` с дословными цитатами пользователя (R01…) → OpenSpec-изменение → гейты готовности (G0-G3) → параллельные волны реализации (изолированные файлы, единый контракт `interfaces.md`) → слепая верификация `@oracle`.
+3. Субагенты работают в изолированном контексте с контрактом возврата ≤25 строк (STATUS / FILES / TESTS / INTERFACES / CONCERNS) и передачей эстафеты (HANDOFF) при приближении к лимиту вызовов контекста.
+4. Инженерная дисциплина: недокументированный публичный символ предметной области бракуется Оракулом (`domain-modeling`); интерфейсы проверяются на устойчивость (`codebase-design`); баги диагностируются по 6-фазному протоколу до правки логики (`diagnosing-bugs`).
+5. Долгоживущие сервисы (фоновые серверы разработки, вотчеры) изолируются и управляются через специализированные средства (процессы OMP или рабочие пространства Paseo) без утечки портов при завершении субагентов.
+
+
+## Сопровождение и синхронизация (Maintenance)
+
+```powershell
+powershell -File tools/audit.ps1               # сводная проверка здоровья всех компонентов
+powershell -File tools/sync.ps1                # проверка дрейфа между репозиторием и установкой
+powershell -File tools/sync.ps1 -Promote       # перенос изменений: рабочая папка -> репозиторий
+powershell -File tools/sync.ps1 -Deploy        # перенос изменений: репозиторий -> рабочая папка
+node tools/prompt-lint.mjs baseline --root .   # обновление базовой линии кэша промптов
 python tools/session_cost.py <transcript.jsonl>
 ```
 
-## After install
+## После установки
 
-- Open a NEW OMP session — skills, MCP, and `AGENTS.md` load at session start.
-- Give it a real task. A T2 task should open with the ask widget, not code.
+- Запустите новую сессию OMP — навыки, MCP и `AGENTS.md` считываются при старте.
+- Начните задачу: при классификации T2 оркестратор открывает интервью через опросник, а не пишет код наугад.
+
+Полный свод правил: `core/PORTABLE.md`, `agent/AGENTS.md`, `agent/agents/orchestrator.md`.
 
 ## License
 

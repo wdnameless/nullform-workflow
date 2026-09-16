@@ -12,7 +12,8 @@ Terms used in this OMP workflow harness. Definitions say what a term
   - **Repo tree** — the git clone you installed from. The distributable source of truth.
   - **Drift** — divergence between the two. Owned by `tools/sync.ps1`.
 - **Install** — copying the repo tree onto a machine (`install.ps1`). Produces
-  the live tree and registers the Paseo profile.
+  the live tree. Does not mutate Paseo; Paseo profile setup is an optional explicit step (`paseo/setup-paseo.ps1`).
+- **Portable core** — execution-environment-agnostic specification, contracts, and interfaces (`core/PORTABLE.md`) defining the 4-wave SDD process independently of OMP or Paseo.
 - **Prompt surface** — any file whose text reaches a model's context:
   `agent/AGENTS.md`, `agent/agents/*.md`, `~/.agents/rules/*.md`,
   `~/.agents/skills/*/SKILL.md`. Not a synonym for *rule* or *skill*: those are
@@ -114,12 +115,9 @@ Terms used in this OMP workflow harness. Definitions say what a term
 
 ## Operations
 
-- **Soft request budget** — the internal per-run tool-call ceiling
-  (`softRequestBudget`). Not the real limit; see *Rate ceiling*.
-- **Rate ceiling** — the gateway's hard limit (60 requests / 30 min). A lane
-  emits HANDOFF at 40–45 calls so the headroom survives reconciliation.
+- **Rate ceiling** — gateway or provider request rate limit if present. A lane
+  emits HANDOFF at ~40–45 calls before running into context limits or provider caps so the headroom survives reconciliation.
 - **Session reuse** — continuing a specialist session that still holds useful
-  context, instead of spawning a cold one. Saves tokens and quota.
 - **Session snapshot** — the skill registry is read once at session start. A skill
   installed mid-session does not resolve as `skill://<name>` until restart, even
   though its rules may already be embedded in agent files.

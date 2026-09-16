@@ -5,13 +5,19 @@
 
 .DESCRIPTION
   Installs an orchestration harness for OMP: agent definitions, rules, skills,
-  tools, and optional MCP/Paseo configuration. Nothing here is provider-specific
+  tools, and portable core specification. Base installation is strictly OMP-native
+  and leaves Paseo untouched; optional Paseo profile integration can be run via -SetupPaseo or explicitly via paseo/setup-paseo.ps1. Nothing here is provider-specific
   or machine-specific - you supply your own model endpoint.
+
+  -SkipPaseo is deprecated: it is accepted for compatibility with older installs
+  and is a no-op, because the base install already leaves Paseo untouched.
+  Passing it together with -SetupPaseo fails with an error.
 
   Where things land (all OMP-native paths):
     <HarnessRoot>\agent\           agent definitions + tools (the "live tree")
     <HarnessRoot>\agent\agents\    role definitions
-    <HarnessRoot>\tools\           codemap / prompt-lint / replay / audit ...
+    <HarnessRoot>\tools\           codemap / prompt-lint / replay / audit / archmap ...
+    <HarnessRoot>\core\            portable workflow specification & contracts
     ~/.omp/agent/AGENTS.md         orchestrator law (auto-loaded every session)
     ~/.omp/agent/rules/*.md        rules, addressable as rule://<name>
     ~/.omp/agent/models.yml        your provider(s)          (needs your input)
@@ -26,14 +32,16 @@
   powershell -ExecutionPolicy Bypass -File install.ps1
 
 .EXAMPLE
-  # Non-interactive, from a filled-in secrets.env:
-  copy secrets.example.env secrets.env   # then edit it
-  powershell -ExecutionPolicy Bypass -File install.ps1 -NonInteractive
+  # Non-interactive, sandbox root for testing:
+  powershell -ExecutionPolicy Bypass -File install.ps1 -UserHome "C:\temp\test-home" -HarnessRoot "C:\temp\test-home\omp-workflow" -NonInteractive
 #>
 param(
   [string]$SecretsFile = (Join-Path $PSScriptRoot 'secrets.env'),
-  [string]$HarnessRoot = (Join-Path $HOME 'omp-workflow'),
+  [string]$HarnessRoot = "",
+  [string]$UserHome = "",
+  [string]$UserRoot = "",
   [switch]$NonInteractive,
+  [switch]$SetupPaseo,
   [switch]$SkipPaseo,
   [switch]$SkipMcp
 )
@@ -50,6 +58,32 @@ function Ask($prompt, $default = '') {
   return $v
 }
 
+# -SkipPaseo is kept for backward compatibility with the pre-portable installer.
+# The base install now leaves Paseo untouched unconditionally, so the switch is a
+# no-op; passing it together with -SetupPaseo is a contradiction, not a precedence
+# puzzle, and fails loudly instead of silently picking one.
+if ($SkipPaseo -and $SetupPaseo) {
+  Die "-SkipPaseo and -SetupPaseo contradict each other. Paseo is skipped by default: pass -SetupPaseo alone to opt in."
+}
+if ($SkipPaseo) {
+  Warn "-SkipPaseo is deprecated and now a no-op: the base install leaves Paseo untouched by default."
+}
+
+# Resolve UserHome and HarnessRoot (supporting both UserHome and UserRoot alias)
+if ([string]::IsNullOrWhiteSpace($UserHome)) {
+  if (-not [string]::IsNullOrWhiteSpace($UserRoot)) {
+    $UserHome = $UserRoot
+  } else {
+    $UserHome = $env:USERPROFILE
+    if ([string]::IsNullOrWhiteSpace($UserHome)) {
+      $UserHome = $HOME
+    }
+  }
+}
+if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
+  $HarnessRoot = Join-Path $UserHome 'omp-workflow'
+}
+
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 function WriteText([string]$path, [string]$text) {
   $dir = Split-Path -Parent $path
@@ -58,13 +92,14 @@ function WriteText([string]$path, [string]$text) {
 }
 
 Write-Host "`n=== OMP workflow installer ===`n"
+Write-Host "  user home    : $UserHome"
 Write-Host "  harness root : $HarnessRoot"
 Write-Host "  source       : $PSScriptRoot`n"
 
 # ---------- 1. Dependencies ----------
 Write-Host "-- Dependencies"
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  Die "node not found in PATH. The harness tools (codemap, replay, lint) are Node scripts. Install Node 18+."
+  Die "node not found in PATH. The harness tools (codemap, replay, lint, archmap) are Node scripts. Install Node 18+."
 }
 Ok "node $(& node --version)"
 
@@ -81,7 +116,7 @@ if (-not (Get-Command openspec -ErrorAction SilentlyContinue)) {
 Write-Host "`n-- Configuration"
 $cfgVals = @{}
 if (Test-Path $SecretsFile) {
-  Get-Content $SecretsFile | ForEach-Object {
+  Get-Content $SecretsFile -Encoding UTF8 | ForEach-Object {
     if ($_ -match '^\s*([A-Z0-9_]+)\s*=\s*(.+?)\s*$' -and $_ -notmatch '^\s*#') { $cfgVals[$Matches[1]] = $Matches[2] }
   }
   Ok "loaded $(($cfgVals.Keys).Count) value(s) from $SecretsFile"
@@ -127,28 +162,69 @@ function Patch([string]$text) {
 
 # ---------- 3. File layout ----------
 Write-Host "`n-- Files"
-$agentDir = "$HOME\.omp\agent"
+$agentDir = Join-Path $UserHome ".omp\agent"
+$agentsHome = Join-Path $UserHome ".agents"
+
 foreach ($d in @("$HarnessRoot\agent", "$HarnessRoot\agent\agents", "$HarnessRoot\tools",
-                 "$HarnessRoot\templates", $agentDir, "$agentDir\rules",
-                 "$HOME\.agents\rules", "$HOME\.agents\skills")) {
+                 "$HarnessRoot\core", "$HarnessRoot\paseo", "$HarnessRoot\templates",
+                 "$HarnessRoot\rules",
+                 $agentDir, "$agentDir\rules",
+                 "$agentsHome\rules", "$agentsHome\skills")) {
   New-Item -ItemType Directory -Force -Path $d | Out-Null
 }
 
-Copy-Item "$PSScriptRoot\agent\AGENTS.md" "$HarnessRoot\agent\AGENTS.md" -Force
 # AGENTS.md ships path-templated so it survives being installed anywhere. Resolve
 # <HARNESS> at install time: without this the agent cannot find the full protocol.
 $slashRoot = $HarnessRoot.Replace([char]92, [char]47)   # backslash -> forward slash
-$agentsText = (Get-Content "$PSScriptRoot\agent\AGENTS.md" -Raw).Replace('<HARNESS>', $slashRoot)
+$agentsText = (Get-Content "$PSScriptRoot\agent\AGENTS.md" -Raw -Encoding UTF8).Replace('<HARNESS>', $slashRoot)
+WriteText "$HarnessRoot\agent\AGENTS.md" $agentsText
 WriteText "$agentDir\AGENTS.md" $agentsText
 # A one-line pointer, so agent defs can be located from any working directory.
 WriteText "$agentDir\.harness-root" ("$HarnessRoot" + [Environment]::NewLine)
 Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
-# Same substitution for any role/rule file that references the harness root.
-Get-ChildItem "$HarnessRoot\agent\agents\*.md", "$PSScriptRoot\rules\*.md" -ErrorAction SilentlyContinue | ForEach-Object {
-  $t = Get-Content $_.FullName -Raw
+# Copy rules directly into HarnessRoot/rules first. NEVER modify source files in PSScriptRoot!
+if (Test-Path "$PSScriptRoot\rules") {
+  Copy-Item "$PSScriptRoot\rules\*" "$HarnessRoot\rules\" -Force -Recurse
+}
+# Perform <HARNESS> substitution strictly on destination copies in HarnessRoot
+Get-ChildItem "$HarnessRoot\agent\agents\*.md", "$HarnessRoot\rules\*.md" -ErrorAction SilentlyContinue | ForEach-Object {
+  $t = Get-Content $_.FullName -Raw -Encoding UTF8
   if ($t -match '<HARNESS>') { WriteText $_.FullName ($t.Replace('<HARNESS>', $slashRoot)) }
 }
-Copy-Item "$PSScriptRoot\tools\*" "$HarnessRoot\tools\" -Force -Recurse
+
+# Copy tools files (excluding any local node_modules directory to ensure clean prefix installation)
+Get-ChildItem -Path "$PSScriptRoot\tools\*" -Exclude 'node_modules' | ForEach-Object {
+  Copy-Item $_.FullName "$HarnessRoot\tools\" -Force -Recurse
+}
+
+# Install tools dependencies with checked exit code if package.json exists
+$installedToolsPkg = Join-Path $HarnessRoot "tools\package.json"
+if (Test-Path $installedToolsPkg) {
+  Write-Host "  Installing tools dependencies via npm ci..."
+  $toolsDir = Join-Path $HarnessRoot "tools"
+  $npmCmd = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
+  if ([string]::IsNullOrWhiteSpace($npmCmd)) {
+    $npmCmd = (Get-Command "npm" -ErrorAction SilentlyContinue).Source
+  }
+  if ([string]::IsNullOrWhiteSpace($npmCmd)) {
+    Die "npm executable not found in PATH; required to install tools dependencies"
+  }
+  $npmArgs = @("ci", "--prefix", $toolsDir, "--ignore-scripts", "--no-audit", "--no-fund")
+  & $npmCmd $npmArgs
+  if ($LASTEXITCODE -ne 0) {
+    Die "npm ci --prefix '$toolsDir' failed with exit code $LASTEXITCODE"
+  }
+  Ok "tools dependencies installed successfully"
+}
+
+# Copy core and paseo
+if (Test-Path "$PSScriptRoot\core") {
+  Copy-Item "$PSScriptRoot\core\*" "$HarnessRoot\core\" -Force -Recurse
+}
+if (Test-Path "$PSScriptRoot\paseo") {
+  Copy-Item "$PSScriptRoot\paseo\*" "$HarnessRoot\paseo\" -Force -Recurse
+}
+
 # Also drop the repo-level scripts into the harness root, so an install made
 # without keeping the clone can still verify and audit itself.
 foreach ($f in 'verify.ps1', 'audit.ps1', 'README.md', 'CONTEXT.md', 'secrets.example.env') {
@@ -158,39 +234,38 @@ foreach ($f in 'verify.ps1', 'audit.ps1', 'README.md', 'CONTEXT.md', 'secrets.ex
 if (Test-Path "$PSScriptRoot\skills") { Copy-Item "$PSScriptRoot\skills" "$HarnessRoot\skills" -Force -Recurse }
 if (Test-Path "$PSScriptRoot\templates") { Copy-Item "$PSScriptRoot\templates\*" "$HarnessRoot\templates\" -Force -Recurse }
 if (Test-Path "$PSScriptRoot\CONTEXT.md") { Copy-Item "$PSScriptRoot\CONTEXT.md" "$HarnessRoot\CONTEXT.md" -Force }
-Ok "agent defs + tools -> $HarnessRoot"
+Ok "agent defs + tools + core -> $HarnessRoot"
 
 # Skills: skip marketplace-lock-managed ones so the install does not desync
 # ~/.agents/.skill-lock.json (a lock entry alone is not proof of installation).
-$lockPath = "$HOME\.agents\.skill-lock.json"
+$lockPath = "$agentsHome\.skill-lock.json"
 $skipSkills = @()
 if (Test-Path $lockPath) {
   $lockedNames = @((Get-Content $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json).skills.PSObject.Properties.Name)
-  $skipSkills = @($lockedNames | Where-Object { Test-Path "$HOME\.agents\skills\$_\SKILL.md" })
+  $skipSkills = @($lockedNames | Where-Object { Test-Path "$agentsHome\skills\$_\SKILL.md" })
 }
 $copied = 0; $skipped = @()
 Get-ChildItem "$PSScriptRoot\skills" -Directory | ForEach-Object {
   if ($skipSkills -contains $_.Name) { $skipped += $_.Name; return }
-  Copy-Item $_.FullName "$HOME\.agents\skills\" -Force -Recurse
+  Copy-Item $_.FullName "$agentsHome\skills\" -Force -Recurse
   $script:copied++
 }
 Ok "skills: $copied installed$(if ($skipped) { ", $(($skipped).Count) lock-managed skipped" })"
 
-Copy-Item "$PSScriptRoot\rules\*" "$agentDir\rules\" -Force -Recurse
-Copy-Item "$PSScriptRoot\rules\*" "$HOME\.agents\rules\" -Force -Recurse -ErrorAction SilentlyContinue
-Get-ChildItem "$agentDir\rules\*.md" -ErrorAction SilentlyContinue | ForEach-Object {
-  $t = Get-Content $_.FullName -Raw
-  if ($t -match '<HARNESS>') { WriteText $_.FullName ($t.Replace('<HARNESS>', $slashRoot)) }
+# Copy pre-substituted rules from HarnessRoot to agentDir and agentsHome
+if (Test-Path "$HarnessRoot\rules") {
+  Copy-Item "$HarnessRoot\rules\*" "$agentDir\rules\" -Force -Recurse
+  Copy-Item "$HarnessRoot\rules\*" "$agentsHome\rules\" -Force -Recurse -ErrorAction SilentlyContinue
 }
 Ok "rules -> $agentDir\rules (and ~/.agents\rules)"
 
 # ---------- 4. Provider + model routing ----------
 if ($providerBase) {
-  WriteText "$agentDir\models.yml" (Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw))
+  WriteText "$agentDir\models.yml" (Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw -Encoding UTF8))
   Ok "models.yml -> $agentDir\models.yml (provider: my-provider)"
 
   if (-not (Test-Path "$agentDir\config.yml")) {
-    WriteText "$agentDir\config.yml" (Patch (Get-Content "$PSScriptRoot\agent\config.yml.example" -Raw))
+    WriteText "$agentDir\config.yml" (Patch (Get-Content "$PSScriptRoot\agent\config.yml.example" -Raw -Encoding UTF8))
     Ok "config.yml installed (roles -> my-provider/$modelId)"
   } else {
     Warn "config.yml already exists -> left untouched. Update its modelRoles to 'my-provider/$modelId' by hand."
@@ -202,29 +277,29 @@ if ($providerBase) {
 # ---------- 5. MCP fleet (optional) ----------
 if (-not $SkipMcp) {
   $mcpTarget = "$agentDir\mcp.json"
-  $mcpExisting = Test-Path $mcpTarget
-  if ($mcpExisting -and -not $NonInteractive) {
-    $ans = Ask "mcp.json already exists - overwrite with the sanitized example? (y/N)" 'n'
-    if ($ans -notmatch '^[Yy]') { $mcpExisting = $false; Warn "mcp.json left untouched" }
-  } elseif ($mcpExisting -and $NonInteractive) {
-    Warn "mcp.json exists -> left untouched (delete it to regenerate)"
-    $mcpExisting = $false
-  }
-  if (-not $mcpExisting -or $NonInteractive) {
-    if (-not $mcpExisting) {
-      $mcp = Patch (Get-Content "$PSScriptRoot\agent\mcp.json.example" -Raw) | ConvertFrom-Json
-      # Drop entries the user did not supply a value for: an absent server is
-      # better than one that fails to connect on every session boot.
-      $drop = @()
-      if (-not $memoryUrl)   { $drop += 'memory' }
-      if (-not $crawlUrl)    { $drop += 'crawl4ai' }
-      if (-not $context7Key) { $drop += 'context7' }
-      foreach ($d in $drop) { $mcp.mcpServers.PSObject.Properties.Remove($d) }
-      WriteText $mcpTarget ($mcp | ConvertTo-Json -Depth 30)
-      $kept = ($mcp.mcpServers.PSObject.Properties.Name) -join ', '
-      Ok "mcp.json -> $mcpTarget (kept: $kept)"
-      if ($drop.Count) { Warn "dropped unconfigured: $($drop -join ', ') - re-run with values to add them" }
+  $shouldWrite = -not (Test-Path $mcpTarget)
+  if (-not $shouldWrite) {
+    if ($NonInteractive) {
+      Warn "mcp.json exists -> left untouched (delete it to regenerate)"
+    } else {
+      $ans = Ask "mcp.json already exists - overwrite with the sanitized example? (y/N)" 'n'
+      $shouldWrite = $ans -match '^(y|yes)$'
+      if (-not $shouldWrite) { Warn "mcp.json left untouched" }
     }
+  }
+  if ($shouldWrite) {
+    $mcp = Patch (Get-Content "$PSScriptRoot\agent\mcp.json.example" -Raw -Encoding UTF8) | ConvertFrom-Json
+    # Drop entries the user did not supply a value for: an absent server is
+    # better than one that fails to connect on every session boot.
+    $drop = @()
+    if (-not $memoryUrl)   { $drop += 'memory' }
+    if (-not $crawlUrl)    { $drop += 'crawl4ai' }
+    if (-not $context7Key) { $drop += 'context7' }
+    foreach ($d in $drop) { $mcp.mcpServers.PSObject.Properties.Remove($d) }
+    WriteText $mcpTarget ($mcp | ConvertTo-Json -Depth 30)
+    $kept = ($mcp.mcpServers.PSObject.Properties.Name) -join ', '
+    Ok "mcp.json -> $mcpTarget (kept: $kept)"
+    if ($drop.Count) { Warn "dropped unconfigured: $($drop -join ', ') - re-run with values to add them" }
   }
 } else { Warn "MCP step skipped (-SkipMcp)" }
 
@@ -247,27 +322,26 @@ if (Test-Path $junction) {
   Ok "junction $junction -> $HarnessRoot\agent\agents"
 }
 
-# ---------- 7. Paseo profile (optional) ----------
-if (-not $SkipPaseo -and (Get-Command paseo -ErrorAction SilentlyContinue)) {
-  $paseoCfg = "$HOME\.paseo\config.json"
-  if (Test-Path $paseoCfg) {
-    Copy-Item $paseoCfg "$paseoCfg.bak" -Force
-    # -Encoding UTF8 is required: the default ANSI read mangles the non-ASCII lane glyphs.
-    $cfg = Get-Content $paseoCfg -Raw -Encoding UTF8 | ConvertFrom-Json
-    $profiles = @()
-    Get-Content "$PSScriptRoot\paseo\profiles.json" -Raw -Encoding UTF8 |
-      ConvertFrom-Json | ForEach-Object { $profiles += $_ }
-    # Point the profile at whatever model the user actually configured.
-    if ($providerBase) {
-      foreach ($p in $profiles) { $p.model = "my-provider/$modelId" }
-    }
-    if (-not $cfg.daemon) { $cfg | Add-Member -NotePropertyName daemon -NotePropertyValue ([pscustomobject]@{}) }
-    $cfg.daemon | Add-Member -NotePropertyName agentProfiles -NotePropertyValue $profiles -Force
-    WriteText $paseoCfg ($cfg | ConvertTo-Json -Depth 30)
-    try { & paseo daemon reload | Out-Null; Ok "Paseo profile installed + daemon reloaded" }
-    catch { Warn "profile written; run 'paseo daemon reload' manually" }
-  } else { Warn "~/.paseo/config.json not found -> install Paseo first, then re-run" }
-} else { Warn "Paseo not found or -SkipPaseo -> profile step skipped" }
+# ---------- 7. Optional Paseo integration ----------
+# Base installer leaves Paseo configuration completely untouched by default.
+# Integration is only performed if explicitly requested via -SetupPaseo.
+if ($SetupPaseo) {
+  $setupScript = Join-Path $PSScriptRoot "paseo\setup-paseo.ps1"
+  if (-not (Test-Path $setupScript)) {
+    Die "setup-paseo.ps1 not found at $setupScript"
+  }
+  $paseoArgs = @("-ExecutionPolicy", "Bypass", "-File", $setupScript, "-UserProfileDir", $UserHome)
+  if ($configuredModel) {
+    $paseoArgs += @("-Model", "my-provider/$configuredModel")
+  }
+  & powershell @paseoArgs
+  if ($LASTEXITCODE -ne 0) {
+    Die "setup-paseo.ps1 failed with exit code $LASTEXITCODE. If configuring a brand-new profile, ensure an explicit model is available."
+  }
+  Ok "Optional Paseo integration executed via setup-paseo.ps1"
+} else {
+  Ok "Base install leaves Paseo untouched. To configure Paseo profiles explicitly, run: powershell -File paseo/setup-paseo.ps1"
+}
 
 # ---------- 8. Baseline the prompt surfaces ----------
 # Records a hash per prompt surface so a later edit is visible as a cache-prefix
@@ -283,8 +357,9 @@ Write-Host @"
   Next:
     1. Open a NEW OMP session (skills, MCP, and AGENTS.md load at session start).
     2. Check the harness:    powershell -File '$HarnessRoot\tools\audit.ps1'
-    3. Give it a real task. A T2 task should open with the ask widget, not code.
+    3. Optional Paseo setup: powershell -File '$HarnessRoot\paseo\setup-paseo.ps1'
+    4. Give it a real task. A T2 task should open with the ask widget, not code.
 
-  Repo docs: README.md    Full law: `$HarnessRoot\agent\AGENTS.md`
+  Repo docs: README.md    Core spec: `$HarnessRoot\core\PORTABLE.md`    Full law: `$HarnessRoot\agent\AGENTS.md`
 
 "@

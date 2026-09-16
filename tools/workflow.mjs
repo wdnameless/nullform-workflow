@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * workflow.mjs — tier enforcement for the OMP workflow.
+ * workflow.mjs — tier enforcement for the portable workflow harness protocol.
  *
  * WHY THIS EXISTS
  * The lane classification and the 4-Wave artifacts were text rules in a prompt.

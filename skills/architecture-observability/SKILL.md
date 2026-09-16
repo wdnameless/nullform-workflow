@@ -34,10 +34,10 @@ no build step. Open it directly in a browser.
 
 | Section | What the human learns |
 |---|---|
-| **Health score** | Average Maintainability Index (Microsoft's normalised formula). 85+ comfortable, 65–85 workable, below 65 risky. Comparable to other tooling, not a bespoke number. |
+| **Health score** | Average approximate Maintainability Index proxy using a Microsoft-style normalised formula with heuristic volume inputs, not exact Halstead metrics or a grade directly comparable to other tools. Use it to track trends, not to certify quality. |
 | **What changed** | Files added/removed/modified since the previous scan, with line and branch deltas, plus any **new dependency cycles**. |
-| **How it fits together** | Module graph. Arrows point at what a file imports. Red = in a cycle, amber = 600+ lines. Hover any box for lines/branches/MI/fan-in. |
-| **What to look at** | Findings in plain language: what is wrong, **why it matters**, and what to do about it. |
+| **How it fits together** | Module & Call graph (SVG, pan/zoom/reset, fullscreen, dark Russian UI). For JS/TS: semantic symbol declarations and directed function/method calls via TypeScript compiler API, plus module import edges. For other languages: heuristic module overview and member list in details. Red = in a cycle, amber = 600+ lines. Hover/click any node for details, callers, and callees. |
+| **What to look at** | Findings in Russian: what is wrong, **why it matters**, and what to do about it. |
 | **Largest files** | Where the weight sits, with branch count and who imports it. |
 
 ## How to use it as the agent
@@ -61,10 +61,8 @@ no build step. Open it directly in a browser.
 ## Boundaries
 
 - **Static analysis only.** No LLM, no network, nothing leaves the machine. The
-  HTML is a plain file you can commit, email, or open offline.
-- **Regex-based extraction.** Imports and exports are parsed per language; it can
-  miss an edge at the margins. It will not manufacture findings — a miss shows as
-  a missing edge, not a false alarm.
+  HTML is a single self-contained offline file you can commit, inspect in browser, or share.
+- **Parser depth.** Deep AST/semantic analysis via TypeScript compiler API is performed for JS/TS files (exact symbol declarations, resolved/unresolved function and method calls). For other supported languages (Python, Go, Rust, Ruby, Java, etc.), imports, exports, and members are extracted via heuristics. It does not synthesize fake call edges for languages without semantic support.
 - **Not a substitute for `CODEMAP.md`.** `codemap` maps *meaning* per folder for
   the agent (`skill://codemap`). `archmap` shows *structure and trend* to the
   human. One is prose, the other is a measurement.
