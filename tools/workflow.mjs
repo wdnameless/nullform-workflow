@@ -42,13 +42,15 @@ const REQUIREMENTS = {
     { kind: "lane", label: "lane declared (start --tier)", auto: true },
   ],
   T1: [
-    { kind: "recon", label: "recon notes: files + acceptance check", path: null },
+    // minDetail: a one-word "done" is what makes a gate decorative. The floor is
+    // low on purpose - enough that the field cannot be satisfied by accident.
+    { kind: "recon", label: "recon notes: files touched + acceptance check", path: null, minDetail: 20 },
   ],
   T2: [
-    { kind: "manifest", label: "manifest.md with R## rows + verbatim user quotes", path: "openspec/changes/<name>/manifest.md" },
+    { kind: "manifest", label: "manifest.md with R## rows + verbatim user quotes", path: "openspec/changes/<name>/manifest.md", mustContain: /R\d\d/ },
     { kind: "openspec", label: "openspec change validated", path: "openspec/changes/<name>" },
-    { kind: "interfaces", label: "interfaces.md: boundaries + signatures + owners", path: null },
-    { kind: "oracle", label: "oracle verdict recorded (ACCEPT)", path: null },
+    { kind: "interfaces", label: "interfaces.md: boundaries + signatures + owners", path: null, minDetail: 40 },
+    { kind: "oracle", label: "oracle verdict + its reasons", path: null, minDetail: 30, mustContain: /ACCEPT|REJECT/i },
   ],
   T3: [
     { kind: "worktree", label: "isolated worktree per major slice", path: null },
@@ -151,6 +153,32 @@ function cmdArtifact(root, flags) {
     return 1;
   }
   const detail = flags.detail ? String(flags.detail) : null;
+
+  // Evidence floor. Without this, `artifact --kind oracle --detail ok` satisfies a
+  // T2 gate and the gate is theatre.
+  if (req.minDetail && (!detail || detail.trim().length < req.minDetail)) {
+    console.error(`workflow: ${kind} needs a real description (>= ${req.minDetail} chars).`);
+    console.error(`  got: ${detail ? JSON.stringify(detail) : "(nothing)"}`);
+    console.error(`  record it: --detail "<what you actually did/verified>"`);
+    return 1;
+  }
+  if (req.mustContain && detail && !req.mustContain.test(detail)) {
+    console.error(`workflow: ${kind} must state the outcome — expected ${req.mustContain}.`);
+    console.error(`  e.g. --detail "ACCEPT: verified X and Y, no gaps"`);
+    return 1;
+  }
+  // A manifest without requirement rows is not a manifest.
+  if (req.mustContain && path) {
+    try {
+      const body = readFileSync(join(root, path), "utf8");
+      if (!req.mustContain.test(body)) {
+        console.error(`workflow: ${path} does not contain requirement rows (expected ${req.mustContain}).`);
+        console.error(`  a manifest lists R01..Rnn, each with the verbatim quote it came from.`);
+        return 1;
+      }
+    } catch { /* existence already checked above */ }
+  }
+
   st.artifacts[kind] = { at: new Date().toISOString(), path, detail };
   save(root, st);
   const done = Object.keys(st.artifacts).length;
