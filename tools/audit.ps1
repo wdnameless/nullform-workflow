@@ -136,6 +136,28 @@ Invoke-Check 'CONTEXT.md coverage' {
   @{ Ok = ($r.Code -eq 0 -or $r.Code -eq 2); Detail = $detail }
 }
 
+# The gate is what makes the protocol enforceable; if it is broken, every rule it
+# backs silently reverts to a suggestion.
+Invoke-Check 'tier gate present and working' {
+  $wf = Join-Path $HarnessRoot 'tools\workflow.mjs'
+  if (-not (Test-Path $wf)) { return @{ Ok = $false; Detail = 'workflow.mjs missing - the protocol is back to being prose' } }
+  $tmp = Join-Path $env:TEMP ("wf-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  try {
+    $null = Invoke-Capture 'node' @($wf,'start','--tier','T0','--task','probe','--root',$tmp)
+    $ok = Invoke-Capture 'node' @($wf,'check','--root',$tmp)
+    $null = Invoke-Capture 'node' @($wf,'start','--tier','T2','--task','p2','--force','--root',$tmp)
+    $blocked = Invoke-Capture 'node' @($wf,'check','--root',$tmp)
+    @{ Ok = ($ok.Code -eq 0 -and $blocked.Code -ne 0); Detail = 'T0 passes, T2 blocks' }
+  } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+}
+
+Invoke-Check 'architecture report engine' {
+  $am = Join-Path $HarnessRoot 'tools\archmap.mjs'
+  if (-not (Test-Path $am)) { return @{ Ok = $false; Detail = 'archmap.mjs missing - the user has no view of their repo' } }
+  @{ Ok = $true; Detail = 'present' }
+}
+
 Invoke-Check 'codemap currency' {
   $state = Join-Path $RepoRoot '.codemap\state.json'
   if (-not (Test-Path $state)) { return @{ Ok = $true; Detail = 'not initialised (optional)' } }
