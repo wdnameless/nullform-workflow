@@ -110,27 +110,21 @@ foreach ($entry in $Manifest) {
 
   $live = Read-Normalized $livePath
   $repo = Read-Normalized $repoPath
-  # Repo files ship path-templated (<HARNESS>) so an install can live anywhere;
-  # the live tree has the real path. Compare like-for-like.
-  # Use literal .Replace(), never -replace: the regex form expands $&/$1 in the
-  # INPUT, silently corrupting any file that contains those sequences (every
-  # shell script does), which then reports as permanent false drift.
-  if ($null -ne $repo) { $repo = $repo.Replace('<HARNESS>', $HarnessRoot.Replace([char]92, [char]47)) }
-
-  if ($null -eq $live -and $null -eq $repo) { continue }
-  if ($null -eq $live) { Write-Host "  [!!] missing in harness : $rel" -ForegroundColor Yellow; $drift += $rel; continue }
-  if ($null -eq $repo) { Write-Host "  [!!] missing in repo    : $rel" -ForegroundColor Yellow; $drift += $rel; continue }
+  # Prompt surfaces (agent defs, rules) ship with '<HARNESS>' so an install can
+  # live anywhere; the live tree holds the resolved path. Normalise before
+  # comparing, using literal .Replace — the regex form expands $&/$1 in the INPUT
+  # and would corrupt any script that contains them.
+  # Keyed on the manifest entry, not on file content: content cannot distinguish
+  # "templates the path" from "documents the path", and tools/ does the latter.
+  $isPromptSurface = ($rel -like 'agent\*') -or ($rel -like 'agent/*') -or
+                     ($rel -like 'rules\*') -or ($rel -like 'rules/*')
+  if ($null -ne $repo -and $isPromptSurface) {
+    $repo = $repo.Replace('<HARNESS>', $HarnessRoot.Replace([char]92, [char]47))
+  }
 
   if ($live -eq $repo) { continue }
 
   $drift += $rel
-  # mtime is the only cheap signal available here. If the repo copy is newer, the
-  # live tree is probably stale, and promoting would overwrite newer work.
-  try {
-    if ((Get-Item $repoPath).LastWriteTimeUtc -gt (Get-Item $livePath).LastWriteTimeUtc.AddSeconds(2)) {
-      $suspect += $rel
-    }
-  } catch { }
   if ($Promote) {
     Write-Normalized $repoPath $live
     Write-Host "  [->] promote $rel" -ForegroundColor Cyan
