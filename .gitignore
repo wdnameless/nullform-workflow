@@ -7,3 +7,5 @@ Thumbs.db
 .prompt-lint/
 .probe/
 agent/config.yml
+.archmap/
+.workflow/
