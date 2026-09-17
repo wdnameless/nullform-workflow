@@ -50,11 +50,18 @@ if (-not (Test-Path (Join-Path $HarnessRoot 'agent\AGENTS.md'))) {
 }
 $harnessIsRepo = Test-Path (Join-Path $HarnessRoot 'install.ps1')
 if ($harnessIsRepo) {
-  if ([string]::IsNullOrWhiteSpace($RepoRoot)) { $RepoRoot = $HarnessRoot }
+  if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $nestedRepo = Join-Path $HarnessRoot 'workflow-repo'
+    if (Test-Path (Join-Path $nestedRepo 'install.ps1')) {
+      $RepoRoot = $nestedRepo
+    } else {
+      $RepoRoot = $HarnessRoot
+    }
+  }
 } else {
   if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     $hParent = Split-Path -Parent $HarnessRoot
-    $cands = @()
+    $cands = @((Join-Path $HarnessRoot 'workflow-repo'))
     if ($hParent) {
       $cands += (Join-Path $hParent 'workflow-repo')
       $cands += (Join-Path $hParent ((Split-Path -Leaf $HarnessRoot) + '-repo'))
@@ -65,6 +72,9 @@ if ($harnessIsRepo) {
 }
 if ($RepoRoot) { $RepoRoot = [System.IO.Path]::GetFullPath($RepoRoot) }
 if ($HarnessRoot) { $HarnessRoot = [System.IO.Path]::GetFullPath($HarnessRoot) }
+# `install.ps1` also ships into the live harness. After resolution, equality —
+# not marker presence — decides whether this is truly a single repo tree.
+$harnessIsRepo = [string]::Equals($RepoRoot, $HarnessRoot, [System.StringComparison]::OrdinalIgnoreCase)
 $findings = @()
 $results  = @()
 
