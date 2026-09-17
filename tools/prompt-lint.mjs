@@ -104,13 +104,22 @@ function label(root, p) {
 
 /* -------------------------------------------------------------------- command */
 
+function normaliseHarnessRoot(text, root) {
+  if (!root) return text;
+  const slash = root.split("\\").join("/");
+  return text.split(root).join("<HARNESS>").split(slash).join("<HARNESS>");
+}
+
 function cmdScan(root, home) {
   const files = [...collectSurfaces(root), ...collectInstalled(home)];
   let hits = 0;
   const perFile = [];
 
   for (const f of files) {
-    const lines = readText(f).split("\n");
+    // The installer deliberately substitutes <HARNESS> with this machine's
+    // absolute path. A UUID-like segment in a sandbox/user path is not volatile
+    // prompt content: it is the stable install root for that installation.
+    const lines = normaliseHarnessRoot(readText(f), root).split("\n");
     const found = [];
     lines.forEach((line, i) => {
       if (line.includes("prompt-lint:allow")) return;

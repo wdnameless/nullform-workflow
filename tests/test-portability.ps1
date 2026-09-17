@@ -86,13 +86,21 @@ try {
     Assert (-not (Test-Path (Join-Path $installedHarness "tools\client.js"))) "tools/report/client.js must not be flattened into tools/"
     Assert (-not (Test-Path (Join-Path $installedHarness "tools\page.css"))) "tools/report/page.css must not be flattened into tools/"
 
-    # Omitting -RepoRoot exercises audit's candidate-path calculation. Other
-    # audit checks may legitimately report setup gaps in the sandbox; the
-    # path resolver itself must never crash before producing the audit report.
-    $auditOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installedHarness "tools\audit.ps1") -HarnessRoot $installedHarness -Scope core 2>&1
+    $oldHome = $env:HOME
+    $oldUserProfile = $env:USERPROFILE
+    try {
+        $env:HOME = $FakeHome
+        $env:USERPROFILE = $FakeHome
+        $auditOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installedHarness "tools\audit.ps1") -HarnessRoot $installedHarness -Scope core 2>&1
+        $auditExit = $LASTEXITCODE
+    } finally {
+        $env:HOME = $oldHome
+        $env:USERPROFILE = $oldUserProfile
+    }
     $auditText = ($auditOutput | Out-String)
     Assert ($auditText -notmatch 'positional parameter') "Installed audit must not crash in Join-Path candidate resolution"
     Assert ($auditText -match 'Harness audit') "Installed audit must reach its report"
+    Assert ($auditExit -eq 0) "Fresh installed audit must pass, got exit $auditExit`: $auditText"
 
     Assert (-not (Test-Path (Join-Path $FakeHome ".paseo\config.json"))) "Base installer MUST NOT create or mutate .paseo\config.json"
     Assert (-not (Test-Path (Join-Path $FakeHome ".omp\agent\mcp.json"))) "-SkipMcp MUST NOT create mcp.json"

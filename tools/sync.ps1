@@ -131,7 +131,8 @@ foreach ($entry in $Manifest) {
   # Keyed on the manifest entry, not on file content: content cannot distinguish
   # "templates the path" from "documents the path", and tools/ does the latter.
   $isPromptSurface = ($rel -like 'agent\*') -or ($rel -like 'agent/*') -or
-                     ($rel -like 'rules\*') -or ($rel -like 'rules/*')
+                     ($rel -like 'rules\*') -or ($rel -like 'rules/*') -or
+                     ($rel -like 'skills\*') -or ($rel -like 'skills/*')
   if ($null -ne $repo -and $isPromptSurface) {
     $repo = $repo.Replace('<HARNESS>', $HarnessRoot.Replace([char]92, [char]47))
   }

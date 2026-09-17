@@ -356,7 +356,20 @@ if ($SetupPaseo) {
 # Records a hash per prompt surface so a later edit is visible as a cache-prefix
 # change rather than a silent full-price re-bill.
 if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
-  & node "$HarnessRoot\tools\prompt-lint.mjs" baseline --root $HarnessRoot | Out-Null
+  # prompt-lint also scans ~/.agents. During a sandbox/custom -UserHome install,
+  # Node must resolve the same home we just populated — otherwise the baseline
+  # records the operator's real machine and the first installed audit reports
+  # every skill as added/removed.
+  $oldHome = $env:HOME
+  $oldUserProfile = $env:USERPROFILE
+  try {
+    $env:HOME = $UserHome
+    $env:USERPROFILE = $UserHome
+    & node "$HarnessRoot\tools\prompt-lint.mjs" baseline --root $HarnessRoot | Out-Null
+  } finally {
+    $env:HOME = $oldHome
+    $env:USERPROFILE = $oldUserProfile
+  }
   Ok "prompt-cache baseline recorded"
 }
 
