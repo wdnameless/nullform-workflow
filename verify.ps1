@@ -365,6 +365,50 @@ Check 'harness/repo drift (when a repo clone is present)' {
   else { throw 'agent defs/rules differ between harness and repo' }
 }
 
+# ---------------------------------------------------------------- ci & auto-review
+Check 'auto-review CLI runs and respects problem gate' {
+  $tmpClean = Join-Path $env:TEMP ("ar-clean-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  $tmpCycle = Join-Path $env:TEMP ("ar-cycle-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Force -Path (Join-Path $tmpClean '.archmap') | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $tmpCycle '.archmap') | Out-Null
+  try {
+    Set-Content -Path (Join-Path $tmpClean 'a.js') -Value 'export const a = 1;' -Encoding UTF8
+    Set-Content -Path (Join-Path $tmpClean '.archmap\state.json') -Value '{"totals":{"files":1,"loc":1,"avgMi":90},"cycles":[],"problems":[]}' -Encoding UTF8
+
+    Set-Content -Path (Join-Path $tmpCycle 'a.js') -Value 'import "./b.js";' -Encoding UTF8
+    Set-Content -Path (Join-Path $tmpCycle 'b.js') -Value 'import "./a.js";' -Encoding UTF8
+    Set-Content -Path (Join-Path $tmpCycle '.archmap\state.json') -Value '{"totals":{"files":2,"loc":2,"avgMi":60},"cycles":[["a.js","b.js","a.js"]],"problems":[]}' -Encoding UTF8
+
+    $tool = Join-Path $HarnessRoot 'tools\auto-review.mjs'
+    if (-not (Test-Path $tool)) { throw "tools/auto-review.mjs not found" }
+
+    $resClean = Invoke-Capture 'node' @($tool, '--root', $tmpClean)
+    if ($resClean.Code -ne 0) { throw "clean fixture failed: $($resClean.Text.Trim())" }
+
+    $resCycle = Invoke-Capture 'node' @($tool, '--root', $tmpCycle)
+    if ($resCycle.Code -eq 0) { throw "cycle fixture unexpectedly succeeded" }
+
+    'clean=0 cycle=1'
+  } finally {
+    Remove-Item -Recurse -Force $tmpClean -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $tmpCycle -ErrorAction SilentlyContinue
+  }
+}
+
+Check 'CI template present and parses as YAML' {
+  $ciTemplate = Join-Path $HarnessRoot 'templates\ci\workflow-gate.yml'
+  if (-not (Test-Path $ciTemplate)) { throw "templates/ci/workflow-gate.yml not found" }
+  $content = Get-Content -Path $ciTemplate -Raw -Encoding UTF8
+  if ($content -notmatch 'name:\s*Workflow Gate') { throw "missing name: Workflow Gate" }
+  if ($content -notmatch 'on:\s*(\n|\r\n)\s+push:') { throw "missing push trigger" }
+  if ($content -notmatch 'node-version:\s*20') { throw "missing node 20" }
+  if ($content -notmatch 'archmap\.mjs') { throw "missing archmap invocation" }
+  if ($content -notmatch 'auto-review\.mjs') { throw "missing auto-review invocation" }
+  if ($content -notmatch 'actions/upload-artifact') { throw "missing artifact upload" }
+  if ($content -notmatch 'actions/github-script') { throw "missing PR comment action" }
+  'valid CI YAML template'
+}
+
 # ---------------------------------------------------------------- report
 $results | Format-Table -AutoSize
 # PS 5.1: a single-object pipeline result is not an array and has no .Count, so

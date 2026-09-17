@@ -42,9 +42,10 @@ task:
     oracle: __DEFAULT_MODEL__
     fixer: __DEFAULT_MODEL__
     explorer: __DEFAULT_MODEL__
-  # Internal per-run tool-call ceiling. NOTE: this is NOT the real limit — a
-  # hosted gateway may cap requests per minute. Subagent lanes emit HANDOFF at
-  # ~45 calls to leave headroom for reconciliation (see agent/agents/orchestrator.md).
+  # Workflow tool-call budgets per tier are configured in .workflow/budgets.json
+  # (defaults: T0: 10, T1: 25, T2: 45, T3: 45).
+  # Subagent lanes emit HANDOFF at ~40-45 calls to leave headroom for reconciliation.
+  # softRequestBudget acts as an internal fallback ceiling for agent tasks.
   softRequestBudget: 100
 
 commands:

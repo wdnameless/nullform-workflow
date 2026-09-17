@@ -12,10 +12,13 @@
  *
  * COMMANDS
  *   start  --tier T2 --task "..."   open a task, declare its lane
+ *          [--auto --allow "<glob>" --max-diff <N>]  guarded auto for T0
+ *   suggest --files a.ts,b.ts [--task "..."]  heuristic tier suggestion
  *   artifact --kind manifest --path openspec/changes/x/manifest.md
  *   check                            verify the tier's requirements; exit 1 if unmet
  *   status                           what is done / still required
  *   close  [--force --reason "..."]  finish the task
+ *          [--auto] [--diff-lines N] finish guarded auto task
  *
  * TIER REQUIREMENTS (a tier requires everything the tiers below it require)
  *   T0  lane only            — trivial, 1-2 known files
@@ -24,6 +27,7 @@
  *   T3  + worktree isolation — program of work
  *
  * State: .workflow/state.json (gitignored). Exit 0 ok, 1 unmet, 2 cannot run.
+ * Budgets: .workflow/budgets.json (optional, defaults {T0:10, T1:25, T2:45, T3:45}).
  * Zero dependencies. Node 18+ / Bun.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
@@ -31,7 +35,8 @@ import { join, dirname } from "node:path";
 
 const DIR = ".workflow";
 const FILE = "state.json";
-
+const BUDGETS_FILE = "budgets.json";
+const DEFAULT_BUDGETS = { T0: 10, T1: 25, T2: 45, T3: 45 };
 /* ------------------------------------------------------------------- ladder */
 
 // Ordered: each tier inherits every requirement below it.
@@ -71,6 +76,23 @@ function requiredFor(tier) {
 /* --------------------------------------------------------------------- state */
 
 function statePath(root) { return join(root, DIR, FILE); }
+function budgetsPath(root) { return join(root, DIR, BUDGETS_FILE); }
+
+function loadBudgets(root) {
+  const p = budgetsPath(root);
+  if (!existsSync(p)) return { ...DEFAULT_BUDGETS };
+  try {
+    const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
+    return {
+      T0: typeof raw.T0 === "number" ? raw.T0 : DEFAULT_BUDGETS.T0,
+      T1: typeof raw.T1 === "number" ? raw.T1 : DEFAULT_BUDGETS.T1,
+      T2: typeof raw.T2 === "number" ? raw.T2 : DEFAULT_BUDGETS.T2,
+      T3: typeof raw.T3 === "number" ? raw.T3 : DEFAULT_BUDGETS.T3,
+    };
+  } catch {
+    return { ...DEFAULT_BUDGETS };
+  }
+}
 
 function load(root) {
   const p = statePath(root);
@@ -82,6 +104,118 @@ function load(root) {
 function save(root, st) {
   mkdirSync(join(root, DIR), { recursive: true });
   writeFileSync(statePath(root), JSON.stringify(st, null, 2));
+}
+
+/* ------------------------------------------------------------------- suggest */
+
+const KEYWORDS_T3_EXPLICIT = [
+  /(?:несколько фич|множество задач|параллельн|мульти-фич|multi-feature|программа)/i,
+];
+// "add X and implement Y" — two independent feature verbs joined by and/plus.
+// Bare "and" alone is NOT a program signal: "migration and schema update" is one feature.
+const VERB_PAIR_T3 = /\b(?:add|implement|build|create|refactor|добавить|реализовать)\b[\s\S]{0,80}?\b(?:and|plus|и)\b[\s\S]{0,80}?\b(?:add|implement|build|create|refactor|добавить|реализовать)\b/i;
+
+const KEYWORDS_T2 = [
+  /\b(?:schema|migration|database|db|migration|architectur|redesign|refactor-all)\b/i,
+  /(?:схема|миграци|архитектур|баз[аы]\s+данных|редизайн)/i,
+];
+
+const KEYWORDS_NEW_DEP_OR_API = [
+  /\b(?:dep|dependency|package|npm|install|api|endpoint|contract|breaking)\b/i,
+  /(?:зависимост|пакет|эндпоинт|контракт|апи)/i,
+];
+
+function isUnfamiliarDir(file) {
+  const normalized = file.replace(/\\/g, "/").toLowerCase();
+  // Heuristic: top-level dirs or paths that look like unknown/new/experimental modules
+  return /(?:^|\/)(?:experimental|legacy|vendor|unfamiliar|new-module|external)\//i.test(normalized);
+}
+
+function suggestTier({ files = [], task = "" }) {
+  const fileList = Array.isArray(files)
+    ? files.filter(Boolean)
+    : String(files || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const taskStr = String(task || "");
+
+  const reasons = [];
+  let totalRules = 4;
+  let matchedRules = 0;
+
+  const hasT3Kw = KEYWORDS_T3_EXPLICIT.some((re) => re.test(taskStr))
+    || (VERB_PAIR_T3.test(taskStr) && !KEYWORDS_T2.some((re) => re.test(taskStr)));
+  const hasT2Kw = KEYWORDS_T2.some((re) => re.test(taskStr));
+  const hasDepOrApiKw = KEYWORDS_NEW_DEP_OR_API.some((re) => re.test(taskStr));
+  const count = fileList.length;
+  const hasUnfamiliar = fileList.some(isUnfamiliarDir);
+
+  let tier = "T0";
+
+  // Rule 1: Multi-feature keywords or program scope -> T3
+  if (hasT3Kw) {
+    tier = "T3";
+    matchedRules++;
+    reasons.push("задача содержит ключевые слова множественных фич или объединения задач ('and', 'plus', 'несколько фич')");
+  }
+
+  // Rule 2: Schema / migration / architecture keywords or >9 files -> at least T2
+  if (count > 9 || hasT2Kw) {
+    if (LADDER.indexOf("T2") > LADDER.indexOf(tier)) {
+      tier = "T2";
+    }
+    matchedRules++;
+    if (count > 9) {
+      reasons.push(`большой охват файлов (${count} > 9), требуется manifest и OpenSpec`);
+    }
+    if (hasT2Kw) {
+      reasons.push("задача затрагивает схему данных, миграции или архитектурные изменения");
+    }
+  }
+
+  // Rule 3: 3-9 files or unfamiliar directory -> at least T1
+  if ((count >= 3 && count <= 9) || hasUnfamiliar) {
+    if (LADDER.indexOf("T1") > LADDER.indexOf(tier)) {
+      tier = "T1";
+    }
+    matchedRules++;
+    if (count >= 3 && count <= 9) {
+      reasons.push(`затрагивается от 3 до 9 файлов (${count}), требуется разведка и recon notes`);
+    }
+    if (hasUnfamiliar) {
+      reasons.push("обнаружены файлы в незнакомых или изолированных директориях");
+    }
+  }
+
+  // Rule 4: Small scope: 1-2 files and no keywords -> T0
+  if (count <= 2 && !hasT3Kw && !hasT2Kw) {
+    if (hasDepOrApiKw) {
+      if (LADDER.indexOf("T1") > LADDER.indexOf(tier)) {
+        tier = "T1";
+      }
+      matchedRules++;
+      reasons.push("обнаружены ключевые слова новых зависимостей или API изменений");
+    } else {
+      matchedRules++;
+      reasons.push(`локальное изменение (${count === 0 ? "0-1" : count} файл(а)) без изменения зависимостей, API или схем данных`);
+    }
+  }
+
+  // If no reasons collected yet (e.g. 0 files with standard prompt), provide default T0 reason
+  if (reasons.length === 0) {
+    matchedRules++;
+    reasons.push("базовое локальное изменение");
+  }
+
+  const confidence = Number((Math.min(matchedRules, totalRules) / totalRules).toFixed(2));
+  return { tier, confidence, reasons };
+}
+
+function cmdSuggest(flags) {
+  const rawFiles = flags.files ? String(flags.files) : "";
+  const files = rawFiles ? rawFiles.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const task = flags.task ? String(flags.task) : "";
+  const result = suggestTier({ files, task });
+  console.log(JSON.stringify(result, null, 2));
+  return 0;
 }
 
 /* ----------------------------------------------------------------------- cli */
@@ -106,12 +240,61 @@ function cmdStart(root, flags) {
     console.error(`workflow: --tier must be one of ${LADDER.join(', ')} (got '${flags.tier || ''}')`);
     return 2;
   }
+
+  const isAuto = Boolean(flags.auto);
+  let autoConfig = null;
+  if (isAuto) {
+    // Guarded auto validation: tier must be T0; refuse T1+
+    if (tier !== "T0") {
+      const refusal = {
+        at: new Date().toISOString(),
+        tier,
+        reason: `Guarded auto-mode refused: tier ${tier} exceeds maximum allowable tier T0`,
+      };
+      let st = load(root);
+      if (!st) {
+        st = {
+          version: 1,
+          tier,
+          task: String(flags.task || "(untitled)"),
+          startedAt: new Date().toISOString(),
+          status: "refused",
+          artifacts: {},
+        };
+      }
+      st.autoRefusal = refusal;
+      save(root, st);
+      console.error(`workflow: guarded auto mode refused for ${tier} (only T0 allowed)`);
+      return 1;
+    }
+
+    if (!flags.allow || typeof flags.allow !== "string" || !flags.allow.trim()) {
+      console.error("workflow: --auto requires --allow \"<pattern>\" (e.g. --allow \"src/**\")");
+      return 1;
+    }
+
+    const maxDiffNum = flags["max-diff"] !== undefined ? Number(flags["max-diff"]) : NaN;
+    if (Number.isNaN(maxDiffNum) || maxDiffNum < 1 || maxDiffNum > 20) {
+      console.error("workflow: --auto requires --max-diff <N> where 1 <= N <= 20");
+      return 1;
+    }
+
+    autoConfig = {
+      allow: String(flags.allow).trim(),
+      maxDiff: maxDiffNum,
+    };
+  }
+
   const prev = load(root);
   if (prev && prev.status === "open" && !flags.force) {
     console.error(`workflow: task '${prev.task}' is already open at ${prev.tier}.`);
     console.error(`  close it first, or pass --force to replace it.`);
     return 2;
   }
+
+  const budgets = loadBudgets(root);
+  const tierBudget = budgets[tier] ?? DEFAULT_BUDGETS[tier] ?? 45;
+
   const st = {
     version: 1,
     tier,
@@ -122,8 +305,15 @@ function cmdStart(root, flags) {
     // classifying. Requiring a second command for it would be ceremony.
     artifacts: { lane: { at: new Date().toISOString(), path: null, detail: tier } },
   };
+  if (autoConfig) {
+    st.auto = autoConfig;
+  }
   save(root, st);
   console.log(`workflow: ${tier} task opened — ${st.task}`);
+  console.log(`  budget: ${tierBudget} tool calls for ${tier}`);
+  if (autoConfig) {
+    console.log(`  auto: guarded autonomous mode enabled (allow: "${autoConfig.allow}", max-diff: ${autoConfig.maxDiff})`);
+  }
   const reqs = requiredFor(tier).filter((r) => !st.artifacts[r.kind]);
   if (reqs.length) {
     console.log(`  this tier further requires ${reqs.length} artifact(s):`);
@@ -133,6 +323,7 @@ function cmdStart(root, flags) {
   }
   return 0;
 }
+
 
 function cmdArtifact(root, flags) {
   const st = load(root);
@@ -210,10 +401,19 @@ function cmdStatus(root) {
   const st = load(root);
   if (!st) { console.log("workflow: no active task."); return 0; }
   const reqs = requiredFor(st.tier);
+  const budgets = loadBudgets(root);
+  const tierBudget = budgets[st.tier] ?? DEFAULT_BUDGETS[st.tier] ?? 45;
   console.log(`task    ${st.task}`);
   console.log(`tier    ${st.tier}`);
   console.log(`status  ${st.status}`);
   console.log(`started ${st.startedAt}`);
+  console.log(`budget  ${tierBudget} tool calls for ${st.tier}`);
+  if (st.auto) {
+    console.log(`auto    enabled (allow: "${st.auto.allow}", maxDiff: ${st.auto.maxDiff})`);
+  }
+  if (st.autoRefusal) {
+    console.log(`autoRefusal ${st.autoRefusal.reason} at ${st.autoRefusal.at}`);
+  }
   console.log(`artifacts ${Object.keys(st.artifacts).length}/${reqs.length}`);
   for (const r of reqs) {
     const a = st.artifacts[r.kind];
@@ -222,9 +422,22 @@ function cmdStatus(root) {
   return 0;
 }
 
+
 function cmdClose(root, flags) {
   const st = load(root);
   if (!st) { console.error("workflow: no task state."); return 2; }
+
+  if (flags.auto || st.auto) {
+    if (flags["diff-lines"] !== undefined) {
+      const diffLines = Number(flags["diff-lines"]);
+      const cap = st.auto?.maxDiff ?? 20;
+      if (Number.isNaN(diffLines) || diffLines > cap) {
+        console.error(`workflow: auto close failed — diff lines (${diffLines}) exceed cap of ${cap}`);
+        return 1;
+      }
+    }
+  }
+
   const reqs = requiredFor(st.tier);
   const missing = reqs.filter((r) => !st.artifacts[r.kind]);
 
@@ -241,6 +454,9 @@ function cmdClose(root, flags) {
   }
   st.status = "closed";
   st.closedAt = new Date().toISOString();
+  if (flags["diff-lines"] !== undefined) {
+    st.diffLines = Number(flags["diff-lines"]);
+  }
   if (missing.length) {
     st.deviation = { forced: true, reason: String(flags.reason), missing: missing.map((m) => m.kind) };
     console.log(`workflow: closed with DEVIATION — ${missing.map((m) => m.kind).join(', ')} (${st.deviation.reason})`);
@@ -251,27 +467,38 @@ function cmdClose(root, flags) {
   return 0;
 }
 
+
 /* ---------------------------------------------------------------------- main */
 
-const args = parse(process.argv.slice(2));
-const root = args.flags.root ? String(args.flags.root) : process.cwd();
-const cmd = args._[0];
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdClose, load, save, parse };
 
-let code;
-switch (cmd) {
-  case "start":    code = cmdStart(root, args.flags); break;
-  case "artifact": code = cmdArtifact(root, args.flags); break;
-  case "check":    code = cmdCheck(root); break;
-  case "status":   code = cmdStatus(root); break;
-  case "close":    code = cmdClose(root, args.flags); break;
-  default:
-    console.log("workflow.mjs — tier enforcement\n");
-    console.log("  node workflow.mjs start --tier T2 --task \"add rate limiting\"");
-    console.log("  node workflow.mjs artifact --kind manifest --path openspec/changes/x/manifest.md");
-    console.log("  node workflow.mjs check      # exit 1 if the tier's artifacts are missing");
-    console.log("  node workflow.mjs status");
-    console.log("  node workflow.mjs close [--force --reason \"...\"]");
-    console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
-    code = 0;
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+
+if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
+  const args = parse(process.argv.slice(2));
+  const root = args.flags.root ? String(args.flags.root) : process.cwd();
+  const cmd = args._[0];
+
+  let code;
+  switch (cmd) {
+    case "start":    code = cmdStart(root, args.flags); break;
+    case "suggest":  code = cmdSuggest(args.flags); break;
+    case "artifact": code = cmdArtifact(root, args.flags); break;
+    case "check":    code = cmdCheck(root); break;
+    case "status":   code = cmdStatus(root); break;
+    case "close":    code = cmdClose(root, args.flags); break;
+    default:
+      console.log("workflow.mjs — tier enforcement\n");
+      console.log("  node workflow.mjs suggest --files a.ts,b.ts [--task \"...\"]");
+      console.log("  node workflow.mjs start --tier T2 --task \"add rate limiting\"");
+      console.log("  node workflow.mjs start --tier T0 --auto --allow \"src/**\" --max-diff 5");
+      console.log("  node workflow.mjs artifact --kind manifest --path openspec/changes/x/manifest.md");
+      console.log("  node workflow.mjs check      # exit 1 if the tier's artifacts are missing");
+      console.log("  node workflow.mjs status");
+      console.log("  node workflow.mjs close [--force --reason \"...\"] [--auto] [--diff-lines N]");
+      console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
+      code = 0;
+  }
+  process.exit(code);
 }
-process.exit(code);

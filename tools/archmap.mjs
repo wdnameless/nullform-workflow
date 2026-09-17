@@ -26,6 +26,8 @@ try {
   renderHtml = (state) => `<!doctype html><html><head><meta charset="utf-8"><title>Archmap</title></head><body><pre>${JSON.stringify(state, null, 2)}</pre></body></html>`;
 }
 import { analyzeProjectJsTs } from "./archmap-analysis.mjs";
+import { loadCache, saveCache } from "./archmap-cache.mjs";
+import { analyzeProblems } from "./archmap-problems.mjs";
 
 const DIR = ".archmap";
 const STATE = "state.json";
@@ -177,8 +179,40 @@ function resolveImport(fromFile, spec, root, fileSet) {
 
 /* ------------------------------------------------------------------ analyze */
 
-function analyzeFile(fullPath, root) {
+function analyzeFile(fullPath, root, cachedEntry = null) {
   const src = readFileSync(fullPath, "utf8").replace(/\r\n/g, "\n");
+  const currentHash = sha(src);
+
+  if (cachedEntry && cachedEntry.hash === currentHash && Array.isArray(cachedEntry.members)) {
+    const ext = extname(fullPath);
+    const lines = src.split("\n");
+    let loc = 0, blank = 0, comment = 0;
+    let inBlock = false;
+    for (const raw of lines) {
+      const l = raw.trim();
+      if (!l) { blank++; continue; }
+      if (inBlock) { comment++; if (l.includes("*/")) inBlock = false; continue; }
+      if (l.startsWith("/*")) { comment++; if (!l.includes("*/")) inBlock = true; continue; }
+      if (/^(?:\/\/|#|--|\*)/.test(l)) { comment++; continue; }
+      loc++;
+    }
+    DECISION.lastIndex = 0;
+    const complexity = 1 + (src.match(DECISION) || []).length;
+    const imports = cachedEntry.imports || [];
+    const exports = cachedEntry.exports || [];
+    return {
+      loc, blank, comment,
+      complexity,
+      imports,
+      exports,
+      members: cachedEntry.members,
+      bytes: Buffer.byteLength(src),
+      hash: currentHash,
+      volume: Math.max(1, loc * Math.log2(Math.max(2, exports.length + imports.length + 1)) * 2),
+      cached: true,
+    };
+  }
+
   const ext = extname(fullPath);
   const lang = LANGS[ext];
 
@@ -217,10 +251,12 @@ function analyzeFile(fullPath, root) {
     exports,
     members,
     bytes: Buffer.byteLength(src),
-    hash: sha(src),
+    hash: currentHash,
     volume: Math.max(1, loc * Math.log2(Math.max(2, exports.length + imports.length + 1)) * 2),
+    cached: false,
   };
 }
+
 
 function findCycles(graph) {
   let idx = 0;
@@ -257,12 +293,30 @@ async function scan(root) {
   const fileSet = new Set(rel);
   const byPath = new Map();
 
+  const oldCache = loadCache(root);
+  const newEntries = {};
+  let cacheHits = 0;
+
   files.forEach((full, i) => {
     const r = rel[i];
-    const a = analyzeFile(full, root);
+    const cachedEntry = oldCache.entries?.[r] || null;
+    const a = analyzeFile(full, root, cachedEntry);
+    if (a.cached) {
+      cacheHits++;
+    }
+    newEntries[r] = {
+      hash: a.hash,
+      members: a.members,
+      imports: a.imports,
+      exports: a.exports,
+    };
     const deps = [...new Set(a.imports.map((s) => resolveImport(r, s, root, fileSet)).filter(Boolean))];
     byPath.set(r, { ...a, path: r, dir: posix(dirname(r)), deps });
   });
+
+  saveCache(root, { version: 1, entries: newEntries });
+  const totalFiles = files.length;
+  const cacheHitRate = totalFiles > 0 ? Math.round((cacheHits / totalFiles) * 100) / 100 : 0;
 
   // Semantic JS/TS symbols, static call graph and unresolved tracking
   const jsTsAnalysis = await analyzeProjectJsTs(root, rel, byPath);
@@ -302,7 +356,8 @@ async function scan(root) {
   const avgMi = Object.values(filesOut).length
     ? Math.round(Object.values(filesOut).reduce((s, f) => s + f.mi, 0) / Object.values(filesOut).length)
     : 0;
-  return {
+
+  const state = {
     version: 1,
     scannedAt: new Date().toISOString(),
     root: posix(root),
@@ -314,8 +369,13 @@ async function scan(root) {
     calls: jsTsAnalysis.calls,
     unresolvedCalls: jsTsAnalysis.unresolvedCalls,
     analysis: jsTsAnalysis.analysis,
+    cacheHitRate,
   };
+
+  state.problems = analyzeProblems(state, root);
+  return state;
 }
+
 
 /* ----------------------------------------------------------------- findings */
 
@@ -509,8 +569,18 @@ async function runCli() {
     const html = renderHtml(state, d, find);
     writeFileSync(join(root, DIR, REPORT), html);
     console.log(`archmap: ${state.totals.files} files · ${state.totals.loc} lines · MI ${state.totals.avgMi}/100`);
+    if (typeof state.cacheHitRate === "number") {
+      console.log(`  cache: ${(state.cacheHitRate * 100).toFixed(0)}% hit rate`);
+    }
     if (state.symbols) {
       console.log(`  symbols: ${state.symbols.length} · calls: ${state.calls?.length || 0} · unresolved: ${state.unresolvedCalls?.length || 0}`);
+    }
+    if (state.problems && state.problems.length) {
+      const crit = state.problems.filter((p) => p.severity === "critical").length;
+      const hi = state.problems.filter((p) => p.severity === "high").length;
+      const med = state.problems.filter((p) => p.severity === "medium").length;
+      const lo = state.problems.filter((p) => p.severity === "low").length;
+      console.log(`  problems: ${crit} critical, ${hi} high, ${med} medium, ${lo} low (${state.problems.length} total)`);
     }
     const hc = find.shown.filter((f) => f.severity === "high").length;
     const mc = find.shown.filter((f) => f.severity === "medium").length;
@@ -546,6 +616,8 @@ async function runCli() {
       calls: state.calls || [],
       unresolvedCalls: state.unresolvedCalls || [],
       analysis: state.analysis || null,
+      cacheHitRate: typeof state.cacheHitRate === "number" ? state.cacheHitRate : 0,
+      problems: state.problems || [],
       findingsShown: find.shown.length,
       findingsTotal: find.total,
       findingsSuppressed: find.suppressed,

@@ -133,6 +133,36 @@ export function applyPromo(v: number): number {
   "src/shared/legacy.ts": `export function oldThing() { return 42; }
 `,
 
+  "src/shared/auth-secrets.ts": `// Service for authenticating with external API
+export const STRIPE_KEY = "sk_live_1234567890abcdef1234567890abcdef";
+export const API_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";
+
+export function connectAuth(endpoint: string) {
+  const fn = eval("endpoint + '/auth'");
+  return fn;
+}
+`,
+
+  "src/services/resilience.ts": `import { log } from "../shared/logger";
+
+export function swallowErrors(action: () => void) {
+  // TODO: implement robust retry mechanism
+  try {
+    action();
+  } catch (err) {
+    // swallowed error
+  }
+}
+
+export function logOnly(action: () => void) {
+  // FIXME: add alert channel notification
+  try {
+    action();
+  } catch (err) {
+    console.error(err);
+  }
+}
+`,
   "src/api/routes.ts": `import { render1 } from "../ui/view1";
 import { priceOrder } from "../services/pricing";
 import { log } from "../shared/logger";
