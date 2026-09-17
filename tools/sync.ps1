@@ -82,6 +82,8 @@ $Manifest = @(
   'tools\auto-review.mjs',
   'tools\archmap-report.mjs',
   'tools\archmap-analysis.mjs',
+  'tools\report\client.js',
+  'tools\report\page.css',
   'tools\archmap-demo.mjs',
   'tools\package.json',
   'tools\package-lock.json',

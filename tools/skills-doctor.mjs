@@ -24,6 +24,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 
 /* ----------------------------------------------------------------- utilities */
 
@@ -88,9 +89,23 @@ function run(installedRoot, repoRoot) {
       notes.push({ skill: name, kind: "name-differs", detail: `declares name '${fm.name}' (directory is '${name}')` });
     }
 
+  // The installer substitutes the <HARNESS> placeholder with the machine's
+  // harness root on install (see install.ps1). Parity must compare the repo
+  // template against the substituted copy, so normalise the installed text
+  // back to the placeholder before hashing.
+  let harnessRoot = "";
+  try {
+    harnessRoot = readFileSync(join(homedir(), ".omp", "agent", ".harness-root"), "utf8").trim();
+  } catch { /* no harness pointer — nothing to normalise */ }
+  const normaliseInstalled = (text) => {
+    if (!harnessRoot) return text;
+    const slash = harnessRoot.replace(/\\/g, "/");
+    return text.split(slash).join("<HARNESS>").split(harnessRoot).join("<HARNESS>");
+  };
+
     if (repoRoot && repoNames.has(name)) {
       const repoText = readFileSync(join(repoRoot, name, "SKILL.md"), "utf8");
-      const iSha = sha(text), rSha = sha(repoText);
+      const iSha = sha(normaliseInstalled(text)), rSha = sha(repoText);
       if (iSha !== rSha) {
         const truncated = norm(repoText).startsWith(norm(text).trimEnd()) || norm(text).length < norm(repoText).length * 0.9;
         problems.push({

@@ -1,0 +1,69 @@
+name: Repo Gate
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gate:
+    name: Repository Verification Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install tools dependencies
+        run: npm ci --prefix tools --ignore-scripts
+
+      - name: Validate OpenSpec changes
+        run: |
+          if [ -d "openspec/changes" ]; then
+            for spec_dir in openspec/changes/*; do
+              if [ -d "$spec_dir" ]; then
+                echo "Validating $spec_dir..."
+                npx --yes openspec validate "$spec_dir" --strict
+              fi
+            done
+          fi
+
+      - name: Run unit & regression tests
+        run: |
+          if [ -d "tools/tests" ]; then
+            node --test "tools/tests/*.test.mjs"
+          fi
+
+      - name: Architecture scan & auto-review
+        run: |
+          node tools/archmap.mjs scan --root .
+          node tools/auto-review.mjs --root .
+
+      - name: Upload .archmap artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archmap-report
+          path: .archmap/
+          retention-days: 14
+
+      - name: Check active workflow state
+        run: |
+          if [ -f ".workflow/state.json" ]; then
+            echo "Checking .workflow/state.json..."
+            node tools/workflow.mjs check
+          else
+            echo "No active .workflow/state.json found. Skipping."
+          fi

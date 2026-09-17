@@ -53,7 +53,7 @@ jobs:
       - name: Run unit & regression tests
         run: |
           if [ -d "tools/tests" ]; then
-            node --test tools/tests/
+            node --test "tools/tests/*.test.mjs"
           fi
 
       - name: Architecture scan & auto-review

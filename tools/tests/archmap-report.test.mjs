@@ -13,6 +13,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { renderHtml } from "../archmap-report.mjs";
 
 test("renderHtml signature and backwards compatibility with minimal state", () => {
@@ -255,4 +256,24 @@ test("Legacy state fallback: displays existing findings when state.problems is a
   const html = renderHtml(legacyState, null, legacyFindings);
   assert.match(html, /Замечания и архитектурные дефекты/);
   assert.match(html, /Цикл зависимостей/);
+});
+
+test("Generated client script is valid standalone JS and data marker is replaced", () => {
+  const sampleState = {
+    root: "/repo/sample",
+    scannedAt: new Date().toISOString(),
+    files: {
+      "src/index.js": { lines: 20, cyclomatic: 1, mi: 85, imports: [], exports: [] },
+    },
+    totals: { files: 1, loc: 20, avgMi: 85 },
+    cycles: []
+  };
+  const html = renderHtml(sampleState);
+  const scriptMatch = html.match(/<script>(?!id)([\s\S]*?)<\/script>/);
+  assert.ok(scriptMatch, "Client script block must be present");
+  const scriptSrc = scriptMatch[1];
+  assert.equal(scriptSrc.includes("/*__ARCHMAP_DATA__*/"), false, "Data marker must be replaced in rendered output");
+  assert.doesNotThrow(() => {
+    new vm.Script(scriptSrc);
+  }, "new vm.Script(src) must not throw");
 });

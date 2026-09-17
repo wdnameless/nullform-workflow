@@ -30,14 +30,14 @@
  * Budgets: .workflow/budgets.json (optional, defaults {T0:10, T1:25, T2:45, T3:45}).
  * Zero dependencies. Node 18+ / Bun.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 const DIR = ".workflow";
 const FILE = "state.json";
 const BUDGETS_FILE = "budgets.json";
+const METRICS_FILE = "metrics.jsonl";
 const DEFAULT_BUDGETS = { T0: 10, T1: 25, T2: 45, T3: 45 };
-/* ------------------------------------------------------------------- ladder */
 
 // Ordered: each tier inherits every requirement below it.
 const LADDER = ["T0", "T1", "T2", "T3"];
@@ -106,6 +106,75 @@ function save(root, st) {
   writeFileSync(statePath(root), JSON.stringify(st, null, 2));
 }
 
+function appendMetric(root, record) {
+  const p = join(root, DIR, METRICS_FILE);
+  mkdirSync(dirname(p), { recursive: true });
+  const line = JSON.stringify(record) + "\n";
+  appendFileSync(p, line, "utf8");
+}
+
+function loadMetrics(root) {
+  const p = join(root, DIR, METRICS_FILE);
+  if (!existsSync(p)) return [];
+  const content = readFileSync(p, "utf8");
+  const lines = content.split("\n").map((l) => l.trim()).filter(Boolean);
+  const out = [];
+  for (const line of lines) {
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      // ignore malformed line
+    }
+  }
+  return out;
+}
+
+function cmdMetrics(root) {
+  const list = loadMetrics(root);
+  if (list.length === 0) {
+    console.log("задач пока нет");
+    return 0;
+  }
+
+  const total = list.length;
+  const byTier = {};
+  const durations = [];
+  let forcedCount = 0;
+  let autoCount = 0;
+
+  for (const m of list) {
+    const t = m.tier || "UNKNOWN";
+    byTier[t] = (byTier[t] || 0) + 1;
+    if (typeof m.durationMs === "number" && !Number.isNaN(m.durationMs)) {
+      durations.push(m.durationMs);
+    }
+    if (m.forced) forcedCount++;
+    if (m.auto) autoCount++;
+  }
+
+  durations.sort((a, b) => a - b);
+  const sum = durations.reduce((acc, v) => acc + v, 0);
+  const avgMs = durations.length ? Math.round(sum / durations.length) : 0;
+  let medMs = 0;
+  if (durations.length) {
+    const mid = Math.floor(durations.length / 2);
+    medMs = durations.length % 2 !== 0 ? durations[mid] : Math.round((durations[mid - 1] + durations[mid]) / 2);
+  }
+
+  console.log(`Всего задач: ${total}`);
+  console.log("По тирам:");
+  for (const t of LADDER) {
+    if (byTier[t]) console.log(`  ${t}: ${byTier[t]}`);
+  }
+  for (const [k, v] of Object.entries(byTier)) {
+    if (!LADDER.includes(k)) console.log(`  ${k}: ${v}`);
+  }
+  console.log(`Средняя длительность: ${avgMs} мс`);
+  console.log(`Медианная длительность: ${medMs} мс`);
+  console.log(`Force-закрытий: ${forcedCount}`);
+  console.log(`Авто-режимов: ${autoCount}`);
+  return 0;
+}
 /* ------------------------------------------------------------------- suggest */
 
 const KEYWORDS_T3_EXPLICIT = [
@@ -464,13 +533,29 @@ function cmdClose(root, flags) {
     console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
   }
   save(root, st);
+  const startedMs = st.startedAt ? new Date(st.startedAt).getTime() : new Date(st.closedAt).getTime();
+  const closedMs = new Date(st.closedAt).getTime();
+  const durationMs = Math.max(0, closedMs - startedMs);
+  const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
+  const isForced = Boolean(missing.length && flags.force);
+  const metricRecord = {
+    task: st.task || "(untitled)",
+    tier: st.tier,
+    startedAt: st.startedAt || st.closedAt,
+    closedAt: st.closedAt,
+    durationMs,
+    forced: isForced,
+    auto: st.auto ?? null,
+    artifactsCount,
+  };
+  appendMetric(root, metricRecord);
   return 0;
 }
 
 
 /* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdClose, load, save, parse };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdClose, cmdMetrics, loadMetrics, appendMetric, load, save, parse };
 
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -488,6 +573,7 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
     case "check":    code = cmdCheck(root); break;
     case "status":   code = cmdStatus(root); break;
     case "close":    code = cmdClose(root, args.flags); break;
+    case "metrics":  code = cmdMetrics(root); break;
     default:
       console.log("workflow.mjs — tier enforcement\n");
       console.log("  node workflow.mjs suggest --files a.ts,b.ts [--task \"...\"]");
@@ -497,8 +583,8 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
       console.log("  node workflow.mjs check      # exit 1 if the tier's artifacts are missing");
       console.log("  node workflow.mjs status");
       console.log("  node workflow.mjs close [--force --reason \"...\"] [--auto] [--diff-lines N]");
+      console.log("  node workflow.mjs metrics [--root .]");
       console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
-      code = 0;
   }
   process.exit(code);
 }
