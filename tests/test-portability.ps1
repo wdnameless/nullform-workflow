@@ -78,6 +78,22 @@ try {
     Assert (Test-Path $installedHarness) "Installed harness root exists"
     Assert (Test-Path (Join-Path $installedHarness "core\PORTABLE.md")) "core\PORTABLE.md exists in installed harness"
     Assert (Test-Path (Join-Path $installedHarness "paseo\setup-paseo.ps1")) "paseo\setup-paseo.ps1 exists in installed harness"
+    # Tools subdirectories are load-bearing: archmap-report.mjs resolves these
+    # assets relative to itself, and Node's test runner expects tests/ intact.
+    Assert (Test-Path (Join-Path $installedHarness "tools\report\client.js")) "tools/report/client.js must preserve its directory"
+    Assert (Test-Path (Join-Path $installedHarness "tools\report\page.css")) "tools/report/page.css must preserve its directory"
+    Assert (Test-Path (Join-Path $installedHarness "tools\tests\archmap-report.test.mjs")) "tools/tests must preserve its directory"
+    Assert (-not (Test-Path (Join-Path $installedHarness "tools\client.js"))) "tools/report/client.js must not be flattened into tools/"
+    Assert (-not (Test-Path (Join-Path $installedHarness "tools\page.css"))) "tools/report/page.css must not be flattened into tools/"
+
+    # Omitting -RepoRoot exercises audit's candidate-path calculation. Other
+    # audit checks may legitimately report setup gaps in the sandbox; the
+    # path resolver itself must never crash before producing the audit report.
+    $auditOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installedHarness "tools\audit.ps1") -HarnessRoot $installedHarness -Scope core 2>&1
+    $auditText = ($auditOutput | Out-String)
+    Assert ($auditText -notmatch 'positional parameter') "Installed audit must not crash in Join-Path candidate resolution"
+    Assert ($auditText -match 'Harness audit') "Installed audit must reach its report"
+
     Assert (-not (Test-Path (Join-Path $FakeHome ".paseo\config.json"))) "Base installer MUST NOT create or mutate .paseo\config.json"
     Assert (-not (Test-Path (Join-Path $FakeHome ".omp\agent\mcp.json"))) "-SkipMcp MUST NOT create mcp.json"
 

@@ -192,8 +192,11 @@ Get-ChildItem "$HarnessRoot\agent\agents\*.md", "$HarnessRoot\rules\*.md" -Error
   if ($t -match '<HARNESS>') { WriteText $_.FullName ($t.Replace('<HARNESS>', $slashRoot)) }
 }
 
-# Copy tools files (excluding any local node_modules directory to ensure clean prefix installation)
-Get-ChildItem -Path "$PSScriptRoot\tools\*" -Exclude 'node_modules' | ForEach-Object {
+# Copy tools preserving directory structure. PowerShell quirk: a wildcard path
+# combined with -Exclude enumerates container CONTENTS, which flattens
+# subdirectories (report/, tests/) into the destination root and breaks the
+# renderer's relative asset lookup. Enumerate the directory itself instead.
+Get-ChildItem -Path "$PSScriptRoot\tools" -Exclude 'node_modules' | ForEach-Object {
   Copy-Item $_.FullName "$HarnessRoot\tools\" -Force -Recurse
 }
 

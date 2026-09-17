@@ -57,7 +57,7 @@ if ($harnessIsRepo) {
     $cands = @()
     if ($hParent) {
       $cands += (Join-Path $hParent 'workflow-repo')
-      $cands += (Join-Path $hParent (Split-Path -Leaf $HarnessRoot) + '-repo')
+      $cands += (Join-Path $hParent ((Split-Path -Leaf $HarnessRoot) + '-repo'))
     }
     $hit = $cands | Where-Object { $_ -and (Test-Path (Join-Path $_ 'install.ps1')) } | Select-Object -First 1
     if ($hit) { $RepoRoot = $hit } else { $RepoRoot = $HarnessRoot }
