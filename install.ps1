@@ -251,6 +251,12 @@ Get-ChildItem "$PSScriptRoot\skills" -Directory | ForEach-Object {
   $script:copied++
 }
 Ok "skills: $copied installed$(if ($skipped) { ", $(($skipped).Count) lock-managed skipped" })"
+# <HARNESS> substitution inside installed skills (destination copies only —
+# a skill that references the tools by absolute path must work on any machine).
+Get-ChildItem "$agentsHome\skills" -Recurse -Filter *.md -ErrorAction SilentlyContinue | ForEach-Object {
+  $t = Get-Content $_.FullName -Raw -Encoding UTF8
+  if ($t -match '<HARNESS>') { WriteText $_.FullName ($t.Replace('<HARNESS>', $slashRoot)) }
+}
 
 # Copy pre-substituted rules from HarnessRoot to agentDir and agentsHome
 if (Test-Path "$HarnessRoot\rules") {

@@ -11,12 +11,12 @@ folder), so it survives across sessions and is reviewable in git.
 
 ## Engine
 
-`D:/ohmypi/tools/codemap.mjs` (installed by `install.ps1`; zero dependencies, Node 18+/Bun):
+`<HARNESS>/tools/codemap.mjs` (installed by `install.ps1`; zero dependencies, Node 18+/Bun):
 
 ```bash
-node D:/ohmypi/tools/codemap.mjs init   --root . --include "src/**/*.ts" --exclude "dist/**"
-node D:/ohmypi/tools/codemap.mjs changes --root .    # what changed since last update
-node D:/ohmypi/tools/codemap.mjs update  --root .    # commit new hashes
+node <HARNESS>/tools/codemap.mjs init   --root . --include "src/**/*.ts" --exclude "dist/**"
+node <HARNESS>/tools/codemap.mjs changes --root .    # what changed since last update
+node <HARNESS>/tools/codemap.mjs update  --root .    # commit new hashes
 ```
 
 State lives in `.codemap/state.json` (gitignored). Scan config (`--include` /
