@@ -30,7 +30,7 @@
  * Budgets: .workflow/budgets.json (optional, defaults {T0:10, T1:25, T2:45, T3:45}).
  * Zero dependencies. Node 18+ / Bun.
  */
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 const DIR = ".workflow";
@@ -102,8 +102,12 @@ function load(root) {
 }
 
 function save(root, st) {
-  mkdirSync(join(root, DIR), { recursive: true });
-  writeFileSync(statePath(root), JSON.stringify(st, null, 2));
+  // Atomic write: a crash mid-write must never leave a truncated state.json.
+  const target = statePath(root);
+  const tmp = target + ".tmp";
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(tmp, JSON.stringify(st, null, 2));
+  renameSync(tmp, target);
 }
 
 function appendMetric(root, record) {
@@ -533,8 +537,9 @@ function cmdClose(root, flags) {
     console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
   }
   save(root, st);
-  const startedMs = st.startedAt ? new Date(st.startedAt).getTime() : new Date(st.closedAt).getTime();
   const closedMs = new Date(st.closedAt).getTime();
+  const startedMsRaw = st.startedAt ? new Date(st.startedAt).getTime() : NaN;
+  const startedMs = Number.isNaN(startedMsRaw) ? closedMs : startedMsRaw;
   const durationMs = Math.max(0, closedMs - startedMs);
   const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
   const isForced = Boolean(missing.length && flags.force);

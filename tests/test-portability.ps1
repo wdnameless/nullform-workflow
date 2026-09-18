@@ -80,10 +80,11 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "paseo\setup-paseo.ps1")) "paseo\setup-paseo.ps1 exists in installed harness"
     # Tools subdirectories are load-bearing: archmap-report.mjs resolves these
     # assets relative to itself, and Node's test runner expects tests/ intact.
-    Assert (Test-Path (Join-Path $installedHarness "tools\report\client.js")) "tools/report/client.js must preserve its directory"
+    Assert (Test-Path (Join-Path $installedHarness "tools\report\client.core.js")) "tools/report/client.core.js must preserve its directory"
+    Assert (Test-Path (Join-Path $installedHarness "tools\report\client.problems.js")) "tools/report/client.problems.js must preserve its directory"
     Assert (Test-Path (Join-Path $installedHarness "tools\report\page.css")) "tools/report/page.css must preserve its directory"
     Assert (Test-Path (Join-Path $installedHarness "tools\tests\archmap-report.test.mjs")) "tools/tests must preserve its directory"
-    Assert (-not (Test-Path (Join-Path $installedHarness "tools\client.js"))) "tools/report/client.js must not be flattened into tools/"
+    Assert (-not (Test-Path (Join-Path $installedHarness "tools\client.core.js"))) "tools/report/client.core.js must not be flattened into tools/"
     Assert (-not (Test-Path (Join-Path $installedHarness "tools\page.css"))) "tools/report/page.css must not be flattened into tools/"
 
     $oldHome = $env:HOME
@@ -315,7 +316,21 @@ try {
     Assert (-not (Test-Path (Join-Path $skipPaseoHome ".paseo\config.json"))) "Contradictory flags MUST abort before touching Paseo config"
     Write-Host "Test 10 PASSED."
 
-    Write-Host "`nAll 10 portability regression tests PASSED successfully!"
+    # --- TEST 11: install -SetupPaseo on a machine with NO existing Paseo config ---
+    # Regression: install.ps1 referenced an undefined $configuredModel, so -Model
+    # was never forwarded and setup-paseo.ps1 died on a clean machine.
+    Write-Host "Running Test 11: Clean -SetupPaseo install forwards model from secrets..."
+    $cleanHome = Join-Path $SandboxDir "userhome-cleanpaseo"
+    New-Item -ItemType Directory -Path $cleanHome -Force | Out-Null
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $cleanHome -SecretsFile $fakeSecretsPath -SkipMcp -NonInteractive -SetupPaseo
+    $cleanExit = $LASTEXITCODE
+    Assert ($cleanExit -eq 0) "Clean -SetupPaseo install MUST succeed when secrets.env provides DEFAULT_MODEL_ID, got exit $cleanExit"
+    $cleanCfg = Get-Content -Raw -Encoding UTF8 (Join-Path $cleanHome ".paseo\config.json") | ConvertFrom-Json
+    $cleanProfile = $cleanCfg.daemon.agentProfiles | Where-Object { $_.id -eq "agent_profile_orchestrator" }
+    Assert ($null -ne $cleanProfile) "Orchestrator profile must exist after clean -SetupPaseo"
+    Assert ($cleanProfile.model -eq "my-provider/gpt-4o") "Profile model must come from secrets (my-provider/gpt-4o), got: $($cleanProfile.model)"
+
+    Write-Host "`nAll 11 portability regression tests PASSED successfully!"
 
 
 } finally {

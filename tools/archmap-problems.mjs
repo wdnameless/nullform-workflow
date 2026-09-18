@@ -442,6 +442,8 @@ function detectOptimizationProblems(state, sourceGetter) {
  * Checks if line contains hardcoded secret.
  */
 function detectSecretInLine(line) {
+  // Explicit fixture opt-out, same convention as prompt-lint:allow.
+  if (line.includes('archmap:allow')) return false;
   // Discard comments that only describe keys
   const trimmed = line.trim();
   if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("#")) {
@@ -457,8 +459,12 @@ function detectSecretInLine(line) {
   const literalMatch = /(?:api[_-]?key|secret|token|password|passwd|auth[_-]?token)\s*[:=]\s*["'`]([^"'`\r\n]{8,})["'`]/i.exec(line);
   if (literalMatch) {
     const val = literalMatch[1];
-    // Exclude obvious templates or placeholders
+    // Exclude obvious templates or placeholders: instruction values
+    // ("your-key", "changeme", "<token>", "xxx") are documentation, not leaks.
     if (/^[A-Z0-9_]+$/.test(val) && (val.includes("ENV") || val.includes("EXAMPLE") || val.includes("PLACEHOLDER") || val.includes("TOKEN"))) {
+      return false;
+    }
+    if (/^(?:<[^>]+>|your[-_a-z0-9]*|my[-_a-z0-9]*|change[-_]?me|changeme|placeholder|example|dummy|fake|test[-_a-z0-9]*|x{3,}|\*+|\.{3,})$/i.test(val)) {
       return false;
     }
     return true;
@@ -479,6 +485,10 @@ function detectSecurityProblems(state, sourceGetter) {
   for (const p of Object.keys(state.files || {})) {
     const src = sourceGetter(p);
     if (!src) continue;
+    // File-level opt-out for fixtures that intentionally contain detectable
+    // patterns (detector demos, redaction tests). Marker lives in a header
+    // comment, so it never propagates into content the file generates.
+    if (src.includes('archmap:allow-file')) continue;
     const lines = src.split(/\r?\n/);
 
     for (let i = 0; i < lines.length; i++) {

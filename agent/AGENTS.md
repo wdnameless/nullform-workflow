@@ -17,6 +17,9 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
 - Record each artifact as you produce it:
   `node '<HARNESS>/tools/workflow.mjs' artifact --kind manifest --path openspec/changes/x/manifest.md`
   A `--path` is checked **on disk** — claiming a file that does not exist fails.
+  Content is checked too: a manifest MUST contain `R##` rows (verbatim quotes), and
+  `oracle`/`interfaces` need `--detail` with real evidence. Run these from the PROJECT
+  root (where `.workflow/state.json` lives), not the harness directory.
 - `check` exits 1 while anything is missing. Do not report the task complete with a failing `check`.
 - Close honestly: `close` refuses while artifacts are missing. If you must deviate,
   `close --force --reason "<why>"` records the deviation so it is visible, not silent.
@@ -51,6 +54,8 @@ stop-and-say-something event even when the task succeeded.
 
 ## 3. DELEGATION TARGETS
 `@designer` UI (8-phase skill pipeline) | `@fixer` logic TDD isolated | `@explorer`/`@scout` discovery | `@librarian` docs | `@oracle` blind acceptance.
+Also available: `@sonic` (mechanical edits/data collection), `@security-reviewer`
+(read-only security audit). `task` is the default spawn type, not a named role.
 
 ## 4. FLEET CONTRACT
 Every spawn: bounded scope + acceptance criteria + **return contract** (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines, no essays). Hand files by PATH, never paste contents. Safe context budget: emit HANDOFF before exhaustion or context degradation (reconciliation headroom) → HANDOFF protocol. Kill wanderers (`hub cancel` or optional `paseo stop`). Writers isolated, one owner per file, zones disjoint, read-only roles never edit. On T2+ the orchestrator NEVER writes project code — only specs/manifest/interfaces/git.

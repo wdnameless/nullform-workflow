@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env node  // archmap:allow-file — fixture intentionally contains detectable patterns
 /**
  * archmap-demo.mjs — build a small project with real architectural defects, then
  * run archmap over it so a human can see what the report looks like on a codebase

@@ -1,4 +1,5 @@
 import { test } from "node:test";
+// archmap:allow-file — fixture intentionally contains detectable patterns
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -32,7 +32,12 @@ jobs:
         # Placeholder / conditional: installs dependencies for tooling if package.json exists in tools/
         run: |
           if [ -f "tools/package.json" ]; then
-            npm ci --prefix tools
+            if [ -f "tools/package-lock.json" ]; then
+              npm ci --prefix tools --ignore-scripts
+            else
+              # npm ci hard-fails without a lockfile; install is the fallback
+              npm install --prefix tools --ignore-scripts --no-audit --no-fund
+            fi
           fi
 
       - name: Validate OpenSpec changes

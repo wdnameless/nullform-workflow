@@ -589,14 +589,22 @@ function loadCss() {
   }
 }
 
+// The client script ships as ordered real files (concatenated at render) so no
+// single file crosses the giant-module threshold and each part gets real syntax
+// checking. Order matters: core defines state, graphs and problems build on it.
+const CLIENT_PARTS = ["client.core.js", "client.graphs.js", "client.problems.js"];
+
 function loadClientJs() {
   if (cachedClientJs !== null) return cachedClientJs;
-  try {
-    cachedClientJs = fs.readFileSync(new URL("./report/client.js", import.meta.url), "utf8");
-    return cachedClientJs;
-  } catch (err) {
-    throw new Error("Отсутствует tools/report/client.js — переустановите harness");
-  }
+  const parts = CLIENT_PARTS.map((name) => {
+    try {
+      return fs.readFileSync(new URL(`./report/${name}`, import.meta.url), "utf8");
+    } catch (err) {
+      throw new Error(`Отсутствует tools/report/${name} — переустановите harness`);
+    }
+  });
+  cachedClientJs = parts.join("\n");
+  return cachedClientJs;
 }
 
 function renderClientScript() {

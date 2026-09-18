@@ -23,7 +23,8 @@ agent's own interpretation.
 
 ```bash
 node '<HARNESS>/tools/archmap.mjs' scan   --root .   # analyze + write the report
-node '<HARNESS>/tools/archmap.mjs' diff   --root .   # text delta since last scan
+node '<HARNESS>/tools/archmap.mjs' report --root .   # re-render HTML from the last snapshot
+node '<HARNESS>/tools/archmap.mjs' diff   --root .   # delta (needs at least two scans)
 node '<HARNESS>/tools/archmap.mjs' json   --root .   # for you to read, not the human
 ```
 

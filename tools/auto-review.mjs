@@ -22,6 +22,11 @@ import { join, resolve, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 
+/** Resolve npm-family executables on Windows without a shell (injection-safe). */
+function npmBin(name) {
+  return process.platform === "win32" ? `${name}.cmd` : name;
+}
+
 const DIR = ".archmap";
 const STATE = "state.json";
 const PREV = "previous.json";
@@ -240,11 +245,11 @@ export async function runAutoReview(opts = {}) {
   const tsconfigPath = join(root, "tsconfig.json");
   if (existsSync(tsconfigPath)) {
     log("Найдена конфигурация tsconfig.json, запуск tsc --noEmit...");
-    const tscRes = spawnSync("npx", ["--yes", "tsc", "--noEmit", "-p", tsconfigPath], {
+    const tscRes = spawnSync(npmBin("npx"), ["--yes", "tsc", "--noEmit", "-p", tsconfigPath], {
       cwd: root,
       stdio: "pipe",
       encoding: "utf8",
-      shell: true,
+      shell: false,
     });
     if (tscRes.status === 0) {
       log("✅ TypeScript: проверка типов пройдена успешно без ошибок.");
@@ -263,11 +268,11 @@ export async function runAutoReview(opts = {}) {
   const eslintCfg = findEslintConfig(root);
   if (eslintCfg) {
     log(`Найден конфигурационный файл линтера: ${eslintCfg}`);
-    const eslintRes = spawnSync("npx", ["--yes", "eslint", "."], {
+    const eslintRes = spawnSync(npmBin("npx"), ["--yes", "eslint", "."], {
       cwd: root,
       stdio: "pipe",
       encoding: "utf8",
-      shell: true,
+      shell: false,
     });
     if (eslintRes.status === 0) {
       log("✅ ESLint: нарушений правил линтинга не найдено.");
@@ -285,11 +290,11 @@ export async function runAutoReview(opts = {}) {
 
   if (pkg?.scripts?.test) {
     log(`Запуск тестового скрипта: npm test ("${pkg.scripts.test}")...`);
-    const testRes = spawnSync("npm", ["test"], {
+    const testRes = spawnSync(npmBin("npm"), ["test"], {
       cwd: root,
       stdio: "pipe",
       encoding: "utf8",
-      shell: true,
+      shell: false,
     });
 
     const combinedOutput = (testRes.stdout || "") + "\n" + (testRes.stderr || "");

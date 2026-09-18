@@ -340,8 +340,10 @@ if ($SetupPaseo) {
     Die "setup-paseo.ps1 not found at $setupScript"
   }
   $paseoArgs = @("-ExecutionPolicy", "Bypass", "-File", $setupScript, "-UserProfileDir", $UserHome)
-  if ($configuredModel) {
-    $paseoArgs += @("-Model", "my-provider/$configuredModel")
+  # The collected inputs name it $modelId; $configuredModel never existed, so a
+  # clean -SetupPaseo install silently dropped -Model and setup-paseo.ps1 died.
+  if ($providerBase -and $modelId) {
+    $paseoArgs += @("-Model", "my-provider/$modelId")
   }
   & powershell @paseoArgs
   if ($LASTEXITCODE -ne 0) {
