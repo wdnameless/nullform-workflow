@@ -220,3 +220,24 @@ node tools/workflow.mjs start --tier T0 --auto --allow "src/**" --max-diff 5 --t
 - Состояние задачи фиксирует параметры `auto: { allow, maxDiff }`.
 - Закрытие задачи `workflow.mjs close --auto --diff-lines <N>` сверяет фактически переданный объем diff со значением `maxDiff` (если превышен — отказ с кодом 1).
 - Каркас OMP **не выполняет автоматического редактирования файлов самостоятельно**: данный флаг представляет собой строгий гейт-контракт. Оркестратор имеет право применять правки `T0` автономно только при наличии зафиксированного состояния `auto`.
+
+## Кеш нейросетей: качество прежде экономии
+
+Workflow измеряет prompt cache, но не меняет модель и не урезает контекст:
+
+```bash
+python tools/session_cost.py --cache-report session.jsonl
+node tools/cache-doctor.mjs session.jsonl
+node tools/prompt-lint.mjs fingerprint --root . --json
+node tools/cache-policy.mjs check --root . --policy templates/workflow/cache-policy.example.json
+node tools/return-contract.mjs check agent-result.md
+```
+
+`cacheReadShare = cacheRead / (input + cacheRead)` — наблюдаемая доля повторно
+прочитанного ввода, а не универсальный provider hit-rate. Cache Doctor называет
+причину только когда она присутствует в transcript (model_change, fallback,
+compaction, fingerprint drift); иначе возвращает `UNKNOWN`.
+
+Пороговые значения моделей, compaction и объёма вывода — **только advisory**.
+Инструменты кеша никогда не меняют `modelRoles`, не компактифицируют историю,
+не обрезают ответы, не пропускают тесты и не редактируют проектный код.

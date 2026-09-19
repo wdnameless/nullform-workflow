@@ -13,9 +13,10 @@
  *      that point and every subsequent turn misses the cache.
  *
  * Commands:
- *   scan      — report volatile literals in prompt surfaces (no state needed)
- *   baseline  — record golden hashes of every surface
- *   check     — fail if a surface drifted from the baseline
+ *   scan        — report volatile literals in prompt surfaces (no state needed)
+ *   baseline    — record golden hashes of every surface
+ *   check       — fail if a surface drifted from the baseline
+ *   fingerprint — layered deterministic prompt fingerprints (--json, fixed keys)
  *
  * Escape hatch: put `prompt-lint:allow` anywhere on a line to exempt it.
  *
@@ -24,6 +25,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, relative, sep, basename } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const STATE_DIR = ".prompt-lint";
 const BASELINE = "baseline.json";
@@ -47,9 +49,10 @@ const VOLATILE = [
 /* ----------------------------------------------------------------- utilities */
 
 function parseArgs(argv) {
-  const out = { _: [], root: null };
+  const out = { _: [], root: null, json: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--root") out.root = argv[++i];
+    else if (argv[i] === "--json") out.json = true;
     else out._.push(argv[i]);
   }
   return out;
@@ -100,6 +103,131 @@ function sha(text) {
 function label(root, p) {
   const rel = relative(root, p);
   return rel.startsWith("..") ? p : rel.split(sep).join("/");
+}
+
+/** Collect deterministic four layers from sorted files */
+export function collectFingerprint(root, home) {
+  const baseRoot = root || process.cwd();
+  const userHome = home || process.env.USERPROFILE || process.env.HOME || "";
+
+  const toRel = (p) => {
+    const rel = relative(baseRoot, p);
+    return rel.split(sep).join("/");
+  };
+
+  const layerMap = {
+    baseInstructions: [],
+    agentRoles: [],
+    rules: [],
+    skills: [],
+  };
+
+  // 1. baseInstructions: agent/AGENTS.md
+  const agentsMd = join(baseRoot, "agent", "AGENTS.md");
+  if (existsSync(agentsMd)) {
+    layerMap.baseInstructions.push(agentsMd);
+  }
+
+  // 2. agentRoles: agent/agents/*.md sorted
+  const agentsDir = join(baseRoot, "agent", "agents");
+  if (existsSync(agentsDir)) {
+    const files = readdirSync(agentsDir)
+      .filter((f) => f.endsWith(".md"))
+      .sort();
+    for (const f of files) {
+      layerMap.agentRoles.push(join(agentsDir, f));
+    }
+  }
+
+  // 3. rules: root/rules or ~/.agents/rules sorted; prefer root for repo command
+  const rootRulesDir = join(baseRoot, "rules");
+  const homeRulesDir = userHome ? join(userHome, ".agents", "rules") : null;
+  const chosenRulesDir = existsSync(rootRulesDir) ? rootRulesDir : (homeRulesDir && existsSync(homeRulesDir) ? homeRulesDir : null);
+  if (chosenRulesDir) {
+    const files = readdirSync(chosenRulesDir)
+      .filter((f) => f.endsWith(".md"))
+      .sort();
+    for (const f of files) {
+      layerMap.rules.push(join(chosenRulesDir, f));
+    }
+  }
+
+  // 4. skills: root/skills or ~/.agents/skills sorted; prefer root for repo command
+  const rootSkillsDir = join(baseRoot, "skills");
+  const homeSkillsDir = userHome ? join(userHome, ".agents", "skills") : null;
+  const chosenSkillsDir = existsSync(rootSkillsDir) ? rootSkillsDir : (homeSkillsDir && existsSync(homeSkillsDir) ? homeSkillsDir : null);
+  if (chosenSkillsDir) {
+    const dirs = readdirSync(chosenSkillsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+    for (const d of dirs) {
+      const p = join(chosenSkillsDir, d, "SKILL.md");
+      if (existsSync(p)) {
+        layerMap.skills.push(p);
+      }
+    }
+  }
+
+  const layers = {};
+  const allFiles = [];
+
+  for (const layerName of ["baseInstructions", "agentRoles", "rules", "skills"]) {
+    const fileList = layerMap[layerName];
+    const layerEntries = [];
+    let combinedSha = "";
+    const hasher = createHash("sha256");
+
+    for (const filePath of fileList) {
+      const content = readText(filePath);
+      const fileSha = sha(content);
+      const relPath = toRel(filePath);
+      const entry = {
+        layer: layerName,
+        path: relPath,
+        sha: fileSha,
+      };
+      layerEntries.push(entry);
+      allFiles.push(entry);
+      hasher.update(content, "utf8");
+    }
+    combinedSha = layerEntries.length > 0 ? hasher.digest("hex").slice(0, 16) : "";
+    layers[layerName] = {
+      sha: combinedSha,
+      count: layerEntries.length,
+    };
+  }
+
+  const compositeHasher = createHash("sha256");
+  for (const layerName of ["baseInstructions", "agentRoles", "rules", "skills"]) {
+    compositeHasher.update(`${layerName}:${layers[layerName].sha}\n`, "utf8");
+  }
+  const compositeSha = compositeHasher.digest("hex").slice(0, 16);
+
+  return {
+    version: 1,
+    combined: compositeSha,
+    compositeSha,
+    layers,
+    files: allFiles,
+  };
+}
+
+function cmdFingerprint(root, home, asJson) {
+  const res = collectFingerprint(root, home);
+  if (asJson) {
+    console.log(JSON.stringify(res, null, 2));
+  } else {
+    console.log(`prompt-lint fingerprint: ${res.compositeSha}`);
+    for (const [layer, info] of Object.entries(res.layers)) {
+      console.log(`  ${layer.padEnd(18)} sha:${info.sha || "none"} count:${info.count}`);
+    }
+    console.log(`\nFiles (${res.files.length}):`);
+    for (const f of res.files) {
+      console.log(`  [${f.layer}] ${f.path} (${f.sha})`);
+    }
+  }
+  return 0;
 }
 
 /* -------------------------------------------------------------------- command */
@@ -203,21 +331,25 @@ function cmdCheck(root, home) {
 
 /* ----------------------------------------------------------------------- main */
 
-const args = parseArgs(process.argv.slice(2));
-const root = args.root || process.cwd();
-const home = process.env.USERPROFILE || process.env.HOME || "";
-const cmd = args._[0];
-
-let code;
-switch (cmd) {
-  case "scan":     code = cmdScan(root, home); break;
-  case "baseline": code = cmdBaseline(root, home); break;
-  case "check":    code = cmdCheck(root, home); break;
-  default:
-    console.log("prompt-lint.mjs — prompt-cache safety\n");
-    console.log("  node prompt-lint.mjs scan     --root <harness>   # volatile literals");
-    console.log("  node prompt-lint.mjs baseline --root <harness>   # record golden hashes");
-    console.log("  node prompt-lint.mjs check    --root <harness>   # fail on drift");
-    code = 0;
+function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
+  const root = args.root || process.cwd();
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  switch (args._[0]) {
+    case "scan":        return cmdScan(root, home);
+    case "baseline":    return cmdBaseline(root, home);
+    case "check":       return cmdCheck(root, home);
+    case "fingerprint": return cmdFingerprint(root, home, args.json);
+    default:
+      console.log("prompt-lint.mjs — prompt-cache safety\n");
+      console.log("  node prompt-lint.mjs scan        --root <harness>   # volatile literals");
+      console.log("  node prompt-lint.mjs baseline    --root <harness>   # record golden hashes");
+      console.log("  node prompt-lint.mjs check       --root <harness>   # fail on drift");
+      console.log("  node prompt-lint.mjs fingerprint --root <harness> [--json] # layered fingerprints");
+      return 0;
+  }
 }
-process.exit(code);
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exit(main());
+}

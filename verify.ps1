@@ -256,6 +256,29 @@ Check 'prompt surfaces match baseline (cache-prefix stable)' {
   'matches'
 }
 
+Check 'prompt fingerprint is deterministic across runs' {
+  $r1 = Invoke-Capture 'node' @("$HarnessRoot\tools\prompt-lint.mjs", 'fingerprint', '--root', $HarnessRoot)
+  if ($r1.Code -ne 0) { throw 'failed to compute first prompt fingerprint' }
+  $r2 = Invoke-Capture 'node' @("$HarnessRoot\tools\prompt-lint.mjs", 'fingerprint', '--root', $HarnessRoot)
+  if ($r2.Code -ne 0) { throw 'failed to compute second prompt fingerprint' }
+  if ($r1.Text.Trim() -ne $r2.Text.Trim()) { throw 'prompt fingerprint differs across consecutive runs' }
+  'deterministic'
+}
+
+Check 'cache policy gates prompt lint and contract safety' {
+  $fixture = "$HarnessRoot\tools\tests\fixtures\return-contract\valid.md"
+  if (-not (Test-Path $fixture)) {
+    $fixture = "$HarnessRoot\tools\tests\fixtures\return-contract.fixture.md"
+  }
+  $args = @("$HarnessRoot\tools\cache-policy.mjs", 'check', '--root', $HarnessRoot)
+  if (Test-Path $fixture) {
+    $args += @('--return-contract', $fixture)
+  }
+  $r = Invoke-Capture 'node' $args
+  if ($r.Code -ne 0) { throw 'cache policy check failed safe gates' }
+  'enforced'
+}
+
 # ---------------------------------------------------------------- enforcement
 # The tier gate is what makes the protocol enforceable. If it is broken or absent,
 # every prose rule it backs silently returns to being a suggestion.

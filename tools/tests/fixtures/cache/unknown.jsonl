@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"sess-unknown","timestamp":"2026-09-13T05:00:00.000Z"}
+{"type":"model_change","id":"mc-u-1","timestamp":"2026-09-13T05:00:01.000Z","model":"provider-a/steady-model","resolvedModelIsFallback":false}
+{"type":"message","id":"msg-u-1","timestamp":"2026-09-13T05:00:05.000Z","message":{"role":"assistant","provider":"provider-a","model":"steady-model","usage":{"input":20,"output":20,"cacheRead":100,"cacheWrite":0,"totalTokens":140,"cost":{"total":0.0005}}}}
+{"type":"message","id":"msg-u-2","timestamp":"2026-09-13T05:00:20.000Z","message":{"role":"assistant","provider":"provider-a","model":"steady-model","usage":{"input":120,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":140,"cost":{"total":0.0012}}}}

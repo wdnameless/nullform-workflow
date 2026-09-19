@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "layers": {
+    "base": "hash_base_layer_v1",
+    "roles": "hash_roles_layer_v1",
+    "rules": "hash_rules_layer_v1",
+    "skills": "hash_skills_layer_v1",
+    "combined": "hash_combined_layer_v1"
+  }
+}

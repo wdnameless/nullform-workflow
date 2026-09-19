@@ -67,3 +67,17 @@ jobs:
           else
             echo "No active .workflow/state.json found. Skipping."
           fi
+
+      - name: Prompt surfaces & cache safety checks
+        run: |
+          node tools/prompt-lint.mjs scan --root .
+          FP1=$(node tools/prompt-lint.mjs fingerprint --root .)
+          FP2=$(node tools/prompt-lint.mjs fingerprint --root .)
+          if [ "$FP1" != "$FP2" ]; then
+            echo "Prompt fingerprint is non-deterministic!"
+            exit 1
+          if [ -f "tools/tests/fixtures/return-contract/valid.md" ]; then
+            node tools/return-contract.mjs tools/tests/fixtures/return-contract/valid.md
+          elif [ -f "tools/tests/fixtures/return-contract.fixture.md" ]; then
+            node tools/return-contract.mjs tools/tests/fixtures/return-contract.fixture.md
+          fi

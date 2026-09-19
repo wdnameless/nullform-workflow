@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"sess-fallback","timestamp":"2026-09-13T03:00:00.000Z"}
+{"type":"model_change","id":"mc-fb-1","timestamp":"2026-09-13T03:00:01.000Z","model":"provider-a/primary-model","resolvedModelIsFallback":false}
+{"type":"message","id":"msg-fb-1","timestamp":"2026-09-13T03:00:05.000Z","message":{"role":"assistant","provider":"provider-a","model":"primary-model","usage":{"input":50,"output":25,"cacheRead":150,"cacheWrite":0,"totalTokens":225,"cost":{"total":0.001}}}}
+{"type":"model_change","id":"mc-fb-2","timestamp":"2026-09-13T03:00:20.000Z","model":"provider-a/fallback-model","resolvedModelIsFallback":true}
+{"type":"message","id":"msg-fb-2","timestamp":"2026-09-13T03:00:25.000Z","message":{"role":"assistant","provider":"provider-a","model":"fallback-model","usage":{"input":180,"output":30,"cacheRead":0,"cacheWrite":0,"totalTokens":210,"cost":{"total":0.0015}}}}

@@ -70,6 +70,11 @@ def empty_metrics() -> Dict[str, Any]:
         "cacheWrite": 0,
         "totalTokens": 0,
         "cost": defaultdict(float),
+        "warmTurns": 0,
+        "coldTurns": 0,
+        "zeroUsageTurns": 0,
+        "modelSwitches": 0,
+        "fallbackChanges": 0,
     }
 
 
@@ -94,7 +99,7 @@ def add_metrics(dest: Dict[str, Any], usage: Dict[str, Any]) -> None:
         dest["cost"]["total"] += float(cost_obj)
 
 
-def metrics_to_dict(metrics: Dict[str, Any]) -> Dict[str, Any]:
+def metrics_to_dict(metrics: Dict[str, Any], include_cache_report: bool = False) -> Dict[str, Any]:
     # Convert cost defaultdict to regular dict, rounded for clean representation if needed
     cost_dict = dict(metrics["cost"])
     # If total was not explicitly provided but other cost fields exist, ensure total
@@ -108,7 +113,7 @@ def metrics_to_dict(metrics: Dict[str, Any]) -> Dict[str, Any]:
     for k, v in cost_dict.items():
         clean_cost[k] = round(v, 6) if isinstance(v, float) else v
 
-    return {
+    out = {
         "input": metrics["input"],
         "output": metrics["output"],
         "cacheRead": metrics["cacheRead"],
@@ -117,8 +122,27 @@ def metrics_to_dict(metrics: Dict[str, Any]) -> Dict[str, Any]:
         "cost": clean_cost,
     }
 
+    if include_cache_report:
+        inp = metrics["input"]
+        cr = metrics["cacheRead"]
+        denom = inp + cr
+        share = round(cr / denom, 4) if denom > 0 else None
+        out["cacheReadShare"] = share
+        out["warmTurns"] = metrics.get("warmTurns", 0)
+        out["coldTurns"] = metrics.get("coldTurns", 0)
+        out["zeroUsageTurns"] = metrics.get("zeroUsageTurns", 0)
+        out["modelSwitches"] = metrics.get("modelSwitches", 0)
+        out["fallbackChanges"] = metrics.get("fallbackChanges", 0)
 
-def parse_and_aggregate(paths: List[str]) -> Dict[str, Any]:
+    return out
+
+
+def parse_and_aggregate(
+    paths: List[str],
+    cache_report: bool = False,
+    include_cache_report: bool = False,
+) -> Dict[str, Any]:
+    do_cache = cache_report or include_cache_report
     per_agent: Dict[str, Dict[str, Any]] = defaultdict(empty_metrics)
     per_day: Dict[str, Dict[str, Any]] = defaultdict(empty_metrics)
     total_metrics = empty_metrics()
@@ -127,6 +151,7 @@ def parse_and_aggregate(paths: List[str]) -> Dict[str, Any]:
         if not os.path.exists(path):
             continue
         try:
+            current_model: Optional[str] = None
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
                     line = line.strip()
@@ -139,7 +164,71 @@ def parse_and_aggregate(paths: List[str]) -> Dict[str, Any]:
 
                     if not isinstance(event, dict):
                         continue
-                    if event.get("type") != "message":
+
+                    event_type = event.get("type")
+
+                    # Parse model_change events
+                    if event_type == "model_change":
+                        raw_model = event.get("model") or event.get("to")
+                        prov = event.get("provider")
+                        if prov and raw_model and "/" not in raw_model:
+                            model_key = f"{prov}/{raw_model}"
+                        elif raw_model:
+                            model_key = raw_model
+                        else:
+                            model_key = current_model or "unknown"
+
+                        ts = event.get("timestamp")
+                        day_key = parse_timestamp_to_utc_date(ts)
+
+                        is_fallback = bool(
+                            event.get("resolvedModelIsFallback")
+                            or event.get("isFallback")
+                            or event.get("fallback")
+                        )
+                        if is_fallback:
+                            per_agent[model_key]["fallbackChanges"] += 1
+                            per_day[day_key]["fallbackChanges"] += 1
+                            total_metrics["fallbackChanges"] += 1
+
+                        prev = event.get("from") or current_model
+                        if prev is not None and raw_model and raw_model != prev:
+                            per_agent[model_key]["modelSwitches"] += 1
+                            per_day[day_key]["modelSwitches"] += 1
+                            total_metrics["modelSwitches"] += 1
+                        elif current_model is None and event.get("from") is not None:
+                            per_agent[model_key]["modelSwitches"] += 1
+                            per_day[day_key]["modelSwitches"] += 1
+                            total_metrics["modelSwitches"] += 1
+
+                        if raw_model:
+                            current_model = raw_model
+                        continue
+
+                    # Parse fallback events
+                    if event_type == "fallback":
+                        raw_model = event.get("model") or current_model or "unknown"
+                        prov = event.get("provider")
+                        if prov and raw_model and "/" not in raw_model:
+                            model_key = f"{prov}/{raw_model}"
+                        else:
+                            model_key = raw_model
+
+                        ts = event.get("timestamp")
+                        day_key = parse_timestamp_to_utc_date(ts)
+
+                        per_agent[model_key]["fallbackChanges"] += 1
+                        per_day[day_key]["fallbackChanges"] += 1
+                        total_metrics["fallbackChanges"] += 1
+
+                        if event.get("model") and current_model is not None and event.get("model") != current_model:
+                            per_agent[model_key]["modelSwitches"] += 1
+                            per_day[day_key]["modelSwitches"] += 1
+                            total_metrics["modelSwitches"] += 1
+                            current_model = event.get("model")
+                        continue
+
+                    if event_type != "message":
                         continue
 
                     msg = event.get("message")
@@ -162,16 +251,46 @@ def parse_and_aggregate(paths: List[str]) -> Dict[str, Any]:
                     model = msg.get("model") or event.get("model") or "unknown"
                     agent_key = f"{provider}/{model}"
 
+                    if current_model is None:
+                        current_model = agent_key
+
                     # Timestamp can be on message or top-level event
                     ts = msg.get("timestamp")
                     if ts is None:
                         ts = event.get("timestamp")
                     day_key = parse_timestamp_to_utc_date(ts)
 
+                    if msg.get("resolvedModelIsFallback") is True or msg.get("isFallback") is True or msg.get("fallback") is True:
+                        per_agent[agent_key]["fallbackChanges"] += 1
+                        per_day[day_key]["fallbackChanges"] += 1
+                        total_metrics["fallbackChanges"] += 1
+
                     # Total tokens auto-compute if omitted
                     u_copy = dict(usage)
                     if "totalTokens" not in u_copy:
                         u_copy["totalTokens"] = int(u_copy.get("input", 0)) + int(u_copy.get("output", 0))
+
+                    inp_val = int(u_copy.get("input", 0))
+                    out_val = int(u_copy.get("output", 0))
+                    cr_val = int(u_copy.get("cacheRead", 0))
+
+                    has_cache_field = "cacheRead" in usage or "cacheWrite" in usage
+                    is_zero_usage = (inp_val == 0 and out_val == 0 and cr_val == 0) or msg.get("stopReason") == "error"
+                    is_warm = cr_val > 0
+                    is_cold = has_cache_field and (inp_val > 0 and cr_val == 0)
+
+                    if is_zero_usage:
+                        per_agent[agent_key]["zeroUsageTurns"] += 1
+                        per_day[day_key]["zeroUsageTurns"] += 1
+                        total_metrics["zeroUsageTurns"] += 1
+                    elif is_warm:
+                        per_agent[agent_key]["warmTurns"] += 1
+                        per_day[day_key]["warmTurns"] += 1
+                        total_metrics["warmTurns"] += 1
+                    elif is_cold:
+                        per_agent[agent_key]["coldTurns"] += 1
+                        per_day[day_key]["coldTurns"] += 1
+                        total_metrics["coldTurns"] += 1
 
                     add_metrics(per_agent[agent_key], u_copy)
                     add_metrics(per_day[day_key], u_copy)
@@ -179,18 +298,22 @@ def parse_and_aggregate(paths: List[str]) -> Dict[str, Any]:
         except Exception:
             continue
 
-    out_per_agent = {k: metrics_to_dict(v) for k, v in sorted(per_agent.items())}
-    out_per_day = {k: metrics_to_dict(v) for k, v in sorted(per_day.items())}
-    out_total = metrics_to_dict(total_metrics)
+    out_per_agent = {k: metrics_to_dict(v, do_cache) for k, v in sorted(per_agent.items())}
+    out_per_day = {k: metrics_to_dict(v, do_cache) for k, v in sorted(per_day.items())}
+    out_total = metrics_to_dict(total_metrics, do_cache)
 
-    return {
+    result = {
         "per_agent": out_per_agent,
         "per_day": out_per_day,
         "total": out_total,
     }
+    if do_cache:
+        result["per_model"] = out_per_agent
+
+    return result
 
 
-def format_table(data: Dict[str, Any]) -> str:
+def format_table(data: Dict[str, Any], cache_report: bool = False) -> str:
     lines: List[str] = []
 
     def format_row(name: str, m: Dict[str, Any], width: int = 30) -> str:
@@ -199,7 +322,17 @@ def format_table(data: Dict[str, Any]) -> str:
             tokens_str += f" (cacheR={m['cacheRead']:,} cacheW={m['cacheWrite']:,})"
         cost_val = m.get("cost", {}).get("total", 0.0)
         cost_str = f"${cost_val:,.4f}"
-        return f"  {name:<{width}} | {tokens_str:<50} | {cost_str:>10}"
+        row_str = f"  {name:<{width}} | {tokens_str:<50} | {cost_str:>10}"
+        if cache_report and "cacheReadShare" in m:
+            share_val = m["cacheReadShare"]
+            share_str = f"{share_val:.1%}" if share_val is not None else "n/a"
+            cache_detail = (
+                f"    cacheShare={share_str} warm={m.get('warmTurns', 0)} "
+                f"cold={m.get('coldTurns', 0)} zero={m.get('zeroUsageTurns', 0)} "
+                f"switches={m.get('modelSwitches', 0)} fallbacks={m.get('fallbackChanges', 0)}"
+            )
+            return f"{row_str}\n{cache_detail}"
+        return row_str
 
     lines.append("=== PER AGENT ===")
     if data["per_agent"]:
@@ -223,6 +356,14 @@ def format_table(data: Dict[str, Any]) -> str:
         tot_tokens += f" (cacheR={tot['cacheRead']:,} cacheW={tot['cacheWrite']:,})"
     tot_cost = f"${tot.get('cost', {}).get('total', 0.0):,.4f}"
     lines.append(f"TOTAL: {tot_tokens} | cost={tot_cost}")
+    if cache_report and "cacheReadShare" in tot:
+        share_val = tot["cacheReadShare"]
+        share_str = f"{share_val:.1%}" if share_val is not None else "n/a"
+        lines.append(
+            f"  cacheShare={share_str} warm={tot.get('warmTurns', 0)} "
+            f"cold={tot.get('coldTurns', 0)} zero={tot.get('zeroUsageTurns', 0)} "
+            f"switches={tot.get('modelSwitches', 0)} fallbacks={tot.get('fallbackChanges', 0)}"
+        )
 
     return "\n".join(lines)
 
@@ -356,6 +497,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Aggregate token usage and costs from .jsonl transcripts.")
     parser.add_argument("paths", nargs="*", help="One or more .jsonl transcript paths")
     parser.add_argument("--json", dest="as_json", action="store_true", help="Output JSON object only")
+    parser.add_argument("--cache-report", dest="cache_report", action="store_true", help="Include neural prompt cache metrics")
     parser.add_argument("--selftest", action="store_true", help="Run self-tests and exit")
 
     args = parser.parse_args()
@@ -377,13 +519,12 @@ def main() -> None:
         parser.print_help(sys.stderr)
         sys.exit(1)
 
-    result = parse_and_aggregate(args.paths)
+    result = parse_and_aggregate(args.paths, cache_report=args.cache_report)
 
     if args.as_json:
         print(json.dumps(result, indent=2))
     else:
-        print(format_table(result))
-
+        print(format_table(result, cache_report=args.cache_report))
 
 if __name__ == "__main__":
     main()

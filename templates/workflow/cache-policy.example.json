@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "maxModelsPerTask": 2,
+  "compactionThreshold": 0.78,
+  "maxInlineToolOutputLines": 80,
+  "maxInlineSubagentResultLines": 25,
+  "requireStableToolOrder": true,
+  "dynamicContextPlacement": "tail"
+}
