@@ -182,5 +182,22 @@ class TestSessionCostCacheReport(unittest.TestCase):
         self.assertIn("cold=1", table_cache)
 
 
+    def test_error_turn_with_tokens_is_not_zero_usage(self):
+        """Regression: an errored turn that still spent tokens must classify by
+        its token profile (cold/warm), not as zeroUsageTurns — the old rule
+        counted it as zero-usage while still adding its tokens to the totals."""
+        with tempfile.NamedTemporaryFile("w+", suffix=".jsonl", delete=False, encoding="utf-8") as tf:
+            tf.write('{"type":"message","message":{"role":"assistant","provider":"p","model":"m","timestamp":1000,"stopReason":"error","errorStatus":429,"usage":{"input":120,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":120,"cost":{"total":0.001}}}}\n')
+            tf_path = tf.name
+        try:
+            res = session_cost.parse_and_aggregate([tf_path], cache_report=True)
+            total = res["total"]
+            self.assertEqual(total["zeroUsageTurns"], 0, "errored turn with tokens must not be zero-usage")
+            self.assertEqual(total["coldTurns"], 1, "it must classify as a cold turn")
+            self.assertEqual(total["input"], 120, "tokens still counted in totals")
+        finally:
+            os.remove(tf_path)
+
+
 if __name__ == "__main__":
     unittest.main()

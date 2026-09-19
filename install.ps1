@@ -230,7 +230,7 @@ if (Test-Path "$PSScriptRoot\paseo") {
 
 # Also drop the repo-level scripts into the harness root, so an install made
 # without keeping the clone can still verify and audit itself.
-foreach ($f in 'verify.ps1', 'audit.ps1', 'README.md', 'CONTEXT.md', 'secrets.example.env') {
+foreach ($f in 'verify.ps1', 'README.md', 'CONTEXT.md', 'secrets.example.env') {
   $src = Join-Path $PSScriptRoot $f
   if (Test-Path $src) { Copy-Item $src "$HarnessRoot\$f" -Force }
 }
@@ -319,7 +319,9 @@ if (Test-Path $junction) {
   if ($item.LinkType -eq 'Junction') {
     $target = ($item.Target | Select-Object -First 1)
     if ($target -ne "$HarnessRoot\agent\agents") {
-      Remove-Item $junction -Force -Recurse
+      # Remove ONLY the junction reparse point: PS 5.1 Remove-Item -Recurse can
+      # traverse a junction and delete the TARGET directory's contents.
+      [System.IO.Directory]::Delete($junction, $false)
       New-Item -ItemType Junction -Path $junction -Target "$HarnessRoot\agent\agents" | Out-Null
       Ok "junction re-pointed -> $HarnessRoot\agent\agents"
     } else { Ok "junction already correct" }

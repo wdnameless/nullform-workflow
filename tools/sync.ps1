@@ -101,6 +101,9 @@ $Manifest = @(
   'templates\design\DESIGN.md',
   'templates\design\examples\good\README.md',
   'templates\design\examples\bad\README.md',
+  'templates\ci\workflow-gate.yml',
+  'templates\workflow\cache-policy.example.json',
+  'templates\paseo.json',
   'CONTEXT.md',
   'README.md'
 )
@@ -150,9 +153,21 @@ foreach ($entry in $Manifest) {
 
   $drift += $rel
   if ($Promote) {
+    # Promote writes live -> repo. If the repo copy is NEWER than the live copy,
+    # that write destroys newer work: collect it and skip (unless -Force).
+    $liveTime = (Get-Item -LiteralPath $livePath -ErrorAction SilentlyContinue).LastWriteTimeUtc
+    $repoTime = (Get-Item -LiteralPath $repoPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
+    if ($repoTime -and $liveTime -and $repoTime -gt $liveTime) {
+      $suspect += $rel
+      if (-not $Force) { continue }
+    }
+    # Never write a NULL side over an existing file: a missing source means
+    # "nothing to copy", not "erase the destination".
+    if ($null -eq $live) { continue }
     Write-Normalized $repoPath $live
     Write-Host "  [->] promote $rel" -ForegroundColor Cyan
   } elseif ($Deploy) {
+    if ($null -eq $repo) { continue }
     Write-Normalized $livePath $repo
     Write-Host "  [<-] deploy  $rel" -ForegroundColor Cyan
   } else {
@@ -167,13 +182,18 @@ if ($drift.Count -eq 0) {
 }
 
 if ($Promote -and $suspect.Count) {
-  Write-Host "sync: REFUSED - $($suspect.Count) repo file(s) are NEWER than the live tree:" -ForegroundColor Red
-  foreach ($x in $suspect) { Write-Host "  $x" -ForegroundColor Red }
-  Write-Host ""
-  Write-Host "Promoting would overwrite that work with a stale harness. Either:" -ForegroundColor Yellow
-  Write-Host "  -Deploy      push the repo (newer) INTO the live tree, or" -ForegroundColor Yellow
-  Write-Host "  -Promote -Force   if the live tree really is the intended source" -ForegroundColor Yellow
-  if (-not $Force) { exit 2 }
+  if (-not $Force) {
+    Write-Host "sync: REFUSED - $($suspect.Count) repo file(s) are NEWER than the live tree:" -ForegroundColor Red
+    foreach ($x in $suspect) { Write-Host "  $x" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host "Promoting would overwrite that work with a stale harness. Either:" -ForegroundColor Yellow
+    Write-Host "  -Deploy      push the repo (newer) INTO the live tree, or" -ForegroundColor Yellow
+    Write-Host "  -Promote -Force   if the live tree really is the intended source" -ForegroundColor Yellow
+    exit 2
+  } else {
+    Write-Host "sync: FORCED - overwrote $($suspect.Count) newer repo file(s) with the live tree:" -ForegroundColor Yellow
+    foreach ($x in $suspect) { Write-Host "  $x" -ForegroundColor Yellow }
+  }
 }
 
 if ($Promote -or $Deploy) {

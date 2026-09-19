@@ -215,10 +215,10 @@ Check 'no unsubstituted placeholders across installed configs' {
 # Resolve the provider id declared in models.yml against the LIVE registry, so a
 # typo surfaces here instead of as a mystery routing failure mid-task.
 Check 'declared provider resolves in the live registry' {
+  if (-not (Test-Path "$agentDir\models.yml")) { throw [NotConfigured]::new("no provider yet - re-run install.ps1 with a base URL + key + model id") }
   $y = Get-Content "$agentDir\models.yml" -Raw
   # First indented key under `providers:` is the provider id.
   # Skip blank lines and comments between 'providers:' and the first key.
-  if (-not (Test-Path "$agentDir\models.yml")) { throw [NotConfigured]::new("no provider yet - re-run install.ps1 with a base URL + key + model id") }
   $provId = [regex]::Match($y, '(?m)^providers:\s*$(?:\r?\n(?:\s*#.*|\s*)?)*\r?\n(?:\s*#.*\r?\n)*\s{2}([a-z0-9][a-z0-9._-]*):').Groups[1].Value
   if (-not $provId) { throw "cannot read provider id from models.yml" }
   # Invoke the .cmd shim: PowerShell resolves `omp` to omp.ps1, which calls a

@@ -275,7 +275,10 @@ def parse_and_aggregate(
                     cr_val = int(u_copy.get("cacheRead", 0))
 
                     has_cache_field = "cacheRead" in usage or "cacheWrite" in usage
-                    is_zero_usage = (inp_val == 0 and out_val == 0 and cr_val == 0) or msg.get("stopReason") == "error"
+                    # Classification by actual token usage: an errored turn that
+                    # still spent tokens is a real (cold/warm) turn, not zero-usage.
+                    # Mixing both made zeroUsageTurns overlap the token totals.
+                    is_zero_usage = (inp_val == 0 and out_val == 0 and cr_val == 0)
                     is_warm = cr_val > 0
                     is_cold = has_cache_field and (inp_val > 0 and cr_val == 0)
 

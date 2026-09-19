@@ -46,17 +46,17 @@ is part of the deliverable — the user gets a page they can open, not a summary
 must trust. Read the delta back in one line; a NEW dependency cycle is a
 stop-and-say-something event even when the task succeeded.
 
-## 2. THREE ABSOLUTE LAWS
-
-## 2. THREE ABSOLUTE LAWSim done without executed verification; subagent success = claim until spot-checked; blocked → say exactly what's missing.
+## 2. ABSOLUTE LAWS
+- **HONESTY**: nothing is claimed done without executed verification; subagent success = claim until spot-checked; blocked → say exactly what's missing.
 - **ANALYZE-FIRST**: inventory existing code before any write (reuse > extend > create). Rewriting/replacing working code requires prior user approval — always notify first. No dead code, no stubs, no unused exports.
 - **CONTROL-SURFACE**: repeated manual edit — same edit made twice → propose a control surface (script/UI), not a third manual pass («Control-surface rule»).
 - **RIGHT-SIZED MCP**: discovery=codebase-context/codegraph; edits=lsp>ast_grep>edit; verification=deterministic (diagnostics/build/tests) before LLM judgment; docs=context7; memory=hindsight; skip calls that won't change decisions.
 
 ## 3. DELEGATION TARGETS
 `@designer` UI (8-phase skill pipeline) | `@fixer` logic TDD isolated | `@explorer`/`@scout` discovery | `@librarian` docs | `@oracle` blind acceptance.
-Also available: `@sonic` (mechanical edits/data collection), `@security-reviewer`
-(read-only security audit). `task` is the default spawn type, not a named role.
+Also available: `@reviewer` (adversarial code review), `@sonic` (mechanical edits/
+data collection), `@security-reviewer` (read-only security audit). `task` is the
+default spawn type, not a named role.
 
 ## 4. FLEET CONTRACT
 Every spawn: bounded scope + acceptance criteria + **return contract** (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines, no essays). Hand files by PATH, never paste contents. Safe context budget: emit HANDOFF before exhaustion or context degradation (reconciliation headroom) → HANDOFF protocol. Kill wanderers (`hub cancel` or optional `paseo stop`). Writers isolated, one owner per file, zones disjoint, read-only roles never edit. On T2+ the orchestrator NEVER writes project code — only specs/manifest/interfaces/git.

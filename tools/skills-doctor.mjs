@@ -107,12 +107,15 @@ function run(installedRoot, repoRoot) {
       const repoText = readFileSync(join(repoRoot, name, "SKILL.md"), "utf8");
       const iSha = sha(normaliseInstalled(text)), rSha = sha(repoText);
       if (iSha !== rSha) {
-        const truncated = norm(repoText).startsWith(norm(text).trimEnd()) || norm(text).length < norm(repoText).length * 0.9;
+        // Compare the SAME normalised text used for hashing; raw text carries
+        // the resolved harness path and would misfire the truncation heuristic.
+        const instNorm = norm(normaliseInstalled(text));
+        const truncated = norm(repoText).startsWith(instNorm.trimEnd()) || instNorm.length < norm(repoText).length * 0.9;
         problems.push({
           skill: name,
           kind: truncated ? "truncation" : "parity",
           detail: truncated
-            ? `installed copy looks TRUNCATED (${norm(text).length} vs ${norm(repoText).length} bytes)`
+            ? `installed copy looks TRUNCATED (${instNorm.length} vs ${norm(repoText).length} bytes)`
             : `installed copy differs from repo (${iSha} vs ${rSha})`,
         });
       }

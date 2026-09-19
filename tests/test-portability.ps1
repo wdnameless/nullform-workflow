@@ -253,8 +253,8 @@ try {
     $legacyProf = $updatedLegacy.daemon.agentProfiles | Where-Object { $_.id -eq "agent_profile_lean_router_01" }
     Assert ($null -ne $legacyProf) "Legacy equivalent profile is preserved"
     Assert ($legacyProf.model -eq "custom-host/legacy-model") "Legacy equivalent model is untouched"
-    $duplicateOrch = $updatedLegacy.daemon.agentProfiles | Where-Object { $_.id -eq "agent_profile_orchestrator" }
-    Assert ($null -eq $duplicateOrch) "New orchestrator profile is not duplicated when legacy equivalent is present"
+    $orchCount = @($updatedLegacy.daemon.agentProfiles | Where-Object { $_.id -eq "agent_profile_orchestrator" }).Count
+    Assert ($orchCount -eq 0) "New orchestrator profile is not duplicated when legacy equivalent is present (count=$orchCount)"
     Write-Host "Test 6 PASSED."
 
     # --- TEST 7: Installer with -SetupPaseo merges profiles and preserves settings ---
