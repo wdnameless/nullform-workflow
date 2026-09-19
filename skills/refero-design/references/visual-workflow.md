@@ -78,6 +78,15 @@ Avoid: [wrong palette, extra text, brand drift, generic placeholders]
 Generated assets must be placed into the implementation before handoff or documented as
 blocked.
 
+## HARD RULES for Bitmap Media Generation
+
+These rules are HARD constraints, not advisory suggestions. Every generated or sourced bitmap asset MUST comply:
+
+1. **No raster text, digits, or logos**: NEVER include text, numbers, badges, or brand logos in raster image output. Text is ALWAYS a vector or HTML/CSS overlay.
+2. **Leave generous negative space**: Compose subjects with intentional breathing room (left, right, or top/bottom) specifically reserved for typography and UI overlays.
+3. **Stocks BEFORE generation**: When a stock answer exists (Pexels, Pixabay, Openverse), search and source it BEFORE triggering generative AI models. Real photography beats synthetic slop.
+4. **One prompt per approved art direction**: Never run shotgun variations or speculative batches. Craft one precise prompt aligned with the approved reference lock.
+
 ## Visual QA
 
 After implementation, run a visual QA pass for substantial UI/design work:

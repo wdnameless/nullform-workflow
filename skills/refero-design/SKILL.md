@@ -202,6 +202,15 @@ Recommended loop:
 7. Choose one primary foundation and borrow 1-2 specific details from other styles.
 8. Lock the primary reference's signature traits before implementation.
 
+### Project Design Contract & Examples
+
+At task start, ground research in the project's persistent design contract and examples:
+
+1. **Read contract (`docs/DESIGN.md`)**: If `docs/DESIGN.md` exists, READ it before any research and treat it as the authoritative project visual contract. Follow its canvas, tokens, reference lock, and imagery strategy.
+2. **Read examples (`docs/examples/good`, `docs/examples/bad`)**: When present, read them during research. Good examples illustrate concrete patterns to emulate; bad examples illustrate patterns to avoid. If an example conflicts with an approved reference lock in `docs/DESIGN.md`, the lock wins; always name conflicts explicitly.
+3. **Merge updates after reference lock**: After research and reference lock, MERGE new tokens, commitments, or decisions into `docs/DESIGN.md`. Touch only changed sections; never blind-overwrite or destroy untouched sections.
+4. **Offer creation if absent**: If `docs/DESIGN.md` does not exist, offer to create it from `templates/design/DESIGN.md`. If the user declines, proceed silently without prompting again.
+
 Good style queries:
 
 - editorial monochrome SaaS landing page

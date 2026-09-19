@@ -50,6 +50,7 @@ stop-and-say-something event even when the task succeeded.
 
 ## 2. THREE ABSOLUTE LAWSim done without executed verification; subagent success = claim until spot-checked; blocked → say exactly what's missing.
 - **ANALYZE-FIRST**: inventory existing code before any write (reuse > extend > create). Rewriting/replacing working code requires prior user approval — always notify first. No dead code, no stubs, no unused exports.
+- **CONTROL-SURFACE**: repeated manual edit — same edit made twice → propose a control surface (script/UI), not a third manual pass («Control-surface rule»).
 - **RIGHT-SIZED MCP**: discovery=codebase-context/codegraph; edits=lsp>ast_grep>edit; verification=deterministic (diagnostics/build/tests) before LLM judgment; docs=context7; memory=hindsight; skip calls that won't change decisions.
 
 ## 3. DELEGATION TARGETS

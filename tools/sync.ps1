@@ -98,6 +98,9 @@ $Manifest = @(
   'core\PORTABLE.md',
   'paseo\profiles.json',
   'paseo\setup-paseo.ps1',
+  'templates\design\DESIGN.md',
+  'templates\design\examples\good\README.md',
+  'templates\design\examples\bad\README.md',
   'CONTEXT.md',
   'README.md'
 )

@@ -99,6 +99,15 @@ For each art direction option:
 
 3. **Compose final banner** — overlay text, CTA, logo on generated visual in HTML/CSS
 
+### HARD RULES for Bitmap Media Generation
+
+These rules are HARD constraints, not advisory suggestions. Every generated or sourced bitmap asset MUST comply:
+
+1. **No raster text, digits, or logos**: NEVER include text, numbers, badges, or brand logos in raster image output. Text is ALWAYS a vector or HTML/CSS overlay.
+2. **Leave generous negative space**: Compose subjects with intentional breathing room (left, right, or top/bottom) specifically reserved for typography and UI overlays.
+3. **Stocks BEFORE generation**: When a stock answer exists (Pexels, Pixabay, Openverse), search and source it BEFORE triggering generative AI models. Real photography beats synthetic slop.
+4. **One prompt per approved art direction**: Never run shotgun variations or speculative batches. Craft one precise prompt aligned with the approved art direction.
+
 ### Step 4: Export Banners to Images
 
 After designing HTML banners, export each to PNG using `chrome-devtools` skill:

@@ -176,6 +176,15 @@ Load `references/banner-sizes-and-styles.md` for complete sizes and styles refer
 - Text under 20% for ads (Meta penalizes)
 - Print: 300 DPI, CMYK, 3-5mm bleed
 
+### Banner: HARD RULES for Bitmap Media Generation
+
+These rules are HARD constraints, not advisory suggestions. Every generated or sourced bitmap asset MUST comply:
+
+1. **No raster text, digits, or logos**: NEVER include text, numbers, badges, or brand logos in raster image output. Text is ALWAYS a vector or HTML/CSS overlay.
+2. **Leave generous negative space**: Compose subjects with intentional breathing room (left, right, or top/bottom) specifically reserved for typography and UI overlays.
+3. **Stocks BEFORE generation**: When a stock answer exists (Pexels, Pixabay, Openverse), search and source it BEFORE triggering generative AI models. Real photography beats synthetic slop.
+4. **One prompt per approved art direction**: Never run shotgun variations or speculative batches. Craft one precise prompt aligned with the approved art direction.
+
 ## Icon Design (Built-in)
 
 15 styles, 12 categories. Gemini 3.1 Pro Preview generates SVG text output.
@@ -240,6 +249,15 @@ Load `references/social-photos-design.md` for sizes, templates, best practices.
 | IG Carousel | 1080×1350 | LinkedIn | 1200×627 |
 | YT Thumb | 1280×720 | Pinterest | 1000×1500 |
 
+
+### Social Photos: HARD RULES for Bitmap Media Generation
+
+These rules are HARD constraints, not advisory suggestions. Every generated or sourced bitmap asset MUST comply:
+
+1. **No raster text, digits, or logos**: NEVER include text, numbers, badges, or brand logos in raster image output. Text is ALWAYS a vector or HTML/CSS overlay.
+2. **Leave generous negative space**: Compose subjects with intentional breathing room (left, right, or top/bottom) specifically reserved for typography and UI overlays.
+3. **Stocks BEFORE generation**: When a stock answer exists (Pexels, Pixabay, Openverse), search and source it BEFORE triggering generative AI models. Real photography beats synthetic slop.
+4. **One prompt per approved art direction**: Never run shotgun variations or speculative batches. Craft one precise prompt aligned with the approved art direction.
 ## Workflows
 
 ### Complete Brand Package

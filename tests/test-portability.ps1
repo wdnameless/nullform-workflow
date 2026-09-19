@@ -85,6 +85,8 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "tools\report\page.css")) "tools/report/page.css must preserve its directory"
     Assert (Test-Path (Join-Path $installedHarness "tools\tests\archmap-report.test.mjs")) "tools/tests must preserve its directory"
     Assert (Test-Path (Join-Path $installedHarness "templates\workflow\cache-policy.example.json")) "cache policy example must install with templates"
+    Assert (Test-Path (Join-Path $installedHarness "templates\design\DESIGN.md")) "design contract template must install"
+    Assert (Test-Path (Join-Path $installedHarness "templates\design\examples\good\README.md")) "examples/good skeleton must install"
     Assert (-not (Test-Path (Join-Path $installedHarness "tools\client.core.js"))) "tools/report/client.core.js must not be flattened into tools/"
     Assert (-not (Test-Path (Join-Path $installedHarness "tools\page.css"))) "tools/report/page.css must not be flattened into tools/"
 
