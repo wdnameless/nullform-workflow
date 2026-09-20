@@ -1,6 +1,7 @@
 {
   "version": 1,
   "entries": [
+    { "match": "gemini-3.8-flash-high", "why": "Pinned by the operator; strongest-available auto-selection remains below as fallback" },
     { "match": "best-reasoning", "why": "Gateway's own strongest-reasoning route" },
     { "match": "opus", "why": "Strongest reasoning for blind acceptance" },
     { "match": "gpt-5.6-sol-max", "why": "Top-tier review and verification" },
@@ -9,7 +10,6 @@
     { "match": "gemini-3-pro", "why": "High-context complex verification" },
     { "match": "k3", "why": "Strong long-context reviewer" },
     { "match": "deepseek-v4", "why": "Strong reasoning at low cost" },
-    { "match": "grok-4", "why": "Solid independent reviewer" },
-    { "match": "gemini-3.8-flash-high", "why": "Mandated fallback oracle model" }
+    { "match": "grok-4", "why": "Solid independent reviewer" }
   ]
 }
