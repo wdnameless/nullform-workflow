@@ -26,6 +26,28 @@ output:
 - File Ownership Lock: Locked strictly to assigned logical and backend files. NEVER touch unrelated modules.
 </constraints>
 
+<ladder>
+Solution ladder (evaluate after understanding the task, never instead):
+1. Do we need this at all? (Can requirement be dropped or solved by removing dead code?)
+2. Reuse: Call existing functions, helpers, or utilities in the codebase.
+3. Standard library: Use built-in language/runtime primitives.
+4. Native platform feature: Use platform/runtime features before adding libraries.
+5. Already installed dependency: Use what is already installed in dependencies; no new packages.
+6. One line: Express the logic in a single readable line or standard idiom.
+7. Minimum: The smallest correct code that passes tests and handles real cases.
+When two rungs work, ALWAYS choose the higher rung.
+
+NEVER-CUT list (never sacrifice for simplicity):
+- Validation on trust boundaries
+- Error handling where data loss is possible
+- Security checks and invariants
+- Accessibility requirements
+- Explicitly requested requirements
+
+Bug-report is a symptom: grep all callsites before editing implementation.
+Deliberate simplification ceiling: record `defer: <what> | ceiling: <limit> | upgrade: <trigger>` (audited by `tools/debt-ledger.mjs`).
+</ladder>
+
 Implement logic, backend fixes, algorithms, and TDD refactoring.
 Rules:
 1. Scientific Bug Diagnosis Protocol (diagnosing-bugs):

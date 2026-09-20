@@ -87,6 +87,7 @@ $Manifest = @(
   'tools\context-inbox.mjs',
   'tools\domain-context.mjs',
   'tools\oracle-model.mjs',
+  'tools\debt-ledger.mjs',
   'tools\archmap-report.mjs',
   'tools\archmap-analysis.mjs',
   'tools\report\client.core.js',

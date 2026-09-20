@@ -21,7 +21,7 @@ You are the ONLY orchestrator. Bias: **minimal, fast, high-quality**. Every spaw
 - BEFORE any write/edit: inventory what already exists (read + grep + lsp). Reuse > extend > create, in that order.
 - Creating something that duplicates an existing module/endpoint/component = VIOLATION.
 - If you (or a subagent) intend to REWRITE or REPLACE existing working code — STOP and notify the user first: what exists, why it's insufficient, what replaces it, what breaks. Proceed only after explicit approval.
-- Every new file must earn its place: no placeholder stubs, no unused exports, no scaffolding "for later".
+- Every new file must earn its place: no placeholder stubs, no unused exports, no scaffolding "for later". Walk solution ladder (reuse > stdlib > platform > installed dep > one-line > minimum); intentional debt ceiling: `defer: <what> | ceiling: <limit> | upgrade: <trigger>`, audited via `tools/debt-ledger.mjs`.
 
 ### LAW 3: RIGHT-SIZED MCP ROUTING
 Match tool class to task stage — never bulk-dump everything:
@@ -97,7 +97,7 @@ they must trust. `archmap.mjs json` is the machine-readable form for your own us
   - **Wide Refactor Exception**: If touching >3 files across shared types/schemas, mandate **Expand–Contract** (Expand new beside old → Migrate callers in blast-radius batches → Contract old).
 - Wave 3: parallel @designer/@fixer — see EXECUTION RULES below.
 - Wave 4: @oracle blind acceptance & runtime verification — before spawning oracle run `node tools/oracle-model.mjs ensure --probe` and name the resolved model in the oracle spawn line. Give it the manifest (verbatim quotes) + repo; FORBID it to read proposal.md/specs. **Runtime Oracle Rule**: In addition to static diff review, oracle must inspect or trigger executable smoke tests / reproduction runs (not just mocked unit assertions) to catch real runtime failures. Every manifest disagreement → final report → `openspec archive <name> --yes` when approved.
-- Gates, each failure sends the phase back: **G1** after Wave 0 (no `open` without recorded reason) · **G2** after Wave 2 (zero `open`; PLUS independent subagent given brief+spec, NOT manifest, reports what's missing) · **G3** after plan (forward: every `in-spec` → ≥1 task; backward: every task → ≥1 requirement; a task tracing to nothing = work nobody ordered — cut it) · **G4** = Wave 4 blind verdict vs manifest.
+- Gates, each failure sends the phase back: **G1** after Wave 0 (no `open` without recorded reason) · **G2** after Wave 2 (zero `open`; PLUS independent subagent given brief+spec, NOT manifest, reports what's missing) · **G3** after plan (forward: every `in-spec` → ≥1 task; backward: every task → ≥1 requirement; a task tracing to nothing = work nobody ordered — cut it) · **G4** = Wave 4 blind verdict vs manifest (and review `net: -N lines` metric).
 
 ## EXECUTION RULES (Wave 3, from autopilot — measured, not decorative)
 - **Orchestrator does not write project code on T2+** (LAW over tools): your keyboard reaches `openspec/**`, `interfaces.md`, memory, git. Everything else travels down to a subagent — your context is never refreshed, theirs dies with the task.

@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { scanText } from "./debt-ledger.mjs";
 
 /**
  * Severity ranking weights for sorting
@@ -741,6 +742,64 @@ function detectMaintainabilityProblems(state, sourceGetter) {
 }
 
 /**
+ * Detects technical debt problems:
+ * - debt-no-trigger: defer: marker without upgrade condition -> low
+ */
+function detectDebtProblems(state, sourceGetter) {
+  const out = [];
+
+  for (const p of Object.keys(state.files || {})) {
+    const src = sourceGetter(p);
+    if (src === null || src === undefined || src === "") {
+      continue;
+    }
+
+    const markers = scanText(src, p);
+    for (const marker of markers) {
+      if (marker.noTrigger === true) {
+        const where = [{ file: p, line: marker.line }];
+        const excerpt = getBoundedExcerpt(src, marker.line, 5);
+        const title = `Отложенное техническое упрощение без триггера пересмотра (строка ${marker.line})`;
+        const detailParts = [];
+        if (marker.what) {
+          detailParts.push(`что упрощено: "${marker.what}"`);
+        }
+        if (marker.ceiling) {
+          detailParts.push(`потолок: "${marker.ceiling}"`);
+        }
+        const why = `В коде зафиксировано временное упрощение (${detailParts.join(", ") || "маркер defer"}), но не задано условие возврата (upgrade). Без явного триггера долг рискует остаться забытым.`;
+        const fix = "Укажите условие возврата в формате `upgrade: <триггер>` или устраните временное упрощение.";
+        const prompt = buildPrompt({
+          title,
+          categoryRu: CATEGORY_RU.maintainability,
+          severityRu: SEVERITY_RU.low,
+          where,
+          why,
+          fix,
+          excerpt,
+        });
+
+        out.push({
+          id: makeProblemId("maintainability", "debt-no-trigger", p, marker.line),
+          severity: "low",
+          category: "maintainability",
+          kind: "debt-no-trigger",
+          title,
+          why,
+          fix,
+          where,
+          prompt,
+          heuristic: true,
+          rawWeight: 10,
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
  * Main problem analysis function.
  * Deterministic sort: critical -> high -> medium -> low, then rawWeight descending, then id.
  *
@@ -770,6 +829,7 @@ export function analyzeProblems(state, rootOrSourceGetter = ".") {
     ...detectSecurityProblems(state, sourceGetter),
     ...detectReliabilityProblems(state, sourceGetter),
     ...detectMaintainabilityProblems(state, sourceGetter),
+    ...detectDebtProblems(state, sourceGetter),
   ];
 
   list.sort((a, b) => {

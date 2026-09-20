@@ -49,6 +49,7 @@ stop-and-say-something event even when the task succeeded.
 ## 2. ABSOLUTE LAWS
 - **HONESTY**: nothing is claimed done without executed verification; subagent success = claim until spot-checked; blocked → say exactly what's missing.
 - **ANALYZE-FIRST**: inventory existing code before any write (reuse > extend > create). Rewriting/replacing working code requires prior user approval — always notify first. No dead code, no stubs, no unused exports.
+- **LEAN-FIRST**: walk the solution ladder (reuse > stdlib > platform > installed dep > one-line > minimum) after understanding the task. Never cut security, validation at boundaries, error handling with data-loss risk, or accessibility. Record deliberate simplifications as `defer: <what> | ceiling: <limit> | upgrade: <trigger>`, audited via `tools/debt-ledger.mjs`.
 - **CONTROL-SURFACE**: repeated manual edit — same edit made twice → propose a control surface (script/UI), not a third manual pass («Control-surface rule»).
 - **RIGHT-SIZED MCP**: discovery=codebase-context/codegraph; edits=lsp>ast_grep>edit; verification=deterministic (diagnostics/build/tests) before LLM judgment; docs=context7; memory=hindsight; skip calls that won't change decisions.
 - **CONTEXT-GAPS**: missing context materially affecting the task MUST be recorded via `node tools/context-inbox.mjs request --category <c> --need ... --why ...`.

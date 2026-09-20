@@ -50,6 +50,12 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Review budget** — at most one initial review plus two re-reviews per gate
   (defined by `skill://deepwork`).
 
+## Lean engineering
+
+- **Solution ladder** — the ordered preference for resolving implementation needs (reuse > stdlib > platform > installed dep > one-line > minimum) evaluated after understanding the task. Never applied at the expense of security, validation at boundaries, error handling with data loss risk, or accessibility.
+- **Defer marker** — a single-line code comment documenting an intentional simplification ceiling: `defer: <what> | ceiling: <limit> | upgrade: <trigger>`. Recognized only when `defer:` starts the comment body immediately after the comment prefix (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`) and optional whitespace. Enables deliberate debt with an explicit boundary and upgrade trigger.
+- **Debt ledger** — the registry and audit report of all active defer markers, generated and verified by `tools/debt-ledger.mjs`.
+
 ## Roles
 
 - **Orchestrator** — the single router. Classifies, plans, schedules, reconciles,
@@ -107,6 +113,7 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Replay harness** — `tools/replay.mjs`. Records a live network interaction as a
   cassette and replays it deterministically, so a runtime oracle can refute a
   network-path claim without the live service.
+- **Debt ledger tool** — `tools/debt-ledger.mjs`. Scans repository code comments for `defer:` markers, checks for formatting errors or missing triggers, and generates `DEBT-LEDGER.md`.
 - **Workspace script** — a service Paseo supervises (`paseo.json`), for long-lived
   processes the user must see. Distinct from **hub process**, which is an
   in-session PTY that dies with the session.

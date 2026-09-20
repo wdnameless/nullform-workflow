@@ -417,6 +417,49 @@ Check 'auto-review CLI runs and respects problem gate' {
     Remove-Item -Recurse -Force $tmpCycle -ErrorAction SilentlyContinue
   }
 }
+Check 'debt ledger gate works' {
+  $tool = Join-Path $HarnessRoot 'tools\debt-ledger.mjs'
+  if (-not (Test-Path $tool)) { throw "tools/debt-ledger.mjs not found" }
+
+  $tmp = Join-Path $env:TEMP ("dl-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  try {
+    $testFile = Join-Path $tmp 'fixture.js'
+
+    # 1. defer marker WITHOUT upgrade: -> scan --check must exit 1
+    Set-Content -Path $testFile -Value '// defer: quick mock | ceiling: 5 items' -Encoding UTF8
+    $resNoTrigger = Invoke-Capture 'node' @($tool, 'scan', '--root', $tmp, '--check')
+    if ($resNoTrigger.Code -eq 0) {
+      throw "debt ledger gate unexpectedly succeeded on file without upgrade trigger: $($resNoTrigger.Text.Trim())"
+    }
+
+    # 2. same file WITH upgrade: -> scan --check must exit 0
+    Set-Content -Path $testFile -Value '// defer: quick mock | ceiling: 5 items | upgrade: when items > 5' -Encoding UTF8
+    $resWithTrigger = Invoke-Capture 'node' @($tool, 'scan', '--root', $tmp, '--check')
+    if ($resWithTrigger.Code -ne 0) {
+      throw "debt ledger gate failed on valid file with upgrade trigger: $($resWithTrigger.Text.Trim())"
+    }
+
+    # 3. --json parses
+    $resJson = Invoke-Capture 'node' @($tool, 'scan', '--root', $tmp, '--json')
+    if ($resJson.Code -ne 0) {
+      throw "debt ledger scan --json failed with code $($resJson.Code): $($resJson.Text.Trim())"
+    }
+    try {
+      $parsed = ConvertFrom-Json -InputObject $resJson.Text
+    } catch {
+      throw "failed to parse debt ledger JSON output: $($_.Exception.Message)"
+    }
+    if ($null -eq $parsed -or $null -eq $parsed.total) {
+      throw "parsed JSON missing expected fields: $($resJson.Text.Trim())"
+    }
+
+    'noTrigger=1 ok=0 json=ok'
+  } finally {
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+  }
+}
+
 
 Check 'CI template present and parses as YAML' {
   $ciTemplate = Join-Path $HarnessRoot 'templates\ci\workflow-gate.yml'

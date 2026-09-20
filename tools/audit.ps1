@@ -176,6 +176,12 @@ Invoke-Check 'architecture report engine' {
   @{ Ok = $true; Detail = 'archmap.mjs and archmap-report.mjs present' }
 }
 
+Invoke-Check 'debt ledger tool' {
+  $dl = Join-Path $HarnessRoot 'tools\debt-ledger.mjs'
+  if (-not (Test-Path $dl)) { return @{ Ok = $false; Detail = 'debt-ledger.mjs missing' } }
+  @{ Ok = $true; Detail = 'debt-ledger.mjs present' }
+}
+
 Invoke-Check 'portable core specification' {
   $cp = Join-Path $HarnessRoot 'core\PORTABLE.md'
   if (-not (Test-Path $cp)) { return @{ Ok = $false; Detail = 'core\PORTABLE.md missing' } }

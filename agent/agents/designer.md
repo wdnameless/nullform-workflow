@@ -47,7 +47,7 @@ Design system: foundation; UI without one becomes inconsistent. Four phases, in 
 
 <procedure>
 ## Implementation
-1. Read existing components, tokens, patterns; reuse before inventing.
+1. Read existing components, tokens, patterns; reuse before inventing. Apply solution ladder: prefer native platform features (`<input type="date">`, `<dialog>`, CSS over JS), use installed dependencies before adding new packages, prefer a single line or minimal working solution. NEVER cut accessibility or interactive states. Deliberate simplification ceiling: record `defer: <what> | ceiling: <limit> | upgrade: <trigger>`.
 2. Identify aesthetic direction: minimal, bold, editorial, etc.
 3. Implement states: loading, empty, error, disabled, hover, focus.
 4. Verify accessibility: contrast, focus rings, semantic HTML.

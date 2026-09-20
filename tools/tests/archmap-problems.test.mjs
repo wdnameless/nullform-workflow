@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { analyzeProblems, redactSecrets } from "../archmap-problems.mjs";
+import { join, dirname } from "node:path";
+import { analyzeProblems, redactSecrets, makeProblemId } from "../archmap-problems.mjs";
 import { loadCache, saveCache } from "../archmap-cache.mjs";
 
 test("archmap-problems: redactSecrets masks secret patterns with [REDACTED]", () => {
@@ -127,6 +127,66 @@ test("archmap-cache: saveCache and loadCache persist entries and version", () =>
     const loaded = loadCache(tempDir);
     assert.strictEqual(loaded.version, 1);
     assert.deepStrictEqual(loaded.entries["src/a.ts"], data.entries["src/a.ts"]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archmap-problems: detects debt-no-trigger only for defer markers without upgrade", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "archmap-debt-test-"));
+  try {
+    const sampleFile = "src/example.js";
+    const fileContent = [
+      "// normal comment line 1",
+      "// defer: quick mock",
+      "function run() {",
+      "  // defer: ok | upgrade: when x",
+      "  const note = \"defer: this is prose text in a string without comment\";",
+      "  return note;",
+      "}",
+    ].join("\n");
+
+    const fullPath = join(tempDir, sampleFile);
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, fileContent, "utf8");
+
+    const mockState = {
+      totals: { files: 1, loc: 7, avgMi: 85 },
+      cycles: [],
+      files: {
+        [sampleFile]: {
+          loc: 7,
+          blank: 0,
+          comment: 2,
+          bytes: fileContent.length,
+          hash: "abc",
+          complexity: 1,
+          exports: 0,
+          imports: 0,
+          members: ["run"],
+          deps: [],
+          fanIn: 0,
+          fanOut: 0,
+          mi: 85,
+        },
+      },
+      symbols: [],
+      calls: [],
+      unresolvedCalls: [],
+    };
+
+    const problems = analyzeProblems(mockState, tempDir);
+    const debtProblems = problems.filter((p) => p.kind === "debt-no-trigger");
+
+    assert.strictEqual(debtProblems.length, 1, "Should detect exactly one debt-no-trigger problem");
+    const prob = debtProblems[0];
+    assert.strictEqual(prob.category, "maintainability");
+    assert.strictEqual(prob.severity, "low");
+    assert.strictEqual(prob.where[0].file, sampleFile);
+    assert.strictEqual(prob.where[0].line, 2);
+    assert.ok(prob.why.includes("quick mock"));
+    assert.strictEqual(prob.heuristic, true);
+    assert.strictEqual(prob.id, makeProblemId("maintainability", "debt-no-trigger", sampleFile, 2));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

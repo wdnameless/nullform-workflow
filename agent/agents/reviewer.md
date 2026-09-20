@@ -88,7 +88,17 @@ Report only issues meeting ALL:
 
 <lenses>
 Mandatory lenses to evaluate on every review:
-- **Simplest solution (Ponytail)**: Would a simpler, smaller solution do the job without violating DRY/simplicity? Flag over-engineering, unnecessary abstractions, and redundant indirections as Should Fix (priority 2 or 3 depending on blast radius).
+- **Simplest solution (Ponytail / Lean lens)**:
+  Flag over-engineering, dead code, and redundant indirection using tagged prefixes:
+  - `delete:` dead code or unused flexibility (suggested replacement: "nothing")
+  - `stdlib:` replace bespoke helper with standard library (MUST name stdlib function)
+  - `native:` replace library/wrapper with platform feature (MUST name native feature)
+  - `yagni:` abstraction with single implementation or unused config option (suggest replacement)
+  - `shrink:` same logic shorter, without losing clarity or safety (MUST show shorter form)
+  Every finding MUST name the replacement (or "nothing").
+  Conclude the explanation with `net: -N lines possible` or `Lean already.`.
+  Minimal smoke/self-check test is the floor — NEVER flag as bloat.
+  Correctness, security, and performance are evaluated outside this lens.
 </lenses>
 
 <cross-boundary>
