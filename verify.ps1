@@ -306,39 +306,12 @@ Check 'tier gate enforces artifacts (workflow.mjs)' {
   } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 }
 
-# ---------------------------------------------------------------- visibility
-# The architecture report is the human's window into their own repo. A broken
-# engine means they silently lose it.
-Check 'archmap produces a report with graph and findings' {
-  $tmp = Join-Path $env:TEMP ("am-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-  New-Item -ItemType Directory -Force -Path "$tmp\src" | Out-Null
-  try {
-    Set-Content -Path "$tmp\src\a.ts" -Value "import { b } from './b';`nexport const a = b;" -Encoding UTF8
-    Set-Content -Path "$tmp\src\b.ts" -Value "import { a } from './a';`nexport const b = a;" -Encoding UTF8
-    $am = Join-Path $HarnessRoot 'tools\archmap.mjs'
-    if (-not (Test-Path $am)) { throw "archmap.mjs missing" }
-    $scan = Invoke-Capture 'node' @($am, 'scan', '--root', $tmp)
-    if ($scan.Code -ne 0) { throw "scan failed" }
-    $html = Join-Path $tmp '.archmap\architecture.html'
-    if (-not (Test-Path $html)) { throw "no report written" }
-    $c = Get-Content $html -Raw
-    if ($c -notmatch '<svg id="graph"') { throw "report missing <svg id=""graph"">" }
-    if ($c -notmatch '<html[^>]*lang="ru"') { throw "report missing <html lang=""ru"">" }
-    $js = Invoke-Capture 'node' @($am, 'json', '--root', $tmp)
-    # A planted two-file cycle must be detected, along with analysis symbols/calls coverage.
-    if ($js.Text -notmatch '"cycles":\s*1') { throw "planted cycle not detected" }
-    if ($js.Text -notmatch '"symbols"' -or $js.Text -notmatch '"calls"') { throw "json missing semantic symbols or calls" }
-    'graph + score + cycle detection ok'
-  } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
-}
 Check 'portable core specification and adapter presence' {
   $portable = Join-Path $HarnessRoot 'core\PORTABLE.md'
   if (-not (Test-Path $portable)) { throw "core\PORTABLE.md missing" }
   $paseoSetup = Join-Path $HarnessRoot 'paseo\setup-paseo.ps1'
   if (-not (Test-Path $paseoSetup)) { throw "paseo\setup-paseo.ps1 missing" }
-  $analysisRuntime = Join-Path $HarnessRoot 'tools\archmap-analysis.mjs'
-  if (-not (Test-Path $analysisRuntime)) { throw "tools\archmap-analysis.mjs missing" }
-  'core, paseo adapter, and archmap analysis runtime present'
+  'core and paseo adapter present'
 }
 
 # ---------------------------------------------------------------- engines
@@ -391,16 +364,11 @@ Check 'harness/repo drift (when a repo clone is present)' {
 # ---------------------------------------------------------------- ci & auto-review
 Check 'auto-review CLI runs and respects problem gate' {
   $tmpClean = Join-Path $env:TEMP ("ar-clean-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-  $tmpCycle = Join-Path $env:TEMP ("ar-cycle-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-  New-Item -ItemType Directory -Force -Path (Join-Path $tmpClean '.archmap') | Out-Null
-  New-Item -ItemType Directory -Force -Path (Join-Path $tmpCycle '.archmap') | Out-Null
+  $tmpGate = Join-Path $env:TEMP ("ar-gate-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Force -Path $tmpClean | Out-Null
+  New-Item -ItemType Directory -Force -Path $tmpGate | Out-Null
   try {
-    Set-Content -Path (Join-Path $tmpClean 'a.js') -Value 'export const a = 1;' -Encoding UTF8
-    Set-Content -Path (Join-Path $tmpClean '.archmap\state.json') -Value '{"totals":{"files":1,"loc":1,"avgMi":90},"cycles":[],"problems":[]}' -Encoding UTF8
-
-    Set-Content -Path (Join-Path $tmpCycle 'a.js') -Value 'import "./b.js";' -Encoding UTF8
-    Set-Content -Path (Join-Path $tmpCycle 'b.js') -Value 'import "./a.js";' -Encoding UTF8
-    Set-Content -Path (Join-Path $tmpCycle '.archmap\state.json') -Value '{"totals":{"files":2,"loc":2,"avgMi":60},"cycles":[["a.js","b.js","a.js"]],"problems":[]}' -Encoding UTF8
+    Set-Content -Path (Join-Path $tmpGate 'fixture.js') -Value '// defer: test without upgrade' -Encoding UTF8
 
     $tool = Join-Path $HarnessRoot 'tools\auto-review.mjs'
     if (-not (Test-Path $tool)) { throw "tools/auto-review.mjs not found" }
@@ -408,13 +376,13 @@ Check 'auto-review CLI runs and respects problem gate' {
     $resClean = Invoke-Capture 'node' @($tool, '--root', $tmpClean)
     if ($resClean.Code -ne 0) { throw "clean fixture failed: $($resClean.Text.Trim())" }
 
-    $resCycle = Invoke-Capture 'node' @($tool, '--root', $tmpCycle)
-    if ($resCycle.Code -eq 0) { throw "cycle fixture unexpectedly succeeded" }
+    $resGate = Invoke-Capture 'node' @($tool, '--root', $tmpGate)
+    if ($resGate.Code -eq 0) { throw "gate fixture unexpectedly succeeded" }
 
-    'clean=0 cycle=1'
+    'clean=0 gate=1'
   } finally {
     Remove-Item -Recurse -Force $tmpClean -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force $tmpCycle -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $tmpGate -ErrorAction SilentlyContinue
   }
 }
 Check 'debt ledger gate works' {
@@ -459,8 +427,6 @@ Check 'debt ledger gate works' {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
   }
 }
-
-
 Check 'CI template present and parses as YAML' {
   $ciTemplate = Join-Path $HarnessRoot 'templates\ci\workflow-gate.yml'
   if (-not (Test-Path $ciTemplate)) { throw "templates/ci/workflow-gate.yml not found" }
@@ -468,9 +434,7 @@ Check 'CI template present and parses as YAML' {
   if ($content -notmatch 'name:\s*Workflow Gate') { throw "missing name: Workflow Gate" }
   if ($content -notmatch 'on:\s*(\n|\r\n)\s+push:') { throw "missing push trigger" }
   if ($content -notmatch 'node-version:\s*20') { throw "missing node 20" }
-  if ($content -notmatch 'archmap\.mjs') { throw "missing archmap invocation" }
   if ($content -notmatch 'auto-review\.mjs') { throw "missing auto-review invocation" }
-  if ($content -notmatch 'actions/upload-artifact') { throw "missing artifact upload" }
   if ($content -notmatch 'actions/github-script') { throw "missing PR comment action" }
   'valid CI YAML template'
 }

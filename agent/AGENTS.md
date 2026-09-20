@@ -32,20 +32,6 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
 - `🌌 [T3 PROGRAM]` multi-feature program → T2 per slice + feature worktrees (git worktree or optional Paseo workspace).
 - Match the lane to reality: >2 files, unfamiliar area, or new behavior → T1 MINIMUM (NEVER down-classify to T0 to save time). T0 only for truly trivial 1–2 known-file edits. Escalate when a lane stalls. When unsure → ONE clarifying question.
 
-## 1b. ARCHITECTURE VISIBILITY — the human cannot see the repo from a diff
-After structural work (new modules, moved files, refactors), refresh the report the
-user actually looks at:
-
-```
-node '<HARNESS>/tools/archmap.mjs' scan --root .
-```
-
-It writes `.archmap/architecture.html` (module graph, health score, plain-language
-findings, and the delta since the last scan) and prints what changed. On T2/T3 this
-is part of the deliverable — the user gets a page they can open, not a summary they
-must trust. Read the delta back in one line; a NEW dependency cycle is a
-stop-and-say-something event even when the task succeeded.
-
 ## 2. ABSOLUTE LAWS
 - **HONESTY**: nothing is claimed done without executed verification; subagent success = claim until spot-checked; blocked → say exactly what's missing.
 - **ANALYZE-FIRST**: inventory existing code before any write (reuse > extend > create). Rewriting/replacing working code requires prior user approval — always notify first. No dead code, no stubs, no unused exports.

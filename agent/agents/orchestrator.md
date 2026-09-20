@@ -65,16 +65,6 @@ node '<HARNESS>/tools/workflow.mjs' close
 T2 requires: manifest · openspec change · interfaces · oracle verdict.
 T1 requires recon notes. T0 requires nothing beyond the lane.
 
-### ARCHITECTURE VISIBILITY (the human cannot see the repo from a diff)
-After a task that changed structure, refresh the human-facing report:
-```
-node '<HARNESS>/tools/archmap.mjs' scan --root .
-```
-It writes `.archmap/architecture.html` — module graph, health score, plain-language
-findings, and what changed since the previous scan — and prints the delta. On T2/T3
-this is part of the deliverable: the user gets a page they can open, not a summary
-they must trust. `archmap.mjs json` is the machine-readable form for your own use.
-
 ### T0 — FAST LANE (minutes, not ceremony)
 1. Locate exact spot yourself (LSP/grep — 1–2 calls max).
 2. Direct edit if trivial and safe; else ONE specialist spawn (@designer/@fixer) with bounded brief.

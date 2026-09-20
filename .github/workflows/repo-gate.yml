@@ -26,9 +26,6 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install tools dependencies
-        run: npm ci --prefix tools --ignore-scripts
-
       - name: Validate OpenSpec changes
         run: |
           if [ -d "openspec/changes" ]; then
@@ -46,18 +43,9 @@ jobs:
             node --test "tools/tests/*.test.mjs"
           fi
 
-      - name: Architecture scan & auto-review
+      - name: Auto-review gate
         run: |
-          node tools/archmap.mjs scan --root .
           node tools/auto-review.mjs --root .
-
-      - name: Upload .archmap artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: archmap-report
-          path: .archmap/
-          retention-days: 14
 
       - name: Check active workflow state
         run: |
@@ -76,6 +64,7 @@ jobs:
           if [ "$FP1" != "$FP2" ]; then
             echo "Prompt fingerprint is non-deterministic!"
             exit 1
+          fi
           if [ -f "tools/tests/fixtures/return-contract/valid.md" ]; then
             node tools/return-contract.mjs tools/tests/fixtures/return-contract/valid.md
           elif [ -f "tools/tests/fixtures/return-contract.fixture.md" ]; then

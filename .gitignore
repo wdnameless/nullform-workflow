@@ -8,8 +8,6 @@ Thumbs.db
 .prompt-lint/
 .probe/
 agent/config.yml
-.archmap/
 .workflow/
-archmap-demo/
 node_modules/
 tools/node_modules/

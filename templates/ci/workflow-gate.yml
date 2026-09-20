@@ -28,18 +28,6 @@ jobs:
           node-version: 20
           # cache: 'npm' # Uncomment if root package-lock.json exists
 
-      - name: Install tools dependencies
-        # Placeholder / conditional: installs dependencies for tooling if package.json exists in tools/
-        run: |
-          if [ -f "tools/package.json" ]; then
-            if [ -f "tools/package-lock.json" ]; then
-              npm ci --prefix tools --ignore-scripts
-            else
-              # npm ci hard-fails without a lockfile; install is the fallback
-              npm install --prefix tools --ignore-scripts --no-audit --no-fund
-            fi
-          fi
-
       - name: Validate OpenSpec changes
         # Validates only changed change-proposals under openspec/changes/*
         run: |
@@ -61,22 +49,10 @@ jobs:
             node --test "tools/tests/*.test.mjs"
           fi
 
-      - name: Architecture scan & auto-review
-        id: archmap_scan
+      - name: Auto-review gate
+        id: auto_review
         run: |
-          # 1. Run archmap scan to generate .archmap snapshot & architecture.html
-          node tools/archmap.mjs scan --root .
-
-          # 2. Run auto-review gate (checks cycles, critical/high problems, typecheck & lint if configured)
           node tools/auto-review.mjs --root .
-
-      - name: Upload .archmap artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: archmap-report
-          path: .archmap/
-          retention-days: 14
 
       - name: Check active workflow state
         # Checks workflow state if project is under active workflow execution
@@ -88,43 +64,12 @@ jobs:
             echo "No active .workflow/state.json found. Skipping."
           fi
 
-      - name: Post PR Comment with Architecture Summary
+      - name: Post PR Comment with Auto-Review Summary
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
-
-            let body = '### 🏛️ Archmap Architecture Gate Report\n\n';
-            const statePath = path.join(process.env.GITHUB_WORKSPACE, '.archmap', 'state.json');
-            const prevPath = path.join(process.env.GITHUB_WORKSPACE, '.archmap', 'previous.json');
-
-            if (fs.existsSync(statePath)) {
-              try {
-                const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-                const totals = state.totals || {};
-                body += `**Файлов:** ${totals.files || 0} | **Строк кода:** ${totals.loc || 0} | **Индекс сопровождаемости (MI):** ${totals.avgMi || 0}/100\n\n`;
-
-                if (state.problems && state.problems.length) {
-                  const critical = state.problems.filter(p => p.severity === 'critical').length;
-                  const high = state.problems.filter(p => p.severity === 'high').length;
-                  const medium = state.problems.filter(p => p.severity === 'medium').length;
-                  const low = state.problems.filter(p => p.severity === 'low').length;
-                  body += `**Обнаружено проблем:** 🔴 ${critical} крит., 🟠 ${high} выс., 🟡 ${medium} сред., ⚪ ${low} низ.\n\n`;
-                } else if (state.cycles && state.cycles.length) {
-                  body += `⚠️ **Циклических зависимостей:** ${state.cycles.length}\n\n`;
-                } else {
-                  body += `✅ Архитектурных проблем не обнаружено.\n\n`;
-                }
-              } catch (e) {
-                body += `Не удалось разобрать .archmap/state.json: ${e.message}\n\n`;
-              }
-            } else {
-              body += 'Отчёт .archmap/state.json не найден.\n\n';
-            }
-
-            body += `_Подробный HTML-отчёт сохранён в артефактах сборки (archmap-report)._`;
+            let body = '### Auto-Review Gate Passed\n\nAll quality gates passed successfully.';
 
             // Look for existing comment to update or create a new one
             const comments = await github.rest.issues.listComments({
@@ -134,7 +79,7 @@ jobs:
             });
 
             const botComment = comments.data.find(comment =>
-              comment.user.type === 'Bot' && comment.body.includes('Archmap Architecture Gate Report')
+              comment.user.type === 'Bot' && comment.body.includes('Auto-Review Gate')
             );
 
             if (botComment) {

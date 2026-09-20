@@ -168,14 +168,6 @@ Invoke-Check 'tier gate present and working' {
   } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 }
 
-Invoke-Check 'architecture report engine' {
-  $am = Join-Path $HarnessRoot 'tools\archmap.mjs'
-  $ar = Join-Path $HarnessRoot 'tools\archmap-report.mjs'
-  if (-not (Test-Path $am)) { return @{ Ok = $false; Detail = 'archmap.mjs missing' } }
-  if (-not (Test-Path $ar)) { return @{ Ok = $false; Detail = 'archmap-report.mjs missing' } }
-  @{ Ok = $true; Detail = 'archmap.mjs and archmap-report.mjs present' }
-}
-
 Invoke-Check 'debt ledger tool' {
   $dl = Join-Path $HarnessRoot 'tools\debt-ledger.mjs'
   if (-not (Test-Path $dl)) { return @{ Ok = $false; Detail = 'debt-ledger.mjs missing' } }

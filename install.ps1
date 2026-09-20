@@ -16,7 +16,7 @@
   Where things land (all OMP-native paths):
     <HarnessRoot>\agent\           agent definitions + tools (the "live tree")
     <HarnessRoot>\agent\agents\    role definitions
-    <HarnessRoot>\tools\           codemap / prompt-lint / replay / audit / archmap ...
+    <HarnessRoot>\tools\           codemap / prompt-lint / replay / audit ...
     <HarnessRoot>\core\            portable workflow specification & contracts
     ~/.omp/agent/AGENTS.md         orchestrator law (auto-loaded every session)
     ~/.omp/agent/rules/*.md        rules, addressable as rule://<name>
@@ -99,7 +99,7 @@ Write-Host "  source       : $PSScriptRoot`n"
 # ---------- 1. Dependencies ----------
 Write-Host "-- Dependencies"
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  Die "node not found in PATH. The harness tools (codemap, replay, lint, archmap) are Node scripts. Install Node 18+."
+  Die "node not found in PATH. The harness tools (codemap, replay, lint) are Node scripts. Install Node 18+."
 }
 Ok "node $(& node --version)"
 
@@ -181,7 +181,8 @@ WriteText "$HarnessRoot\agent\AGENTS.md" $agentsText
 WriteText "$agentDir\AGENTS.md" $agentsText
 # A one-line pointer, so agent defs can be located from any working directory.
 WriteText "$agentDir\.harness-root" ("$HarnessRoot" + [Environment]::NewLine)
-Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
+Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
+
 Copy-Item "$PSScriptRoot\agent\oracle-priority.example.json" "$HarnessRoot\agent\" -Force
 # Copy rules directly into HarnessRoot/rules first. NEVER modify source files in PSScriptRoot!
 if (Test-Path "$PSScriptRoot\rules") {
@@ -192,33 +193,9 @@ Get-ChildItem "$HarnessRoot\agent\agents\*.md", "$HarnessRoot\rules\*.md" -Error
   $t = Get-Content $_.FullName -Raw -Encoding UTF8
   if ($t -match '<HARNESS>') { WriteText $_.FullName ($t.Replace('<HARNESS>', $slashRoot)) }
 }
-
-# Copy tools preserving directory structure. PowerShell quirk: a wildcard path
-# combined with -Exclude enumerates container CONTENTS, which flattens
-# subdirectories (report/, tests/) into the destination root and breaks the
-# renderer's relative asset lookup. Enumerate the directory itself instead.
+# Copy tools preserving directory structure.
 Get-ChildItem -Path "$PSScriptRoot\tools" -Exclude 'node_modules' | ForEach-Object {
   Copy-Item $_.FullName "$HarnessRoot\tools\" -Force -Recurse
-}
-
-# Install tools dependencies with checked exit code if package.json exists
-$installedToolsPkg = Join-Path $HarnessRoot "tools\package.json"
-if (Test-Path $installedToolsPkg) {
-  Write-Host "  Installing tools dependencies via npm ci..."
-  $toolsDir = Join-Path $HarnessRoot "tools"
-  $npmCmd = (Get-Command "npm.cmd" -ErrorAction SilentlyContinue).Source
-  if ([string]::IsNullOrWhiteSpace($npmCmd)) {
-    $npmCmd = (Get-Command "npm" -ErrorAction SilentlyContinue).Source
-  }
-  if ([string]::IsNullOrWhiteSpace($npmCmd)) {
-    Die "npm executable not found in PATH; required to install tools dependencies"
-  }
-  $npmArgs = @("ci", "--prefix", $toolsDir, "--ignore-scripts", "--no-audit", "--no-fund")
-  & $npmCmd $npmArgs
-  if ($LASTEXITCODE -ne 0) {
-    Die "npm ci --prefix '$toolsDir' failed with exit code $LASTEXITCODE"
-  }
-  Ok "tools dependencies installed successfully"
 }
 
 # Copy core and paseo

@@ -78,12 +78,8 @@ try {
     Assert (Test-Path $installedHarness) "Installed harness root exists"
     Assert (Test-Path (Join-Path $installedHarness "core\PORTABLE.md")) "core\PORTABLE.md exists in installed harness"
     Assert (Test-Path (Join-Path $installedHarness "paseo\setup-paseo.ps1")) "paseo\setup-paseo.ps1 exists in installed harness"
-    # Tools subdirectories are load-bearing: archmap-report.mjs resolves these
-    # assets relative to itself, and Node's test runner expects tests/ intact.
-    Assert (Test-Path (Join-Path $installedHarness "tools\report\client.core.js")) "tools/report/client.core.js must preserve its directory"
-    Assert (Test-Path (Join-Path $installedHarness "tools\report\client.problems.js")) "tools/report/client.problems.js must preserve its directory"
-    Assert (Test-Path (Join-Path $installedHarness "tools\report\page.css")) "tools/report/page.css must preserve its directory"
-    Assert (Test-Path (Join-Path $installedHarness "tools\tests\archmap-report.test.mjs")) "tools/tests must preserve its directory"
+    Assert (-not (Test-Path (Join-Path $installedHarness "tools\archmap.mjs"))) "tools/archmap.mjs must not exist"
+    Assert (-not (Test-Path (Join-Path $installedHarness "tools\report"))) "tools/report must not exist"
     Assert (Test-Path (Join-Path $installedHarness "templates\workflow\cache-policy.example.json")) "cache policy example must install with templates"
     Assert (Test-Path (Join-Path $installedHarness "templates\design\DESIGN.md")) "design contract template must install"
     Assert (Test-Path (Join-Path $installedHarness "templates\design\examples\good\README.md")) "examples/good skeleton must install"
@@ -92,8 +88,6 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "tools\oracle-model.mjs")) "oracle-model tool must install"
     Assert (Test-Path (Join-Path $installedHarness "tools\debt-ledger.mjs")) "debt-ledger tool must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\oracle-priority.example.json")) "oracle priority example must install"
-    Assert (-not (Test-Path (Join-Path $installedHarness "tools\client.core.js"))) "tools/report/client.core.js must not be flattened into tools/"
-    Assert (-not (Test-Path (Join-Path $installedHarness "tools\page.css"))) "tools/report/page.css must not be flattened into tools/"
 
     $oldHome = $env:HOME
     $oldUserProfile = $env:USERPROFILE
