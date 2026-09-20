@@ -42,6 +42,12 @@
       "args": ["/c", "npx", "-y", "@executeautomation/playwright-mcp-server"],
       "env": {}
     },
+    "chrome-devtools": {
+      "$comment": "Chrome DevTools MCP server for browser inspection, console, network, performance, and automation.",
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "chrome-devtools-mcp@1.9.0"],
+      "env": {}
+    },
 
     "memory": {
       "$comment": "Cross-session memory (optional, external service). Point at YOUR deployment, or delete this entry — the workflow degrades to no persistent memory and still works.",

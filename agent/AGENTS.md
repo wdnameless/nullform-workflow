@@ -51,6 +51,8 @@ stop-and-say-something event even when the task succeeded.
 - **ANALYZE-FIRST**: inventory existing code before any write (reuse > extend > create). Rewriting/replacing working code requires prior user approval — always notify first. No dead code, no stubs, no unused exports.
 - **CONTROL-SURFACE**: repeated manual edit — same edit made twice → propose a control surface (script/UI), not a third manual pass («Control-surface rule»).
 - **RIGHT-SIZED MCP**: discovery=codebase-context/codegraph; edits=lsp>ast_grep>edit; verification=deterministic (diagnostics/build/tests) before LLM judgment; docs=context7; memory=hindsight; skip calls that won't change decisions.
+- **CONTEXT-GAPS**: missing context materially affecting the task MUST be recorded via `node tools/context-inbox.mjs request --category <c> --need ... --why ...`.
+  Tell the user the drop path `context/<category>/`, proceed with stated assumptions, never block.
 
 ## 3. DELEGATION TARGETS
 `@designer` UI (8-phase skill pipeline) | `@fixer` logic TDD isolated | `@explorer`/`@scout` discovery | `@librarian` docs | `@oracle` blind acceptance.
@@ -86,6 +88,7 @@ task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST 
 - `rule://enterprise-directives` — git/PR isolation protocol, port allocation, DB migrations, visual QA timing, dependency verification. MUST read before: work on `main`-adjacent branches, DB schema changes, dev-server startup, Playwright screenshots, new external deps.
 - MCP `dap-debugger` — interactive debugging (breakpoints, stepping, variable inspection) when a bug resists log analysis. Prefer `debug_inspect` one-shot first. Used in antidetect-browser sessions.
 - MCP `crawl4ai` — bulk web scraping via dedicated server (native MCP): `crawl`, `md`, `html`, `pdf`, `screenshot`, `execute_js`, `ask`. For JS-heavy pages or batch jobs. NOT for single simple reads — `read <url>` suffices.
+- MCP `chrome-devtools` — mandatory browser inspection and automation via Chrome DevTools Protocol (navigation, network/console logging, performance trace, heap snapshot, DOM interaction, lighthouse audit).
 
 # ENGINEERING DISCIPLINES (skills; read `skill://<name>` when the trigger fires)
 - `skill://domain-modeling` — `CONTEXT.md` glossary, ubiquitous language, ADR triggers. Read when naming new types/entities or when terms conflict.

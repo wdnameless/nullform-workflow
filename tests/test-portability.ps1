@@ -87,6 +87,10 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "templates\workflow\cache-policy.example.json")) "cache policy example must install with templates"
     Assert (Test-Path (Join-Path $installedHarness "templates\design\DESIGN.md")) "design contract template must install"
     Assert (Test-Path (Join-Path $installedHarness "templates\design\examples\good\README.md")) "examples/good skeleton must install"
+    Assert (Test-Path (Join-Path $installedHarness "tools\context-inbox.mjs")) "context-inbox tool must install"
+    Assert (Test-Path (Join-Path $installedHarness "tools\domain-context.mjs")) "domain-context tool must install"
+    Assert (Test-Path (Join-Path $installedHarness "tools\oracle-model.mjs")) "oracle-model tool must install"
+    Assert (Test-Path (Join-Path $installedHarness "agent\oracle-priority.example.json")) "oracle priority example must install"
     Assert (-not (Test-Path (Join-Path $installedHarness "tools\client.core.js"))) "tools/report/client.core.js must not be flattened into tools/"
     Assert (-not (Test-Path (Join-Path $installedHarness "tools\page.css"))) "tools/report/page.css must not be flattened into tools/"
 

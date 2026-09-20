@@ -86,6 +86,11 @@ Report only issues meeting ALL:
 - **Proportionate rigor** — fix demands no rigor absent elsewhere in codebase.
 </criteria>
 
+<lenses>
+Mandatory lenses to evaluate on every review:
+- **Simplest solution (Ponytail)**: Would a simpler, smaller solution do the job without violating DRY/simplicity? Flag over-engineering, unnecessary abstractions, and redundant indirections as Should Fix (priority 2 or 3 depending on blast radius).
+</lenses>
+
 <cross-boundary>
 Every patch-introduced type, variant, or value crossing a function or module boundary (event, message, command, frame, enum variant, queue item, IPC payload):
 1. Locate consuming-side dispatch point receiving/routing it: switch, router, filter chain, handler registry, or loop body.

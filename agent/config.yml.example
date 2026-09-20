@@ -26,6 +26,8 @@ modelRoles:
   tiny:      __DEFAULT_MODEL__
   explorer:  __DEFAULT_MODEL__
   fixer:     __DEFAULT_MODEL__
+# Oracle role: recommended to set to a different, strongest available model for blind acceptance.
+# Priority order and fallback discovery can be customized via agent/oracle-priority.example.json.
   oracle:    __DEFAULT_MODEL__
   reviewer:  __DEFAULT_MODEL__
 

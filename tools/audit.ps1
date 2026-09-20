@@ -192,6 +192,37 @@ Invoke-Check 'codemap currency' {
   @{ Ok = $true; Detail = $(if ($n -eq 0) { 'current' } else { "$n file(s) changed - CODEMAP.md may be stale" }) }
 }
 
+Invoke-Check 'oracle model role' {
+  $scriptPath = Join-Path $HarnessRoot 'tools\oracle-model.mjs'
+  if (-not (Test-Path $scriptPath)) {
+    return @{ Ok = $true; Detail = 'oracle-model.mjs not found (optional)' }
+  }
+  # No provider configured (fresh install) is NOT a failure: nothing to resolve.
+  $modelsPath = Join-Path $HOME '.omp\agent\models.yml'
+  $configPath = Join-Path $HOME '.omp\agent\config.yml'
+  if (-not (Test-Path $modelsPath) -or -not (Test-Path $configPath)) {
+    return @{ Ok = $true; Detail = 'n/a (no provider configured)' }
+  }
+  # --probe: resolve against the full discovered universe, not just declared models,
+  # so the check agrees with the orchestrator's `ensure --probe`.
+  $r = Invoke-Capture 'node' @($scriptPath, 'list', '--json', '--probe')
+  if ($r.Code -ne 0) {
+    return @{ Ok = $false; Detail = "oracle-model list failed with exit $($r.Code)" }
+  }
+  try {
+    $json = $r.Text | ConvertFrom-Json
+    if ($json.isFallback) {
+      return @{ Ok = $true; Detail = 'fallback' }
+    }
+    if ($json.resolved) {
+      return @{ Ok = $true; Detail = "oracle=$($json.resolved)" }
+    }
+    return @{ Ok = $true; Detail = 'fallback' }
+  } catch {
+    return @{ Ok = $false; Detail = "failed to parse oracle-model json output: $($_.Exception.Message)" }
+  }
+}
+
 if ($Json) {
   @{ results = $results; findings = $findings; ok = ($findings.Count -eq 0) } | ConvertTo-Json -Depth 4
 } else {

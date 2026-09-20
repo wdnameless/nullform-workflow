@@ -181,7 +181,8 @@ WriteText "$HarnessRoot\agent\AGENTS.md" $agentsText
 WriteText "$agentDir\AGENTS.md" $agentsText
 # A one-line pointer, so agent defs can be located from any working directory.
 WriteText "$agentDir\.harness-root" ("$HarnessRoot" + [Environment]::NewLine)
-Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
+Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
+Copy-Item "$PSScriptRoot\agent\oracle-priority.example.json" "$HarnessRoot\agent\" -Force
 # Copy rules directly into HarnessRoot/rules first. NEVER modify source files in PSScriptRoot!
 if (Test-Path "$PSScriptRoot\rules") {
   Copy-Item "$PSScriptRoot\rules\*" "$HarnessRoot\rules\" -Force -Recurse
@@ -278,6 +279,21 @@ if ($providerBase) {
     Ok "config.yml installed (roles -> my-provider/$modelId)"
   } else {
     Warn "config.yml already exists -> left untouched. Update its modelRoles to 'my-provider/$modelId' by hand."
+  }
+
+  # Autoselect oracle model role (best-effort, never die)
+  try {
+    $oracleScript = Join-Path $HarnessRoot 'tools\oracle-model.mjs'
+    if (Test-Path $oracleScript) {
+      & node $oracleScript ensure --probe --config "$agentDir\config.yml" --models "$agentDir\models.yml" 2>$null
+      if ($LASTEXITCODE -eq 0) {
+        Ok "oracle model role verified"
+      } else {
+        Warn "oracle model autoselect completed with non-zero exit ($LASTEXITCODE)"
+      }
+    }
+  } catch {
+    Warn "oracle model autoselect failed: $($_.Exception.Message)"
   }
 } else {
   Warn "models.yml + config.yml skipped (no provider supplied)"

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "entries": [
+    { "match": "best-reasoning", "why": "Gateway's own strongest-reasoning route" },
+    { "match": "opus", "why": "Strongest reasoning for blind acceptance" },
+    { "match": "gpt-5.6-sol-max", "why": "Top-tier review and verification" },
+    { "match": "gpt-5.6-sol-high", "why": "High-capability verification" },
+    { "match": "gpt-5", "why": "Strong general acceptance model" },
+    { "match": "gemini-3-pro", "why": "High-context complex verification" },
+    { "match": "k3", "why": "Strong long-context reviewer" },
+    { "match": "deepseek-v4", "why": "Strong reasoning at low cost" },
+    { "match": "grok-4", "why": "Solid independent reviewer" },
+    { "match": "gemini-3.8-flash-high", "why": "Mandated fallback oracle model" }
+  ]
+}
