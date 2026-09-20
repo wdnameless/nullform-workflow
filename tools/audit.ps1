@@ -174,6 +174,12 @@ Invoke-Check 'debt ledger tool' {
   @{ Ok = $true; Detail = 'debt-ledger.mjs present' }
 }
 
+Invoke-Check 'benchmark tool' {
+  $bm = Join-Path $HarnessRoot 'tools\benchmark.mjs'
+  if (-not (Test-Path $bm)) { return @{ Ok = $false; Detail = 'benchmark.mjs missing' } }
+  @{ Ok = $true; Detail = 'benchmark.mjs present' }
+}
+
 Invoke-Check 'portable core specification' {
   $cp = Join-Path $HarnessRoot 'core\PORTABLE.md'
   if (-not (Test-Path $cp)) { return @{ Ok = $false; Detail = 'core\PORTABLE.md missing' } }

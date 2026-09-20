@@ -96,6 +96,8 @@ Terms used in this OMP workflow harness. Definitions say what a term
   directly rather than inferred. May be temporary or durable; decide which.
 - **Red-capable loop** — a reproduction that genuinely fails on the reported bug.
   Required before implementation code is read or touched.
+- **Benchmark task** — an isolated coding problem specification (`bench/tasks.json`) with an ID, prompt, optional setup commands, timeout, and deterministic verification checks. Never mutates the source repo directly.
+- **Arm** — a named variant or configuration of an agent workflow being evaluated (e.g. `raw-model` vs `omp-workflow`), defined by a runner command template executed inside a fresh local git clone.
 
 ## Tooling
 
@@ -114,6 +116,7 @@ Terms used in this OMP workflow harness. Definitions say what a term
   cassette and replays it deterministically, so a runtime oracle can refute a
   network-path claim without the live service.
 - **Debt ledger tool** — `tools/debt-ledger.mjs`. Scans repository code comments for `defer:` markers, checks for formatting errors or missing triggers, and generates `DEBT-LEDGER.md`.
+- **Benchmark harness** — `tools/benchmark.mjs`. Orchestrates isolated benchmark task runs across arms (`init`, `run`, `report`, `compare`), capturing objective metrics (LOC deltas, duration, check pass rates, and optional session cost).
 - **Workspace script** — a service Paseo supervises (`paseo.json`), for long-lived
   processes the user must see. Distinct from **hub process**, which is an
   in-session PTY that dies with the session.
