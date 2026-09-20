@@ -96,7 +96,7 @@ Mandatory lenses to evaluate on every review:
   - `yagni:` abstraction with single implementation or unused config option (suggest replacement)
   - `shrink:` same logic shorter, without losing clarity or safety (MUST show shorter form)
   Every finding MUST name the replacement (or "nothing").
-  Conclude the explanation with `net: -N lines possible` or `Lean already.`.
+  Conclude the explanation with `net: -N lines possible` or `Lean already.`. This tagged delete-list is the input to Stage B.
   Minimal smoke/self-check test is the floor — NEVER flag as bloat.
   Correctness, security, and performance are evaluated outside this lens.
 </lenses>

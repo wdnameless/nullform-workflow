@@ -49,10 +49,11 @@ const VOLATILE = [
 /* ----------------------------------------------------------------- utilities */
 
 function parseArgs(argv) {
-  const out = { _: [], root: null, json: false };
+  const out = { _: [], root: null, json: false, check: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--root") out.root = argv[++i];
     else if (argv[i] === "--json") out.json = true;
+    else if (argv[i] === "--check") out.check = true;
     else out._.push(argv[i]);
   }
   return out;
@@ -229,6 +230,185 @@ function cmdFingerprint(root, home, asJson) {
   }
   return 0;
 }
+const DEFAULT_BUDGETS = {
+  always: { maxBytes: 16384, maxLines: 200 },
+  "role-defs": { maxBytes: 65536, maxLines: 1200 },
+  rules: { maxBytes: 16384, maxLines: 250 },
+  skills: { maxBytes: 32768, maxLines: 400 },
+};
+
+export function parseSkillFrontmatterText(text) {
+  const norm = text.replace(/\r\n/g, "\n");
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(norm);
+  if (!m) return "";
+  const lines = m[1].split("\n");
+  const matched = [];
+  for (const line of lines) {
+    if (/^[A-Za-z0-9_-]+:\s*/.test(line)) {
+      const key = line.slice(0, line.indexOf(":")).trim();
+      if (key === "name" || key === "description") {
+        matched.push(line);
+      }
+    }
+  }
+  return matched.length ? matched.join("\n") + "\n" : "";
+}
+
+export function collectSizes(root, home, customBudgets = null) {
+  const baseRoot = root || process.cwd();
+  const userHome = home || process.env.USERPROFILE || process.env.HOME || "";
+
+  let mergedBudgets = {
+    always: { ...DEFAULT_BUDGETS.always },
+    "role-defs": { ...DEFAULT_BUDGETS["role-defs"] },
+    rules: { ...DEFAULT_BUDGETS.rules },
+    skills: { ...DEFAULT_BUDGETS.skills },
+  };
+
+  const budgetFile = join(baseRoot, ".prompt-lint", "budget.json");
+  if (existsSync(budgetFile)) {
+    try {
+      const parsed = JSON.parse(readFileSync(budgetFile, "utf8"));
+      for (const [group, conf] of Object.entries(parsed)) {
+        if (mergedBudgets[group] && conf && typeof conf === "object") {
+          if (typeof conf.maxBytes === "number") mergedBudgets[group].maxBytes = conf.maxBytes;
+          if (typeof conf.maxLines === "number") mergedBudgets[group].maxLines = conf.maxLines;
+        }
+      }
+    } catch {
+      // ignore invalid json in budget.json
+    }
+  }
+
+  if (customBudgets && typeof customBudgets === "object") {
+    for (const [group, conf] of Object.entries(customBudgets)) {
+      if (mergedBudgets[group] && conf && typeof conf === "object") {
+        if (typeof conf.maxBytes === "number") mergedBudgets[group].maxBytes = conf.maxBytes;
+        if (typeof conf.maxLines === "number") mergedBudgets[group].maxLines = conf.maxLines;
+      }
+    }
+  }
+
+  const groups = {
+    always: { bytes: 0, lines: 0, files: [] },
+    "role-defs": { bytes: 0, lines: 0, files: [] },
+    rules: { bytes: 0, lines: 0, files: [] },
+    skills: { bytes: 0, lines: 0, files: [] },
+  };
+
+  // 1. always: agent/AGENTS.md
+  const agentsMd = join(baseRoot, "agent", "AGENTS.md");
+  if (existsSync(agentsMd)) {
+    const content = readText(agentsMd);
+    const bytes = Buffer.byteLength(content, "utf8");
+    const lines = content.length === 0 ? 0 : content.split("\n").length;
+    groups.always.bytes += bytes;
+    groups.always.lines += lines;
+    groups.always.files.push(agentsMd);
+  }
+
+  // 2. role-defs: agent/agents/*.md
+  const agentsDir = join(baseRoot, "agent", "agents");
+  if (existsSync(agentsDir)) {
+    const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md")).sort();
+    for (const f of files) {
+      const p = join(agentsDir, f);
+      const content = readText(p);
+      const bytes = Buffer.byteLength(content, "utf8");
+      const lines = content.length === 0 ? 0 : content.split("\n").length;
+      groups["role-defs"].bytes += bytes;
+      groups["role-defs"].lines += lines;
+      groups["role-defs"].files.push(p);
+    }
+  }
+
+  // 3. rules: root/rules or ~/.agents/rules
+  const rootRulesDir = join(baseRoot, "rules");
+  const homeRulesDir = userHome ? join(userHome, ".agents", "rules") : null;
+  const chosenRulesDir = existsSync(rootRulesDir) ? rootRulesDir : (homeRulesDir && existsSync(homeRulesDir) ? homeRulesDir : null);
+  if (chosenRulesDir) {
+    const files = readdirSync(chosenRulesDir).filter((f) => f.endsWith(".md")).sort();
+    for (const f of files) {
+      const p = join(chosenRulesDir, f);
+      const content = readText(p);
+      const bytes = Buffer.byteLength(content, "utf8");
+      const lines = content.length === 0 ? 0 : content.split("\n").length;
+      groups.rules.bytes += bytes;
+      groups.rules.lines += lines;
+      groups.rules.files.push(p);
+    }
+  }
+
+  // 4. skills: root/skills or ~/.agents/skills (frontmatter name + description only)
+  const rootSkillsDir = join(baseRoot, "skills");
+  const homeSkillsDir = userHome ? join(userHome, ".agents", "skills") : null;
+  const chosenSkillsDir = existsSync(rootSkillsDir) ? rootSkillsDir : (homeSkillsDir && existsSync(homeSkillsDir) ? homeSkillsDir : null);
+  if (chosenSkillsDir) {
+    const dirs = readdirSync(chosenSkillsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+    for (const d of dirs) {
+      const p = join(chosenSkillsDir, d, "SKILL.md");
+      if (existsSync(p)) {
+        const content = readText(p);
+        const fm = parseSkillFrontmatterText(content);
+        const bytes = Buffer.byteLength(fm, "utf8");
+        const lines = fm ? fm.split("\n").filter(Boolean).length : 0;
+        groups.skills.bytes += bytes;
+        groups.skills.lines += lines;
+        groups.skills.files.push(p);
+      }
+    }
+  }
+
+  const results = {};
+  let ok = true;
+
+  for (const groupName of ["always", "role-defs", "rules", "skills"]) {
+    const data = groups[groupName];
+    const budget = mergedBudgets[groupName];
+    const groupOk = data.bytes <= budget.maxBytes && data.lines <= budget.maxLines;
+    if (!groupOk) ok = false;
+    results[groupName] = {
+      bytes: data.bytes,
+      maxBytes: budget.maxBytes,
+      lines: data.lines,
+      maxLines: budget.maxLines,
+      ok: groupOk,
+      fileCount: data.files.length,
+    };
+  }
+
+  return { ok, groups: results };
+}
+
+function cmdSizes(root, home, asJson, checkMode) {
+  const res = collectSizes(root, home);
+
+  if (asJson) {
+    console.log(JSON.stringify(res, null, 2));
+  } else {
+    console.log("prompt-lint: prompt size budget analysis\n");
+    for (const [group, info] of Object.entries(res.groups)) {
+      const kb = (info.bytes / 1024).toFixed(1);
+      const maxKb = (info.maxBytes / 1024).toFixed(1);
+      const status = info.ok ? "OK" : "EXCEEDED";
+      const bStr = `${kb} KB / max ${maxKb} KB`;
+      const lStr = `${info.lines} lines / max ${info.maxLines} lines`;
+      console.log(`  ${group.padEnd(12)} ${bStr.padEnd(25)} ${lStr.padEnd(25)} ${status}`);
+    }
+    if (!res.ok) {
+      console.log("\nSome prompt size budgets were exceeded.");
+    }
+  }
+
+  if (checkMode && !res.ok) {
+    return 1;
+  }
+  return 0;
+}
+
 
 /* -------------------------------------------------------------------- command */
 
@@ -340,12 +520,14 @@ function main(argv = process.argv.slice(2)) {
     case "baseline":    return cmdBaseline(root, home);
     case "check":       return cmdCheck(root, home);
     case "fingerprint": return cmdFingerprint(root, home, args.json);
+    case "sizes":       return cmdSizes(root, home, args.json, args.check);
     default:
       console.log("prompt-lint.mjs — prompt-cache safety\n");
       console.log("  node prompt-lint.mjs scan        --root <harness>   # volatile literals");
       console.log("  node prompt-lint.mjs baseline    --root <harness>   # record golden hashes");
       console.log("  node prompt-lint.mjs check       --root <harness>   # fail on drift");
       console.log("  node prompt-lint.mjs fingerprint --root <harness> [--json] # layered fingerprints");
+      console.log("  node prompt-lint.mjs sizes       --root <harness> [--json] [--check] # size budgets");
       return 0;
   }
 }

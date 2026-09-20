@@ -17,12 +17,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import {
+  isGitRepo,
   collectDomainFiles,
+  collectRecentCommits,
+  collectGhIssues,
+  collectDecisions,
   collectDomainContext,
   formatRussianOutput,
-  isGitRepo,
+  parseArgs,
 } from "../domain-context.mjs";
-
 function createTempDir() {
   return mkdtempSync(join(tmpdir(), "domain-context-test-"));
 }
@@ -177,4 +180,53 @@ test("domain parameter validation: throws if domain is missing", () => {
     },
     { message: /Параметр --domain обязателен/ }
   );
+});
+
+test("DECISIONS section: finds matching lines in docs/adr and openspec/changes, graceful when empty, capped at 5", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "domain-decisions-test-"));
+  t.after(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  // Check empty state
+  const emptyRes = collectDecisions(tempDir, "auth", 5);
+  assert.deepStrictEqual(emptyRes.decisions, []);
+
+  const emptyCtx = collectDomainContext({ root: tempDir, domain: "auth", allowGh: false });
+  assert.deepStrictEqual(emptyCtx.decisions, []);
+  const emptyText = formatRussianOutput(emptyCtx);
+  assert.match(emptyText, /=== DECISIONS ===\r?\nрешений по домену не найдено/);
+
+  // Create docs/adr/ADR-001.md, ADR-002.md
+  const adrDir = join(tempDir, "docs", "adr");
+  mkdirSync(adrDir, { recursive: true });
+  writeFileSync(join(adrDir, "0001-auth-jwt.md"), "# 1. Auth JWT Decision\nWe use JWT tokens for auth service.\nSecond auth mention.");
+  writeFileSync(join(adrDir, "0002-billing.md"), "# 2. Billing\nWe use Stripe.");
+  writeFileSync(join(adrDir, "0003-auth-session.md"), "# 3. Session Auth\nFallback session auth mechanism.");
+
+  // Create openspec/changes/feature-auth/{proposal,manifest}.md
+  const specAuth = join(tempDir, "openspec", "changes", "feature-auth");
+  mkdirSync(specAuth, { recursive: true });
+  writeFileSync(join(specAuth, "proposal.md"), "# Proposal: auth migration\nMigrate auth tokens.");
+  writeFileSync(join(specAuth, "manifest.md"), "# Manifest: auth\nRequirement R-auth.");
+
+  // Create other files that should be ignored or capped
+  writeFileSync(join(specAuth, "other.md"), "# Other doc with auth");
+  const specBilling = join(tempDir, "openspec", "changes", "feature-billing");
+  mkdirSync(specBilling, { recursive: true });
+  writeFileSync(join(specBilling, "proposal.md"), "# Proposal: billing\nIncludes auth integration.");
+  writeFileSync(join(specBilling, "manifest.md"), "# Manifest: billing\nTouches auth endpoints.");
+
+  const foundRes = collectDecisions(tempDir, "auth", 5);
+  // We have 6 candidate files matching:
+  // 0001-auth-jwt.md, 0003-auth-session.md, feature-auth/proposal.md, feature-auth/manifest.md, feature-billing/proposal.md, feature-billing/manifest.md
+  // But capped at 5!
+  assert.strictEqual(foundRes.decisions.length, 5);
+  // Check that first line per file was picked
+  assert.strictEqual(foundRes.decisions[0], "docs/adr/0001-auth-jwt.md: # 1. Auth JWT Decision");
+
+  const foundCtx = collectDomainContext({ root: tempDir, domain: "auth", allowGh: false });
+  assert.strictEqual(foundCtx.decisions.length, 5);
+  const foundText = formatRussianOutput(foundCtx);
+  assert.match(foundText, /=== DECISIONS ===\r?\n- docs\/adr\/0001-auth-jwt\.md: # 1\. Auth JWT Decision/);
 });

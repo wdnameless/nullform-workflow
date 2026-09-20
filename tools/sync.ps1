@@ -86,6 +86,8 @@ $Manifest = @(
   'tools\oracle-model.mjs',
   'tools\debt-ledger.mjs',
   'tools\benchmark.mjs',
+  'tools\usage-audit.mjs',
+  'tools\doctor.mjs',
   'tools\audit.ps1',
   'tools\sync.ps1',
   'core\PORTABLE.md',

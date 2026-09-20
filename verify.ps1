@@ -438,6 +438,21 @@ Check 'CI template present and parses as YAML' {
   if ($content -notmatch 'actions/github-script') { throw "missing PR comment action" }
   'valid CI YAML template'
 }
+Check 'install doctor (repo mode)' {
+  $doc = Join-Path $HarnessRoot 'tools\doctor.mjs'
+  if (-not (Test-Path $doc)) { throw "doctor.mjs missing" }
+  $r = Invoke-Capture 'node' @($doc, '--harness', $HarnessRoot, '--json')
+  if ($r.Code -ne 0) {
+    throw "doctor failed with code $($r.Code): $($r.Text.Trim())"
+  }
+  try {
+    $json = ConvertFrom-Json -InputObject $r.Text
+  } catch {
+    throw "failed to parse doctor JSON output: $($_.Exception.Message)"
+  }
+  if ($null -eq $json) { throw "empty doctor JSON output" }
+  'repo mode ok'
+}
 
 # ---------------------------------------------------------------- report
 $results | Format-Table -AutoSize

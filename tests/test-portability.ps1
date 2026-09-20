@@ -88,6 +88,8 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "tools\oracle-model.mjs")) "oracle-model tool must install"
     Assert (Test-Path (Join-Path $installedHarness "tools\debt-ledger.mjs")) "debt-ledger tool must install"
     Assert (Test-Path (Join-Path $installedHarness "tools\benchmark.mjs")) "benchmark tool must install"
+    Assert (Test-Path (Join-Path $installedHarness "tools\usage-audit.mjs")) "usage-audit tool must install"
+    Assert (Test-Path (Join-Path $installedHarness "tools\doctor.mjs")) "doctor tool must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\oracle-priority.example.json")) "oracle priority example must install"
 
     $oldHome = $env:HOME

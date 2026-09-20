@@ -227,6 +227,44 @@ Invoke-Check 'oracle model role' {
   }
 }
 
+Invoke-Check 'usage audit tool' {
+  $ua = Join-Path $HarnessRoot 'tools\usage-audit.mjs'
+  if (-not (Test-Path $ua)) { return @{ Ok = $false; Detail = 'usage-audit.mjs missing' } }
+  @{ Ok = $true; Detail = 'usage-audit.mjs present' }
+}
+
+Invoke-Check 'install doctor' {
+  $agentHarnessRoot = Join-Path $HOME '.omp\agent\.harness-root'
+  if (-not (Test-Path $agentHarnessRoot)) {
+    return @{ Ok = $true; Detail = 'n/a (no installed agent dir)' }
+  }
+  $doc = Join-Path $HarnessRoot 'tools\doctor.mjs'
+  if (-not (Test-Path $doc)) { return @{ Ok = $false; Detail = 'doctor.mjs missing' } }
+  $r = Invoke-Capture 'node' @($doc, '--harness', $HarnessRoot, '--json')
+  if ($r.Code -ne 0) {
+    return @{ Ok = $false; Detail = "doctor check failed with exit $($r.Code)" }
+  }
+  try {
+    $json = $r.Text | ConvertFrom-Json
+    if ($json.ok) {
+      return @{ Ok = $true; Detail = "clean ($($json.summary.pass) pass)" }
+    }
+    return @{ Ok = $false; Detail = "$($json.summary.fail) check(s) failed" }
+  } catch {
+    return @{ Ok = $false; Detail = "failed to parse doctor json output: $($_.Exception.Message)" }
+  }
+}
+
+Invoke-Check 'prompt budget' {
+  $pl = Join-Path $HarnessRoot 'tools\prompt-lint.mjs'
+  if (-not (Test-Path $pl)) { return @{ Ok = $false; Detail = 'prompt-lint.mjs missing' } }
+  $r = Invoke-Capture 'node' @($pl, 'sizes', '--root', $HarnessRoot, '--check')
+  if ($r.Code -ne 0) {
+    return @{ Ok = $false; Detail = "prompt budget check failed (exit $($r.Code))" }
+  }
+  @{ Ok = $true; Detail = 'within budget' }
+}
+
 if ($Json) {
   @{ results = $results; findings = $findings; ok = ($findings.Count -eq 0) } | ConvertTo-Json -Depth 4
 } else {

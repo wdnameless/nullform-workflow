@@ -293,6 +293,79 @@ export function collectGhIssues(root, domain, allowGh = true) {
     return { issues: [], notes };
   }
 }
+/**
+ * Ищет решения по токену домена в docs/adr/**\/*.md и openspec/changes/**\/{proposal,manifest}.md.
+ * Ограничение: не более maxRows (по умолчанию 5) строк, первая найденная строка на файл,
+ * усечение до 160 символов.
+ */
+export function collectDecisions(root, domain, maxRows = 5) {
+  const decisions = [];
+  const notes = [];
+  const tokenLower = domain.toLowerCase();
+
+  function scanDirRecursive(dir) {
+    const files = [];
+    if (!existsSync(dir)) return files;
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          files.push(...scanDirRecursive(full));
+        } else if (entry.isFile()) {
+          files.push(full);
+        }
+      }
+    } catch {
+      // игнорируем ошибки доступа
+    }
+    return files;
+  }
+
+  const candidateFiles = [];
+  // 1. docs/adr/**/*.md
+  const adrDir = join(root, "docs", "adr");
+  if (existsSync(adrDir)) {
+    const adrFiles = scanDirRecursive(adrDir).filter((f) => f.endsWith(".md"));
+    candidateFiles.push(...adrFiles);
+  }
+
+  // 2. openspec/changes/**/{proposal,manifest}.md
+  const openspecDir = join(root, "openspec", "changes");
+  if (existsSync(openspecDir)) {
+    const specFiles = scanDirRecursive(openspecDir).filter((f) => {
+      const base = f.split(sep).pop();
+      return base === "proposal.md" || base === "manifest.md";
+    });
+    candidateFiles.push(...specFiles);
+  }
+
+  // Сортируем для детерминизма
+  candidateFiles.sort();
+
+  for (const filePath of candidateFiles) {
+    if (decisions.length >= maxRows) break;
+    try {
+      const content = readFileSync(filePath, "utf8");
+      const lines = content.split(/\r?\n/);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.toLowerCase().includes(tokenLower)) {
+          const relPath = relative(root, filePath).split(sep).join("/");
+          const snippet = trimmed.length > 160 ? trimmed.slice(0, 157) + "..." : trimmed;
+          decisions.push(`${relPath}: ${snippet}`);
+          break; // первая подходящая строка в файле
+        }
+      }
+    } catch {
+      // пропуск нечитаемого файла
+    }
+  }
+
+  return { decisions, notes };
+}
+
 
 /**
  * Главная функция сбора доменного контекста.
@@ -321,6 +394,9 @@ export function collectDomainContext({
   // 3. Issue
   const issueRes = collectGhIssues(root, normDomain, allowGh);
   allNotes.push(...issueRes.notes);
+  // 4. Решения (DECISIONS)
+  const decisionRes = collectDecisions(root, normDomain, 5);
+  allNotes.push(...decisionRes.notes);
 
   return {
     domain: normDomain,
@@ -328,6 +404,7 @@ export function collectDomainContext({
     totalFiles: fileRes.totalFiles,
     truncated: fileRes.truncated,
     commits: commitRes.commits,
+    decisions: decisionRes.decisions,
     issues: issueRes.issues,
     notes: allNotes,
   };
@@ -358,6 +435,16 @@ export function formatRussianOutput(data) {
       sections.push(`- ${c}`);
     }
   }
+  // DECISIONS
+  sections.push("\n=== DECISIONS ===");
+  if (!data.decisions || data.decisions.length === 0) {
+    sections.push("решений по домену не найдено");
+  } else {
+    for (const d of data.decisions) {
+      sections.push(`- ${d}`);
+    }
+  }
+
 
   // ISSUES
   sections.push("\n=== ISSUES ===");

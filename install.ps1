@@ -370,6 +370,23 @@ if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
   Ok "prompt-cache baseline recorded"
 }
 
+# ---------- 9. Run install doctor ----------
+if (Test-Path "$HarnessRoot\tools\doctor.mjs") {
+  $doctorOut = & node "$HarnessRoot\tools\doctor.mjs" --harness "$HarnessRoot" --agent-dir "$agentDir" --agents-home "$agentsHome" 2>&1
+  $doctorExit = $LASTEXITCODE
+  if ($doctorExit -ne 0) {
+    Write-Host ""
+    Write-Host "install-doctor detected errors in installed harness:" -ForegroundColor Red
+    foreach ($line in $doctorOut) {
+      if ($line -match 'FAIL') {
+        Write-Host "  $line" -ForegroundColor Red
+      }
+    }
+    exit 1
+  }
+  Ok "install doctor checks passed"
+}
+
 Write-Host "`n=== Installed ==="
 Write-Host @"
 

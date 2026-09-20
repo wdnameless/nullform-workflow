@@ -98,6 +98,7 @@ Terms used in this OMP workflow harness. Definitions say what a term
   Required before implementation code is read or touched.
 - **Benchmark task** — an isolated coding problem specification (`bench/tasks.json`) with an ID, prompt, optional setup commands, timeout, and deterministic verification checks. Never mutates the source repo directly.
 - **Arm** — a named variant or configuration of an agent workflow being evaluated (e.g. `raw-model` vs `omp-workflow`), defined by a runner command template executed inside a fresh local git clone.
+- **Stage B** — the simplifying second phase in the A→B→A delivery rhythm. After meeting specifications and passing tests in Stage A, the agent executes an explicit compression and deduplication pass, preserving test invariance while achieving neutral or negative net lines of code (`net: -N lines`).
 
 ## Tooling
 
@@ -122,6 +123,9 @@ Terms used in this OMP workflow harness. Definitions say what a term
   in-session PTY that dies with the session.
 - **Hub** — in-session coordination: peer messaging, background jobs, PTY processes.
 - **Paseo** — the supervising daemon: workspaces, agents, terminals, schedules.
+- **Prompt budget** — sub-command (`tools/prompt-lint.mjs sizes [--check]`) and configuration (`.prompt-lint/budget.json`) enforcing size limits across agent prompt surfaces to prevent context degradation and cache thrashing.
+- **Usage audit** — audit tool (`tools/usage-audit.mjs [--days 30]`) analyzing tool, MCP, and skill invocation frequency from local logs without printing or exposing sensitive invocation payloads.
+- **Install doctor** — diagnostic harness (`tools/doctor.mjs`) validating installation prerequisites, directory structures, and environment health, acting as a hard gate during installation (`install.ps1`).
 
 ## Operations
 

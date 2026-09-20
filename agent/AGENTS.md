@@ -40,6 +40,7 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
 - **RIGHT-SIZED MCP**: discovery=codebase-context/codegraph; edits=lsp>ast_grep>edit; verification=deterministic (diagnostics/build/tests) before LLM judgment; docs=context7; memory=hindsight; skip calls that won't change decisions.
 - **CONTEXT-GAPS**: missing context materially affecting the task MUST be recorded via `node tools/context-inbox.mjs request --category <c> --need ... --why ...`.
   Tell the user the drop path `context/<category>/`, proceed with stated assumptions, never block.
+- **PROMPT-OWNERSHIP**: Prompt surfaces belong to the human. Edits to system prompts, agent instructions, or prompt templates by an agent are allowed ONLY after explicit user approval.
 
 ## 3. DELEGATION TARGETS
 `@designer` UI (8-phase skill pipeline) | `@fixer` logic TDD isolated | `@explorer`/`@scout` discovery | `@librarian` docs | `@oracle` blind acceptance.
@@ -55,7 +56,7 @@ task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST 
 
 ## 5. MEMORY (Hindsight — shared across all user devices)
 - RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>")` — reuse decisions other devices already recorded.
-- RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions")` — bank `main`.
+- RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions")` — bank `main`. Memory hygiene: retain strictly structured ≤~200 words. Durable architectural decisions belong in `docs/adr/`, not in memory.
 ---
 
 # SHELL PATHS (Windows host — get this right the first time)
