@@ -13,12 +13,35 @@ import { pathToFileURL } from "node:url";
  *   --days <n>        Фильтр сессий по возрасту в днях (по умолчанию 30)
  *   --mcp <path>      Путь к mcp.json (по умолчанию ~/.omp/agent/mcp.json)
  *   --skills <dir>    Каталог установленных скиллов (по умолчанию ~/.agents/skills)
+ *   --plugins <path>  Манифест OMP-плагинов (по умолчанию ~/.omp/agent/plugins.json)
  *   --json            Машиночитаемый вывод JSON
  *   --help, -h        Справка
  */
 
 /** Объявленные опции CLI; всё остальное — опечатка, которую нельзя проглатывать. */
-const KNOWN_OPTIONS = new Set(["sessions", "days", "top", "mcp", "skills", "json", "help"]);
+const KNOWN_OPTIONS = new Set(["sessions", "days", "top", "mcp", "skills", "plugins", "json", "help"]);
+
+/**
+ * Инструменты и слэш-команды 14 OMP-плагинов манифеста `agent/plugins.json`.
+ * Ключ — имя плагина, значение — маркеры, по которым видно его использование в
+ * сессии: имена тулов и слэш-команды. Аудит ищет именно эти маркеры.
+ */
+export const KNOWN_PLUGIN_TOOLS = {
+  "oh-my-pi-plugin-morph": ["fast_edit", "fastcompact", "codebase_warpsearch"],
+  "pi-lens": ["pi_lens_activate_tools", "lens_diagnostics", "/lens"],
+  "pi-goal-x": ["goal_", "/goal"],
+  "pi-qq": ["/qq"],
+  "pi-prompt-shelf": ["/shelf", "/prompt-shelf"],
+  "pi-bar": ["/bar"],
+  "pi-gh-cli": ["/gh"],
+  "@dietrichgebert/ponytail": ["/ponytail"],
+  "omp-plugin-duplicate-detector": ["duplicate-detector", "jscpd"],
+  "omp-typescript-complexity-evaluator": ["complexity-evaluator"],
+  "omp-url-pin": ["url-pin"],
+  "@plannotator/pi-extension": ["plannotator"],
+  "pi-linter": ["linter", "/linter"],
+  "oh-my-pi-plugin-grok-build": ["grok-build"],
+};
 
 /**
  * Разбирает числовой параметр CLI. Молчаливая подмена значения (0 → 1, -5 → 30,
@@ -39,6 +62,9 @@ export function parseCliArgs(args = process.argv.slice(2)) {
   const defaultSessions = join(defaultHome, ".omp", "agent", "sessions");
   const defaultMcp = join(defaultHome, ".omp", "agent", "mcp.json");
   const defaultSkills = join(defaultHome, ".agents", "skills");
+  const userPlugins = join(defaultHome, ".omp", "agent", "plugins.json");
+  const repoPlugins = join(process.cwd(), "agent", "plugins.json");
+  const defaultPlugins = existsSync(userPlugins) ? userPlugins : (existsSync(repoPlugins) ? repoPlugins : userPlugins);
 
   const { values } = utilParseArgs({
     args,
@@ -48,6 +74,7 @@ export function parseCliArgs(args = process.argv.slice(2)) {
       top: { type: "string", default: "15" },
       mcp: { type: "string", default: defaultMcp },
       skills: { type: "string", default: defaultSkills },
+      plugins: { type: "string", default: defaultPlugins },
       json: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -68,6 +95,7 @@ export function parseCliArgs(args = process.argv.slice(2)) {
     ["--sessions", values.sessions],
     ["--mcp", values.mcp],
     ["--skills", values.skills],
+    ["--plugins", values.plugins],
   ]) {
     if (typeof value !== "string" || value.trim() === "") {
       errors.push(`${flag} требует непустой путь (получено: ${JSON.stringify(value)})`);
@@ -80,6 +108,7 @@ export function parseCliArgs(args = process.argv.slice(2)) {
     top: top ?? 15,
     mcpPath: values.mcp,
     skillsDir: values.skills,
+    pluginsPath: values.plugins,
     json: values.json,
     help: values.help,
     errors,
@@ -169,6 +198,54 @@ export function loadInstalledSkills(skillsDirPath) {
   return skills.sort();
 }
 
+/** Имя пакета без версии: `pi-lens@^4.2.1` → `pi-lens`, `@scope/pkg@1.0.0` → `@scope/pkg`. */
+function barePluginName(name) {
+  const at = name.indexOf("@", 1);
+  return at === -1 ? name : name.slice(0, at);
+}
+
+/**
+ * Загрузка имён установленных OMP-плагинов. Поддерживает три формата:
+ *   - манифест харнесса `agent/plugins.json`: `{ plugins: [{ name, spec }] }` / `[{ name, spec }]`;
+ *   - вывод `omp plugin list --json`: `{ npm: [{ name, enabled }] }`;
+ *   - `package.json`: `{ dependencies: { "<name>": "<range>" } }`.
+ * Ошибки конфигурации не проглатываются (как и в `loadMcpServers`): иначе битый
+ * манифест выглядел бы как «плагинов нет, значит ничего не используется».
+ *
+ * @param {string} pluginsPath
+ * @param {string[]} [notes]
+ * @returns {string[]} отсортированные уникальные имена плагинов
+ */
+export function loadPlugins(pluginsPath, notes = []) {
+  if (!pluginsPath || typeof pluginsPath !== "string" || !existsSync(pluginsPath)) return [];
+
+  let data;
+  try {
+    data = JSON.parse(readFileSync(pluginsPath, "utf8"));
+  } catch (err) {
+    notes.push(`plugins.json не читается (${err.message}) — раздел плагинов неполон: ${pluginsPath}`);
+    return [];
+  }
+
+  let entries;
+  if (Array.isArray(data)) entries = data;
+  else if (Array.isArray(data?.plugins)) entries = data.plugins;
+  else if (Array.isArray(data?.npm)) entries = data.npm;
+  else if (data?.dependencies && typeof data.dependencies === "object" && !Array.isArray(data.dependencies)) {
+    entries = Object.keys(data.dependencies);
+  } else {
+    notes.push(`plugins.json: неизвестный формат (нет plugins/npm/dependencies) — конфигурация не прочитана: ${pluginsPath}`);
+    return [];
+  }
+
+  const names = entries
+    .map((entry) => (typeof entry === "string" ? entry : typeof entry?.name === "string" ? entry.name : ""))
+    .map((name) => barePluginName(name.trim()))
+    .filter((name) => name !== "");
+
+  return [...new Set(names)].sort();
+}
+
 /**
  * Анализ сессий.
  */
@@ -178,6 +255,7 @@ export function auditUsage(options) {
     days = 30,
     mcpPath,
     skillsDir,
+    pluginsPath,
     now = Date.now(),
   } = options;
 
@@ -191,6 +269,8 @@ export function auditUsage(options) {
       tools: { mcp: {}, builtins: {}, skills: {} },
       unusedMcp: [],
       unusedSkills: [],
+      pluginStats: {},
+      unusedPlugins: [],
     };
   }
 
@@ -204,6 +284,8 @@ export function auditUsage(options) {
       tools: { mcp: {}, builtins: {}, skills: {} },
       unusedMcp: [],
       unusedSkills: [],
+      pluginStats: {},
+      unusedPlugins: [],
     };
   }
 
@@ -218,6 +300,19 @@ export function auditUsage(options) {
   const mcpServersUsed = new Set();
   const skillsUsed = new Set();
 
+  const configuredMcpServers = loadMcpServers(mcpPath, notes);
+  const installedSkills = loadInstalledSkills(skillsDir);
+  const installedPlugins = loadPlugins(pluginsPath, notes);
+
+  const pluginCallCounts = {};
+  for (const name of Object.keys(KNOWN_PLUGIN_TOOLS)) {
+    pluginCallCounts[name] = 0;
+  }
+  for (const name of installedPlugins) {
+    if (!(name in pluginCallCounts)) {
+      pluginCallCounts[name] = 0;
+    }
+  }
   function recordMcp(toolName, serverName) {
     mcpCounts[toolName] = (mcpCounts[toolName] || 0) + 1;
     if (serverName) mcpServersUsed.add(serverName);
@@ -276,6 +371,7 @@ export function auditUsage(options) {
       if (record.type === "toolCall" || record.type === "tool_use") {
         candidates.push(record);
       }
+      const pluginsCalledInRecord = new Set();
 
       for (const item of candidates) {
         if (!item || typeof item !== "object") continue;
@@ -291,24 +387,55 @@ export function auditUsage(options) {
         if (!name || typeof name !== "string") continue;
 
         const args = item.arguments || item.input || {};
+        const argPath = typeof args.path === "string" ? args.path : "";
+
+        // Проверка соответствия инструментам/командам OMP-плагинов
+        for (const [pluginName, markers] of Object.entries(KNOWN_PLUGIN_TOOLS)) {
+          let matched = false;
+          for (const marker of markers) {
+            if (marker.endsWith("_")) {
+              if (name.startsWith(marker) || (argPath && argPath.includes(marker))) {
+                matched = true;
+                break;
+              }
+            } else if (marker.startsWith("/")) {
+              if (name === marker || name === marker.slice(1)) {
+                matched = true;
+                break;
+              }
+            } else {
+              if (
+                name === marker ||
+                name.endsWith("__" + marker) ||
+                argPath === "xd://" + marker ||
+                argPath.startsWith("xd://" + marker + "?") ||
+                argPath.includes("/" + marker)
+              ) {
+                matched = true;
+                break;
+              }
+            }
+          }
+          if (matched) {
+            pluginCallCounts[pluginName] = (pluginCallCounts[pluginName] || 0) + 1;
+            pluginsCalledInRecord.add(pluginName);
+          }
+        }
 
         // Проверяем skill:// в аргументах (например, read({ path: "skill://<name>" }))
-        const argPath = typeof args.path === "string" ? args.path : "";
-        if (argPath.startsWith("skill://")) {
-          const match = argPath.match(/^skill:\/\/([^/\s?#]+)/);
+        const skillArgPath = typeof args.path === "string" ? args.path : "";
+        if (skillArgPath.startsWith("skill://")) {
+          const match = skillArgPath.match(/^skill:\/\/([^/\s?#]+)/);
           if (match && match[1]) {
             recordSkill(match[1]);
           }
         }
 
         // Проверяем xd://mcp__... в вызовах write
-        if (argPath.startsWith("xd://mcp__")) {
-          const mcpTarget = argPath.slice("xd://mcp__".length);
-          // mcpTarget: например hindsight_recall или codebase_index_index_status
-          // Попытаемся определить server и tool
+        if (skillArgPath.startsWith("xd://mcp__")) {
+          const mcpTarget = skillArgPath.slice("xd://mcp__".length);
           const mcpFullName = "mcp__" + mcpTarget;
           const parts = mcpTarget.split("_");
-          // serverName приблизительно - первое слово или mcpTarget
           recordMcp(mcpFullName, parts[0]);
           continue;
         }
@@ -326,12 +453,54 @@ export function auditUsage(options) {
           recordBuiltin(name);
         }
       }
+
+      // Сканирование текстов сообщений на слэш-команды и упоминания плагинов
+      const role = record?.message?.role || record?.role;
+      if (role !== "toolResult") {
+        const texts = [];
+        const rawContent = record?.message?.content ?? record?.content;
+        if (typeof rawContent === "string") {
+          texts.push(rawContent);
+        } else if (Array.isArray(rawContent)) {
+          for (const block of rawContent) {
+            if (typeof block === "string") texts.push(block);
+            else if (typeof block?.text === "string") texts.push(block.text);
+          }
+        }
+        if (typeof record?.text === "string") texts.push(record.text);
+        if (typeof record?.command === "string") texts.push(record.command);
+
+        for (const text of texts) {
+          if (!text || typeof text !== "string") continue;
+          for (const [pluginName, markers] of Object.entries(KNOWN_PLUGIN_TOOLS)) {
+            let pluginCountInText = 0;
+            for (const marker of markers) {
+              if (marker.startsWith("/")) {
+                const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                const re = new RegExp(`(?:^|[\\s"'\`])${esc}(?=[\\s"'\`\\r\\n]|$|[?.,!])`, "g");
+                const matches = text.match(re);
+                if (matches) {
+                  pluginCountInText += matches.length;
+                }
+              } else if (!pluginsCalledInRecord.has(pluginName)) {
+                const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                const re = marker.endsWith("_")
+                  ? new RegExp(`\\b${esc}\\w*`, "i")
+                  : new RegExp(`\\b${esc}\\b`, "i");
+                if (re.test(text)) {
+                  pluginCountInText += 1;
+                }
+              }
+            }
+            if (pluginCountInText > 0) {
+              pluginCallCounts[pluginName] = (pluginCallCounts[pluginName] || 0) + pluginCountInText;
+              pluginsCalledInRecord.add(pluginName);
+            }
+          }
+        }
+      }
     }
   }
-
-  const configuredMcpServers = loadMcpServers(mcpPath, notes);
-  const installedSkills = loadInstalledSkills(skillsDir);
-
   // Неиспользуемые MCP-серверы
   // Сопоставляем configuredMcpServers с используемыми серверами
   const unusedMcp = configuredMcpServers.filter((server) => {
@@ -351,6 +520,23 @@ export function auditUsage(options) {
 
   // Неиспользуемые установленные скиллы
   const unusedSkills = installedSkills.filter((skill) => !skillsUsed.has(skill));
+  const allPluginNames = new Set([
+    ...Object.keys(KNOWN_PLUGIN_TOOLS),
+    ...installedPlugins,
+  ]);
+
+  const pluginStats = {};
+  for (const name of allPluginNames) {
+    const calls = pluginCallCounts[name] || 0;
+    pluginStats[name] = {
+      calls,
+      used: calls > 0,
+    };
+  }
+
+  const unusedPlugins = installedPlugins
+    .filter((name) => (pluginStats[name]?.calls || 0) === 0)
+    .sort();
 
   notes.push(`Обработано файлов: ${scannedFiles} из ${allFiles.length}`);
   notes.push(`Всего строк: ${totalLines}`);
@@ -374,6 +560,8 @@ export function auditUsage(options) {
     },
     unusedMcp: unusedMcp.sort(),
     unusedSkills: unusedSkills.sort(),
+    pluginStats,
+    unusedPlugins,
     notes,
   };
 }
@@ -433,6 +621,25 @@ export function formatAuditReport(data, { top = 15 } = {}) {
     }
   }
 
+  const pluginCalls = {};
+  if (data.pluginStats) {
+    for (const [name, stat] of Object.entries(data.pluginStats)) {
+      if (stat.calls > 0) {
+        pluginCalls[name] = stat.calls;
+      }
+    }
+  }
+  ranked("--- ИСПОЛЬЗОВАНИЕ ПЛАГИНОВ OMP ---", pluginCalls, 38, "(вызовов не обнаружено)");
+
+  lines.push(`\n--- НЕИСПОЛЬЗУЕМЫЕ ПЛАГИНЫ (0 вызовов за ${data.stats?.days ?? 30} дней) ---`);
+  if (!data.unusedPlugins || data.unusedPlugins.length === 0) {
+    lines.push("(все установленные плагины используются или список пуст)");
+  } else {
+    for (const p of data.unusedPlugins) {
+      lines.push(`  - ${p} (рекомендация: omp plugin disable ${p})`);
+    }
+  }
+
   if (data.notes && data.notes.length > 0) {
     lines.push("\n--- ЗАМЕТКИ ---");
     for (const n of data.notes) {
@@ -453,6 +660,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   --top <n>         Ограничить ранжированные списки в текстовом отчёте, >= 1 (по умолчанию 15)
   --mcp <path>      Путь к mcp.json (по умолчанию ~/.omp/agent/mcp.json)
   --skills <dir>    Каталог установленных скиллов (по умолчанию ~/.agents/skills)
+  --plugins <path>  Манифест OMP-плагинов (по умолчанию ~/.omp/agent/plugins.json)
   --json            Машиночитаемый вывод JSON (полные счётчики, без ограничения --top)
   --help, -h        Справка
 `;

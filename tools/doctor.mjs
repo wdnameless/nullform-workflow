@@ -65,6 +65,7 @@ export const CORE_TOOLS = [
   "auto-review.mjs",
   "doctor.mjs",
   "sync-prune.mjs",
+  "memory-cadence.mjs",
   "audit.ps1",
   "sync.ps1",
 ];

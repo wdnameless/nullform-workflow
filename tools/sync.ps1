@@ -93,6 +93,7 @@ $Manifest = @(
   'tools\test-lens.mjs',
   'tools\doctor.mjs',
   'tools\sync-prune.mjs',
+  'tools\memory-cadence.mjs',
   'tools\audit.ps1',
   'tools\sync.ps1',
   'core\PORTABLE.md',

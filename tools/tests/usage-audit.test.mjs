@@ -8,6 +8,8 @@ import {
   findJsonlFiles,
   loadMcpServers,
   loadInstalledSkills,
+  loadPlugins,
+  KNOWN_PLUGIN_TOOLS,
   auditUsage,
   formatAuditReport,
 } from "../usage-audit.mjs";
@@ -348,6 +350,306 @@ test('usage-audit: битый mcp.json не выглядит как «конфи
     const cli = runCli(['--sessions', sessions, '--days', '30', '--mcp', mcpPath]);
     assert.equal(cli.status, 0);
     assert.match(cli.stdout, /mcp\.json не читается/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("loadPlugins: parses various formats and strips version suffixes", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "audit-load-plugins-"));
+  try {
+    // 1) agent/plugins.json format (array and { plugins: [...] })
+    const arrPath = join(tmp, "plugins-arr.json");
+    writeFileSync(
+      arrPath,
+      JSON.stringify([
+        { name: "pi-lens@^4.2.1", spec: "pi-lens@^4.2.1" },
+        { name: "@dietrichgebert/ponytail@1.0.0", spec: "..." },
+      ])
+    );
+    assert.deepEqual(loadPlugins(arrPath), ["@dietrichgebert/ponytail", "pi-lens"]);
+
+    const objPath = join(tmp, "plugins-obj.json");
+    writeFileSync(
+      objPath,
+      JSON.stringify({
+        plugins: [
+          { name: "pi-qq" },
+          { name: "pi-goal-x@0.31.6" },
+        ],
+      })
+    );
+    assert.deepEqual(loadPlugins(objPath), ["pi-goal-x", "pi-qq"]);
+
+    // 2) omp plugin list --json format ({ npm: [{ name, enabled }] })
+    const npmPath = join(tmp, "plugins-npm.json");
+    writeFileSync(
+      npmPath,
+      JSON.stringify({
+        npm: [
+          { name: "oh-my-pi-plugin-morph", enabled: true },
+          { name: "pi-bar", enabled: false },
+        ],
+      })
+    );
+    assert.deepEqual(loadPlugins(npmPath), ["oh-my-pi-plugin-morph", "pi-bar"]);
+
+    // 3) package.json format ({ dependencies: { ... } })
+    const pkgPath = join(tmp, "package.json");
+    writeFileSync(
+      pkgPath,
+      JSON.stringify({
+        dependencies: {
+          "pi-linter": "^0.2.7",
+          "omp-url-pin": "~1.2.0",
+        },
+      })
+    );
+    assert.deepEqual(loadPlugins(pkgPath), ["omp-url-pin", "pi-linter"]);
+
+    // 4) edge cases: missing file, broken JSON, invalid format
+    assert.deepEqual(loadPlugins(join(tmp, "non-existent.json")), []);
+
+    const brokenPath = join(tmp, "broken.json");
+    writeFileSync(brokenPath, "{ invalid json");
+    const notesBroken = [];
+    assert.deepEqual(loadPlugins(brokenPath, notesBroken), []);
+    assert.match(notesBroken[0], /не читается/);
+
+    const unknownPath = join(tmp, "unknown.json");
+    writeFileSync(unknownPath, JSON.stringify({ otherField: 123 }));
+    const notesUnknown = [];
+    assert.deepEqual(loadPlugins(unknownPath, notesUnknown), []);
+    assert.match(notesUnknown[0], /неизвестный формат/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("KNOWN_PLUGIN_TOOLS: exports mapping for 14 plugins", () => {
+  const expectedPlugins = [
+    "oh-my-pi-plugin-morph",
+    "pi-lens",
+    "pi-goal-x",
+    "pi-qq",
+    "pi-prompt-shelf",
+    "pi-bar",
+    "pi-gh-cli",
+    "@dietrichgebert/ponytail",
+    "omp-plugin-duplicate-detector",
+    "omp-typescript-complexity-evaluator",
+    "omp-url-pin",
+    "@plannotator/pi-extension",
+    "pi-linter",
+    "oh-my-pi-plugin-grok-build",
+  ];
+  for (const name of expectedPlugins) {
+    assert.ok(Array.isArray(KNOWN_PLUGIN_TOOLS[name]), `missing plugin tools for ${name}`);
+    assert.ok(KNOWN_PLUGIN_TOOLS[name].length > 0, `empty tools for ${name}`);
+  }
+});
+
+test("usage-audit: counts plugin tool calls and slash commands, identifies unused plugins", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "audit-plugins-usage-"));
+  try {
+    const sessionsDir = join(tmp, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+
+    // Session 1:
+    // - toolCall: fast_edit (oh-my-pi-plugin-morph)
+    // - toolCall write with xd://fastcompact (oh-my-pi-plugin-morph)
+    // - user message with slash command: /lens (pi-lens)
+    // - user message with slash command: /qq (pi-qq)
+    // - user message with slash command: /shelf (pi-prompt-shelf)
+    const session1 = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "/lens status\n/qq why did the test fail?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Applying fast_edit to patch the file" },
+            { type: "toolCall", name: "fast_edit", arguments: { path: "src/app.ts" } },
+            { type: "toolCall", name: "write", arguments: { path: "xd://fastcompact", content: "{}" } },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "/shelf list" }],
+        },
+      }),
+    ];
+    writeFileSync(join(sessionsDir, "session1.jsonl"), session1.join("\n"));
+
+    // Session 2:
+    // - toolCall: goal_create (pi-goal-x)
+    // - toolCall: duplicate-detector (omp-plugin-duplicate-detector)
+    // - slash command: /bar (pi-bar)
+    const session2 = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "goal_create", arguments: { title: "Fix bug" } },
+            { type: "toolCall", name: "duplicate-detector", arguments: {} },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "/bar",
+        },
+      }),
+    ];
+    writeFileSync(join(sessionsDir, "session2.jsonl"), session2.join("\n"));
+
+    // plugins.json: configured plugins
+    const pluginsPath = join(tmp, "plugins.json");
+    writeFileSync(
+      pluginsPath,
+      JSON.stringify({
+        plugins: [
+          { name: "oh-my-pi-plugin-morph" },
+          { name: "pi-lens" },
+          { name: "pi-qq" },
+          { name: "pi-prompt-shelf" },
+          { name: "pi-goal-x" },
+          { name: "pi-bar" },
+          { name: "omp-plugin-duplicate-detector" },
+          { name: "@dietrichgebert/ponytail" },
+          { name: "pi-linter" },
+          { name: "omp-url-pin" },
+        ],
+      })
+    );
+
+    const res = auditUsage({
+      sessionsDir,
+      days: 30,
+      pluginsPath,
+      now: Date.now(),
+    });
+
+    assert.equal(res.empty, false);
+    // Verifying plugin calls
+    assert.equal(res.pluginStats["oh-my-pi-plugin-morph"].calls, 2);
+    assert.equal(res.pluginStats["oh-my-pi-plugin-morph"].used, true);
+
+    assert.equal(res.pluginStats["pi-lens"].calls, 1);
+    assert.equal(res.pluginStats["pi-lens"].used, true);
+
+    assert.equal(res.pluginStats["pi-qq"].calls, 1);
+    assert.equal(res.pluginStats["pi-qq"].used, true);
+
+    assert.equal(res.pluginStats["pi-prompt-shelf"].calls, 1);
+    assert.equal(res.pluginStats["pi-prompt-shelf"].used, true);
+
+    assert.equal(res.pluginStats["pi-goal-x"].calls, 1);
+    assert.equal(res.pluginStats["pi-goal-x"].used, true);
+
+    assert.equal(res.pluginStats["pi-bar"].calls, 1);
+    assert.equal(res.pluginStats["pi-bar"].used, true);
+
+    assert.equal(res.pluginStats["omp-plugin-duplicate-detector"].calls, 1);
+    assert.equal(res.pluginStats["omp-plugin-duplicate-detector"].used, true);
+
+    assert.equal(res.pluginStats["@dietrichgebert/ponytail"].calls, 0);
+    assert.equal(res.pluginStats["@dietrichgebert/ponytail"].used, false);
+
+    assert.equal(res.pluginStats["pi-linter"].calls, 0);
+    assert.equal(res.pluginStats["pi-linter"].used, false);
+
+    // Unused plugins (from plugins.json with 0 calls)
+    assert.deepEqual(res.unusedPlugins, [
+      "@dietrichgebert/ponytail",
+      "omp-url-pin",
+      "pi-linter",
+    ]);
+
+    // Format audit report verification
+    const report = formatAuditReport(res);
+    assert.match(report, /--- ИСПОЛЬЗОВАНИЕ ПЛАГИНОВ OMP ---/);
+    assert.match(report, /oh-my-pi-plugin-morph\s+:\s+2/);
+    assert.match(report, /pi-lens\s+:\s+1/);
+    assert.match(report, /--- НЕИСПОЛЬЗУЕМЫЕ ПЛАГИНЫ \(0 вызовов за 30 дней\) ---/);
+    assert.match(report, /omp plugin disable @dietrichgebert\/ponytail/);
+    assert.match(report, /omp plugin disable omp-url-pin/);
+    assert.match(report, /omp plugin disable pi-linter/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("usage-audit CLI: accepts --plugins and outputs plugin sections", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "audit-cli-plugins-"));
+  try {
+    const sessionsDir = join(tmp, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+
+    const line = JSON.stringify({
+      type: "message",
+      message: {
+        role: "user",
+        content: "/qq testing plugins in CLI",
+      },
+    });
+    writeFileSync(join(sessionsDir, "test.jsonl"), line + "\n");
+
+    const pluginsPath = join(tmp, "plugins.json");
+    writeFileSync(
+      pluginsPath,
+      JSON.stringify({
+        plugins: [
+          { name: "pi-qq" },
+          { name: "pi-bar" },
+        ],
+      })
+    );
+
+    // 1) Text report
+    const textCli = runCli([
+      "--sessions",
+      sessionsDir,
+      "--days",
+      "30",
+      "--plugins",
+      pluginsPath,
+    ]);
+    assert.equal(textCli.status, 0);
+    assert.match(textCli.stdout, /--- ИСПОЛЬЗОВАНИЕ ПЛАГИНОВ OMP ---/);
+    assert.match(textCli.stdout, /pi-qq\s+:\s+1/);
+    assert.match(textCli.stdout, /--- НЕИСПОЛЬЗУЕМЫЕ ПЛАГИНЫ/);
+    assert.match(textCli.stdout, /omp plugin disable pi-bar/);
+
+    // 2) JSON output
+    const jsonCli = runCli([
+      "--sessions",
+      sessionsDir,
+      "--days",
+      "30",
+      "--plugins",
+      pluginsPath,
+      "--json",
+    ]);
+    assert.equal(jsonCli.status, 0);
+    const data = JSON.parse(jsonCli.stdout);
+    assert.equal(data.pluginStats["pi-qq"].calls, 1);
+    assert.equal(data.pluginStats["pi-qq"].used, true);
+    assert.equal(data.pluginStats["pi-bar"].calls, 0);
+    assert.equal(data.pluginStats["pi-bar"].used, false);
+    assert.deepEqual(data.unusedPlugins, ["pi-bar"]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

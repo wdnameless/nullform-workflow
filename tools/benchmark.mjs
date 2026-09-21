@@ -24,17 +24,32 @@ import { pathToFileURL } from "node:url";
 export const TASKS_FILE = "bench/tasks.json";
 export const RUNS_DIR = "bench/runs";
 
+/**
+ * Тиры задач: `safety` — проверка инвариантов и скрытых граничных условий,
+ * `perf` — производительность, `standard` — обычная задача (по умолчанию).
+ */
+export const TASK_TIERS = ["standard", "safety", "perf"];
+
 export const DEFAULT_TASKS_TEMPLATE = {
   version: 1,
   tasks: [
     {
       id: "sample-task",
+      tier: "standard",
       title: "Пример задачи бенчмарка",
       prompt: "Создайте файл answer.txt со словом hello",
       setup: [],
       checks: [
         "node -e \"const fs = require('fs'); if (fs.readFileSync('answer.txt','utf8').trim() !== 'hello') process.exit(1);\"",
       ],
+      timeoutSec: 300,
+    },
+    {
+      id: "safety-edge-case",
+      tier: "safety",
+      title: "Safety: Boundary Validation",
+      prompt: "Реализуйте безопасную обработку граничных условий без утечек",
+      checks: ["node -e \"process.exit(0)\""],
       timeoutSec: 300,
     },
   ],
@@ -352,6 +367,13 @@ export function loadTasks(root) {
     if (t.setup !== undefined && !Array.isArray(t.setup)) {
       throw new Error(`Задача '${t.id}': 'setup' должен быть массивом команд.`);
     }
+    if (t.tier !== undefined && (typeof t.tier !== "string" || !TASK_TIERS.includes(t.tier))) {
+      throw new Error(
+        `Задача '${t.id}': 'tier' должен быть строкой из ${TASK_TIERS.join(", ")} (получено: ${JSON.stringify(t.tier)}).`
+      );
+    }
+    // Тир по умолчанию — standard: дальше по коду он всегда определён.
+    t.tier = t.tier || "standard";
     if (t.checks !== undefined && !Array.isArray(t.checks)) {
       throw new Error(`Задача '${t.id}': 'checks' должен быть массивом команд.`);
     }
@@ -400,8 +422,8 @@ function evaluateCost(root, transcriptPath) {
     return { note: `Скрипт расчета стоимости tools/session_cost.py не найден` };
   }
 
-  // Сначала пробуем python3, затем python
-  const commands = ["python3", "python"];
+  // Сначала пробуем заданный извне интерпретатор, затем типовые имена/пути.
+  const commands = [process.env.PYTHON_PATH, "python3", "python", "D:/Python312/python.exe", "py"].filter(Boolean);
   let lastErr = "";
   for (const py of commands) {
     try {
@@ -670,6 +692,7 @@ export function runBenchmark(options) {
       version: 1,
       task: taskId,
       arm,
+      tier: task.tier || "standard",
       run: item.runNumber,
       startedAt,
       durationMs,
@@ -694,30 +717,55 @@ export function runBenchmark(options) {
 
   return results;
 }
+/**
+ * Считывает тиры задач из bench/tasks.json (тир по умолчанию: standard).
+ * @param {string} root
+ * @returns {Map<string, string>}
+ */
+export function readTaskTiers(root) {
+  const map = new Map();
+  try {
+    const data = loadTasks(root);
+    for (const t of data.tasks || []) {
+      if (t && t.id) {
+        map.set(t.id, t.tier || "standard");
+      }
+    }
+  } catch {
+    // tasks.json отсутствует или повреждён
+  }
+  return map;
+}
 
 /**
  * Агрегирует прогоны из bench/runs
  * @param {string} root
- * @returns {{byTaskArm: Record<string, object>, total: number}}
+ * @param {object} [options={}]
+ * @returns {{byTaskArm: Record<string, object>, total: number, skipped: Array<object>, safetyChecksPassed: number, safetyChecksTotal: number, safetyPassRate: number|null, costTotal: number|null, costMedian: number|null}}
  */
-export function summarizeRuns(root) {
+export function summarizeRuns(root, options = {}) {
   const absRoot = resolve(root || ".");
   const runsDir = join(absRoot, RUNS_DIR);
+  const tierFilter = options.tier || null;
 
   const skipped = [];
-  if (!existsSync(runsDir)) {
-    return { byTaskArm: {}, total: 0, skipped };
+  let entries = [];
+  if (existsSync(runsDir)) {
+    try {
+      entries = readdirSync(runsDir);
+    } catch {
+      entries = [];
+    }
   }
 
-  let entries = [];
-  try {
-    entries = readdirSync(runsDir);
-  } catch {
-    return { byTaskArm: {}, total: 0, skipped };
-  }
+  // Тир берётся из result.json, а для прогонов, записанных до появления поля, — из bench/tasks.json.
+  const taskTiers = readTaskTiers(absRoot);
 
   const byTaskArm = {};
   let totalRuns = 0;
+  let totalSafetyPassed = 0;
+  let totalSafetyChecks = 0;
+  const allCosts = [];
 
   for (const entry of entries) {
     const resFile = join(runsDir, entry, "result.json");
@@ -737,11 +785,17 @@ export function summarizeRuns(root) {
       continue;
     }
 
+    const runTier = res.tier || taskTiers.get(res.task) || "standard";
+    if (tierFilter && runTier !== tierFilter) {
+      continue;
+    }
+
     const key = `${res.task}::${res.arm}`;
     if (!byTaskArm[key]) {
       byTaskArm[key] = {
         task: res.task,
         arm: res.arm,
+        tier: runTier,
         runs: 0,
         durations: [],
         linesAddedList: [],
@@ -749,6 +803,8 @@ export function summarizeRuns(root) {
         filesChangedList: [],
         checksPassed: 0,
         checksTotal: 0,
+        safetyChecksPassed: 0,
+        safetyChecksTotal: 0,
         costs: [],
         statuses: { ok: 0, timeout: 0, error: 0 },
       };
@@ -767,13 +823,31 @@ export function summarizeRuns(root) {
       if (typeof res.metrics.filesChanged === "number") group.filesChangedList.push(res.metrics.filesChanged);
     }
     if (Array.isArray(res.checks)) {
+      const isSafetyTask = runTier === "safety";
       for (const ch of res.checks) {
         group.checksTotal += 1;
         if (ch && ch.passed) group.checksPassed += 1;
+
+        const isSafetyCheck = isSafetyTask || (ch && ch.tier === "safety");
+        if (isSafetyCheck) {
+          group.safetyChecksTotal += 1;
+          totalSafetyChecks += 1;
+          if (ch && ch.passed) {
+            group.safetyChecksPassed += 1;
+            totalSafetyPassed += 1;
+          }
+        }
       }
     }
-    if (res.cost && typeof res.cost.total_usd === "number") {
-      group.costs.push(res.cost.total_usd);
+    const costVal =
+      typeof res.cost === "number"
+        ? res.cost
+        : res.cost && typeof res.cost.total_usd === "number"
+          ? res.cost.total_usd
+          : null;
+    if (costVal !== null) {
+      group.costs.push(costVal);
+      allCosts.push(costVal);
     }
     if (res.status && group.statuses[res.status] !== undefined) {
       group.statuses[res.status] += 1;
@@ -787,10 +861,28 @@ export function summarizeRuns(root) {
     g.medianLinesAdded = Math.round(median(g.linesAddedList));
     g.medianLinesDeleted = Math.round(median(g.linesDeletedList));
     g.medianFilesChanged = Math.round(median(g.filesChangedList));
-    g.medianCostUsd = g.costs.length > 0 ? Number(median(g.costs).toFixed(4)) : null;
+    g.costTotal = g.costs.length > 0 ? Number(g.costs.reduce((s, c) => s + c, 0).toFixed(4)) : null;
+    g.costMedian = g.costs.length > 0 ? Number(median(g.costs).toFixed(4)) : null;
+    g.medianCostUsd = g.costMedian;
+    g.safetyPassRate =
+      g.safetyChecksTotal > 0 ? Number(((g.safetyChecksPassed / g.safetyChecksTotal) * 100).toFixed(1)) : null;
   }
 
-  return { byTaskArm, total: totalRuns, skipped };
+  const safetyPassRate =
+    totalSafetyChecks > 0 ? Number(((totalSafetyPassed / totalSafetyChecks) * 100).toFixed(1)) : null;
+  const costTotal = allCosts.length > 0 ? Number(allCosts.reduce((s, c) => s + c, 0).toFixed(4)) : null;
+  const costMedian = allCosts.length > 0 ? Number(median(allCosts).toFixed(4)) : null;
+
+  return {
+    byTaskArm,
+    total: totalRuns,
+    skipped,
+    safetyChecksPassed: totalSafetyPassed,
+    safetyChecksTotal: totalSafetyChecks,
+    safetyPassRate,
+    costTotal,
+    costMedian,
+  };
 }
 
 /**
@@ -798,14 +890,19 @@ export function summarizeRuns(root) {
  * @param {object} summary
  * @param {string} baselineArm
  * @param {string} candidateArm
+ * @param {object} [options={}]
  * @returns {{byTask: Array<object>, aggregate: object}}
  */
-export function compareArms(summary, baselineArm, candidateArm) {
+export function compareArms(summary, baselineArm, candidateArm, options = {}) {
   const { byTaskArm = {} } = summary || {};
+  const tierFilter = options.tier || null;
 
   // Находим все задачи, для которых есть данные хотя бы по одному из армов
   const tasksSet = new Set();
   for (const item of Object.values(byTaskArm)) {
+    if (tierFilter && item.tier && item.tier !== tierFilter) {
+      continue;
+    }
     if (item.arm === baselineArm || item.arm === candidateArm) {
       tasksSet.add(item.task);
     }
@@ -825,6 +922,32 @@ export function compareArms(summary, baselineArm, candidateArm) {
   let candChecksPassed = 0;
   let candChecksTotal = 0;
 
+  let baseSafetyChecksPassed = 0;
+  let baseSafetyChecksTotal = 0;
+  let candSafetyChecksPassed = 0;
+  let candSafetyChecksTotal = 0;
+
+  let baseCostTotal = 0;
+  let candCostTotal = 0;
+  let hasCost = false;
+
+  const getSafetyRate = (obj) => {
+    if (!obj) return null;
+    if (obj.safetyPassRate !== undefined && obj.safetyPassRate !== null) return obj.safetyPassRate;
+    if (obj.safetyChecksTotal > 0) {
+      return Number(((obj.safetyChecksPassed / obj.safetyChecksTotal) * 100).toFixed(1));
+    }
+    return null;
+  };
+
+  const getCost = (obj) => {
+    if (!obj) return null;
+    if (obj.costTotal !== undefined && obj.costTotal !== null) return obj.costTotal;
+    if (obj.medianCostUsd !== undefined && obj.medianCostUsd !== null) return obj.medianCostUsd;
+    if (obj.costMedian !== undefined && obj.costMedian !== null) return obj.costMedian;
+    return null;
+  };
+
   for (const taskId of Array.from(tasksSet).sort()) {
     const baseKey = `${taskId}::${baselineArm}`;
     const candKey = `${taskId}::${candidateArm}`;
@@ -841,6 +964,12 @@ export function compareArms(summary, baselineArm, candidateArm) {
             checksPassed: base.checksPassed,
             checksTotal: base.checksTotal,
             medianCostUsd: base.medianCostUsd,
+            tier: base.tier || "standard",
+            safetyChecksPassed: base.safetyChecksPassed ?? 0,
+            safetyChecksTotal: base.safetyChecksTotal ?? 0,
+            safetyPassRate: getSafetyRate(base),
+            costTotal: getCost(base),
+            costMedian: base.costMedian ?? base.medianCostUsd ?? null,
           }
         : null,
       candidate: cand
@@ -851,6 +980,12 @@ export function compareArms(summary, baselineArm, candidateArm) {
             checksPassed: cand.checksPassed,
             checksTotal: cand.checksTotal,
             medianCostUsd: cand.medianCostUsd,
+            tier: cand.tier || "standard",
+            safetyChecksPassed: cand.safetyChecksPassed ?? 0,
+            safetyChecksTotal: cand.safetyChecksTotal ?? 0,
+            safetyPassRate: getSafetyRate(cand),
+            costTotal: getCost(cand),
+            costMedian: cand.costMedian ?? cand.medianCostUsd ?? null,
           }
         : null,
       deltas: {},
@@ -870,18 +1005,48 @@ export function compareArms(summary, baselineArm, candidateArm) {
       candChecksPassed += cand.checksPassed;
       candChecksTotal += cand.checksTotal;
 
+      const baseSafetyPass = base.safetyChecksPassed ?? 0;
+      const baseSafetyTot = base.safetyChecksTotal ?? 0;
+      const candSafetyPass = cand.safetyChecksPassed ?? 0;
+      const candSafetyTot = cand.safetyChecksTotal ?? 0;
+
+      baseSafetyChecksPassed += baseSafetyPass;
+      baseSafetyChecksTotal += baseSafetyTot;
+      candSafetyChecksPassed += candSafetyPass;
+      candSafetyChecksTotal += candSafetyTot;
+
+      const baseCost = getCost(base);
+      const candCost = getCost(cand);
+      if (baseCost !== null || candCost !== null) {
+        hasCost = true;
+        if (baseCost !== null) baseCostTotal += baseCost;
+        if (candCost !== null) candCostTotal += candCost;
+      }
+
       const linesDiff = cand.medianLinesAdded - base.medianLinesAdded;
-      const linesPct = base.medianLinesAdded > 0
-        ? ((linesDiff / base.medianLinesAdded) * 100).toFixed(1)
-        : null;
+      const linesPct =
+        base.medianLinesAdded > 0
+          ? ((linesDiff / base.medianLinesAdded) * 100).toFixed(1)
+          : null;
 
       const durDiff = cand.medianDurationMs - base.medianDurationMs;
-      const durPct = base.medianDurationMs > 0
-        ? ((durDiff / base.medianDurationMs) * 100).toFixed(1)
-        : null;
+      const durPct =
+        base.medianDurationMs > 0
+          ? ((durDiff / base.medianDurationMs) * 100).toFixed(1)
+          : null;
 
-      const baseCheckRate = base.checksTotal > 0 ? (base.checksPassed / base.checksTotal) : 0;
-      const candCheckRate = cand.checksTotal > 0 ? (cand.checksPassed / cand.checksTotal) : 0;
+      const baseCheckRate = base.checksTotal > 0 ? base.checksPassed / base.checksTotal : 0;
+      const candCheckRate = cand.checksTotal > 0 ? cand.checksPassed / cand.checksTotal : 0;
+
+      const baseSafetyRate = getSafetyRate(base);
+      const candSafetyRate = getSafetyRate(cand);
+      const safetyPassRateDiff =
+        baseSafetyRate !== null && candSafetyRate !== null
+          ? Number((candSafetyRate - baseSafetyRate).toFixed(1))
+          : null;
+
+      const costDiff =
+        baseCost !== null && candCost !== null ? Number((candCost - baseCost).toFixed(4)) : null;
 
       item.deltas = {
         linesDiff,
@@ -890,28 +1055,126 @@ export function compareArms(summary, baselineArm, candidateArm) {
         durationPct: durPct !== null ? Number(durPct) : null,
         checksRateBase: Number((baseCheckRate * 100).toFixed(1)),
         checksRateCandidate: Number((candCheckRate * 100).toFixed(1)),
+        safetyPassRateBase: baseSafetyRate,
+        safetyPassRateCandidate: candSafetyRate,
+        safetyPassRateDiff,
+        costBase: baseCost,
+        costCandidate: candCost,
+        costDiff,
       };
+    } else {
+      if (base) {
+        const bCost = getCost(base);
+        if (bCost !== null) {
+          hasCost = true;
+          baseCostTotal += bCost;
+        }
+        baseSafetyChecksPassed += base.safetyChecksPassed ?? 0;
+        baseSafetyChecksTotal += base.safetyChecksTotal ?? 0;
+      }
+      if (cand) {
+        const cCost = getCost(cand);
+        if (cCost !== null) {
+          hasCost = true;
+          candCostTotal += cCost;
+        }
+        candSafetyChecksPassed += cand.safetyChecksPassed ?? 0;
+        candSafetyChecksTotal += cand.safetyChecksTotal ?? 0;
+      }
     }
 
     byTask.push(item);
   }
 
+  const baseSafetyPassRate =
+    baseSafetyChecksTotal > 0
+      ? Number(((baseSafetyChecksPassed / baseSafetyChecksTotal) * 100).toFixed(1))
+      : null;
+  const candSafetyPassRate =
+    candSafetyChecksTotal > 0
+      ? Number(((candSafetyChecksPassed / candSafetyChecksTotal) * 100).toFixed(1))
+      : null;
+  const safetyPassRateDiff =
+    baseSafetyPassRate !== null && candSafetyPassRate !== null
+      ? Number((candSafetyPassRate - baseSafetyPassRate).toFixed(1))
+      : null;
+
+  const costDiff = hasCost ? Number((candCostTotal - baseCostTotal).toFixed(4)) : null;
+  const costPct =
+    hasCost && baseCostTotal > 0
+      ? Number((((candCostTotal - baseCostTotal) / baseCostTotal) * 100).toFixed(1))
+      : null;
+
   const aggregate = {
     baselineArm,
     candidateArm,
     linesDiff: hasLines ? candTotalLines - baseTotalLines : null,
-    linesPct: hasLines && baseTotalLines > 0
-      ? Number((((candTotalLines - baseTotalLines) / baseTotalLines) * 100).toFixed(1))
-      : null,
+    linesPct:
+      hasLines && baseTotalLines > 0
+        ? Number((((candTotalLines - baseTotalLines) / baseTotalLines) * 100).toFixed(1))
+        : null,
     durationMsDiff: hasDuration ? candTotalDuration - baseTotalDuration : null,
-    durationPct: hasDuration && baseTotalDuration > 0
-      ? Number((((candTotalDuration - baseTotalDuration) / baseTotalDuration) * 100).toFixed(1))
-      : null,
+    durationPct:
+      hasDuration && baseTotalDuration > 0
+        ? Number((((candTotalDuration - baseTotalDuration) / baseTotalDuration) * 100).toFixed(1))
+        : null,
     baseChecks: { passed: baseChecksPassed, total: baseChecksTotal },
     candidateChecks: { passed: candChecksPassed, total: candChecksTotal },
+    baseSafetyChecks: { passed: baseSafetyChecksPassed, total: baseSafetyChecksTotal },
+    candidateSafetyChecks: { passed: candSafetyChecksPassed, total: candSafetyChecksTotal },
+    baseSafetyPassRate,
+    candidateSafetyPassRate: candSafetyPassRate,
+    safetyPassRateDiff,
+    baseCostTotal: hasCost ? Number(baseCostTotal.toFixed(4)) : null,
+    candidateCostTotal: hasCost ? Number(candCostTotal.toFixed(4)) : null,
+    costDiff,
+    costPct,
   };
 
   return { byTask, aggregate };
+}
+
+/**
+ * Форматирует сводку прогонов для консольного вывода.
+ * @param {object} summary
+ * @returns {string}
+ */
+export function formatReport(summary) {
+  if (!summary || summary.total === 0) {
+    return "Запусков нет: сначала выполните benchmark run.";
+  }
+
+  const lines = [
+    `=== Отчет о бенчмарках (всего прогонов: ${summary.total}) ===`,
+    "Задача | Арм | Прогонов | Время (медиана) | LOC (+/-) | Файлов | Проверки | Стоимость",
+    "---|---|---|---|---|---|---|---",
+  ];
+
+  for (const item of Object.values(summary.byTaskArm)) {
+    const costStr =
+      item.medianCostUsd !== null && item.medianCostUsd !== undefined
+        ? `$${item.medianCostUsd}`
+        : item.costMedian !== null && item.costMedian !== undefined
+          ? `$${item.costMedian}`
+          : "-";
+    lines.push(
+      `${item.task} | ${item.arm} | ${item.runs} | ${item.medianDurationMs}ms | +${item.medianLinesAdded}/-${item.medianLinesDeleted} | ${item.medianFilesChanged} | ${item.checksPassed}/${item.checksTotal} | ${costStr}`
+    );
+  }
+
+  if (summary.safetyChecksTotal > 0) {
+    lines.push(
+      `Safety pass rate: ${summary.safetyPassRate}% (${summary.safetyChecksPassed}/${summary.safetyChecksTotal} checks)`
+    );
+  }
+
+  if (summary.costTotal !== null && summary.costTotal !== undefined) {
+    const medPart =
+      summary.costMedian !== null && summary.costMedian !== undefined ? `, медиана: $${summary.costMedian}` : "";
+    lines.push(`Стоимость: всего $${summary.costTotal}${medPart}`);
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -932,6 +1195,7 @@ export function parseArgs(argv) {
     dryRun: false,
     yes: false,
     json: false,
+    tier: null,
     baseline: null,
     candidate: null,
     help: false,
@@ -965,10 +1229,16 @@ export function parseArgs(argv) {
       args.cmd = argv[++i];
     } else if (arg.startsWith("--cmd=")) {
       args.cmd = arg.slice(6);
-    } else if (arg === "--runs") {
+    } else if (arg === "--runs" || arg === "-n") {
       args.runs = parseInt(argv[++i], 10);
     } else if (arg.startsWith("--runs=")) {
       args.runs = parseInt(arg.slice(7), 10);
+    } else if (arg.startsWith("-n=")) {
+      args.runs = parseInt(arg.slice(3), 10);
+    } else if (arg === "--tier") {
+      args.tier = argv[++i];
+    } else if (arg.startsWith("--tier=")) {
+      args.tier = arg.slice(7);
     } else if (arg === "--timeout") {
       args.timeout = parseInt(argv[++i], 10);
     } else if (arg.startsWith("--timeout=")) {
@@ -1015,7 +1285,8 @@ function printUsage() {
   --task <id>            Идентификатор задачи для run
   --arm <name>           Имя арма (конфигурации/агента)
   --cmd "<template>"     Команда запуска агента с плейсхолдерами
-  --runs <N>             Количество повторных запусков (по умолчанию: 1)
+  -n, --runs <N>         Количество повторных запусков (по умолчанию: 1)
+  --tier <tier>          Фильтр по тиру задач (standard, safety, perf)
   --timeout <sec>        Таймаут выполнения команды в секундах
   --transcript <path>    Путь к транскрипту для подсчета стоимости (session_cost.py)
   --dry-run              Показать план запуска без создания файлов и выполнения команд
@@ -1181,7 +1452,7 @@ export function main(argv = process.argv.slice(2)) {
 
     case "report": {
       try {
-        const summary = summarizeRuns(absRoot);
+        const summary = summarizeRuns(absRoot, { tier: args.tier });
 
         // Пропущенные result.json никогда не остаются незамеченными.
         for (const s of summary.skipped) {
@@ -1190,7 +1461,7 @@ export function main(argv = process.argv.slice(2)) {
 
         if (summary.total === 0) {
           if (args.json) {
-            console.log(JSON.stringify({ total: 0, byTaskArm: {}, skipped: summary.skipped }, null, 2));
+            console.log(JSON.stringify(summary, null, 2));
           } else {
             console.log("Запусков нет: сначала выполните benchmark run.");
           }
@@ -1200,15 +1471,7 @@ export function main(argv = process.argv.slice(2)) {
         if (args.json) {
           console.log(JSON.stringify(summary, null, 2));
         } else {
-          console.log(`=== Отчет о бенчмарках (всего прогонов: ${summary.total}) ===`);
-          console.log("Задача | Арм | Прогонов | Время (медиана) | LOC (+/-) | Файлов | Проверки | Стоимость");
-          console.log("---|---|---|---|---|---|---|---");
-          for (const item of Object.values(summary.byTaskArm)) {
-            const costStr = item.medianCostUsd !== null ? `$${item.medianCostUsd}` : "-";
-            console.log(
-              `${item.task} | ${item.arm} | ${item.runs} | ${item.medianDurationMs}ms | +${item.medianLinesAdded}/-${item.medianLinesDeleted} | ${item.medianFilesChanged} | ${item.checksPassed}/${item.checksTotal} | ${costStr}`
-            );
-          }
+          console.log(formatReport(summary));
         }
         return 0;
       } catch (err) {
@@ -1224,8 +1487,8 @@ export function main(argv = process.argv.slice(2)) {
           return 1;
         }
 
-        const summary = summarizeRuns(absRoot);
-        const comparison = compareArms(summary, args.baseline, args.candidate);
+        const summary = summarizeRuns(absRoot, { tier: args.tier });
+        const comparison = compareArms(summary, args.baseline, args.candidate, { tier: args.tier });
 
         if (args.json) {
           console.log(JSON.stringify(comparison, null, 2));
@@ -1256,6 +1519,17 @@ export function main(argv = process.argv.slice(2)) {
               console.log(
                 `  Проверки: ${b.checksPassed}/${b.checksTotal} (${d.checksRateBase}%) -> ${c.checksPassed}/${c.checksTotal} (${d.checksRateCandidate}%)`
               );
+              if (d.safetyPassRateBase !== null || d.safetyPassRateCandidate !== null) {
+                console.log(
+                  `  Safety pass rate: ${d.safetyPassRateBase ?? "-"}% -> ${d.safetyPassRateCandidate ?? "-"}%`
+                );
+              }
+              if (d.costDiff !== null && d.costDiff !== undefined) {
+                const cSign = d.costDiff > 0 ? "+" : "";
+                console.log(
+                  `  Стоимость: $${d.costBase ?? 0} -> $${d.costCandidate ?? 0} (дельта: ${cSign}$${d.costDiff})`
+                );
+              }
             }
           }
 
@@ -1271,6 +1545,13 @@ export function main(argv = process.argv.slice(2)) {
           }
           if (agg.baseChecks.total > 0 || agg.candidateChecks.total > 0) {
             parts.push(`checks ${agg.baseChecks.passed}/${agg.baseChecks.total} -> ${agg.candidateChecks.passed}/${agg.candidateChecks.total}`);
+          }
+          if (agg.baseSafetyPassRate !== null || agg.candidateSafetyPassRate !== null) {
+            parts.push(`safety ${agg.baseSafetyPassRate ?? 0}% -> ${agg.candidateSafetyPassRate ?? 0}%`);
+          }
+          if (agg.costDiff !== null && agg.costDiff !== undefined) {
+            const costSign = agg.costDiff > 0 ? "+" : "";
+            parts.push(`cost $${agg.baseCostTotal ?? 0} -> $${agg.candidateCostTotal ?? 0} (${costSign}$${agg.costDiff})`);
           }
 
           console.log(`\nИтог: ${parts.length > 0 ? parts.join(", ") : "нет сравнимых метрик"}`);

@@ -101,6 +101,7 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "tools\test-lens.mjs")) "test-lens tool must install"
     Assert (Test-Path (Join-Path $installedHarness "tools\doctor.mjs")) "doctor tool must install"
     Assert (Test-Path (Join-Path $installedHarness "tools\sync-prune.mjs")) "sync-prune tool must install"
+    Assert (Test-Path (Join-Path $installedHarness "tools\memory-cadence.mjs")) "memory-cadence tool must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\oracle-priority.example.json")) "oracle priority example must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\plugins.json")) "plugin manifest must install with the harness (doctor reads it)"
 

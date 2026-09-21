@@ -135,14 +135,16 @@ Terms used in this OMP workflow harness. Definitions say what a term
   network-path claim without the live service.
 - **Debt ledger tool** — `tools/debt-ledger.mjs`. Scans repository code comments for `defer:` markers, checks for formatting errors or missing triggers, and generates `DEBT-LEDGER.md`.
 - **Test lens** — `tools/test-lens.mjs`. Runs a test command (`run -- <cmd>`) or parses saved output (`parse <file>` / stdin) into a compact JSON summary (`total` / `passed` / `failed` / `failures`); recognizes `node --test` (spec reporter), Jest/Vitest JSON, pytest, and cargo, and otherwise falls back to a raw `fail|error|exception` filter. Exit code mirrors the command (`2` = `spawnError`, `1` = killed by signal), so a lens failure never reads as a green suite.
-- **Benchmark harness** — `tools/benchmark.mjs`. Orchestrates isolated benchmark task runs across arms (`init`, `run`, `report`, `compare`), capturing objective metrics (LOC deltas, duration, check pass rates, and optional session cost).
+- **Benchmark harness** — `tools/benchmark.mjs`. Orchestrates isolated benchmark task runs across arms (`init`, `run`, `report`, `compare`), capturing objective metrics (LOC deltas, duration, check pass rates, safety pass rates across safety-tier tasks, and optional session cost).
+- **Safety tier** — benchmark task tier (`tier: "safety"`) designed to test behavior preservation, boundary conditions, and invariant enforcement where lazy shortcut solutions break observable behavior.
+- **Memory cadence** — `tools/memory-cadence.mjs`. Enforces a regular maintenance cadence (default 7 days) over the Hindsight long-term memory bank, tracking last review timestamps and checking configuration freshness.
 - **Workspace script** — a service Paseo supervises (`paseo.json`), for long-lived
   processes the user must see. Distinct from **hub process**, which is an
   in-session PTY that dies with the session.
 - **Hub** — in-session coordination: peer messaging, background jobs, PTY processes.
 - **Paseo** — the supervising daemon: workspaces, agents, terminals, schedules.
 - **Prompt budget** — sub-command (`tools/prompt-lint.mjs sizes [--check]`) and configuration (`.prompt-lint/budget.json`) enforcing size limits across agent prompt surfaces to prevent context degradation and cache thrashing.
-- **Usage audit** — audit tool (`tools/usage-audit.mjs [--days 30]`) analyzing tool, MCP, and skill invocation frequency from local logs without printing or exposing sensitive invocation payloads.
+- **Usage audit** — audit tool (`tools/usage-audit.mjs [--days 30] [--plugins]`) analyzing tool, MCP, plugin, and skill invocation frequency from local logs, surfacing unused plugins with disable recommendations.
 - **Install doctor** — diagnostic harness (`tools/doctor.mjs`) validating installation prerequisites, directory structures, and environment health, acting as a hard gate during installation (`install.ps1`). Its optional `--probe` (network) checks provider reachability in `models.yml` and that each `config.yml` role points at a reachable model; unreachable = `WARN` listing the roles, never `FAIL`, and no network is touched without the flag. It also verifies the plugins named in the *plugin manifest*: a missing plugin is `WARN`, or `FAIL` under `--require-plugins`.
 - **Plugin manifest** — `agent/plugins.json`. The 14 OMP plugins the repo installs (`@dietrichgebert/ponytail`, `oh-my-pi-plugin-morph`, `omp-plugin-duplicate-detector`, `omp-url-pin`, `pi-lens`, `pi-linter`, `pi-qq`, …), each a `omp plugin install <spec>` spec. Part of the install, not of the harness source: `install.ps1` applies it automatically (`-SkipPlugins` opts out) and the *install doctor* verifies presence.
 

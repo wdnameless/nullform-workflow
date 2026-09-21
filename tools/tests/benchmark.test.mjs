@@ -37,6 +37,7 @@ import {
   runBenchmark,
   summarizeRuns,
   compareArms,
+  formatReport,
   parseArgs,
   main,
 } from "../benchmark.mjs";
@@ -113,8 +114,10 @@ test("initBenchmark: создает структуру bench/ и работае�
 
     const loaded = loadTasks(tmp);
     assert.equal(loaded.version, 1);
-    assert.equal(loaded.tasks.length, 1);
+    assert.equal(loaded.tasks.length, 2);
     assert.equal(loaded.tasks[0].id, "sample-task");
+    assert.equal(loaded.tasks[1].id, "safety-edge-case");
+    assert.equal(loaded.tasks[1].tier, "safety");
 
     // Идемпотентность
     const res2 = initBenchmark(tmp);
@@ -689,6 +692,197 @@ test("report: повреждённый result.json не исчезает мол�
     });
     assert.equal(cliJson.status, 1);
     assert.equal(JSON.parse(cliJson.stdout).skipped.length, 1);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("tasks.json: валидация поля tier в loadTasks", () => {
+  const repoDir = createGitRepo();
+  try {
+    initBenchmark(repoDir);
+
+    // Валидные тиры
+    for (const validTier of ["standard", "safety", "perf"]) {
+      writeFileSync(
+        join(repoDir, TASKS_FILE),
+        JSON.stringify({
+          version: 1,
+          tasks: [{ id: `task-${validTier}`, tier: validTier, title: "t", prompt: "p" }],
+        }),
+        "utf8"
+      );
+      const loaded = loadTasks(repoDir);
+      assert.equal(loaded.tasks[0].tier, validTier);
+    }
+
+    // Без указания tier — по умолчанию standard
+    writeFileSync(
+      join(repoDir, TASKS_FILE),
+      JSON.stringify({
+        version: 1,
+        tasks: [{ id: "task-default", title: "t", prompt: "p" }],
+      }),
+      "utf8"
+    );
+    const loadedDef = loadTasks(repoDir);
+    assert.equal(loadedDef.tasks[0].tier, "standard");
+
+    // Невалидные тиры: неверные строки, типы, null, пустая строка
+    const invalidTiers = ["invalid", "unknown", "", 123, true, null, []];
+    for (const badTier of invalidTiers) {
+      writeFileSync(
+        join(repoDir, TASKS_FILE),
+        JSON.stringify({
+          version: 1,
+          tasks: [{ id: "bad-task", tier: badTier, title: "t", prompt: "p" }],
+        }),
+        "utf8"
+      );
+      assert.throws(
+        () => loadTasks(repoDir),
+        /'tier' должен быть строкой из standard, safety, perf/,
+        `Ожидалась ошибка для tier=${JSON.stringify(badTier)}`
+      );
+    }
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("parseArgs: поддержка -n как алиаса --runs и флага --tier", () => {
+  // -n с пробелом
+  const a1 = parseArgs(["run", "-n", "7", "--tier", "safety"]);
+  assert.equal(a1.runs, 7);
+  assert.equal(a1.tier, "safety");
+
+  // -n= и --tier=
+  const a2 = parseArgs(["run", "-n=5", "--tier=perf"]);
+  assert.equal(a2.runs, 5);
+  assert.equal(a2.tier, "perf");
+
+  // Значения по умолчанию
+  const a3 = parseArgs(["run"]);
+  assert.equal(a3.runs, 1);
+  assert.equal(a3.tier, null);
+
+  // --runs и --tier
+  const a4 = parseArgs(["report", "--runs", "3", "--tier", "standard"]);
+  assert.equal(a4.runs, 3);
+  assert.equal(a4.tier, "standard");
+});
+
+test("summarizeRuns и compareArms: подсчет safetyPassRate, учет стоимости и фильтрация по тиру", () => {
+  const repoDir = createGitRepo();
+  try {
+    initBenchmark(repoDir);
+
+    // Создаем 3 синтетических прогона в bench/runs:
+    // 1) safety задача, arm-a: 2 проверки (обе прошли), cost: 0.05
+    mkdirSync(join(repoDir, RUNS_DIR, "run-1"), { recursive: true });
+    writeFileSync(
+      join(repoDir, RUNS_DIR, "run-1", "result.json"),
+      JSON.stringify({
+        version: 1,
+        task: "safe-task",
+        arm: "arm-a",
+        tier: "safety",
+        durationMs: 500,
+        metrics: { linesAdded: 10, linesDeleted: 2, filesChanged: 1 },
+        checks: [{ passed: true }, { passed: true }],
+        cost: { total_usd: 0.05 },
+        status: "ok",
+      }),
+      "utf8"
+    );
+
+    // 2) safety задача, arm-b: 2 проверки (1 прошла, 1 упала), cost: 0.03
+    mkdirSync(join(repoDir, RUNS_DIR, "run-2"), { recursive: true });
+    writeFileSync(
+      join(repoDir, RUNS_DIR, "run-2", "result.json"),
+      JSON.stringify({
+        version: 1,
+        task: "safe-task",
+        arm: "arm-b",
+        tier: "safety",
+        durationMs: 400,
+        metrics: { linesAdded: 8, linesDeleted: 1, filesChanged: 1 },
+        checks: [{ passed: true }, { passed: false }],
+        cost: { total_usd: 0.03 },
+        status: "ok",
+      }),
+      "utf8"
+    );
+
+    // 3) standard задача, arm-a: 1 проверка (прошла), cost: 0.02
+    mkdirSync(join(repoDir, RUNS_DIR, "run-3"), { recursive: true });
+    writeFileSync(
+      join(repoDir, RUNS_DIR, "run-3", "result.json"),
+      JSON.stringify({
+        version: 1,
+        task: "std-task",
+        arm: "arm-a",
+        tier: "standard",
+        durationMs: 300,
+        metrics: { linesAdded: 5, linesDeleted: 0, filesChanged: 1 },
+        checks: [{ passed: true }],
+        cost: { total_usd: 0.02 },
+        status: "ok",
+      }),
+      "utf8"
+    );
+
+    // Полный summary (все тиры)
+    const fullSummary = summarizeRuns(repoDir);
+    assert.equal(fullSummary.total, 3);
+    // Всего safety проверок: 2 (run-1) + 2 (run-2) = 4; из них прошли 2 + 1 = 3
+    assert.equal(fullSummary.safetyChecksTotal, 4);
+    assert.equal(fullSummary.safetyChecksPassed, 3);
+    assert.equal(fullSummary.safetyPassRate, 75.0); // 3/4 = 75%
+    // Стоимость: 0.05 + 0.03 + 0.02 = 0.10
+    assert.equal(fullSummary.costTotal, 0.1);
+    assert.equal(fullSummary.costMedian, 0.03);
+
+    // Фильтрация по options.tier: safety
+    const safetySummary = summarizeRuns(repoDir, { tier: "safety" });
+    assert.equal(safetySummary.total, 2);
+    assert.equal(safetySummary.safetyChecksTotal, 4);
+    assert.equal(safetySummary.safetyChecksPassed, 3);
+    assert.equal(safetySummary.safetyPassRate, 75.0);
+    assert.equal(safetySummary.costTotal, 0.08); // 0.05 + 0.03
+
+    // Фильтрация по options.tier: perf (нет таких прогонов)
+    const perfSummary = summarizeRuns(repoDir, { tier: "perf" });
+    assert.equal(perfSummary.total, 0);
+    assert.equal(perfSummary.safetyChecksTotal, 0);
+    assert.equal(perfSummary.safetyPassRate, null);
+    assert.equal(perfSummary.costTotal, null);
+
+    // formatReport: форматирует консольный вывод с Safety pass rate и стоимостью
+    const reportText = formatReport(fullSummary);
+    assert.match(reportText, /Safety pass rate: 75% \(3\/4 checks\)/);
+    assert.match(reportText, /Стоимость: всего \$0\.1/);
+
+    // compareArms: baseline arm-b vs candidate arm-a
+    const comp = compareArms(fullSummary, "arm-b", "arm-a");
+    assert.equal(comp.byTask.length, 2);
+
+    const safeItem = comp.byTask.find((t) => t.task === "safe-task");
+    assert.ok(safeItem);
+    assert.equal(safeItem.baseline.safetyPassRate, 50.0); // 1/2
+    assert.equal(safeItem.candidate.safetyPassRate, 100.0); // 2/2
+    assert.equal(safeItem.deltas.safetyPassRateDiff, 50.0); // +50%
+    assert.equal(safeItem.deltas.costBase, 0.03);
+    assert.equal(safeItem.deltas.costCandidate, 0.05);
+    assert.equal(safeItem.deltas.costDiff, 0.02);
+
+    // Агрегат compareArms
+    assert.equal(comp.aggregate.baseSafetyPassRate, 50.0);
+    assert.equal(comp.aggregate.candidateSafetyPassRate, 100.0);
+    assert.equal(comp.aggregate.safetyPassRateDiff, 50.0);
+    assert.equal(comp.aggregate.baseCostTotal, 0.03);
+    assert.equal(comp.aggregate.candidateCostTotal, 0.07); // safe-task (0.05) + std-task (0.02)
+    assert.equal(comp.aggregate.costDiff, 0.04);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
