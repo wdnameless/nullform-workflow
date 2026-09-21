@@ -38,6 +38,7 @@ import {
   summarizeRuns,
   compareArms,
   formatReport,
+  findRecentSessionTranscript,
   parseArgs,
   main,
 } from "../benchmark.mjs";
@@ -886,4 +887,9 @@ test("summarizeRuns и compareArms: подсчет safetyPassRate, учет ст
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
+});
+
+test("findRecentSessionTranscript: не падает и возвращает null при отсутствии каталога/файлов", () => {
+  const res = findRecentSessionTranscript(Date.now() + 1000000);
+  assert.equal(res, null);
 });

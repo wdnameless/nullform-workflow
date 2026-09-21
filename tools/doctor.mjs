@@ -272,7 +272,12 @@ export function runOmp(args, { timeout = 60000 } = {}) {
 
 /** Манифест плагинов `agent/plugins.json` → `[{name, spec}]`; без `spec` берётся имя. */
 function readPluginsManifest(path) {
-  const parsed = JSON.parse(stripBom(readFileSync(path, "utf8")));
+  let parsed;
+  try {
+    parsed = JSON.parse(stripBom(readFileSync(path, "utf8")));
+  } catch (e) {
+    throw new Error(`Ошибка разбора манифеста: ${e.message}`);
+  }
   const list = Array.isArray(parsed?.plugins) ? parsed.plugins : [];
   return list
     .filter((p) => p && typeof p.name === "string" && p.name)
@@ -281,7 +286,12 @@ function readPluginsManifest(path) {
 
 /** Имена установленных плагинов из вывода `omp plugin list --json` (npm и marketplace). */
 function installedPluginNames(stdout) {
-  const parsed = JSON.parse(stdout);
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (e) {
+    throw new Error(`Ошибка разбора JSON: ${e.message}`);
+  }
   const names = new Set();
   if (Array.isArray(parsed?.npm)) {
     for (const p of parsed.npm) {
@@ -384,7 +394,7 @@ export function parseCliArgs(args) {
   let quiet = false;
   let probe = false;
   let requirePlugins = false;
-
+  let pruneLogs = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--harness") {
@@ -403,8 +413,9 @@ export function parseCliArgs(args) {
       probe = true;
     } else if (arg === "--require-plugins") {
       requirePlugins = true;
+    } else if (arg === "--prune-logs") {
+      pruneLogs = true;
     } else if (arg === "-h" || arg === "--help") {
-      return { help: true };
     }
   }
 
@@ -421,6 +432,7 @@ export function parseCliArgs(args) {
     quiet,
     probe,
     requirePlugins,
+    pruneLogs,
     help: false,
   };
 }
@@ -1103,7 +1115,61 @@ export function runDoctor(options) {
     }
   }
 
-  // 12. check 'provider-reachability' (только с --probe): сети и отчёта без флага нет.
+  // 12. check 'logs-hygiene': аудит размера и количества сессионных логов в ~/.omp/logs/.
+  {
+    const id = "logs-hygiene";
+    const logsDir = join(homedir(), ".omp", "logs");
+    if (!existsSync(logsDir)) {
+      checks.push({
+        id,
+        status: "pass",
+        detail: "Каталог логов отсутствует (~/.omp/logs): чисто",
+      });
+    } else {
+      let files = [];
+      try { files = readdirSync(logsDir); } catch {}
+      let totalBytes = 0;
+      let staleFiles = [];
+      const now = Date.now();
+      const maxAgeMs = 14 * 24 * 60 * 60 * 1000;
+      for (const f of files) {
+        try {
+          const st = statSync(join(logsDir, f));
+          totalBytes += st.size;
+          if (now - st.mtimeMs > maxAgeMs) staleFiles.push({ name: f, path: join(logsDir, f) });
+        } catch {}
+      }
+
+      if (options.pruneLogs && staleFiles.length > 0) {
+        let pruned = 0;
+        for (const sf of staleFiles) {
+          try { rmSync(sf.path, { force: true }); pruned++; } catch {}
+        }
+        checks.push({
+          id,
+          status: "pass",
+          detail: `Очищено ${pruned} лог-файлов старше 14 дней. Осталось: ${files.length - pruned}`,
+        });
+      } else {
+        const mb = (totalBytes / (1024 * 1024)).toFixed(1);
+        if (files.length > 1000 || totalBytes > 50 * 1024 * 1024) {
+          checks.push({
+            id,
+            status: "warn",
+            detail: `${files.length} файлов логов (${mb} МБ), ${staleFiles.length} старше 14 дней. Очистить: node tools/doctor.mjs --prune-logs`,
+          });
+        } else {
+          checks.push({
+            id,
+            status: "pass",
+            detail: `${files.length} файлов логов (${mb} МБ) в норме`,
+          });
+        }
+      }
+    }
+  }
+
+  // 13. check 'provider-reachability' (только с --probe): сети и отчёта без флага нет.
   if (probeResults) {
     const id = "provider-reachability";
     const configYml = join(agentDir, "config.yml");

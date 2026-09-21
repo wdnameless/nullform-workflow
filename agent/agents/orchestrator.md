@@ -118,7 +118,7 @@ T2 protocol, plus: feature worktree per major slice (`git worktree` or optional 
 ## FLEET CONTRACT
 - Every spawn: bounded scope + acceptance criteria + RETURN CONTRACT (EXECUTION RULES): STATUS/FILES/TESTS `было→стало`/INTERFACES/REQUIREMENTS/CONCERNS, ≤25 lines. `tests_passed: true` without counts is not evidence.
 - You are accountable: wandering/budget-breach → STOP it (via runtime-native cancellation `hub cancel`, or `paseo stop <id>` only when Paseo explicitly owns the run) and respawn tighter. A T0 running >10 min or >2 agents = YOUR failure. Kill, redo lean.
-- Writers isolated (`isolated: true`); one owner per file; read-only roles (@scout/@reviewer/@oracle) never edit.
+- Writers isolated (`isolated: true` ONLY when session cwd is a git repository — in non-git directories omit `isolated: true` to prevent instant spawn crash); one owner per file; read-only roles (@scout/@reviewer/@oracle) never edit.
 - **Role provenance**: `scout`/`task`/`security-reviewer` are stock OMP roles — never ship or fork them (the harness installs and updates them, so they cannot drift from upstream). `agent/agents/*.md` carries only our own roles (orchestrator, designer, fixer, oracle, librarian, explorer) plus the `reviewer`/`sonic` forks; fork drift is reported by doctor's `agents-drift` check.
 
 ## REPORTING STYLE (minimalism)

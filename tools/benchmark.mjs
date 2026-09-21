@@ -20,7 +20,7 @@ import {
 import { join, resolve, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-
+import { homedir } from "node:os";
 export const TASKS_FILE = "bench/tasks.json";
 export const RUNS_DIR = "bench/runs";
 
@@ -450,6 +450,37 @@ function evaluateCost(root, transcriptPath) {
 }
 
 /**
+ * Автоматический поиск самого свежего JSONL-транскрипта OMP, созданного/измененного
+ * не ранее sinceMs. Позволяет замерять стоимость бенчмарка без явного флага --transcript.
+ * @param {number} [sinceMs=0]
+ * @returns {string|null}
+ */
+export function findRecentSessionTranscript(sinceMs = 0) {
+  const sessionsDir = join(homedir(), ".omp", "agent", "sessions");
+  if (!existsSync(sessionsDir)) return null;
+  let newestFile = null;
+  let newestMtime = sinceMs;
+
+  function scan(dir) {
+    let entries;
+    try { entries = readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      const full = join(dir, entry);
+      let st;
+      try { st = statSync(full); } catch { continue; }
+      if (st.isDirectory()) {
+        scan(full);
+      } else if (entry.endsWith(".jsonl") && st.mtimeMs >= newestMtime) {
+        newestMtime = st.mtimeMs;
+        newestFile = full;
+      }
+    }
+  }
+
+  scan(sessionsDir);
+  return newestFile;
+}
+/**
  * Запуск бенчмарка.
  *
  * @param {object} options
@@ -685,7 +716,8 @@ export function runBenchmark(options) {
     }
 
     // 6. Стоимость (cost)
-    const cost = evaluateCost(absRoot, transcript);
+    const transcriptToUse = transcript || findRecentSessionTranscript(startTime - 2000);
+    const cost = evaluateCost(absRoot, transcriptToUse);
 
     // 7. Сборка result.json
     const resultJson = {

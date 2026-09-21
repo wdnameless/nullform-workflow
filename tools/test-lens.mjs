@@ -347,7 +347,7 @@ function buildShellCommand(testCmd) {
 }
 
 export function runCommand(testCmd) {
-  const result = spawnSync(buildShellCommand(testCmd), [], {
+  const result = spawnSync(buildShellCommand(testCmd), {
     shell: true,
     encoding: 'utf-8',
     maxBuffer: MAX_OUTPUT

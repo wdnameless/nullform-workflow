@@ -15,7 +15,6 @@
     { "name": "pi-lens", "spec": "pi-lens@^4.2.1" },
     { "name": "pi-linter", "spec": "pi-linter@^0.2.7" },
     { "name": "pi-prompt-shelf", "spec": "pi-prompt-shelf@^1.1.2" },
-    { "name": "pi-qq", "spec": "pi-qq@^0.1.17" },
-    { "name": "cocoindex-code", "spec": "cocoindex-code@cocoindex-code", "marketplace": "cocoindex-io/cocoindex-code" }
+    { "name": "pi-qq", "spec": "pi-qq@^0.1.17" }
   ]
 }

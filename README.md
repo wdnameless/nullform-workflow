@@ -405,14 +405,13 @@ node tools/doctor.mjs --harness <harness-root> --agent-dir "$HOME/.omp/agent" --
 
 ## Плагины OMP (`agent/plugins.json`)
 
-Каркас ставит набор сторонних OMP-плагинов, перечисленных в манифесте `agent/plugins.json` — **15 записей**: `@dietrichgebert/ponytail`, `@plannotator/pi-extension`, `oh-my-pi-plugin-grok-build`, `oh-my-pi-plugin-morph`, `omp-plugin-duplicate-detector`, `omp-typescript-complexity-evaluator`, `omp-url-pin`, `pi-bar`, `pi-gh-cli`, `pi-goal-x`, `pi-lens`, `pi-linter`, `pi-prompt-shelf`, `pi-qq`, `cocoindex-code`.
+Каркас ставит набор сторонних OMP-плагинов, перечисленных в манифесте `agent/plugins.json` — **14 записей**: `@dietrichgebert/ponytail`, `@plannotator/pi-extension`, `oh-my-pi-plugin-grok-build`, `oh-my-pi-plugin-morph`, `omp-plugin-duplicate-detector`, `omp-typescript-complexity-evaluator`, `omp-url-pin`, `pi-bar`, `pi-gh-cli`, `pi-goal-x`, `pi-lens`, `pi-linter`, `pi-prompt-shelf`, `pi-qq`.
 
-- **Автоматически:** `install.ps1` ставит плагины из манифеста после распаковки каркаса (с поддержкой добавления marketplace для `cocoindex-code`). Ключ `-SkipPlugins` отключает этот шаг (офлайн-установка или ручная настройка).
+- **Автоматически:** `install.ps1` ставит плагины из манифеста после распаковки каркаса. Ключ `-SkipPlugins` отключает этот шаг (офлайн-установка или ручная настройка).
 - **Вручную на новом ПК** (команда идемпотентна — повторный запуск ничего не ломает):
   ```powershell
-  omp plugin marketplace add cocoindex-io/cocoindex-code  # для cocoindex-code
-  omp plugin install "<spec>"                             # по каждой строке agent/plugins.json
-  omp plugin list --json                                  # проверка: npm и marketplace массивы
+  omp plugin install "<spec>"   # по каждой строке agent/plugins.json
+  omp plugin list --json        # проверка: {npm:[{name,version,path,manifest,enabledFeatures,enabled}]}
   ```
 - **Проверка доктором:** `node tools/doctor.mjs` сверяет установленное с манифестом. Отсутствующий плагин — `WARN`; с ключом `--require-plugins` — `FAIL` (жёсткий гейт). Сеть не требуется.
 
