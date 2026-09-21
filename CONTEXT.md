@@ -134,6 +134,7 @@ Terms used in this OMP workflow harness. Definitions say what a term
   cassette and replays it deterministically, so a runtime oracle can refute a
   network-path claim without the live service.
 - **Debt ledger tool** — `tools/debt-ledger.mjs`. Scans repository code comments for `defer:` markers, checks for formatting errors or missing triggers, and generates `DEBT-LEDGER.md`.
+- **Test lens** — `tools/test-lens.mjs`. Runs a test command (`run -- <cmd>`) or parses saved output (`parse <file>` / stdin) into a compact JSON summary (`total` / `passed` / `failed` / `failures`); recognizes `node --test` (spec reporter), Jest/Vitest JSON, pytest, and cargo, and otherwise falls back to a raw `fail|error|exception` filter. Exit code mirrors the command (`2` = `spawnError`, `1` = killed by signal), so a lens failure never reads as a green suite.
 - **Benchmark harness** — `tools/benchmark.mjs`. Orchestrates isolated benchmark task runs across arms (`init`, `run`, `report`, `compare`), capturing objective metrics (LOC deltas, duration, check pass rates, and optional session cost).
 - **Workspace script** — a service Paseo supervises (`paseo.json`), for long-lived
   processes the user must see. Distinct from **hub process**, which is an

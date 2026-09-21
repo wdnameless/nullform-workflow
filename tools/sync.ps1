@@ -90,6 +90,7 @@ $Manifest = @(
   'tools\debt-ledger.mjs',
   'tools\benchmark.mjs',
   'tools\usage-audit.mjs',
+  'tools\test-lens.mjs',
   'tools\doctor.mjs',
   'tools\sync-prune.mjs',
   'tools\audit.ps1',

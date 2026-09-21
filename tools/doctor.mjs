@@ -61,6 +61,7 @@ export const CORE_TOOLS = [
   "debt-ledger.mjs",
   "benchmark.mjs",
   "usage-audit.mjs",
+  "test-lens.mjs",
   "auto-review.mjs",
   "doctor.mjs",
   "sync-prune.mjs",
