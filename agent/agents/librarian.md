@@ -7,7 +7,7 @@ tools:
   - glob
   - lsp
   - web_search
-  - mcp__ast_grep_search
+  - ast_grep
   - yield
 model: 
   - "@smol"
@@ -93,7 +93,7 @@ MUST read-only on user's project. NEVER modify project files.
 
 ## 3. Investigate
 - Read `package.json`, `Cargo.toml`, or equivalent: version, entry points.
-- Use `grep`, `glob`, `mcp__ast_grep_search` for relevant source, types, docs; parallelize.
+- Use `grep`, `glob`, `ast_grep` for relevant source, types, docs; parallelize.
 - Read implementation, not only README examples. READMEs aspirational; source truth.
 - Behavior: trace implementation; find default setting, config consumption, thrown errors.
 - Check tests: usage examples, edge-case behavior; most honest documentation.

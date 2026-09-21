@@ -7,12 +7,16 @@ import { spawnSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import {
   CORE_TOOLS,
+  REQUIRED_ROLES,
   runDoctor,
   parseCliArgs,
   parseRoleModels,
   probeProviders,
   discoverRepoClone,
   isRepoTree,
+  compareAgentDefs,
+  roleNamesIn,
+  missingRequiredRoles,
 } from "../doctor.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
@@ -122,11 +126,8 @@ function createMockHarness(baseDir, { omitFiles = [], omitTools = [] } = {}) {
   // Agent dirs
   mkdirSync(join(harness, "agent/agents"), { recursive: true });
   writeFileSync(join(harness, "agent/AGENTS.md"), "# AGENTS\n", "utf8");
-  const agentRoles = [
-    "fixer.md", "orchestrator.md", "reviewer.md", "designer.md",
-    "oracle.md", "security-reviewer.md", "sonic.md", "librarian.md",
-    "explorer.md", "task.md", "scout.md"
-  ];
+  // Обязательные роли + sonic (наш форк): форк встроенного scout/task/security-reviewer удалён.
+  const agentRoles = REQUIRED_ROLES.map((role) => `${role}.md`).concat("sonic.md");
   for (const role of agentRoles) {
     writeFileSync(join(harness, "agent/agents", role), `---
 name: ${role.replace(".md", "")}
@@ -203,6 +204,7 @@ test("doctor real workflow-repo in repo mode returns exit 0 and parses JSON", ()
   assert.ok(checkIds.includes("skills"));
   assert.ok(checkIds.includes("prompt-baseline"));
   assert.ok(checkIds.includes("configs"));
+  assert.ok(checkIds.includes("agents-drift"));
 });
 
 test("doctor broken fixture missing required file returns exit 1 with exact path", () => {
@@ -257,39 +259,59 @@ test("doctor broken fixture missing core tool returns exit 1 with exact path", (
   }
 });
 
+/**
+ * Фикстура установки: харнесс + agent-dir, привязанный к нему через .harness-root.
+ * `agentRoles` — определения ролей, реально положенные в <agent-dir>/agents.
+ */
+function createInstalledFixture(tmp, { agentRoles = null } = {}) {
+  const harness = createMockHarness(tmp);
+  const agentDir = join(tmp, "agent-dir");
+  const agentsHome = join(tmp, "agents-home");
+
+  mkdirSync(join(agentDir, "agents"), { recursive: true });
+  mkdirSync(join(agentsHome, "skills"), { recursive: true });
+  writeFileSync(join(agentDir, ".harness-root"), harness + "\n", "utf8");
+  writeFileSync(join(agentDir, "AGENTS.md"), `# AGENTS\nHarness: ${harness}\n`, "utf8");
+
+  for (const role of agentRoles || roleNamesIn(join(harness, "agent", "agents"))) {
+    writeFileSync(join(agentDir, "agents", `${role}.md`), "# Role\n", "utf8");
+  }
+
+  mkdirSync(join(agentDir, "rules"), { recursive: true });
+  writeFileSync(join(agentDir, "rules/enterprise-directives.md"), "# Directives\n", "utf8");
+  mkdirSync(join(agentsHome, "rules"), { recursive: true });
+  writeFileSync(join(agentsHome, "rules/enterprise-directives.md"), "# Directives\n", "utf8");
+  writeFileSync(join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {} }), "utf8");
+  writeFileSync(join(agentDir, "models.yml"), "models: []\n", "utf8");
+  writeFileSync(join(agentDir, "config.yml"), "editor: nano\n", "utf8");
+
+  return { harness, agentDir, agentsHome };
+}
+
+/** Каталог «встроенных агентов» для agents-drift: имя файла → содержимое. */
+function writeBuiltinAgents(dir, entries) {
+  mkdirSync(dir, { recursive: true });
+  for (const [name, content] of Object.entries(entries)) {
+    writeFileSync(join(dir, name), content, "utf8");
+  }
+  return dir;
+}
+
+/** Прямой вызов runDoctor в режиме repo на моковом харнессе с заданным каталогом встроенных. */
+function runDoctorOnMockHarness(tmp, { builtinAgentsDir } = {}) {
+  return runDoctor({
+    harness: join(tmp, "harness"),
+    agentDir: join(tmp, "agent-dir"),
+    agentsHome: join(tmp, "agents-home"),
+    mode: "repo",
+    builtinAgentsDir,
+  });
+}
+
 test("doctor full pass fixture with mock harness in installed mode", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-test-installed-"));
   try {
-    const harness = createMockHarness(tmp);
-    const agentDir = join(tmp, "agent-dir");
-    const agentsHome = join(tmp, "agents-home");
-
-    mkdirSync(agentDir, { recursive: true });
-    mkdirSync(join(agentDir, "agents"), { recursive: true });
-    mkdirSync(join(agentsHome, "skills"), { recursive: true });
-
-    // Link harness-root
-    writeFileSync(join(agentDir, ".harness-root"), harness + "\n", "utf8");
-
-    // Copy agent defs and create configs
-    writeFileSync(join(agentDir, "AGENTS.md"), `# AGENTS\nHarness: ${harness}\n`, "utf8");
-    for (const role of [
-      "fixer.md", "orchestrator.md", "reviewer.md", "designer.md",
-      "oracle.md", "security-reviewer.md", "sonic.md", "librarian.md",
-      "explorer.md", "task.md", "scout.md"
-    ]) {
-      writeFileSync(join(agentDir, "agents", role), "# Role\n", "utf8");
-    }
-
-    // Rules in agentDir and agentsHome
-    mkdirSync(join(agentDir, "rules"), { recursive: true });
-    writeFileSync(join(agentDir, "rules/enterprise-directives.md"), "# Directives\n", "utf8");
-    mkdirSync(join(agentsHome, "rules"), { recursive: true });
-    writeFileSync(join(agentsHome, "rules/enterprise-directives.md"), "# Directives\n", "utf8");
-    // Configs
-    writeFileSync(join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {} }), "utf8");
-    writeFileSync(join(agentDir, "models.yml"), "models: []\n", "utf8");
-    writeFileSync(join(agentDir, "config.yml"), "editor: nano\n", "utf8");
+    const { harness, agentDir, agentsHome } = createInstalledFixture(tmp);
 
     const res = spawnSync(
       process.execPath,
@@ -797,3 +819,160 @@ test("runDoctor: probeResults без config.yml не превращается в
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("compareAgentDefs: форк, дрейф и совпадение разложены по корзинам (BOM и CRLF не различия)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-defs-"));
+  try {
+    const ours = writeBuiltinAgents(join(tmp, "ours"), {
+      "alpha.md": "# Role\nSame body\n",
+      "beta.md": "# Role\nOurs body\n",
+      "delta.md": "\uFEFF# Role\r\nSame body\r\n",
+      "gamma.md": "# Role\nOnly ours\n",
+      "notes.txt": "не определение роли\n",
+    });
+    const builtin = writeBuiltinAgents(join(tmp, "builtin"), {
+      "alpha.md": "# Role\nSame body\n",
+      "beta.md": "# Role\nBuiltin body\n",
+      "delta.md": "# Role\nSame body\n",
+    });
+
+    assert.deepEqual(compareAgentDefs(ours, builtin), {
+      forks: ["gamma.md"],
+      drift: ["beta.md"],
+      matched: ["alpha.md", "delta.md"],
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("roleNamesIn/missingRequiredRoles: sonic опционален, отсутствующие роли называются поимённо", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-role-names-"));
+  try {
+    const dir = writeBuiltinAgents(join(tmp, "agents"), {
+      "orchestrator.md": "# Role\n",
+      "fixer.md": "# Role\n",
+      "AGENTS.txt": "не роль\n",
+    });
+
+    assert.deepEqual(roleNamesIn(dir), ["fixer", "orchestrator"]);
+    assert.deepEqual(roleNamesIn(join(tmp, "нет-такого-каталога")), []);
+
+    const full = REQUIRED_ROLES.concat("sonic");
+    assert.deepEqual(missingRequiredRoles(full), [], "sonic не обязателен: набор ролей полон");
+    assert.deepEqual(
+      missingRequiredRoles(full.filter((r) => r !== "orchestrator" && r !== "reviewer")),
+      ["orchestrator", "reviewer"]
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("harness-files: отсутствует обязательная роль → FAIL с точным именем файла", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-test-fail-role-"));
+  try {
+    const harness = createMockHarness(tmp, { omitFiles: ["agent/agents/oracle.md"] });
+    const { status, json } = runDoctorCli(["--harness", harness]);
+
+    assert.equal(status, 1, "пропавшая обязательная роль должна валить doctor");
+    const check = checkOf(json, "harness-files");
+    assert.equal(check.status, "fail");
+    assert.ok(
+      check.detail.includes("agent/agents/oracle.md"),
+      `Ожидался точный путь роли в detail: ${check.detail}`
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("agent-wiring: установка без обязательной роли → FAIL (счёт «>= 8» её пропускал)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-test-wiring-role-"));
+  try {
+    const { harness, agentDir, agentsHome } = createInstalledFixture(tmp, {
+      agentRoles: REQUIRED_ROLES.filter((r) => r !== "fixer").concat("sonic"),
+    });
+
+    const { json } = runDoctorCli([
+      "--harness", harness,
+      "--agent-dir", agentDir,
+      "--agents-home", agentsHome,
+    ]);
+
+    const check = checkOf(json, "agent-wiring");
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /отсутствуют обязательные роли \(fixer\)/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("agents-drift: лишние файлы без встроенного аналога → форки, PASS (не FAIL)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-drift-forks-"));
+  try {
+    createMockHarness(tmp);
+    const builtin = join(tmp, "builtin-agents");
+    mkdirSync(builtin, { recursive: true });
+    copyFileSync(join(tmp, "harness/agent/agents/reviewer.md"), join(builtin, "reviewer.md"));
+
+    const result = runDoctorOnMockHarness(tmp, { builtinAgentsDir: builtin });
+    const check = checkOf(result, "agents-drift");
+
+    assert.equal(check.status, "pass");
+    assert.match(check.detail, /форков: 7/);
+    assert.match(check.detail, /designer\.md/);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("agents-drift: расхождение содержимого → WARN с именами, exit 0", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-drift-warn-"));
+  try {
+    createMockHarness(tmp);
+    const builtin = writeBuiltinAgents(join(tmp, "builtin-agents"), {
+      "orchestrator.md": "# Builtin orchestrator\n",
+      "sonic.md": "# Builtin sonic\n",
+    });
+
+    const result = runDoctorOnMockHarness(tmp, { builtinAgentsDir: builtin });
+    const check = checkOf(result, "agents-drift");
+
+    assert.equal(check.status, "warn");
+    assert.match(check.detail, /Дрейф от встроенных агентов OMP \(2\): orchestrator\.md, sonic\.md/);
+    assert.equal(result.summary.fail, 0);
+    assert.equal(result.ok, true, "дрейф — WARN, он не валит doctor");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("agents-drift: каталог встроенных агентов недоступен → SKIP с причиной", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-drift-skip-"));
+  try {
+    createMockHarness(tmp);
+    const builtin = join(tmp, "нет-встроенных");
+
+    const result = runDoctorOnMockHarness(tmp, { builtinAgentsDir: builtin });
+    const check = checkOf(result, "agents-drift");
+
+    assert.equal(check.status, "skip");
+    assert.match(check.detail, /каталог встроенных агентов не найден/);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("agents-drift: реальный репозиторий — проверка присутствует, никогда не FAIL", () => {
+  const { status, json } = runDoctorCli(["--harness", REPO_ROOT]);
+  const check = checkOf(json, "agents-drift");
+
+  assert.ok(check, "agents-drift должен присутствовать в отчёте");
+  assert.ok(["pass", "warn", "skip"].includes(check.status), `Статус ${check.status} недопустим`);
+  assert.equal(json.summary.fail, 0);
+  assert.equal(status, 0);
+});
+

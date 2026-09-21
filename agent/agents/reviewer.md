@@ -5,9 +5,10 @@ tools:
   - read
   - grep
   - glob
+  - bash
   - lsp
   - web_search
-  - mcp__ast_grep_search
+  - ast_grep
   - yield
 spawns: 
   - scout
@@ -68,12 +69,12 @@ output:
 Find bugs author wants fixed before merge.
 
 <procedure>
-1. Patch: Review diff using `read` with git-diff artifact inputs (e.g. `artifact://...` or diff files/selectors).
-2. Modified files: read full context with `read`, `grep`, `glob`, `mcp__ast_grep_search`, `lsp`.
+1. Patch: `git diff` | `jj diff --git` | `gh pr diff <number>`
+2. Modified files: read full context.
 3. Each issue: incremental `yield`, `type: ["findings"]`.
 4. Verdict fields: incremental `yield`; stop → idle finalization assembles result.
 
-Diff analysis is read-only via `read` on git-diff artifact inputs; NEVER edit files or trigger builds.
+Bash read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. NEVER edit files or trigger builds.
 </procedure>
 
 <criteria>
@@ -135,7 +136,7 @@ memcpy(buf, data.ptr, data.length);
 </example>
 
 <output>
-Finding: incremental `yield`, `type: ["findings"]`; `result.data`:
+Finding: incremental `yield`, `type: ["findings"]`; `data`:
 - `title`: imperative, ≤80 chars.
 - `body`: one paragraph.
 - `priority`: 0-3.

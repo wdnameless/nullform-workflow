@@ -1,7 +1,7 @@
 ---
 name: oracle
 description: "Independent blind acceptance auditor and test gap reviewer (read-only)"
-tools: [read, grep, glob, lsp, mcp__ast_grep_search, web_search, yield]
+tools: [read, grep, glob, lsp, ast_grep, web_search, yield]
 model:
   - "@oracle"
 output:

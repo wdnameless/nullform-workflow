@@ -108,10 +108,18 @@ Check 'openspec present (T2 4-Wave protocol)' {
 }
 
 # ---------------------------------------------------------------- agent defs
+# The role set — not the file count — is what matters: deleting a fork that only
+# duplicated a built-in agent (scout/task/security-reviewer) must leave the
+# roster intact, while a missing required role must fail even when the count
+# still looks healthy. Keep this list in sync with REQUIRED_ROLES in tools/doctor.mjs.
+# `sonic` is our own narrowing fork: installed or not, it is not required.
 Check 'agent definitions present' {
-  $n = (Get-ChildItem "$agentDir\agents" -Filter *.md -ErrorAction SilentlyContinue).Count
-  if ($n -lt 10) { throw "only $n agent files (expected >= 10)" }
-  "$n roles"
+  $required = @('orchestrator', 'fixer', 'designer', 'oracle', 'librarian', 'explorer', 'reviewer')
+  $present = @(Get-ChildItem "$agentDir\agents" -Filter *.md -ErrorAction SilentlyContinue |
+    ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) })
+  $missing = @($required | Where-Object { $present -notcontains $_ })
+  if ($missing.Count) { throw "missing required roles: $($missing -join ', ')" }
+  "$($present.Count) roles, all required roles present ($($required.Count) required; sonic is our optional fork)"
 }
 
 # OMP rejects an agent file without `description` and skips it entirely, so a
@@ -186,6 +194,15 @@ Check 'no MCP server pinned to @latest' {
   if ($bad.Count) { throw "unpinned: $($bad -join ', ') - pin the version" }
   $true
 }
+Check 'mandatory MCP servers present' {
+  $m = Get-Content "$agentDir\mcp.json" -Raw | ConvertFrom-Json
+  $names = @($m.mcpServers.PSObject.Properties.Name)
+  $mandatory = @('chrome-devtools')
+  $missing = @($mandatory | Where-Object { $_ -notin $names })
+  if ($missing.Count) { throw "missing mandatory MCP server(s): $($missing -join ', ')" }
+  "present: $($mandatory -join ', ')"
+}
+
 
 # Map-form matters: list-form registers the provider under the first model-id
 # segment instead of its declared name, so role selectors stop resolving.
@@ -343,6 +360,12 @@ Check 'replay harness detects covered vs uncovered paths' {
     if ($bad.Code -eq 0 -or $bad.Text -notmatch 'UNREDACTED') { throw "leaked secret NOT caught" }
     'both detected'
   } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+}
+Check 'test-lens noise filter produces valid summary' {
+  $dummy = '{"numTotalTests":2,"numPassedTests":1,"numFailedTests":1,"testResults":[{"name":"auth.test.ts","assertionResults":[{"title":"login","status":"failed","failureMessages":["Expected 200 got 401"]}]}]}'
+  $res = $dummy | node "$HarnessRoot\tools\test-lens.mjs" parse | ConvertFrom-Json
+  if ($res.total -ne 2 -or $res.failed -ne 1) { throw "test-lens parse failed: $($res | ConvertTo-Json)" }
+  'summary ok'
 }
 
 # ---------------------------------------------------------------- drift

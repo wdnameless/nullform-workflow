@@ -47,6 +47,11 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
 Also available: `@reviewer` (adversarial code review), `@sonic` (mechanical edits/
 data collection), `@security-reviewer` (read-only security audit). `task` is the
 default spawn type, not a named role.
+ROLE PROVENANCE: `scout`, `task`, `security-reviewer` are stock OMP roles — we ship
+no files for them (they arrive and update with the harness, so they never drift from
+upstream). Our `agent/agents/*.md` holds only our own specialisation: orchestrator,
+designer, fixer, oracle, librarian, explorer — plus the `reviewer`/`sonic` forks of
+the built-in roles; a fork's drift is reported by doctor's `agents-drift` check.
 
 ## 4. FLEET CONTRACT
 Every spawn: bounded scope + acceptance criteria + **return contract** (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines, no essays). Hand files by PATH, never paste contents. Safe context budget: emit HANDOFF before exhaustion or context degradation (reconciliation headroom) → HANDOFF protocol. Kill wanderers (`hub cancel` or optional `paseo stop`). Writers isolated, one owner per file, zones disjoint, read-only roles never edit. On T2+ the orchestrator NEVER writes project code — only specs/manifest/interfaces/git.

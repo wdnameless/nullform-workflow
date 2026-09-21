@@ -63,9 +63,22 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Orchestrator** — the single router. Classifies, plans, schedules, reconciles,
   verifies. Does not write project code on T2+.
 - **Specialist** — a delegated role with one lane of work.
-- **Writer role** — a specialist permitted to edit files (`fixer`, `designer`).
-- **Read-only role** — a specialist that never edits (`scout`, `explorer`,
-  `reviewer`, `oracle`).
+- **Shipped role** — a role definition the repo distributes in `agent/agents/`. Eight
+  of them: `orchestrator`, `designer`, `fixer`, `oracle`, `librarian`, `explorer`,
+  `reviewer`, `sonic`.
+- **Built-in role** — a role OMP itself provides: `scout`, `task`,
+  `security-reviewer`. Never shipped and never forked — the harness installs and
+  updates it, so taking it from the built-in set keeps it current and drift-free.
+- **Forked agent** — our `agent/agents/<name>.md` that overrides a built-in role of
+  the same name (`reviewer`, `sonic` today). Override is by filename, first-wins;
+  OMP has no `extends`, so a fork must be re-based on the built-in body whenever the
+  built-in changes. Drift is reported by the `agents-drift` check in
+  `tools/doctor.mjs` (warn, never fail). Distinct from a *built-in role*, which we
+  do not carry at all.
+- **Writer role** — a specialist permitted to edit files (`fixer`, `designer`,
+  `sonic`).
+- **Read-only role** — a specialist that never edits (`explorer`, `librarian`,
+  `reviewer`, `oracle`; built-in `scout`).
 - **Fleet** — the set of specialists dispatched for a task.
 - **Spawn** — creating a specialist run (`task()`). Distinct from **reuse**, which
   continues an existing specialist session that already holds relevant context.

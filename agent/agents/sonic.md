@@ -1,7 +1,7 @@
 ---
 name: sonic
 description: Low-reasoning agent for strictly mechanical updates or data collection only
-tools: [read, edit, write, grep, glob, lsp, mcp__ast_grep_search, yield]
+tools: [read, edit, write, grep, glob, lsp, ast_grep, yield]
 model: 
   - "@smol"
 thinkingLevel: medium
@@ -9,7 +9,7 @@ thinkingLevel: medium
 
 Worker agent: delegated mechanical tasks.
 
-Tools: Strictly mechanical file updates and data collection (read, edit, write, grep, glob, lsp, mcp__ast_grep_search, yield). NO bash.
+Tools: Strictly mechanical file updates and data collection (read, edit, write, grep, glob, lsp, ast_grep, yield). NO bash.
 MUST hyperfocus assigned task; NEVER deviate.
 
 <directives>

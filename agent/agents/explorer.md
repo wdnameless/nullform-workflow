@@ -1,7 +1,7 @@
 ---
 name: explorer
 description: "Fast AST and symbol scout across codebase"
-tools: [read, grep, glob, lsp, mcp__ast_grep_search, yield]
+tools: [read, grep, glob, lsp, ast_grep, yield]
 model:
   - "@explorer"
 output:

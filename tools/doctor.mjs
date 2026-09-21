@@ -12,7 +12,14 @@
  *
  * Проверки:
  *   node · harness-files · tools-syntax · tools-smoke · agent-wiring · skills ·
- *   prompt-baseline · configs · orphan-files · provider-reachability (только с --probe).
+ *   prompt-baseline · configs · orphan-files · agents-drift ·
+ *   provider-reachability (только с --probe).
+ *
+ * agents-drift (без сети):
+ *   Распаковывает встроенных агентов OMP (`omp agents unpack` во временный каталог)
+ *   и сравнивает с ними каждое наше `agent/agents/*.md`: имя без встроенного аналога —
+ *   наш форк (информационно, внутри pass), содержимое разошлось — WARN с именами.
+ *   `omp` недоступен — SKIP с причиной. Проверка никогда не даёт FAIL.
  *
  * --probe (opt-in, сеть):
  *   Опрашивает GET {baseUrl}/models у каждого провайдера из models.yml и сопоставляет
@@ -61,6 +68,22 @@ export const CORE_TOOLS = [
   "sync.ps1",
 ];
 
+/**
+ * Обязательный набор определений ролей в `agent/agents` (имена файлов без `.md`).
+ * `sonic` намеренно отсутствует: это наш сужающий форк (mechanical-only), он опционален.
+ * Число файлов не проверяется сознательно — важно, что обязательные роли на месте,
+ * иначе удаление или переименование роли проходит незамеченным за «>= 8».
+ */
+export const REQUIRED_ROLES = [
+  "orchestrator",
+  "fixer",
+  "designer",
+  "oracle",
+  "librarian",
+  "explorer",
+  "reviewer",
+];
+
 export function normalizePath(p) {
   if (!p) return "";
   return resolve(p).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
@@ -82,6 +105,87 @@ export function isRepoTree(dir) {
 export function discoverRepoClone(harness) {
   const candidate = join(harness, "workflow-repo");
   return isRepoTree(candidate) ? candidate : null;
+}
+
+/** Имена определений ролей (`*.md` без расширения) в каталоге; `[]`, если каталога нет. */
+export function roleNamesIn(dir) {
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => basename(f, ".md"))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** Обязательные роли, которых нет в наборе имён (пустой массив — набор полон). */
+export function missingRequiredRoles(names) {
+  return REQUIRED_ROLES.filter((role) => !names.includes(role));
+}
+
+/** Сравнение текстов определений: BOM и переводы строк не считаются различием. */
+function normalizeDef(text) {
+  return stripBom(text).replace(/\r\n/g, "\n").trimEnd();
+}
+
+/**
+ * Дрейф наших определений ролей относительно встроенных агентов OMP.
+ * @returns {{forks: string[], drift: string[], matched: string[]}} имена файлов (`role.md`)
+ */
+export function compareAgentDefs(agentsDir, builtinDir) {
+  const forks = [];
+  const drift = [];
+  const matched = [];
+
+  for (const name of readdirSync(agentsDir).filter((f) => f.endsWith(".md")).sort()) {
+    const builtinPath = join(builtinDir, name);
+    const bucket = !existsSync(builtinPath)
+      ? forks
+      : normalizeDef(readFileSync(join(agentsDir, name), "utf8")) ===
+          normalizeDef(readFileSync(builtinPath, "utf8"))
+        ? matched
+        : drift;
+    bucket.push(name);
+  }
+
+  return { forks, drift, matched };
+}
+
+/**
+ * Распаковка встроенных агентов OMP во временный каталог (`omp agents unpack`).
+ * @returns {{dir: string|null, error: string|null}} каталог вызывающий обязан удалить.
+ */
+export function unpackBuiltinAgents() {
+  let dir;
+  try {
+    dir = mkdtempSync(join(tmpdir(), "omp-builtin-agents-"));
+  } catch (err) {
+    return { dir: null, error: `временный каталог не создан: ${err.message}` };
+  }
+
+  // На Windows `omp` — это .cmd-шим, а Node ≥ 18.20 запускает .cmd только через shell;
+  // shell не квотирует аргументы сам, поэтому путь к временному каталогу квотируем явно.
+  const viaShell = process.platform === "win32";
+  const targetDir = viaShell ? `"${dir}"` : dir;
+  const res = spawnSync("omp", ["agents", "unpack", "--dir", targetDir, "--json"], {
+    encoding: "utf8",
+    shell: viaShell,
+  });
+
+  const failure = res.error
+    ? res.error.message
+    : res.status !== 0
+      ? `код ${res.status}: ${(res.stderr || res.stdout || "").trim().split(/\r?\n/).pop() || "нет вывода"}`
+      : null;
+
+  if (failure || readdirSync(dir).filter((f) => f.endsWith(".md")).length === 0) {
+    rmSync(dir, { recursive: true, force: true });
+    return { dir: null, error: failure || "omp не записал ни одного агента" };
+  }
+
+  return { dir, error: null };
 }
 
 /** Провайдер модели вида `provider/model:tag` → `provider`; без разделителя — null. */
@@ -292,16 +396,9 @@ export function runDoctor(options) {
     if (!existsSync(agentsMd)) missing.push("agent/AGENTS.md");
 
     const agentsDir = join(harness, "agent", "agents");
-    let roleCount = 0;
-    if (existsSync(agentsDir)) {
-      try {
-        roleCount = readdirSync(agentsDir).filter((f) => f.endsWith(".md")).length;
-      } catch {
-        roleCount = 0;
-      }
-    }
-    if (roleCount < 8) {
-      missing.push(`agent/agents/*.md (найдено ${roleCount}, требуется >= 8)`);
+    const roleNames = roleNamesIn(agentsDir);
+    for (const role of missingRequiredRoles(roleNames)) {
+      missing.push(`agent/agents/${role}.md (обязательная роль)`);
     }
 
     const edFile = join(harness, "rules", "enterprise-directives.md");
@@ -326,7 +423,7 @@ export function runDoctor(options) {
       checks.push({
         id,
         status: "pass",
-        detail: `Все обязательные файлы и директории харнесса присутствуют (${roleCount} ролей)`,
+        detail: `Все обязательные файлы и директории харнесса присутствуют (обязательные роли: ${REQUIRED_ROLES.length}, всего определений: ${roleNames.length})`,
       });
     } else {
       checks.push({
@@ -489,16 +586,12 @@ export function runDoctor(options) {
       }
 
       const agentsSub = join(agentDir, "agents");
-      let roleCount = 0;
-      if (existsSync(agentsSub)) {
-        try {
-          roleCount = readdirSync(agentsSub).filter((f) => f.endsWith(".md")).length;
-        } catch {
-          roleCount = 0;
-        }
-      }
-      if (roleCount < 8) {
-        wiringErrors.push(`${agentDir}/agents содержит ${roleCount} файлов (требуется >= 8)`);
+      const installedRoles = roleNamesIn(agentsSub);
+      const missingRoles = missingRequiredRoles(installedRoles);
+      if (missingRoles.length > 0) {
+        wiringErrors.push(
+          `${agentDir}/agents: отсутствуют обязательные роли (${summarizeList(missingRoles)})`
+        );
       }
 
       const agentEd = join(agentDir, "rules", "enterprise-directives.md");
@@ -521,7 +614,7 @@ export function runDoctor(options) {
         checks.push({
           id,
           status: "pass",
-          detail: `Проводка агента корректна (${roleCount} ролей, правила и AGENTS.md проверены)`,
+          detail: `Проводка агента корректна (${installedRoles.length} определений ролей, обязательный набор полон; правила и AGENTS.md проверены)`,
         });
       }
     }
@@ -775,7 +868,68 @@ export function runDoctor(options) {
     }
   }
 
-  // 10. check 'provider-reachability' (только с --probe): сети и отчёта без флага нет.
+  // 10. check 'agents-drift': наши определения ролей против встроенных агентов OMP.
+  // Нет встроенного с таким именем → fork (наш собственный агент, часть pass);
+  // имя есть, содержимое разошлось → drift (WARN, имена перечисляются);
+  // тексты совпали → ок. Никогда не FAIL: расхождение бывает намеренным (форки,
+  // сужающие встроенную роль), а сам `omp` может отсутствовать.
+  {
+    const id = "agents-drift";
+    const agentsDir = join(harness, "agent", "agents");
+    const roleNames = roleNamesIn(agentsDir);
+
+    let builtinDir = null;
+    let tempDir = null;
+    let skipReason = null;
+
+    if (roleNames.length === 0) {
+      skipReason = `сравнивать нечего: каталог ${agentsDir} пуст или отсутствует`;
+    } else if (options.builtinAgentsDir) {
+      if (existsSync(options.builtinAgentsDir)) {
+        builtinDir = options.builtinAgentsDir;
+      } else {
+        skipReason = `каталог встроенных агентов не найден (${options.builtinAgentsDir}): сравнение не выполнялось`;
+      }
+    } else {
+      const unpacked = unpackBuiltinAgents();
+      if (unpacked.dir) {
+        builtinDir = unpacked.dir;
+        tempDir = unpacked.dir;
+      } else {
+        skipReason = `omp agents unpack недоступен (${unpacked.error}): сравнение не выполнялось`;
+      }
+    }
+
+    try {
+      if (!builtinDir) {
+        checks.push({ id, status: "skip", detail: skipReason });
+      } else {
+        const { forks, drift, matched } = compareAgentDefs(agentsDir, builtinDir);
+        const forkNote =
+          forks.length > 0
+            ? `. Наши агенты без встроенного аналога (${forks.length}): ${summarizeList(forks)}`
+            : "";
+
+        if (drift.length > 0) {
+          checks.push({
+            id,
+            status: "warn",
+            detail: `Дрейф от встроенных агентов OMP (${drift.length}): ${summarizeList(drift)} — наш файл перекрывает встроенного (first-wins)${forkNote}`,
+          });
+        } else {
+          checks.push({
+            id,
+            status: "pass",
+            detail: `Определения ролей не разошлись со встроенными OMP (совпало: ${matched.length}, форков: ${forks.length})${forkNote}`,
+          });
+        }
+      }
+    } finally {
+      if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  // 11. check 'provider-reachability' (только с --probe): сети и отчёта без флага нет.
   if (probeResults) {
     const id = "provider-reachability";
     const configYml = join(agentDir, "config.yml");
