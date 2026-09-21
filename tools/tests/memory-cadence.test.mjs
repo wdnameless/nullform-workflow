@@ -331,3 +331,24 @@ test("CLI: --json вывод выводит валидный JSON с ожида�
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("CLI: неверный --max-days или неизвестный флаг отклоняется с exit 2", () => {
+  const resInvalid = spawnSync(process.execPath, [CLI_PATH, "--max-days", "abc"], { encoding: "utf8" });
+  assert.equal(resInvalid.status, 2);
+  assert.ok(resInvalid.stderr.includes("--max-days"));
+
+  const resUnknown = spawnSync(process.execPath, [CLI_PATH, "--bad-flag"], { encoding: "utf8" });
+  assert.equal(resUnknown.status, 2);
+  assert.ok(resUnknown.stderr.includes("неизвестный параметр"));
+});
+
+test("CLI: --root переопределяет каталог состояния .workflow", () => {
+  const tmp = createTempDir();
+  try {
+    const proc = spawnSync(process.execPath, [CLI_PATH, "--root", tmp, "--record"], { encoding: "utf8" });
+    assert.equal(proc.status, 0);
+    assert.ok(existsSync(join(tmp, ".workflow", "memory-cadence.json")));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

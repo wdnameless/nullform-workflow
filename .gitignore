@@ -11,3 +11,10 @@ agent/config.yml
 .workflow/
 node_modules/
 tools/node_modules/
+_archive/
+skills-tmp/
+skills-archive/
+migration-backup/
+.archmap/
+archmap-demo/
+Microsoft/

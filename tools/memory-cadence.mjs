@@ -407,10 +407,16 @@ export function formatCadenceReport(status) {
  * @param {string[]} argv
  * @returns {object}
  */
+export const KNOWN_FLAGS = new Set([
+  "config", "state", "root", "max-days", "record", "check",
+  "status", "json", "help", "reviewer", "notes", "review-status"
+]);
+
 export function parseArgs(argv = []) {
   const options = {
     config: null,
     state: null,
+    root: null,
     maxDays: 7,
     record: false,
     check: false,
@@ -420,6 +426,7 @@ export function parseArgs(argv = []) {
     reviewer: null,
     notes: null,
     reviewStatus: "completed",
+    errors: [],
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -434,6 +441,10 @@ export function parseArgs(argv = []) {
       options.status = true;
     } else if (arg === "--json") {
       options.json = true;
+    } else if (arg === "--root") {
+      options.root = argv[++i];
+    } else if (arg.startsWith("--root=")) {
+      options.root = arg.slice("--root=".length);
     } else if (arg === "--config") {
       options.config = argv[++i];
     } else if (arg.startsWith("--config=")) {
@@ -442,14 +453,16 @@ export function parseArgs(argv = []) {
       options.state = argv[++i];
     } else if (arg.startsWith("--state=")) {
       options.state = arg.slice("--state=".length);
-    } else if (arg === "--max-days") {
-      options.maxDays = parseFloat(argv[++i]);
-    } else if (arg.startsWith("--max-days=")) {
-      options.maxDays = parseFloat(arg.slice("--max-days=".length));
-    } else if (arg === "--reviewer") {
-      options.reviewer = argv[++i];
-    } else if (arg.startsWith("--reviewer=")) {
-      options.reviewer = arg.slice("--reviewer=".length);
+    } else if (arg === "--max-days" || arg.startsWith("--max-days=")) {
+      const raw = arg.startsWith("--max-days=") ? arg.slice("--max-days=".length) : argv[++i];
+      const parsed = Number.parseFloat(raw);
+      if (!Number.isFinite(parsed) || parsed < 1) {
+        options.errors.push(`--max-days требует число >= 1 (получено: ${JSON.stringify(raw)})`);
+      } else {
+        options.maxDays = parsed;
+      }
+    } else if (arg === "--reviewer" || arg.startsWith("--reviewer=")) {
+      options.reviewer = arg.startsWith("--reviewer=") ? arg.slice("--reviewer=".length) : argv[++i];
     } else if (arg === "--notes") {
       options.notes = argv[++i];
     } else if (arg.startsWith("--notes=")) {
@@ -458,6 +471,11 @@ export function parseArgs(argv = []) {
       options.reviewStatus = argv[++i];
     } else if (arg.startsWith("--review-status=")) {
       options.reviewStatus = arg.slice("--review-status=".length);
+    } else if (arg.startsWith("--")) {
+      const name = arg.slice(2).split("=")[0];
+      if (!KNOWN_FLAGS.has(name)) {
+        options.errors.push(`неизвестный параметр: ${arg}`);
+      }
     }
   }
 
@@ -472,6 +490,12 @@ export function parseArgs(argv = []) {
 export function main(argv = process.argv.slice(2)) {
   const opts = parseArgs(argv);
 
+  if (opts.errors.length > 0) {
+    for (const err of opts.errors) {
+      process.stderr.write(`Ошибка: ${err}\n`);
+    }
+    return 2;
+  }
   if (opts.help) {
     const helpText = `memory-cadence.mjs — Контроль свежести ревизии памяти Hindsight
 
@@ -495,12 +519,13 @@ export function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const defaultStatePath = join(process.cwd(), ".workflow", "memory-cadence.json");
+  const baseDir = opts.root ? resolve(opts.root) : process.cwd();
+  const defaultStatePath = join(baseDir, ".workflow", "memory-cadence.json");
   const defaultConfigPath = join(homedir(), ".omp", "agent", "config.yml");
 
   const statePath = opts.state || defaultStatePath;
   const configPath = opts.config || defaultConfigPath;
-  const maxDays = isNaN(opts.maxDays) ? DEFAULT_MAX_DAYS : opts.maxDays;
+  const maxDays = Number.isNaN(opts.maxDays) ? DEFAULT_MAX_DAYS : opts.maxDays;
 
   if (opts.record) {
     const recordDetails = {
