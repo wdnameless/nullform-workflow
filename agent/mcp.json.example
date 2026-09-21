@@ -3,12 +3,6 @@
   "$comment": "OPTIONAL MCP fleet. None of these are required for the workflow: agent definitions, rules, skills, and tools all work without them. Keep a server only if you actually use it, and delete the rest — every stdio server is a process OMP must start on session boot. Blank values are removed by the installer; fill them via secrets.env.",
 
   "mcpServers": {
-    "ast-grep": {
-      "$comment": "Structural code search/rewrite. Install: npm i -g ast-grep-mcp (or point args at your own binary).",
-      "command": "cmd.exe",
-      "args": ["/c", "ast-grep-mcp"],
-      "env": {}
-    },
     "dap-debugger": {
       "$comment": "Interactive debugging (breakpoints, stepping). Pin the version: `@latest` forces a registry round-trip on every cold start and intermittently fails to connect.",
       "command": "cmd.exe",
@@ -46,6 +40,26 @@
       "$comment": "Chrome DevTools MCP server for browser inspection, console, network, performance, and automation.",
       "command": "cmd.exe",
       "args": ["/c", "npx", "-y", "chrome-devtools-mcp@1.9.0"],
+      "env": {}
+    },
+    "github": {
+      "$comment": "GitHub Official MCP Server (optional). Set GITHUB_PERSONAL_ACCESS_TOKEN to enable issues, PRs, and CI checks.",
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-github@2025.4.8"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "__GITHUB_PAT__"
+      }
+    },
+    "postgres": {
+      "$comment": "PostgreSQL MCP Server (optional, read-only DB inspection). Replace with your database connection URL.",
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-postgres@0.6.2", "postgresql://user:pass@localhost:5432/mydb"],
+      "env": {}
+    },
+    "docker": {
+      "$comment": "Docker MCP Server (optional, container & compose management). Community standard server: github.com/Swartdraak/Docker-MCP",
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@swartdraak/docker-mcp-server@2.0.0"],
       "env": {}
     },
 

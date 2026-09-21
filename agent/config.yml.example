@@ -70,6 +70,6 @@ theme:
   light: light
 setupVersion: 2
 memory:
-  backend: false
+  backend: "off"
 tools:
   format: native

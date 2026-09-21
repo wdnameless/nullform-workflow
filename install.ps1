@@ -321,7 +321,16 @@ if (-not $SkipMcp) {
     if (-not $memoryUrl)   { $drop += 'memory' }
     if (-not $crawlUrl)    { $drop += 'crawl4ai' }
     if (-not $context7Key) { $drop += 'context7' }
-    foreach ($d in $drop) { $mcp.mcpServers.PSObject.Properties.Remove($d) }
+    if (-not (Get-Command opencode-codebase-index-mcp -ErrorAction SilentlyContinue)) { $drop += 'codebase-index' }
+    if (-not (Get-Command codegraph -ErrorAction SilentlyContinue)) { $drop += 'codegraph' }
+    if (-not $cfgVals['GITHUB_PERSONAL_ACCESS_TOKEN']) { $drop += 'github' }
+    if (-not $cfgVals['POSTGRES_URL']) { $drop += 'postgres' }
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { $drop += 'docker' }
+    foreach ($d in $drop) {
+      if ($mcp.mcpServers.PSObject.Properties[$d]) {
+        $mcp.mcpServers.PSObject.Properties.Remove($d)
+      }
+    }
     WriteText $mcpTarget ($mcp | ConvertTo-Json -Depth 30)
     $kept = ($mcp.mcpServers.PSObject.Properties.Name) -join ', '
     Ok "mcp.json -> $mcpTarget (kept: $kept)"
@@ -418,6 +427,10 @@ if ($SkipPlugins) {
       $pluginsOk = 0
       $pluginsFailed = @()
       foreach ($plugin in $plugins) {
+        if ($plugin.name -eq 'cocoindex-code' -and -not (Get-Command ccc -ErrorAction SilentlyContinue)) {
+          Warn "plugin cocoindex-code skipped: 'ccc' binary not found on PATH. Run: uv tool install 'cocoindex-code[full]'"
+          continue
+        }
         # A native command that writes to stderr must not become a terminating
         # error here: one bad plugin may not abort the remaining installs.
         $prevEap = $ErrorActionPreference
