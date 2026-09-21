@@ -80,6 +80,7 @@ agent/
   agents/              8 определений ролей (orchestrator, designer, fixer, oracle, …)
   config.yml.example   настройки OMP (роли моделей, таймауты, флаги изоляции)
   models.yml.example   шаблон OpenAI-совместимого поставщика
+  plugins.json         манифест OMP-плагинов (14 записей; их ставит install.ps1)
   mcp.json.example     шаблон конфигурации MCP-серверов
 skills/                65+ специализированных навыков (SDD, архитектура, диагностика, дизайн)
 rules/
@@ -372,6 +373,7 @@ node tools/doctor.mjs --harness <harness-root> --agent-dir "$HOME/.omp/agent" --
 - Корректность структуры каталогов установки (`~/.omp/`, `~/.agents/`, наличие системных файлов и шаблонов).
 - Отсутствие поврежденных символических ссылок и мусорных файлов от прерванных сессий.
 - Доступность и валидность базовых конфигураций (`config.yml`, `models.yml`, `mcp.json`).
+- Наличие OMP-плагинов из манифеста `agent/plugins.json`: отсутствующий плагин даёт `WARN` (установка требует сети, поэтому она не блокирует по умолчанию); с ключом `--require-plugins` отсутствие плагина становится `FAIL`.
 
 **Проверка провайдеров (`--probe`, опционально, требует сети):**
 - `node tools/doctor.mjs --probe` опрашивает провайдеров из `models.yml` и проверяет, что каждая роль из `config.yml` указывает на достижимую модель. Недостижимый провайдер даёт `WARN` со списком затронутых ролей (никогда не `FAIL` — машина может быть офлайн).
@@ -381,6 +383,19 @@ node tools/doctor.mjs --harness <harness-root> --agent-dir "$HOME/.omp/agent" --
 **Интеграция с установщиком и ручной запуск:**
 - Скрипт `install.ps1` вызывает `doctor.mjs` в качестве финального шага. Если проверка выявляет ошибки, `install.ps1` **немедленно завершается аварийно (exit code 1)**, предотвращая работу в повреждённом или неполном окружении.
 - При падении установщика или после ручного изменения конфигурации запустите `node tools/doctor.mjs` для локализации причины сбоя и повторите установку после устранения замечаний.
+
+
+## Плагины OMP (`agent/plugins.json`)
+
+Каркас ставит набор сторонних OMP-плагинов, перечисленных в манифесте `agent/plugins.json` — **14 записей**: `@dietrichgebert/ponytail`, `@plannotator/pi-extension`, `oh-my-pi-plugin-grok-build`, `oh-my-pi-plugin-morph`, `omp-plugin-duplicate-detector`, `omp-typescript-complexity-evaluator`, `omp-url-pin`, `pi-bar`, `pi-gh-cli`, `pi-goal-x`, `pi-lens`, `pi-linter`, `pi-prompt-shelf`, `pi-qq`.
+
+- **Автоматически:** `install.ps1` ставит плагины из манифеста после распаковки каркаса. Ключ `-SkipPlugins` отключает этот шаг (офлайн-установка или ручная настройка).
+- **Вручную на новом ПК** (команда идемпотентна — повторный запуск ничего не ломает):
+  ```powershell
+  omp plugin install "<spec>"   # по одной строке манифеста agent/plugins.json
+  omp plugin list --json        # проверка: {npm:[{name,version,path,manifest,enabledFeatures,enabled}]}
+  ```
+- **Проверка доктором:** `node tools/doctor.mjs` сверяет установленное с манифестом. Отсутствующий плагин — `WARN`; с ключом `--require-plugins` — `FAIL` (жёсткий гейт). Сеть не требуется.
 
 
 ## Замеры ценности (benchmark)

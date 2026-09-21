@@ -13,6 +13,11 @@
   and is a no-op, because the base install already leaves Paseo untouched.
   Passing it together with -SetupPaseo fails with an error.
 
+  -SkipPlugins skips the plugin step. `agent\plugins.json` lists the OMP plugins
+  this harness expects; each `omp plugin install <spec>` is idempotent, so the
+  step is safe to re-run. A missing `omp` or a single failed plugin is reported
+  as a warning - plugins are an add-on, never a precondition for the install.
+
   Where things land (all OMP-native paths):
     <HarnessRoot>\agent\           agent definitions + tools (the "live tree")
     <HarnessRoot>\agent\agents\    role definitions
@@ -43,7 +48,8 @@ param(
   [switch]$NonInteractive,
   [switch]$SetupPaseo,
   [switch]$SkipPaseo,
-  [switch]$SkipMcp
+  [switch]$SkipMcp,
+  [switch]$SkipPlugins
 )
 
 $ErrorActionPreference = 'Stop'
@@ -184,6 +190,11 @@ WriteText "$agentDir\.harness-root" ("$HarnessRoot" + [Environment]::NewLine)
 Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
 
 Copy-Item "$PSScriptRoot\agent\oracle-priority.example.json" "$HarnessRoot\agent\" -Force
+# Plugin manifest: without it an installed harness has no record of which plugins
+# it expects, and doctor can only report "nothing declared".
+if (Test-Path "$PSScriptRoot\agent\plugins.json") {
+  Copy-Item "$PSScriptRoot\agent\plugins.json" "$HarnessRoot\agent\" -Force
+}
 # Copy rules directly into HarnessRoot/rules first. NEVER modify source files in PSScriptRoot!
 if (Test-Path "$PSScriptRoot\rules") {
   Copy-Item "$PSScriptRoot\rules\*" "$HarnessRoot\rules\" -Force -Recurse
@@ -383,7 +394,53 @@ if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
   Ok "prompt-cache baseline recorded"
 }
 
-# ---------- 9. Run install doctor ----------
+# ---------- 9. OMP plugins ----------
+# Manifest-driven (`agent\plugins.json`): every `omp plugin install <spec>` is
+# idempotent, and a single failure is reported without failing the harness
+# install — a plugin is an add-on, not a precondition for the harness.
+if ($SkipPlugins) {
+  Warn "plugins: skipped (-SkipPlugins)"
+} else {
+  $pluginsManifest = Join-Path $HarnessRoot "agent\plugins.json"
+  if (-not (Test-Path $pluginsManifest)) {
+    Warn "plugins: manifest not found ($pluginsManifest)"
+  } elseif (-not (Get-Command omp -ErrorAction SilentlyContinue)) {
+    Warn "omp not found in PATH - plugins not installed. Run 'omp plugin install <spec>' for each entry of $pluginsManifest"
+  } else {
+    $plugins = $null
+    try {
+      $plugins = @((Get-Content $pluginsManifest -Raw -Encoding UTF8 | ConvertFrom-Json).plugins | Where-Object { $_.spec })
+    } catch {
+      Warn "plugins: manifest not parsed ($($_.Exception.Message))"
+    }
+
+    if ($null -ne $plugins) {
+      $pluginsOk = 0
+      $pluginsFailed = @()
+      foreach ($plugin in $plugins) {
+        # A native command that writes to stderr must not become a terminating
+        # error here: one bad plugin may not abort the remaining installs.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+          & omp plugin install $plugin.spec --json | Out-Null
+          $pluginExit = $LASTEXITCODE
+        } finally {
+          $ErrorActionPreference = $prevEap
+        }
+        if ($pluginExit -eq 0) { $pluginsOk++ } else { $pluginsFailed += $plugin.name }
+      }
+      foreach ($name in $pluginsFailed) { Warn "plugin failed: $name" }
+      if ($pluginsFailed.Count -eq 0) {
+        Ok "plugins: $pluginsOk ok, 0 failed"
+      } else {
+        Warn "plugins: $pluginsOk ok, $($pluginsFailed.Count) failed"
+      }
+    }
+  }
+}
+
+# ---------- 10. Run install doctor ----------
 if (Test-Path "$HarnessRoot\tools\doctor.mjs") {
   $doctorOut = & node "$HarnessRoot\tools\doctor.mjs" --harness "$HarnessRoot" --agent-dir "$agentDir" --agents-home "$agentsHome" 2>&1
   $doctorExit = $LASTEXITCODE

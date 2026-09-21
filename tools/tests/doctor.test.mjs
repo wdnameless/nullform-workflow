@@ -976,3 +976,183 @@ test("agents-drift: реальный репозиторий — проверка
   assert.equal(status, 0);
 });
 
+/** Манифест плагинов харнесса (`agent/plugins.json`) для фикстур. */
+function writePluginsManifest(harness, plugins) {
+  writeFileSync(join(harness, "agent", "plugins.json"), JSON.stringify({ version: 1, plugins }, null, 2) + "\n", "utf8");
+}
+
+/**
+ * Подставной `omp` вместо реального CLI: тесты не зависят от того, что
+ * установлено на машине, и не ходят в сеть.
+ */
+function fakeOmp({ installed = [], listStdout = null, listStatus = 0, listStderr = "", doctorStatus = 0, doctorStderr = "", error = null } = {}) {
+  return (args) => {
+    if (args[1] === "list") {
+      if (error) return { status: null, stdout: "", stderr: "", error };
+      const stdout = listStdout ?? JSON.stringify({ npm: installed.map((name) => ({ name, version: "1.0.0", enabled: true })) });
+      return { status: listStatus, stdout, stderr: listStderr, error: null };
+    }
+    return { status: doctorStatus, stdout: "", stderr: doctorStderr, error: null };
+  };
+}
+
+/** runDoctor на моковом харнессе с подставным `omp` (встроенных агентов не распаковываем). */
+function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false } = {}) {
+  return runDoctor({
+    harness: join(tmp, "harness"),
+    agentDir: join(tmp, "agent-dir"),
+    agentsHome: join(tmp, "agents-home"),
+    mode: "repo",
+    builtinAgentsDir: join(tmp, "нет-встроенных"),
+    runOmp,
+    requirePlugins,
+  });
+}
+
+test("parseCliArgs: --require-plugins по умолчанию выключен", () => {
+  assert.equal(parseCliArgs(["--harness", "/tmp/h"]).requirePlugins, false);
+  assert.equal(parseCliArgs(["--harness", "/tmp/h", "--require-plugins"]).requirePlugins, true);
+});
+
+test("plugins: манифест есть, плагинов нет → WARN с именами и командой установки", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-missing-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-qq", spec: "pi-qq@^0.1.17" },
+      { name: "pi-lens", spec: "pi-lens@^4.2.1" },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [] }) });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "warn");
+    assert.match(check.detail, /Не установлены плагины \(2 из 2\): pi-qq, pi-lens/);
+    assert.match(check.detail, /omp plugin install pi-qq@\^0\.1\.17/);
+    assert.equal(result.summary.fail, 0);
+    assert.equal(result.ok, true, "без --require-plugins отсутствие плагинов не валит doctor");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: --require-plugins превращает недостающие плагины в FAIL", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-require-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-qq", spec: "pi-qq@^0.1.17" },
+      { name: "pi-lens", spec: "pi-lens@^4.2.1" },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq"] }), requirePlugins: true });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /pi-lens/);
+    assert.equal(result.requirePlugins, true);
+    assert.equal(result.summary.fail, 1);
+    assert.equal(result.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: без манифеста проверка молчит и не зовёт omp", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-nomanifest-"));
+  try {
+    createMockHarness(tmp);
+    let calls = 0;
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: () => {
+        calls++;
+        return { status: 0, stdout: '{"npm":[]}', stderr: "", error: null };
+      },
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "pass");
+    assert.match(check.detail, /Манифест плагинов отсутствует/);
+    assert.equal(calls, 0, "без манифеста omp не вызывается");
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: всё установлено, лишние перечислены как info (PASS)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-extra-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@^0.1.17" }]);
+
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq", "pi-extra"] }) });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "pass");
+    assert.match(check.detail, /1\/1 плагинов установлено/);
+    assert.match(check.detail, /Установлены сверх манифеста \(1\): pi-extra/);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: omp недоступен или вывод не разобран → WARN с причиной, не FAIL", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-noomp-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@^0.1.17" }]);
+
+    const enoent = Object.assign(new Error("spawn omp ENOENT"), { code: "ENOENT" });
+    const absent = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ error: enoent }), requirePlugins: true });
+    const absentCheck = checkOf(absent, "plugins");
+    assert.equal(absentCheck.status, "warn", "отсутствие omp — окружение, а не расхождение манифеста");
+    assert.match(absentCheck.detail, /omp не запущен/);
+    assert.equal(absent.ok, true);
+
+    const garbage = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ listStdout: "not json at all" }) });
+    const garbageCheck = checkOf(garbage, "plugins");
+    assert.equal(garbageCheck.status, "warn");
+    assert.match(garbageCheck.detail, /вывод omp plugin list не разобран/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: ненулевой код omp plugin doctor → WARN с хвостом вывода", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-health-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@^0.1.17" }]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({ installed: ["pi-qq"], doctorStatus: 1, doctorStderr: "boom: broken plugin\nsecond line" }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "warn");
+    assert.match(check.detail, /1\/1 плагинов установлено/);
+    assert.match(check.detail, /omp plugin doctor завершился с кодом 1: boom: broken plugin second line/);
+    assert.equal(result.ok, true, "health-чек плагинов не валит doctor");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: --require-plugins виден в CLI и в JSON-отчёте", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-cli-"));
+  try {
+    const harness = createMockHarness(tmp);
+
+    const { status, json } = runDoctorCli(["--harness", harness, "--require-plugins"]);
+
+    assert.equal(json.requirePlugins, true);
+    assert.equal(checkOf(json, "plugins").status, "pass");
+    assert.equal(json.summary.fail, 0);
+    assert.equal(status, 0);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+

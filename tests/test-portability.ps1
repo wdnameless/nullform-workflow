@@ -64,9 +64,18 @@ try {
     # --- TEST 1: Base installer in sandbox does not touch Paseo or repo source ---
     Write-Host "Running Test 1: Base installer in isolated sandbox..."
     $installScript = Join-Path $RepoRoot "install.ps1"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $FakeHome -SecretsFile $emptySecretsPath -SkipMcp -NonInteractive
-    $installExit = $LASTEXITCODE
+    # -SkipPlugins: the sandbox must never reach the network for plugins.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $installOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $FakeHome -SecretsFile $emptySecretsPath -SkipMcp -SkipPlugins -NonInteractive 2>&1
+        $installExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
     Assert ($installExit -eq 0) "Base installer failed with exit code $installExit"
+    $installText = ($installOutput | Out-String)
+    Assert ($installText -match 'plugins: skipped \(-SkipPlugins\)') "-SkipPlugins MUST report the skipped plugin step, got: $installText"
 
     # Assert NO repo source files were modified during installation
     foreach ($kv in $baselineHashes.GetEnumerator()) {
@@ -92,6 +101,7 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "tools\doctor.mjs")) "doctor tool must install"
     Assert (Test-Path (Join-Path $installedHarness "tools\sync-prune.mjs")) "sync-prune tool must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\oracle-priority.example.json")) "oracle priority example must install"
+    Assert (Test-Path (Join-Path $installedHarness "agent\plugins.json")) "plugin manifest must install with the harness (doctor reads it)"
 
     $oldHome = $env:HOME
     $oldUserProfile = $env:USERPROFILE
@@ -266,7 +276,7 @@ try {
     $fakeSecretsContent = "PROVIDER_BASE_URL=https://api.openai.com/v1`nPROVIDER_API_KEY=test-key-12345`nDEFAULT_MODEL_ID=gpt-4o"
     [System.IO.File]::WriteAllText($fakeSecretsPath, $fakeSecretsContent, [System.Text.Encoding]::UTF8)
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $FakeHome -SecretsFile $fakeSecretsPath -SkipMcp -NonInteractive -SetupPaseo
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $FakeHome -SecretsFile $fakeSecretsPath -SkipMcp -SkipPlugins -NonInteractive -SetupPaseo
     $installPaseoExit = $LASTEXITCODE
     Assert ($installPaseoExit -eq 0) "Installer with -SetupPaseo succeeded with exit 0"
     $paseoFinal = Get-Content -Raw -Encoding UTF8 $paseoConfigPath | ConvertFrom-Json
@@ -293,7 +303,7 @@ try {
     [System.IO.File]::WriteAllText($mcpPath, $mcpSentinel, [System.Text.Encoding]::UTF8)
     $mcpHashBefore = (Get-FileHash -Path $mcpPath -Algorithm SHA256).Hash
     $paseoHashBefore = (Get-FileHash -Path $paseoConfigPath -Algorithm SHA256).Hash
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $FakeHome -SecretsFile $emptySecretsPath -NonInteractive
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $FakeHome -SecretsFile $emptySecretsPath -SkipPlugins -NonInteractive
     $reinstallExit = $LASTEXITCODE
     Assert ($reinstallExit -eq 0) "Noninteractive reinstall failed with exit code $reinstallExit"
     Assert ((Get-FileHash -Path $mcpPath -Algorithm SHA256).Hash -eq $mcpHashBefore) "Existing mcp.json MUST remain byte-for-byte unchanged"
@@ -304,7 +314,7 @@ try {
     Write-Host "Running Test 10: Deprecated -SkipPaseo is a no-op and exits 0..."
     $skipPaseoHome = Join-Path $SandboxDir "userhome-skippaseo"
     New-Item -ItemType Directory -Path $skipPaseoHome -Force | Out-Null
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $skipPaseoHome -SecretsFile $emptySecretsPath -SkipPaseo -SkipMcp -NonInteractive
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $skipPaseoHome -SecretsFile $emptySecretsPath -SkipPaseo -SkipMcp -SkipPlugins -NonInteractive
     $skipPaseoExit = $LASTEXITCODE
     Assert ($skipPaseoExit -eq 0) "-SkipPaseo MUST still be accepted and exit 0 (backward compatibility), got $skipPaseoExit"
     Assert (-not (Test-Path (Join-Path $skipPaseoHome ".paseo\config.json"))) "-SkipPaseo run MUST NOT create or mutate .paseo\config.json"
@@ -313,7 +323,7 @@ try {
     # Contradictory flags must fail clearly instead of silently choosing a precedence.
     $conflictExit = 0
     try {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $skipPaseoHome -SecretsFile $emptySecretsPath -SkipPaseo -SetupPaseo -SkipMcp -NonInteractive
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $skipPaseoHome -SecretsFile $emptySecretsPath -SkipPaseo -SetupPaseo -SkipMcp -SkipPlugins -NonInteractive
         $conflictExit = $LASTEXITCODE
     } catch {
         $conflictExit = 1
@@ -328,7 +338,7 @@ try {
     Write-Host "Running Test 11: Clean -SetupPaseo install forwards model from secrets..."
     $cleanHome = Join-Path $SandboxDir "userhome-cleanpaseo"
     New-Item -ItemType Directory -Path $cleanHome -Force | Out-Null
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $cleanHome -SecretsFile $fakeSecretsPath -SkipMcp -NonInteractive -SetupPaseo
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -UserHome $cleanHome -SecretsFile $fakeSecretsPath -SkipMcp -SkipPlugins -NonInteractive -SetupPaseo
     $cleanExit = $LASTEXITCODE
     Assert ($cleanExit -eq 0) "Clean -SetupPaseo install MUST succeed when secrets.env provides DEFAULT_MODEL_ID, got exit $cleanExit"
     $cleanCfg = Get-Content -Raw -Encoding UTF8 (Join-Path $cleanHome ".paseo\config.json") | ConvertFrom-Json

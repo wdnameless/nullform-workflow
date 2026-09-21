@@ -239,6 +239,65 @@ function summarizeList(items, limit = 8) {
   return `${items.slice(0, limit).join(", ")} … (+${items.length - limit})`;
 }
 
+/** Хвост вывода команды для detail: последние непустые строки, обрезанные по длине. */
+function tailOf(text, lines = 2, limit = 300) {
+  const tail = (text || "").trim().split("\n").map((l) => l.trim()).filter(Boolean).slice(-lines).join(" ");
+  return tail.length > limit ? `${tail.slice(0, limit)}…` : tail;
+}
+
+/**
+ * Запуск `omp <args>` с таймаутом: плагины — аддон к харнессу, поэтому отказ
+ * команды возвращается результатом, а не исключением. Аргументы — фиксированные
+ * литералы вызывающего (`plugin list --json`, `plugin doctor`): shell не квотирует
+ * их сам, а `^` в диапазоне версии им бы съелся. `options.runOmp` — инъекция для
+ * тестов (как `builtinAgentsDir`), чтобы не звать реальный CLI.
+ */
+export function runOmp(args, { timeout = 60000 } = {}) {
+  // На Windows `omp` — это .cmd-шим, а Node ≥ 18.20 запускает .cmd только через
+  // shell (та же причина, что в unpackBuiltinAgents).
+  const res = spawnSync("omp", args, {
+    encoding: "utf8",
+    shell: process.platform === "win32",
+    timeout,
+  });
+  return {
+    status: res.status,
+    stdout: res.stdout || "",
+    stderr: res.stderr || "",
+    error: res.error || null,
+  };
+}
+
+/** Манифест плагинов `agent/plugins.json` → `[{name, spec}]`; без `spec` берётся имя. */
+function readPluginsManifest(path) {
+  const parsed = JSON.parse(stripBom(readFileSync(path, "utf8")));
+  const list = Array.isArray(parsed?.plugins) ? parsed.plugins : [];
+  return list
+    .filter((p) => p && typeof p.name === "string" && p.name)
+    .map((p) => ({ name: p.name, spec: typeof p.spec === "string" && p.spec ? p.spec : p.name }));
+}
+
+/** Имена установленных плагинов из вывода `omp plugin list --json`. */
+function installedPluginNames(stdout) {
+  const parsed = JSON.parse(stdout);
+  if (!Array.isArray(parsed?.npm)) throw new Error("в выводе нет массива npm");
+  return parsed.npm.map((p) => p && p.name).filter((n) => typeof n === "string" && n);
+}
+
+/** Причина WARN по результату `omp plugin doctor`; пустая строка — чисто. */
+function ompHealthNote(res) {
+  if (res.error) {
+    return res.error.code === "ETIMEDOUT"
+      ? "omp plugin doctor: таймаут (>60с)"
+      : `omp plugin doctor не запущен (${res.error.message})`;
+  }
+  if (res.status !== 0) {
+    const tail = tailOf(res.stderr || res.stdout);
+    return `omp plugin doctor завершился с кодом ${res.status}${tail ? `: ${tail}` : ""}`;
+  }
+  return "";
+}
+
 /**
  * Хвост detail для provider-reachability: роли, чьи провайдеры не описаны в models.yml
  * (проверить их нечем — это не WARN, но и не «доступно»), плюс заметки опроса.
@@ -306,6 +365,7 @@ export function parseCliArgs(args) {
   let json = false;
   let quiet = false;
   let probe = false;
+  let requirePlugins = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -323,6 +383,8 @@ export function parseCliArgs(args) {
       quiet = true;
     } else if (arg === "--probe") {
       probe = true;
+    } else if (arg === "--require-plugins") {
+      requirePlugins = true;
     } else if (arg === "-h" || arg === "--help") {
       return { help: true };
     }
@@ -340,6 +402,7 @@ export function parseCliArgs(args) {
     json,
     quiet,
     probe,
+    requirePlugins,
     help: false,
   };
 }
@@ -807,7 +870,100 @@ export function runDoctor(options) {
     }
   }
 
-  // 9. check 'orphan-files': файлы каталогов манифеста, которых нет в репозитории.
+  // 9. check 'plugins': манифест `agent/plugins.json` против `omp plugin list --json`.
+  // Нет манифеста — плагины не заявлены, проверять нечего (pass). Нет `omp` или
+  // список не разобран — WARN с причиной: харнесс без плагинов остаётся рабочим.
+  // Недостающие плагины — тоже WARN, и только `--require-plugins` делает их FAIL.
+  {
+    const id = "plugins";
+    const manifestPath = join(harness, "agent", "plugins.json");
+    const omp = options.runOmp || runOmp;
+
+    let declared = null;
+    let manifestError = null;
+    if (!existsSync(manifestPath)) {
+      checks.push({
+        id,
+        status: "pass",
+        detail: "Манифест плагинов отсутствует (agent/plugins.json): заявленных плагинов нет",
+      });
+    } else {
+      try {
+        declared = readPluginsManifest(manifestPath);
+      } catch (err) {
+        manifestError = err.message;
+      }
+
+      if (manifestError) {
+        checks.push({
+          id,
+          status: "warn",
+          detail: `Манифест плагинов не прочитан (${manifestPath}): ${manifestError}`,
+        });
+      } else if (declared.length === 0) {
+        checks.push({
+          id,
+          status: "pass",
+          detail: "Манифест плагинов пуст: устанавливать нечего",
+        });
+      } else {
+        const listed = omp(["plugin", "list", "--json"]);
+        let installed = null;
+        let listError = null;
+
+        if (listed.error) {
+          listError = listed.error.code === "ETIMEDOUT" ? "таймаут команды" : `omp не запущен (${listed.error.message})`;
+        } else if (listed.status !== 0) {
+          const tail = tailOf(listed.stderr || listed.stdout);
+          const absent = /not recognized|не является внутренней|command not found|no such file/i.test(listed.stderr || "");
+          listError = absent
+            ? "omp не найден в PATH"
+            : `omp plugin list завершился с кодом ${listed.status}${tail ? `: ${tail}` : ""}`;
+        } else {
+          try {
+            installed = installedPluginNames(listed.stdout);
+          } catch (err) {
+            listError = `вывод omp plugin list не разобран: ${err.message}`;
+          }
+        }
+
+        if (listError) {
+          checks.push({
+            id,
+            status: "warn",
+            detail: `Не удалось получить список установленных плагинов: ${listError}. Проверьте вручную: omp plugin list --json`,
+          });
+        } else {
+          const missing = declared.filter((p) => !installed.includes(p.name));
+          const extra = installed.filter((n) => !declared.some((p) => p.name === n));
+
+          let status = "pass";
+          let detail = `${declared.length}/${declared.length} плагинов установлено`;
+          if (missing.length > 0) {
+            status = options.requirePlugins ? "fail" : "warn";
+            const hints = summarizeList(missing.map((p) => `omp plugin install ${p.spec}`));
+            detail = `Не установлены плагины (${missing.length} из ${declared.length}): ${summarizeList(missing.map((p) => p.name))}. Установить: ${hints}`;
+          }
+          if (extra.length > 0) {
+            detail += ` Установлены сверх манифеста (${extra.length}): ${summarizeList(extra)}`;
+          }
+
+          // Необязательный health-чек самих плагинов: его ненулевой код — WARN
+          // с хвостом вывода, но никогда не FAIL (и не запускается, если `omp`
+          // уже не ответил выше — иначе одна причина дала бы два предупреждения).
+          const healthNote = ompHealthNote(omp(["plugin", "doctor"]));
+          if (healthNote) {
+            detail += ` ${healthNote}`;
+            if (status === "pass") status = "warn";
+          }
+
+          checks.push({ id, status, detail });
+        }
+      }
+    }
+  }
+
+  // 10. check 'orphan-files': файлы каталогов манифеста, которых нет в репозитории.
   // tools/ → FAIL (инструмент вне дистрибутива ломает установку у других),
   // прочие каталоги → WARN. Область обхода общая с `sync.ps1 -Prune` (sync-prune.mjs).
   {
@@ -868,7 +1024,7 @@ export function runDoctor(options) {
     }
   }
 
-  // 10. check 'agents-drift': наши определения ролей против встроенных агентов OMP.
+  // 11. check 'agents-drift': наши определения ролей против встроенных агентов OMP.
   // Нет встроенного с таким именем → fork (наш собственный агент, часть pass);
   // имя есть, содержимое разошлось → drift (WARN, имена перечисляются);
   // тексты совпали → ок. Никогда не FAIL: расхождение бывает намеренным (форки,
@@ -929,7 +1085,7 @@ export function runDoctor(options) {
     }
   }
 
-  // 11. check 'provider-reachability' (только с --probe): сети и отчёта без флага нет.
+  // 12. check 'provider-reachability' (только с --probe): сети и отчёта без флага нет.
   if (probeResults) {
     const id = "provider-reachability";
     const configYml = join(agentDir, "config.yml");
@@ -999,6 +1155,7 @@ export function runDoctor(options) {
     mode,
     harness,
     agentDir,
+    requirePlugins: options.requirePlugins === true,
     checks,
     summary,
     ok,
@@ -1030,10 +1187,12 @@ export function printHumanReport(result, quiet) {
 export async function main(argv = process.argv.slice(2)) {
   const opts = parseCliArgs(argv);
   if (opts.help) {
-    console.log(`Использование: node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet] [--probe]
+    console.log(`Использование: node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet] [--probe] [--require-plugins]
 
   --probe  опросить провайдеров из models.yml (GET {baseUrl}/models) и сопоставить
            с ролями config.yml; недостижимые дают WARN. Требует сети.
+  --require-plugins  отсутствие плагинов из agent/plugins.json делает doctor
+           FAIL (по умолчанию это WARN: плагины — аддон, а не условие работы).
   --json   машинный отчёт
   --quiet  только итоговая строка`);
     return 0;

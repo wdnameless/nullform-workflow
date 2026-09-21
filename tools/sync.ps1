@@ -99,6 +99,7 @@ $Manifest = @(
   'paseo\setup-paseo.ps1',
   'templates\design\DESIGN.md',
   'agent\oracle-priority.example.json',
+  'agent\plugins.json',
   'templates\design\examples\good\README.md',
   'templates\design\examples\bad\README.md',
   'templates\ci\workflow-gate.yml',
