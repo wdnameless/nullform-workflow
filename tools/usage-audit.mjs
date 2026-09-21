@@ -41,6 +41,7 @@ export const KNOWN_PLUGIN_TOOLS = {
   "@plannotator/pi-extension": ["plannotator"],
   "pi-linter": ["linter", "/linter"],
   "oh-my-pi-plugin-grok-build": ["grok-build"],
+  "cocoindex-code": ["ccc", "cocoindex"],
 };
 
 /**

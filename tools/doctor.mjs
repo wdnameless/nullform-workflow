@@ -279,11 +279,27 @@ function readPluginsManifest(path) {
     .map((p) => ({ name: p.name, spec: typeof p.spec === "string" && p.spec ? p.spec : p.name }));
 }
 
-/** Имена установленных плагинов из вывода `omp plugin list --json`. */
+/** Имена установленных плагинов из вывода `omp plugin list --json` (npm и marketplace). */
 function installedPluginNames(stdout) {
   const parsed = JSON.parse(stdout);
-  if (!Array.isArray(parsed?.npm)) throw new Error("в выводе нет массива npm");
-  return parsed.npm.map((p) => p && p.name).filter((n) => typeof n === "string" && n);
+  const names = new Set();
+  if (Array.isArray(parsed?.npm)) {
+    for (const p of parsed.npm) {
+      if (p && typeof p.name === "string" && p.name) names.add(p.name);
+    }
+  }
+  if (Array.isArray(parsed?.marketplace)) {
+    for (const p of parsed.marketplace) {
+      if (p && typeof p.id === "string") {
+        const id = p.id.includes("@") ? p.id.split("@")[0] : p.id;
+        names.add(id);
+      }
+    }
+  }
+  if (names.size === 0 && !Array.isArray(parsed?.npm) && !Array.isArray(parsed?.marketplace)) {
+    throw new Error("в выводе нет массива npm или marketplace");
+  }
+  return [...names];
 }
 
 /** Причина WARN по результату `omp plugin doctor`; пустая строка — чисто. */

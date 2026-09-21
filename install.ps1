@@ -423,6 +423,9 @@ if ($SkipPlugins) {
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
+          if ($plugin.marketplace) {
+            & omp plugin marketplace add $plugin.marketplace | Out-Null
+          }
           & omp plugin install $plugin.spec --json | Out-Null
           $pluginExit = $LASTEXITCODE
         } finally {
