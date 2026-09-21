@@ -78,6 +78,11 @@ function requiredFor(tier) {
 function statePath(root) { return join(root, DIR, FILE); }
 function budgetsPath(root) { return join(root, DIR, BUDGETS_FILE); }
 
+/** Plain object guard: `null`, arrays and scalars are not task state. */
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function loadBudgets(root) {
   const p = budgetsPath(root);
   if (!existsSync(p)) return { ...DEFAULT_BUDGETS };
@@ -97,7 +102,14 @@ function loadBudgets(root) {
 function load(root) {
   const p = statePath(root);
   if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, "")); }
+  try {
+    const parsed = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
+    // Corrupt/foreign state (not an object, unknown tier) means "no task", not
+    // "a task with no requirements": otherwise `check` reports COMPLETE on `{}`
+    // and `status` dies with a TypeError on the missing artifacts map.
+    if (!isPlainObject(parsed) || !LADDER.includes(parsed.tier)) return null;
+    return { ...parsed, artifacts: isPlainObject(parsed.artifacts) ? parsed.artifacts : {} };
+  }
   catch { return null; }
 }
 
@@ -125,7 +137,9 @@ function loadMetrics(root) {
   const out = [];
   for (const line of lines) {
     try {
-      out.push(JSON.parse(line));
+      const parsed = JSON.parse(line);
+      // "null" and scalars parse fine and then crash the aggregation.
+      if (isPlainObject(parsed)) out.push(parsed);
     } catch {
       // ignore malformed line
     }
@@ -499,6 +513,13 @@ function cmdStatus(root) {
 function cmdClose(root, flags) {
   const st = load(root);
   if (!st) { console.error("workflow: no task state."); return 2; }
+
+  // Closing twice appends a second metric for the same task: `metrics` then counts
+  // one task as two and invents a duration between the two closes.
+  if (st.status !== "open") {
+    console.error(`workflow: task '${st.task}' is '${st.status}' — nothing to close. Run \`start\` for a new task.`);
+    return 2;
+  }
 
   if (flags.auto || st.auto) {
     if (flags["diff-lines"] !== undefined) {

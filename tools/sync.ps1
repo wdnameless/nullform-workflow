@@ -12,6 +12,7 @@
   Direction:
     -Promote   HarnessRoot -> workflow-repo   (capture local work into git)
     -Deploy    workflow-repo -> HarnessRoot   (push repo state to the install)
+    -Prune     list harness files absent from the repo; delete only with -Confirm
     (default: -Check, report-only, exits 1 on drift)
 
   Line endings are normalised to LF before comparison, because Windows editors
@@ -21,12 +22,16 @@
   powershell -File sync.ps1                  # report drift
   powershell -File sync.ps1 -Promote         # live -> repo
   powershell -File sync.ps1 -Deploy          # repo -> live
+  powershell -File sync.ps1 -Prune           # dry-run: what is not in the repo
+  powershell -File sync.ps1 -Prune -Confirm  # actually delete those files
 #>
 param(
   [string]$HarnessRoot = (Join-Path $HOME 'omp-workflow'),
   [string]$AgentsRoot  = (Join-Path $HOME '.agents'),
   [switch]$Promote,
   [switch]$Deploy,
+  [switch]$Prune,
+  [switch]$Confirm,
   [switch]$Force,
   [string]$Only = '',
   [switch]$Quiet
@@ -52,6 +57,7 @@ function Resolve-RepoRoot {
 $RepoRoot = Resolve-RepoRoot
 
 if ($Promote -and $Deploy) { Write-Error "Choose one of -Promote or -Deploy."; exit 2 }
+if ($Prune -and ($Promote -or $Deploy)) { Write-Error "Choose one of -Prune, -Promote or -Deploy."; exit 2 }
 
 # Manifest entries: "relative-path<tab>live-root"
 # Most files live under the harness root; rules are installed into ~/.agents.
@@ -88,6 +94,7 @@ $Manifest = @(
   'tools\benchmark.mjs',
   'tools\usage-audit.mjs',
   'tools\doctor.mjs',
+  'tools\sync-prune.mjs',
   'tools\audit.ps1',
   'tools\sync.ps1',
   'core\PORTABLE.md',
@@ -115,6 +122,32 @@ function Write-Normalized([string]$Path, [string]$Text) {
   $dir = Split-Path -Parent $Path
   if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
   [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
+}
+
+# ---------- -Prune: files the harness has and the repo does not ----------
+# The candidate list comes from tools\sync-prune.mjs - the same module doctor.mjs
+# uses for its `orphan-files` check, so the CLI and the diagnostic cannot drift
+# apart. Dry-run by default; only -Confirm deletes. Config/session files and
+# .prompt-lint/.workflow/.archmap/node_modules/worktrees are out of scope by
+# construction (see the module header).
+if ($Prune) {
+  $pruneScript = Join-Path $PSScriptRoot 'sync-prune.mjs'
+  if (-not (Test-Path $pruneScript)) {
+    Write-Error "sync-prune.mjs not found next to sync.ps1 ($pruneScript). Deploy tools\sync-prune.mjs first."
+    exit 2
+  }
+  $pruneArgs = @($pruneScript, '--harness', $HarnessRoot, '--repo', $RepoRoot)
+  if ($Confirm) { $pruneArgs += '--delete' }
+  & node @pruneArgs
+  $pruneExit = $LASTEXITCODE
+  if ($pruneExit -ne 0) {
+    Write-Host "sync: prune failed (exit $pruneExit)" -ForegroundColor Red
+    exit $pruneExit
+  }
+  if (-not $Confirm) {
+    Write-Host "sync: dry-run only - nothing was deleted. Re-run with '-Prune -Confirm' to delete." -ForegroundColor Yellow
+  }
+  exit 0
 }
 
 $drift = @()

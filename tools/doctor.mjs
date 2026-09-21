@@ -3,12 +3,22 @@
  * tools/doctor.mjs — Проверка целостности окружения и установки harness.
  *
  * Использование:
- *   node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet]
+ *   node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet] [--probe]
  *
  * Режимы:
  *   installed — когда <agent-dir>/.harness-root существует и указывает на текущий harness.
  *   repo — когда <agent-dir>/.harness-root отсутствует или указывает на другой путь.
  *          В режиме repo проверки agent-dir деградируют до статуса WARN с явным примечанием.
+ *
+ * Проверки:
+ *   node · harness-files · tools-syntax · tools-smoke · agent-wiring · skills ·
+ *   prompt-baseline · configs · orphan-files · provider-reachability (только с --probe).
+ *
+ * --probe (opt-in, сеть):
+ *   Опрашивает GET {baseUrl}/models у каждого провайдера из models.yml и сопоставляет
+ *   роли из config.yml с результатом. Недостижимый провайдер и роли, указывающие на
+ *   его модели, дают WARN (никогда FAIL: машина может быть офлайн). Без --probe
+ *   сеть не трогается и проверки provider-reachability в отчёте нет.
  *
  * Коды возврата:
  *   0 — ok (fail === 0, допустимы pass, warn, skip)
@@ -21,6 +31,9 @@ import { join, resolve, dirname, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { findPruneCandidates } from "./sync-prune.mjs";
+import { cleanYamlValue, parseModelsYaml, probeProvider } from "./oracle-model.mjs";
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -43,6 +56,7 @@ export const CORE_TOOLS = [
   "usage-audit.mjs",
   "auto-review.mjs",
   "doctor.mjs",
+  "sync-prune.mjs",
   "audit.ps1",
   "sync.ps1",
 ];
@@ -56,6 +70,129 @@ export function stripBom(text) {
   return text.replace(/^\uFEFF/, "");
 }
 
+/** Маркеры, отличающие репозиторий от живого харнесса (см. sync.ps1 Resolve-RepoRoot). */
+const REPO_MARKERS = ["install.ps1", join("agent", "models.yml.example")];
+
+/** true — каталог является дистрибутивным репозиторием (а не живым харнессом). */
+export function isRepoTree(dir) {
+  return REPO_MARKERS.every((marker) => existsSync(join(dir, marker)));
+}
+
+/** Клон репозитория внутри харнесса (`<harness>/workflow-repo`) — цель сравнения для orphan-files. */
+export function discoverRepoClone(harness) {
+  const candidate = join(harness, "workflow-repo");
+  return isRepoTree(candidate) ? candidate : null;
+}
+
+/** Провайдер модели вида `provider/model:tag` → `provider`; без разделителя — null. */
+function providerOfModel(model) {
+  if (!model || !model.includes("/")) return null;
+  return model.slice(0, model.indexOf("/"));
+}
+
+/**
+ * Роли модели из config.yml: секция `modelRoles:` и `task.agentModelOverrides:`.
+ * @returns {Array<{role: string, section: string, model: string}>}
+ */
+export function parseRoleModels(configContent) {
+  const roles = [];
+  if (!configContent) return roles;
+
+  let section = null;
+  let inOverrides = false;
+
+  for (const line of stripBom(String(configContent)).split(/\r?\n/)) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+
+    const topMatch = line.match(/^([A-Za-z0-9_-]+):\s*$/);
+    if (topMatch) {
+      section = topMatch[1];
+      inOverrides = false;
+      continue;
+    }
+
+    const childMatch = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
+    if (childMatch) {
+      inOverrides = section === "task" && childMatch[1] === "agentModelOverrides";
+      continue;
+    }
+
+    if (section === "modelRoles") {
+      const m = line.match(/^ {2}([A-Za-z0-9_.-]+):\s*(\S.*)$/);
+      if (m) roles.push({ role: m[1], section: "modelRoles", model: cleanYamlValue(m[2]) });
+    } else if (inOverrides) {
+      const m = line.match(/^ {4}([A-Za-z0-9_.-]+):\s*(\S.*)$/);
+      if (m) roles.push({ role: m[1], section: "agentModelOverrides", model: cleanYamlValue(m[2]) });
+    }
+  }
+
+  return roles;
+}
+
+/** Список для detail: длинные перечни обрезаются, чтобы отчёт оставался читаемым. */
+function summarizeList(items, limit = 8) {
+  if (items.length <= limit) return items.join(", ");
+  return `${items.slice(0, limit).join(", ")} … (+${items.length - limit})`;
+}
+
+/**
+ * Хвост detail для provider-reachability: роли, чьи провайдеры не описаны в models.yml
+ * (проверить их нечем — это не WARN, но и не «доступно»), плюс заметки опроса.
+ */
+function unprobedNote(unprobedRoles, notes = []) {
+  const parts = [];
+  if (unprobedRoles.length > 0) {
+    const byProvider = new Map();
+    for (const r of unprobedRoles) {
+      const provider = providerOfModel(r.model);
+      if (!byProvider.has(provider)) byProvider.set(provider, []);
+      byProvider.get(provider).push(r.role);
+    }
+    const groups = [...byProvider].map(([provider, roleNames]) => `${provider} (${roleNames.join(", ")})`);
+    parts.push(`роли вне models.yml не проверялись: ${summarizeList(groups)}`);
+  }
+  for (const note of notes) parts.push(note);
+  return parts.length > 0 ? `. ${parts.join("; ")}` : "";
+}
+
+/**
+ * Опрос провайдеров из models.yml (сеть, opt-in): для каждого провайдера с baseUrl
+ * выполняется GET {baseUrl}/models. Ключи в отчёт не попадают.
+ *
+ * @returns {Promise<{providers: Object<string, {reachable: boolean|null, error: string|null}>, notes: string[]}>}
+ */
+export async function probeProviders(modelsYamlPath) {
+  const providers = {};
+  const notes = [];
+
+  if (!existsSync(modelsYamlPath)) {
+    return { providers, notes: [`models.yml не найден: ${modelsYamlPath}`] };
+  }
+
+  let parsed;
+  try {
+    parsed = parseModelsYaml(stripBom(readFileSync(modelsYamlPath, "utf8")));
+  } catch (err) {
+    return { providers, notes: [`models.yml не разобран: ${err.message}`] };
+  }
+
+  for (const name of Object.keys(parsed.providers)) {
+    const prov = parsed.providers[name];
+    if (!prov.baseUrl) {
+      providers[name] = { reachable: null, error: "baseUrl не задан" };
+      continue;
+    }
+
+    const res = await probeProvider(prov);
+    providers[name] = { reachable: !res.error, error: res.error || null };
+    if (res.error) {
+      notes.push(`Провайдер ${name} недостижим: ${res.error}`);
+    }
+  }
+
+  return { providers, notes };
+}
+
 
 export function parseCliArgs(args) {
   let harness = null;
@@ -64,6 +201,7 @@ export function parseCliArgs(args) {
   let mode = null;
   let json = false;
   let quiet = false;
+  let probe = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -79,6 +217,8 @@ export function parseCliArgs(args) {
       json = true;
     } else if (arg === "--quiet") {
       quiet = true;
+    } else if (arg === "--probe") {
+      probe = true;
     } else if (arg === "-h" || arg === "--help") {
       return { help: true };
     }
@@ -95,12 +235,15 @@ export function parseCliArgs(args) {
     mode,
     json,
     quiet,
+    probe,
     help: false,
   };
 }
 
 export function runDoctor(options) {
   const { harness, agentDir, agentsHome, mode: requestedMode } = options;
+  // Результат сетевого опроса приходит из main() (--probe); без него проверки нет.
+  const probeResults = options.probeResults || null;
 
   const harnessRootFile = join(agentDir, ".harness-root");
   let hasHarnessRoot = false;
@@ -571,6 +714,123 @@ export function runDoctor(options) {
     }
   }
 
+  // 9. check 'orphan-files': файлы каталогов манифеста, которых нет в репозитории.
+  // tools/ → FAIL (инструмент вне дистрибутива ломает установку у других),
+  // прочие каталоги → WARN. Область обхода общая с `sync.ps1 -Prune` (sync-prune.mjs).
+  {
+    const id = "orphan-files";
+    if (isRepoTree(harness)) {
+      checks.push({
+        id,
+        status: "skip",
+        detail: "Харнесс является дистрибутивным репозиторием: файлов вне репозитория быть не может",
+      });
+    } else {
+      const repoClone = discoverRepoClone(harness);
+      if (!repoClone) {
+        checks.push({
+          id,
+          status: "skip",
+          detail: `Клон репозитория не обнаружен (${join(harness, "workflow-repo")}): сравнение не выполняется`,
+        });
+      } else {
+        let orphans = [];
+        let readError = null;
+        try {
+          orphans = findPruneCandidates({ harness, repo: repoClone });
+        } catch (err) {
+          readError = err.message;
+        }
+
+        if (readError) {
+          checks.push({
+            id,
+            status: "warn",
+            detail: `Не удалось сравнить харнесс с репозиторием: ${readError}`,
+          });
+        } else if (orphans.length === 0) {
+          checks.push({
+            id,
+            status: "pass",
+            detail: `Все файлы каталогов манифеста присутствуют в репозитории (${repoClone})`,
+          });
+        } else {
+          const toolOrphans = orphans.filter((rel) => rel.startsWith("tools/"));
+          const otherOrphans = orphans.filter((rel) => !rel.startsWith("tools/"));
+          const severity = toolOrphans.length > 0 ? "fail" : "warn";
+          const parts = [];
+          if (toolOrphans.length > 0) {
+            parts.push(`tools/ (${toolOrphans.length}): ${summarizeList(toolOrphans)}`);
+          }
+          if (otherOrphans.length > 0) {
+            parts.push(`прочие (${otherOrphans.length}): ${summarizeList(otherOrphans)}`);
+          }
+          checks.push({
+            id,
+            status: severity,
+            detail: `${orphans.length} файл(ов) харнесса отсутствуют в репозитории — ${parts.join("; ")}`,
+          });
+        }
+      }
+    }
+  }
+
+  // 10. check 'provider-reachability' (только с --probe): сети и отчёта без флага нет.
+  if (probeResults) {
+    const id = "provider-reachability";
+    const configYml = join(agentDir, "config.yml");
+    const providerNames = Object.keys(probeResults.providers);
+    const unreachable = providerNames.filter((n) => probeResults.providers[n].reachable === false);
+
+    if (!existsSync(configYml)) {
+      checks.push({
+        id,
+        status: "skip",
+        detail: `config.yml не найден (${configYml}): роли не сопоставлялись с провайдерами`,
+      });
+    } else {
+      let roles = [];
+      try {
+        roles = parseRoleModels(readFileSync(configYml, "utf8"));
+      } catch (err) {
+        roles = [];
+        checks.push({
+          id,
+          status: "warn",
+          detail: `config.yml не прочитан (${err.message}): роли не сопоставлялись с провайдерами`,
+        });
+      }
+
+      const blockedRoles = roles.filter((r) => unreachable.includes(providerOfModel(r.model)));
+      const unprobedRoles = roles.filter((r) => {
+        const provider = providerOfModel(r.model);
+        return provider !== null && !providerNames.includes(provider);
+      });
+
+      if (unreachable.length === 0) {
+        const reachableList = providerNames.filter((n) => probeResults.providers[n].reachable === true);
+        checks.push({
+          id,
+          status: "pass",
+          detail: `Провайдеры отвечают (${reachableList.length > 0 ? reachableList.join(", ") : "нет настроенных"})${unprobedNote(unprobedRoles, probeResults.notes)}`,
+        });
+      } else {
+        const unreachableDetail = unreachable
+          .map((n) => `${n} (${probeResults.providers[n].error})`)
+          .join("; ");
+        const rolesDetail =
+          blockedRoles.length > 0
+            ? blockedRoles.map((r) => `${r.role} [${r.model}]`).join(", ")
+            : "нет";
+        checks.push({
+          id,
+          status: "warn",
+          detail: `Недостижимые провайдеры: ${unreachableDetail}. Роли, указывающие на их модели: ${rolesDetail}${unprobedNote(unprobedRoles, probeResults.notes)}`,
+        });
+      }
+    }
+  }
+
   // Summary calculation
   const summary = {
     pass: checks.filter((c) => c.status === "pass").length,
@@ -613,14 +873,20 @@ export function printHumanReport(result, quiet) {
   console.log(summaryStr);
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   const opts = parseCliArgs(argv);
   if (opts.help) {
-    console.log(`Использование: node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet]`);
-    process.exit(0);
+    console.log(`Использование: node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet] [--probe]
+
+  --probe  опросить провайдеров из models.yml (GET {baseUrl}/models) и сопоставить
+           с ролями config.yml; недостижимые дают WARN. Требует сети.
+  --json   машинный отчёт
+  --quiet  только итоговая строка`);
+    return 0;
   }
 
-  const result = runDoctor(opts);
+  const probeResults = opts.probe ? await probeProviders(join(opts.agentDir, "models.yml")) : null;
+  const result = runDoctor({ ...opts, probeResults });
 
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -628,9 +894,14 @@ export function main(argv = process.argv.slice(2)) {
     printHumanReport(result, opts.quiet);
   }
 
-  process.exit(result.ok ? 0 : 1);
+  return result.ok ? 0 : 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main();
+  main()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      process.stderr.write(`doctor: необработанная ошибка: ${err.message}\n`);
+      process.exit(2);
+    });
 }

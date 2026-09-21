@@ -64,21 +64,21 @@ export function parseArgs(argv) {
 
 /**
  * Strip YAML comments and clean string values.
+ * Exported: doctor.mjs reuses it for config.yml role values (single convention).
+ *
+ * Порядок важен: сначала закрывающая кавычка, потом комментарий. Иначе
+ * `oracle: "model" # why` вернёт значение вместе с кавычками, а
+ * `apiKey: "a#b"` потеряет часть секрета.
  */
-function cleanYamlVal(val) {
+export function cleanYamlValue(val) {
   if (val === undefined || val === null) return "";
-  let v = String(val).trim();
-  // Strip inline comments if not in quotes
-  if (v.startsWith('"') && v.endsWith('"') && v.length >= 2) {
-    return v.slice(1, -1);
-  }
-  if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
-    return v.slice(1, -1);
+  const v = String(val).trim();
+  if (v.length >= 2 && (v[0] === '"' || v[0] === "'")) {
+    const close = v.indexOf(v[0], 1);
+    if (close !== -1) return v.slice(1, close);
   }
   const hashIdx = v.indexOf("#");
-  if (hashIdx !== -1) {
-    v = v.slice(0, hashIdx).trim();
-  }
+  if (hashIdx !== -1) return v.slice(0, hashIdx).trim();
   return v;
 }
 
@@ -135,7 +135,7 @@ export function parseModelsYaml(content) {
     // Check baseUrl
     const baseMatch = rawLine.match(/^\s{4}baseUrl:\s*(.+)$/);
     if (baseMatch) {
-      currentProvider.baseUrl = cleanYamlVal(baseMatch[1]);
+      currentProvider.baseUrl = cleanYamlValue(baseMatch[1]);
       currentField = "baseUrl";
       continue;
     }
@@ -143,7 +143,7 @@ export function parseModelsYaml(content) {
     // Check apiKey
     const keyMatch = rawLine.match(/^\s{4}apiKey:\s*(.+)$/);
     if (keyMatch) {
-      currentProvider.apiKey = cleanYamlVal(keyMatch[1]);
+      currentProvider.apiKey = cleanYamlValue(keyMatch[1]);
       currentField = "apiKey";
       continue;
     }
@@ -159,7 +159,7 @@ export function parseModelsYaml(content) {
     if (currentField === "discovery" && rawLine.match(/^\s{6}type:\s*(.+)$/)) {
       const typeMatch = rawLine.match(/^\s{6}type:\s*(.+)$/);
       currentProvider.discovery = currentProvider.discovery || {};
-      currentProvider.discovery.type = cleanYamlVal(typeMatch[1]);
+      currentProvider.discovery.type = cleanYamlValue(typeMatch[1]);
       continue;
     }
 
@@ -173,7 +173,7 @@ export function parseModelsYaml(content) {
     // Declared model item: "- id: <modelId>"
     const modelIdMatch = rawLine.match(/^\s*(?:-\s+id:|\s{6}-\s+id:)\s*(.+)$/);
     if (modelIdMatch) {
-      const id = cleanYamlVal(modelIdMatch[1]);
+      const id = cleanYamlValue(modelIdMatch[1]);
       if (id && !currentProvider.models.includes(id)) {
         currentProvider.models.push(id);
       }
@@ -316,10 +316,23 @@ export function redactSecrets(text, secretKeys = []) {
 /**
  * Resolve available models across all providers.
  * Returns array of objects: { qualified: `${provider}/${model}`, provider, model, source: 'declared'|'discovered' }
+ *
+ * С `probe=true` опрашивается КАЖДЫЙ провайдер с baseUrl (не только с discovery):
+ * недостижимый провайдер — это и есть причина падения спавнов, поэтому его модели
+ * исключаются из выбора, а `providers[name].reachable === false` служит доказательством.
+ * Без probe поведение прежнее: все объявленные модели доступны, сети нет.
+ *
+ * @returns {Promise<{available: Array, notes: string[], secrets: string[],
+ *   providers: Object<string, {reachable: boolean|null, error: string|null, declared: number, discovered: number}>}>}
  */
 export async function collectAvailableModels(modelsYamlPath, probe = false) {
   if (!existsSync(modelsYamlPath)) {
-    return { available: [], notes: [`Файл models.yml не найден: ${modelsYamlPath}`], secrets: [] };
+    return {
+      available: [],
+      notes: [`Файл models.yml не найден: ${modelsYamlPath}`],
+      secrets: [],
+      providers: {},
+    };
   }
 
   const content = readFileSync(modelsYamlPath, "utf8");
@@ -327,6 +340,7 @@ export async function collectAvailableModels(modelsYamlPath, probe = false) {
   const available = [];
   const notes = [];
   const secrets = [];
+  const providers = {};
 
   for (const provName of Object.keys(parsed.providers)) {
     const prov = parsed.providers[provName];
@@ -334,7 +348,32 @@ export async function collectAvailableModels(modelsYamlPath, probe = false) {
       secrets.push(prov.apiKey);
     }
 
-    // Add declared models
+    let reachable = null;
+    let discovered = [];
+    let probeError = null;
+
+    if (probe && prov.baseUrl) {
+      const probeResult = await probeProvider(prov);
+      probeError = probeResult.error;
+      reachable = !probeError;
+      if (probeError) {
+        notes.push(
+          `Провайдер ${provName} недостижим (${probeError}): его модели исключены из выбора`
+        );
+      } else {
+        discovered = probeResult.models;
+      }
+    }
+
+    providers[provName] = {
+      reachable,
+      error: probeError,
+      discovered: discovered.length,
+    };
+
+    // Модель провалившего провайдера не выбирается никогда (ни declared, ни discovered).
+    if (reachable === false) continue;
+
     for (const modelId of prov.models) {
       available.push({
         qualified: `${provName}/${modelId}`,
@@ -344,27 +383,19 @@ export async function collectAvailableModels(modelsYamlPath, probe = false) {
       });
     }
 
-    // Network probe if requested and discovery is configured
-    if (probe && prov.discovery && prov.baseUrl) {
-      const probeResult = await probeProvider(prov);
-      if (probeResult.error) {
-        notes.push(`Провайдер ${provName}: ошибка опроса /models (${probeResult.error})`);
-      } else {
-        for (const discoveredId of probeResult.models) {
-          if (!prov.models.includes(discoveredId)) {
-            available.push({
-              qualified: `${provName}/${discoveredId}`,
-              provider: provName,
-              model: discoveredId,
-              source: "discovered",
-            });
-          }
-        }
+    for (const discoveredId of discovered) {
+      if (!prov.models.includes(discoveredId)) {
+        available.push({
+          qualified: `${provName}/${discoveredId}`,
+          provider: provName,
+          model: discoveredId,
+          source: "discovered",
+        });
       }
     }
   }
 
-  return { available, notes, secrets };
+  return { available, notes, secrets, providers };
 }
 
 /**
@@ -522,7 +553,9 @@ export async function run(argv) {
   --config <path>    Путь к config.yml (по умолчанию: ~/.omp/agent/config.yml)
   --models <path>    Путь к models.yml (по умолчанию: ~/.omp/agent/models.yml)
   --priority <path>  Путь к oracle-priority.json
-  --probe            Опросить GET {baseUrl}/models для провайдеров с discovery
+  --probe            Опрос GET {baseUrl}/models у всех провайдеров models.yml:
+                     недостижимые помечаются, их модели исключаются из выбора
+                     (ensure/apply не выберут модель провалившего провайдера)
   --dry-run          Не вносить изменений в config.yml
   --json             Вывод в формате JSON
 `;
@@ -539,8 +572,9 @@ export async function run(argv) {
   const priorityPath = resolvePriorityFile(opts.priority);
 
   const priorityEntries = loadPriorityList(priorityPath);
-  const { available, notes, secrets } = await collectAvailableModels(modelsPath, opts.probe);
+  const { available, notes, secrets, providers } = await collectAvailableModels(modelsPath, opts.probe);
   const resolution = resolveOracleModel(priorityEntries, available);
+  const unreachableProviders = Object.keys(providers).filter((n) => providers[n].reachable === false);
 
   // Read current config oracle if present
   let currentOracleConfig = null;
@@ -562,6 +596,8 @@ export async function run(argv) {
         matchedEntry: resolution.matchedEntry,
         currentConfig: currentOracleConfig,
         available: available.map((a) => a.qualified),
+        providers,
+        unreachableProviders,
         priorityPath,
         modelsPath,
         notes,
@@ -577,6 +613,16 @@ export async function run(argv) {
     out += `  Текущая в config : ${currentOracleConfig || "(не задана)"}\n`;
     out += `  Файл приоритетов : ${priorityPath}\n`;
     out += `  Доступные модели : ${available.length > 0 ? available.map((a) => a.qualified).join(", ") : "(нет доступных моделей)"}\n`;
+    if (opts.probe && Object.keys(providers).length > 0) {
+      const statuses = Object.keys(providers).map((name) => {
+        const p = providers[name];
+        if (p.reachable === null) return `${name}: не опрошен`;
+        return p.reachable
+          ? `${name}: доступен (${p.discovered} моделей по /models)`
+          : `${name}: НЕДОСТУПЕН (${p.error})`;
+      });
+      out += `  Провайдеры       : ${statuses.join(", ")}\n`;
+    }
     if (notes.length > 0) {
       out += `  Заметки          :\n` + notes.map((n) => `    - ${n}`).join("\n") + "\n";
     }
@@ -585,6 +631,35 @@ export async function run(argv) {
   }
 
   if (opts.command === "apply" || opts.command === "ensure") {
+    // С --probe модель, чей провайдер провалил опрос, не выбирается: запись её в
+    // config.yml — ровно тот сценарий, когда все спавны падают на 429/401.
+    const resolvedProvider = resolution.resolved.includes("/")
+      ? resolution.resolved.slice(0, resolution.resolved.indexOf("/"))
+      : null;
+    const selectedProviderDead = resolvedProvider
+      ? providers[resolvedProvider]?.reachable === false
+      : false;
+    const fallbackWithoutProvider = resolution.source === "default" && unreachableProviders.length > 0;
+
+    if (opts.probe && (selectedProviderDead || fallbackWithoutProvider)) {
+      const errMessage = `Модель ${resolution.resolved} не выбрана: недостижимы провайдеры ${unreachableProviders.join(", ")}. config.yml не изменён.`;
+      if (opts.json) {
+        process.stdout.write(
+          redactSecrets(
+            JSON.stringify(
+              { ok: false, error: errMessage, resolved: resolution.resolved, unreachableProviders, providers, notes },
+              null,
+              2
+            ),
+            secrets
+          ) + "\n"
+        );
+      } else {
+        process.stderr.write(redactSecrets(`[XX] ${errMessage}\n`, secrets));
+      }
+      return 1;
+    }
+
     let applied = false;
     let errMessage = null;
 
@@ -625,6 +700,7 @@ export async function run(argv) {
         matchedEntry: resolution.matchedEntry,
         applied: applied && !opts.dryRun,
         dryRun: opts.dryRun,
+        unreachableProviders,
         notes,
       };
       process.stdout.write(redactSecrets(JSON.stringify(outObj, null, 2), secrets) + "\n");

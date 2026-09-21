@@ -18,12 +18,18 @@
  *   4. orphan         — skill exists in the repo but was never installed.
  *   5. duplicate-name — two directories declare the same `name:`.
  *
+ * Skills the operator disabled on purpose (`<agents-home>/.skills-disabled.json`)
+ * are reported as `info: disabled by operator` and are exempt from every check
+ * above: the operator already removed them from the registry, so they are not
+ * orphans and not parity problems. A list that cannot be read degrades to empty
+ * (plus a note) instead of silently dropping the exemptions.
+ *
  * Exit 0 = healthy, 1 = problems found, 2 = cannot run.
  * Zero dependencies. Node 18+ / Bun.
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 
 /* ----------------------------------------------------------------- utilities */
@@ -57,16 +63,47 @@ function listSkillDirs(root) {
     .filter((n) => existsSync(join(root, n, "SKILL.md")));
 }
 
+/**
+ * Operator-disabled registry: `<agentsHome>/.skills-disabled.json`
+ * (`{version, disabled: [names], note?}`). Returns the names plus notes for a
+ * list that could not be read — a corrupt file must not silently re-enable the
+ * orphan/parity noise the exemptions exist to suppress.
+ */
+function readDisabled(agentsHome) {
+  const path = join(agentsHome, ".skills-disabled.json");
+  const bad = (detail) => ({ disabled: [], notes: [{ skill: null, detail }] });
+  if (!existsSync(path)) return { disabled: [], notes: [] };
+
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    return bad(`${path}: invalid JSON (${e.message}) -> disabled list treated as EMPTY`);
+  }
+  if (!parsed || !Array.isArray(parsed.disabled)) {
+    return bad(`${path}: no 'disabled' array -> disabled list treated as EMPTY`);
+  }
+  const disabled = [...new Set(parsed.disabled.filter((n) => typeof n === "string").map((n) => n.trim()).filter(Boolean))];
+  return { disabled, notes: [] };
+}
+
 /* -------------------------------------------------------------------- checks */
 
-function run(installedRoot, repoRoot) {
+function run(installedRoot, repoRoot, disabled = []) {
   const problems = [];
   const notes = [];
   const names = new Map();
+  const disabledSet = new Set(disabled);
 
-  const installed = listSkillDirs(installedRoot);
+  const present = listSkillDirs(installedRoot);
+  const installed = present.filter((n) => !disabledSet.has(n));
   const repo = repoRoot && existsSync(repoRoot) ? listSkillDirs(repoRoot) : [];
   const repoNames = new Set(repo);
+
+  const infos = [...disabledSet].sort().map((skill) => ({
+    skill,
+    detail: present.includes(skill) ? "disabled by operator (still on disk - checks skipped)" : "disabled by operator",
+  }));
 
   for (const name of installed) {
     const path = join(installedRoot, name, "SKILL.md");
@@ -136,37 +173,47 @@ function run(installedRoot, repoRoot) {
 
   if (repoRoot) {
     for (const n of repo) {
-      if (!installed.includes(n)) problems.push({ skill: n, kind: "orphan", detail: "in repo but NOT installed -> skill:// will not resolve" });
+      if (installed.includes(n) || disabledSet.has(n)) continue;
+      problems.push({ skill: n, kind: "orphan", detail: "in repo but NOT installed -> skill:// will not resolve" });
     }
   }
 
-  return { problems, notes, installedCount: installed.length, repoCount: repo.length };
+  return { problems, notes, infos, installedCount: installed.length, repoCount: repo.length, disabledCount: infos.length };
 }
 
 /* ---------------------------------------------------------------------- main */
 
 const argv = process.argv.slice(2);
-let installedRoot = null, repoRoot = null;
+let installedRoot = null, repoRoot = null, agentsHome = null;
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--installed") installedRoot = argv[++i];
   else if (argv[i] === "--repo") repoRoot = argv[++i];
+  else if (argv[i] === "--agents-home") agentsHome = argv[++i];
 }
 const home = process.env.USERPROFILE || process.env.HOME || "";
 installedRoot = installedRoot || join(home, ".agents", "skills");
 repoRoot = repoRoot || "<harness>/workflow-repo/skills";
+agentsHome = agentsHome || dirname(installedRoot);
 
 if (!existsSync(installedRoot)) {
   console.error(`skills-doctor: installed root not found: ${installedRoot}`);
   process.exit(2);
 }
 
-const { problems, notes, installedCount, repoCount } = run(installedRoot, repoRoot);
+const disabledList = readDisabled(agentsHome);
+const { problems, notes, infos, installedCount, repoCount, disabledCount } = run(installedRoot, repoRoot, disabledList.disabled);
+notes.push(...disabledList.notes);
 
-console.log(`skills-doctor: ${installedCount} installed, ${repoCount} in repo`);
+console.log(`skills-doctor: ${installedCount} installed, ${repoCount} in repo${disabledCount ? `, ${disabledCount} disabled by operator` : ""}`);
+
+if (infos.length) {
+  console.log("\n  info");
+  for (const i of infos) console.log(`    ${i.skill}: ${i.detail}`);
+}
 
 if (notes.length) {
   console.log("\n  notes (informational)");
-  for (const n of notes) console.log(`    ${n.skill}: ${n.detail}`);
+  for (const n of notes) console.log(`    ${n.skill ? `${n.skill}: ` : ""}${n.detail}`);
 }
 
 if (!problems.length) {

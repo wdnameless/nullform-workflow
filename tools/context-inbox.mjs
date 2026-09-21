@@ -97,6 +97,11 @@ export function formatRow(id, category, need, why, status, added) {
   return `| ${esc(id)} | ${esc(category)} | ${esc(need)} | ${esc(why)} | ${esc(status)} | ${esc(added)} |`;
 }
 
+/** Доминирующий перевод строки файла (CRLF на Windows, LF иначе). */
+function detectEol(content) {
+  return content.includes("\r\n") ? "\r\n" : "\n";
+}
+
 /**
  * Разбирает содержимое REQUESTS.md.
  * Возвращает { headerFound, headerLineIndex, rows, malformed }.
@@ -277,7 +282,10 @@ export function requestContext({
   }
 
   const newRow = formatRow(id, category, need.trim(), finalWhy, "open", added);
-  const updatedContent = content.trimEnd() + "\n" + newRow + "\n";
+  // Перевод строки берём из самого файла: молчаливое превращение CRLF-файла в LF
+  // переписывает все строки пользовательского файла и ломает diff.
+  const eol = detectEol(content);
+  const updatedContent = content.replace(/(\r?\n)+$/, "") + eol + newRow + eol;
   writeFileSync(requestsPath, updatedContent, "utf8");
 
   return {
@@ -383,7 +391,7 @@ export function resolveContext({ root = process.cwd(), id, file = "" }) {
   );
 
   lines[target.lineNum - 1] = updatedRow;
-  writeFileSync(requestsPath, lines.join("\n"), "utf8");
+  writeFileSync(requestsPath, lines.join(detectEol(content)), "utf8");
 
   return {
     id: target.id,
@@ -470,34 +478,57 @@ export function checkContext({ root = process.cwd(), strict = false }) {
   };
 }
 
+const FLAG_SPEC = {
+  "--json": { bool: true, key: "json" },
+  "--strict": { bool: true, key: "strict" },
+  "--root": { key: "root" },
+  "--category": { key: "category" },
+  "--need": { key: "need" },
+  "--why": { key: "why" },
+  "--hint": { key: "hint" },
+  "--id": { key: "id" },
+  "--file": { key: "file" },
+};
+
 /**
  * Парсер аргументов командной строки.
+ * Опечатанный или неполный флаг — ошибка, а не молчаливый пропуск:
+ * `--need` без значения раньше уходил в неизвестность, а `--bogus` игнорировался.
  */
 export function parseArgs(argv) {
-  const args = { _: [] };
+  const args = { _: [], errors: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--root" && i + 1 < argv.length) {
-      args.root = argv[++i];
-    } else if (a === "--category" && i + 1 < argv.length) {
-      args.category = argv[++i];
-    } else if (a === "--need" && i + 1 < argv.length) {
-      args.need = argv[++i];
-    } else if (a === "--why" && i + 1 < argv.length) {
-      args.why = argv[++i];
-    } else if (a === "--hint" && i + 1 < argv.length) {
-      args.hint = argv[++i];
-    } else if (a === "--id" && i + 1 < argv.length) {
-      args.id = argv[++i];
-    } else if (a === "--file" && i + 1 < argv.length) {
-      args.file = argv[++i];
-    } else if (a === "--json") {
-      args.json = true;
-    } else if (a === "--strict") {
-      args.strict = true;
-    } else if (!a.startsWith("--")) {
-      args._.push(a);
+    const eq = a.indexOf("=");
+    const name = eq === -1 ? a : a.slice(0, eq);
+    const inline = eq === -1 ? null : a.slice(eq + 1);
+    const spec = FLAG_SPEC[name];
+
+    if (!spec) {
+      if (a.startsWith("-")) {
+        args.errors.push(`неизвестный флаг ${a}`);
+      } else {
+        args._.push(a);
+      }
+      continue;
     }
+
+    if (spec.bool) {
+      if (inline !== null) {
+        args.errors.push(`флаг ${name} не принимает значение`);
+        continue;
+      }
+      args[spec.key] = true;
+      continue;
+    }
+
+    const value = inline !== null ? inline : argv[i + 1];
+    if (value === undefined || (inline === null && value.startsWith("-"))) {
+      args.errors.push(`флаг ${name} требует значение`);
+      continue;
+    }
+    if (inline === null) i++;
+    args[spec.key] = value;
   }
   return args;
 }
@@ -512,6 +543,22 @@ if (isDirectExecution) {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
   const root = args.root || process.cwd();
+
+  const USAGE =
+    "Использование: node tools/context-inbox.mjs <init|request|list|resolve|check> [опции]\n" +
+    "  init    [--root <dir>]\n" +
+    '  request --category <c> --need "<описание>" [--why "<причина>"] [--hint "<подсказка>"] [--root <dir>] [--json]\n' +
+    "  list    [--root <dir>] [--json]\n" +
+    "  resolve --id <id> [--file <файл>] [--root <dir>] [--json]\n" +
+    "  check   [--root <dir>] [--strict]";
+
+  if (args.errors.length > 0) {
+    for (const err of args.errors) {
+      console.error(`Ошибка: ${err}.`);
+    }
+    console.error(USAGE);
+    process.exit(2);
+  }
 
   try {
     switch (command) {
@@ -605,14 +652,7 @@ if (isDirectExecution) {
       }
 
       default: {
-        console.error(
-          "Использование: node tools/context-inbox.mjs <init|request|list|resolve|check> [опции]\n" +
-            "  init    [--root <dir>]\n" +
-            "  request --category <c> --need \"<описание>\" [--why \"<причина>\"] [--hint \"<подсказка>\"] [--root <dir>] [--json]\n" +
-            "  list    [--root <dir>] [--json]\n" +
-            "  resolve --id <id> [--file <файл>] [--root <dir>] [--json]\n" +
-            "  check   [--root <dir>] [--strict]"
-        );
+        console.error(USAGE);
         process.exit(1);
       }
     }

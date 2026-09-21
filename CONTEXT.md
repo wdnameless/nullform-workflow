@@ -47,6 +47,8 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Blind acceptance** — Wave 4. The oracle judges the product against the
   manifest and the running artifact, never against our own spec.
 - **Oracle** — the read-only acceptance role. See *Roles*.
+- **Double acceptance** — the Wave 4 rule when the resolved oracle model is flash-class (name matches `*flash*` or is the configured fallback): two independent oracle passes, reconciled. ACCEPT requires the two to agree; either `REJECT` forces a fix round, then a fresh pair.
+- **Oracle-lite** — a single-pass Wave 4 acceptance permitted only for a small slice (≤2 files, ≤~80 diff lines), under the same evidence protocol as a full oracle pass. Anything larger goes through double acceptance.
 - **Review budget** — at most one initial review plus two re-reviews per gate
   (defined by `skill://deepwork`).
 
@@ -110,6 +112,8 @@ Terms used in this OMP workflow harness. Definitions say what a term
   An intentional edit requires re-running `baseline` so the change shows in review.
 - **Skills-doctor** — `tools/skills-doctor.mjs`. Detects skills that the registry
   would drop silently (bad frontmatter, truncation, parity, orphans).
+- **Disabled skill** — a skill named in `~/.agents/.skills-disabled.json` (an operator's stop-list). `tools/skills-doctor.mjs` reports it as `disabled by operator` and excludes it from orphan/parity problems. Distinct from a *dropped* skill, which the registry discards by accident.
+- **Prune** — `tools/sync.ps1 -Prune`: lists harness files absent from the repo within manifest-covered directories (dry-run by default), deleting only with `-Confirm`; never touches `.prompt-lint`, `.workflow`, `.archmap`, `node_modules`, `worktrees`, session or config files.
 - **Glossary tool** — `tools/glossary.mjs`. Drafts `CONTEXT.md` from real symbols
   and measures which public symbols are still undocumented. Never invents a
   definition; `--scope` keeps vendored tooling out of the project's glossary.
@@ -125,7 +129,7 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Paseo** — the supervising daemon: workspaces, agents, terminals, schedules.
 - **Prompt budget** — sub-command (`tools/prompt-lint.mjs sizes [--check]`) and configuration (`.prompt-lint/budget.json`) enforcing size limits across agent prompt surfaces to prevent context degradation and cache thrashing.
 - **Usage audit** — audit tool (`tools/usage-audit.mjs [--days 30]`) analyzing tool, MCP, and skill invocation frequency from local logs without printing or exposing sensitive invocation payloads.
-- **Install doctor** — diagnostic harness (`tools/doctor.mjs`) validating installation prerequisites, directory structures, and environment health, acting as a hard gate during installation (`install.ps1`).
+- **Install doctor** — diagnostic harness (`tools/doctor.mjs`) validating installation prerequisites, directory structures, and environment health, acting as a hard gate during installation (`install.ps1`). Its optional `--probe` (network) checks provider reachability in `models.yml` and that each `config.yml` role points at a reachable model; unreachable = `WARN` listing the roles, never `FAIL`, and no network is touched without the flag.
 
 ## Operations
 

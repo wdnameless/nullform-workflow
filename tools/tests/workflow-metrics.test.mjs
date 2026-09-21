@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,8 @@ import {
   cmdClose,
   cmdArtifact,
   cmdMetrics,
+  cmdCheck,
+  cmdStatus,
   loadMetrics,
   appendMetric,
   load,
@@ -153,6 +155,101 @@ test("empty metrics prints message and exits 0", () => {
 
     assert.equal(code, 0);
     assert.ok(logs.some((l) => l.includes("задач пока нет")));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Reproduced defects (adversarial pass): corrupted state/metrics must not pass
+// a gate, crash a read-only command, or double-count a task.
+// ---------------------------------------------------------------------------
+
+test("corrupted state.json reads as no task — check fails instead of reporting COMPLETE", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-test-corrupt-state-"));
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+    const statePath = join(tmp, ".workflow", "state.json");
+
+    for (const body of ['{}', "null", "[]", '{"tier":"T9","artifacts":{}}', "not json"]) {
+      writeFileSync(statePath, body, "utf8");
+      assert.equal(load(tmp), null, `state ${body} must not read as a task`);
+      assert.equal(cmdCheck(tmp), 1, `check must fail on state ${body}, not report COMPLETE`);
+      assert.equal(cmdStatus(tmp), 0, `status must survive state ${body}`);
+      assert.equal(cmdClose(tmp, {}), 2, `close must refuse state ${body}`);
+    }
+
+    // A structurally valid T0 state with a non-object artifacts map still gates:
+    // the lane artifact is missing, so check refuses to call it complete.
+    writeFileSync(statePath, '{"tier":"T0","task":"t","artifacts":5}', "utf8");
+    assert.equal(cmdCheck(tmp), 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("metrics ignores malformed and non-record JSON lines", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-test-bad-metrics-"));
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".workflow", "metrics.jsonl"),
+      [
+        "null",
+        "42",
+        '"a string"',
+        "[1,2]",
+        "{not json",
+        JSON.stringify({ task: "real", tier: "T0", durationMs: 1000, forced: false, auto: null }),
+      ].join("\n") + "\n",
+      "utf8"
+    );
+
+    const records = loadMetrics(tmp);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].task, "real");
+
+    const logs = [];
+    const origLog = console.log;
+    console.log = (...args) => logs.push(args.join(" "));
+    try {
+      assert.equal(cmdMetrics(tmp), 0);
+    } finally {
+      console.log = origLog;
+    }
+    assert.match(logs.join("\n"), /Всего задач:\s*1/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("close on an already closed task is refused and does not double-count metrics", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-test-double-close-"));
+  try {
+    assert.equal(cmdStart(tmp, { tier: "T0", task: "single task" }), 0);
+    assert.equal(cmdClose(tmp, {}), 0);
+    const afterFirst = new Date(load(tmp).closedAt).getTime();
+
+    assert.equal(cmdClose(tmp, {}), 2, "second close must refuse");
+
+    const records = loadMetrics(tmp);
+    assert.equal(records.length, 1, "one task must produce exactly one metric");
+    assert.equal(load(tmp).status, "closed");
+    assert.equal(new Date(load(tmp).closedAt).getTime(), afterFirst, "closedAt must not move");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("close on a refused auto task is refused and writes no metric", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-test-refused-close-"));
+  try {
+    // Guarded auto refuses T2: the state records the refusal, not an open task.
+    assert.equal(cmdStart(tmp, { tier: "T2", task: "too big", auto: true, allow: "src/**", "max-diff": "5" }), 1);
+    assert.equal(load(tmp).status, "refused");
+
+    assert.equal(cmdClose(tmp, {}), 2);
+    assert.equal(existsSync(join(tmp, ".workflow", "metrics.jsonl")), false);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

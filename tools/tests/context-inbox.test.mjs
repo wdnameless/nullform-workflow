@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   initContext,
   requestContext,
@@ -208,6 +209,65 @@ test("check command exit codes: structural validity vs strict mode", () => {
     assert.equal(checkCorrupted.valid, false);
     assert.equal(checkCorrupted.code, 1);
     assert.match(checkCorrupted.errors[0], /повторяющиеся ID/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ------------------------------------------------- adversarial (hardening-2) */
+
+test('CRLF в REQUESTS.md сохраняется при request и resolve', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'ctx-crlf-'));
+  try {
+    initContext(tmp);
+    const requests = join(tmp, 'context', 'REQUESTS.md');
+    const header = [
+      '# Context Requests',
+      '',
+      '| ID | Category | Needed | Why | Status | Added |',
+      '|---|---|---|---|---|---|',
+      '| c1 | domain | first | - | open | 2026-01-01 |',
+      '',
+    ].join('\r\n');
+    writeFileSync(requests, header, 'utf8');
+
+    requestContext({ root: tmp, category: 'domain', need: 'second' });
+    let content = readFileSync(requests, 'utf8');
+    assert.ok(content.includes('\r\n'), 'request не должен переписывать файл в LF');
+    assert.equal(/[^\r]\n/.test(content), false, 'в файле не должно появиться одиночных LF');
+
+    resolveContext({ root: tmp, id: 'c1' });
+    content = readFileSync(requests, 'utf8');
+    assert.ok(content.includes('\r\n'), 'resolve не должен переписывать файл в LF');
+    assert.equal(/[^\r]\n/.test(content), false, 'в файле не должно появиться одиночных LF');
+    assert.match(content, /\| c1 \| domain \| first \| - \| done \| 2026-01-01 \|/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('CLI: опечатанный или неполный флаг — exit 2, а не молчаливый пропуск', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'ctx-flags-'));
+  try {
+    initContext(tmp);
+    const CLI = join(process.cwd(), 'tools', 'context-inbox.mjs');
+    const run = (args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' });
+
+    const bogus = run(['list', '--root', tmp, '--bogus']);
+    assert.equal(bogus.status, 2);
+    assert.match(bogus.stderr, /неизвестный флаг --bogus/);
+
+    const missing = run(['resolve', '--root', tmp, '--id']);
+    assert.equal(missing.status, 2);
+    assert.match(missing.stderr, /--id требует значение/);
+
+    const flagAsValue = run(['list', '--root', tmp, '--file', '--json']);
+    assert.equal(flagAsValue.status, 2);
+    assert.match(flagAsValue.stderr, /--file требует значение/);
+
+    // Контроль: корректные флаги продолжают работать
+    const ok = run(['list', '--root', tmp, '--json']);
+    assert.equal(ok.status, 0);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

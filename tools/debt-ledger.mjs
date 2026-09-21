@@ -438,37 +438,59 @@ export function formatMarkdownLedger(result) {
   return lines.join("\n");
 }
 
+const FLAG_SPEC = {
+  "--help": { bool: true, key: "help" },
+  "-h": { bool: true, key: "help" },
+  "--json": { bool: true, key: "json" },
+  "--check": { bool: true, key: "check" },
+  "--root": { key: "root" },
+  "--write": { key: "write" },
+  "--marker": { key: "marker" },
+};
+
 /**
  * Разбор аргументов командной строки в стиле context-inbox.mjs.
+ * Опечатка в флаге (`--markr TODO`) раньше становилась позиционным аргументом
+ * и молча выключала проверку — гейт отдавал ложный зелёный. Флаг, требующий
+ * значения, теперь тоже обязателен: `--root` без значения ошибкой, а не cwd.
  *
  * @param {string[]} argv
- * @returns {{ _: string[], root?: string, json?: boolean, check?: boolean, write?: string, marker?: string, help?: boolean }}
+ * @returns {{ _: string[], errors: string[], root?: string, json?: boolean, check?: boolean, write?: string, marker?: string, help?: boolean }}
  */
 export function parseArgs(argv) {
-  const args = { _: [] };
+  const args = { _: [], errors: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--help" || arg === "-h") {
-      args.help = true;
-    } else if (arg === "--json") {
-      args.json = true;
-    } else if (arg === "--check") {
-      args.check = true;
-    } else if (arg === "--root") {
-      args.root = argv[++i];
-    } else if (arg.startsWith("--root=")) {
-      args.root = arg.slice(7);
-    } else if (arg === "--write") {
-      args.write = argv[++i];
-    } else if (arg.startsWith("--write=")) {
-      args.write = arg.slice(8);
-    } else if (arg === "--marker") {
-      args.marker = argv[++i];
-    } else if (arg.startsWith("--marker=")) {
-      args.marker = arg.slice(9);
-    } else if (!arg.startsWith("-")) {
-      args._.push(arg);
+    const eq = arg.indexOf("=");
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+    const inline = eq === -1 ? null : arg.slice(eq + 1);
+    const spec = FLAG_SPEC[name];
+
+    if (!spec) {
+      if (arg.startsWith("-")) {
+        args.errors.push(`неизвестный флаг ${arg}`);
+      } else {
+        args._.push(arg);
+      }
+      continue;
     }
+
+    if (spec.bool) {
+      if (inline !== null) {
+        args.errors.push(`флаг ${name} не принимает значение`);
+        continue;
+      }
+      args[spec.key] = true;
+      continue;
+    }
+
+    const value = inline !== null ? inline : argv[i + 1];
+    if (value === undefined || (inline === null && value.startsWith("-"))) {
+      args.errors.push(`флаг ${name} требует значение`);
+      continue;
+    }
+    if (inline === null) i++;
+    args[spec.key] = value;
   }
   return args;
 }
@@ -500,6 +522,15 @@ function printUsage() {
  */
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+
+  if (args.errors.length > 0) {
+    for (const err of args.errors) {
+      console.error(`Ошибка: ${err}.`);
+    }
+    printUsage();
+    return 2;
+  }
+
   if (args.help) {
     printUsage();
     return 0;
@@ -522,10 +553,18 @@ export function main(argv = process.argv.slice(2)) {
     console.error(`Каталог не найден: ${args.root || "."}`);
     return 2;
   }
-  if (args.write) {
-    const md = formatMarkdownLedger(result);
+  if (args.write !== undefined) {
+    if (!args.write) {
+      console.error("Ошибка: --write требует путь к файлу реестра.");
+      return 2;
+    }
     const writePath = resolve(root, args.write);
-    writeFileSync(writePath, md, "utf8");
+    try {
+      writeFileSync(writePath, formatMarkdownLedger(result), "utf8");
+    } catch (err) {
+      console.error(`Ошибка: не удалось записать реестр в ${writePath} (${err.code || err.message}).`);
+      return 2;
+    }
   }
 
   if (args.json) {

@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "task": "csv-sum",
+  "arm": "oneshot",
+  "run": 1,
+  "startedAt": "2026-09-21T02:12:25.832Z",
+  "durationMs": 32552,
+  "status": "ok",
+  "agentExit": 0,
+  "baseSha": "512fb759823488cea91c3ff9a059aaf67432554c",
+  "headSha": "512fb759823488cea91c3ff9a059aaf67432554c",
+  "commits": 0,
+  "worktreeChanges": 9,
+  "metrics": {
+    "linesAdded": 64,
+    "linesDeleted": 0,
+    "filesChanged": 1,
+    "files": [
+      {
+        "added": 64,
+        "deleted": 0,
+        "file": "src/csv.js"
+      }
+    ]
+  },
+  "toolArtifacts": {
+    "linesAdded": 10,
+    "linesDeleted": 0,
+    "filesChanged": 8,
+    "files": [
+      {
+        "added": 0,
+        "deleted": 0,
+        "file": ".opencode/index/codebase.db"
+      },
+      {
+        "added": 0,
+        "deleted": 0,
+        "file": ".opencode/index/codebase.db-shm"
+      },
+      {
+        "added": 0,
+        "deleted": 0,
+        "file": ".opencode/index/codebase.db-wal"
+      },
+      {
+        "added": 7,
+        "deleted": 0,
+        "file": ".opencode/index/failed-batches.d71e9e65840e0842.json"
+      },
+      {
+        "added": 1,
+        "deleted": 0,
+        "file": ".opencode/index/file-hashes.d71e9e65840e0842.json"
+      },
+      {
+        "added": 1,
+        "deleted": 0,
+        "file": ".opencode/index/inverted-index.json"
+      },
+      {
+        "added": 0,
+        "deleted": 0,
+        "file": ".opencode/index/vectors"
+      },
+      {
+        "added": 1,
+        "deleted": 0,
+        "file": ".opencode/index/vectors.meta.json"
+      }
+    ]
+  },
+  "metricsWarning": null,
+  "checks": [
+    {
+      "cmd": "node --test test/csv.test.js",
+      "code": 0,
+      "passed": true,
+      "tail": "ℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 77.4035"
+    }
+  ],
+  "logPath": "D:\\TMP\\bench-real\\bench\\runs\\2026-09-21T02-12-25-698Z-csv-sum-oneshot-1\\agent.log"
+}

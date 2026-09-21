@@ -12,6 +12,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync, spawn } from "node:child_process";
+import { createServer } from "node:http";
 import {
   parseModelsYaml,
   loadPriorityList,
@@ -20,6 +25,8 @@ import {
   redactSecrets,
   collectAvailableModels,
 } from "../oracle-model.mjs";
+
+const ORACLE_PATH = resolve(import.meta.dirname, "../oracle-model.mjs");
 
 test("models.yml parsing: declared providers, models (- id:), discovery type, baseUrl, apiKey", () => {
   const sampleYaml = `
@@ -158,4 +165,278 @@ test("secrets redaction: apiKey material is never exposed in output text", () =>
   assert.ok(!redacted.includes("sk-live-super-secret-key-9999"), "secret must be redacted");
   assert.ok(!redacted.includes("another-sensitive-token"), "secret must be redacted");
   assert.ok(redacted.includes("[REDACTED]"), "redacted marker must be present");
+});
+
+// ---------------------------------------------------------------------------
+// Reachability (--probe): недостижимый провайдер не должен поставлять модели.
+// ---------------------------------------------------------------------------
+
+const DEAD_BASE_URL = "http://127.0.0.1:1/v1";
+
+function modelsYaml(livePort) {
+  const lines = [
+    "providers:",
+    "  dead-provider:",
+    `    baseUrl: ${DEAD_BASE_URL}`,
+    "    apiKey: sk-oracle-fixture-secret",
+    "    models:",
+    "      - id: preferred-oracle",
+  ];
+  if (livePort) {
+    lines.push(
+      "  live-provider:",
+      `    baseUrl: http://127.0.0.1:${livePort}/v1`,
+      "    models:",
+      "      - id: backup-oracle"
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+function writePriorityFile(dir, entries) {
+  const path = join(dir, "oracle-priority.json");
+  writeFileSync(path, JSON.stringify(entries, null, 2), "utf8");
+  return path;
+}
+
+function writeConfigFile(dir, oracleModel) {
+  const path = join(dir, "config.yml");
+  writeFileSync(
+    path,
+    [
+      "# fixture config",
+      "modelRoles:",
+      `  oracle: ${oracleModel}`,
+      "  designer: some-provider/designer-model",
+      "task:",
+      "  agentModelOverrides:",
+      `    oracle: ${oracleModel}`,
+      "    critic: some-provider/critic-model",
+    ].join("\n") + "\n",
+    "utf8"
+  );
+  return path;
+}
+
+function runOracle(args) {
+  const res = spawnSync(process.execPath, [ORACLE_PATH, ...args], { encoding: "utf8" });
+  return { status: res.status, stdout: res.stdout, stderr: res.stderr };
+}
+
+/** Асинхронный запуск: с локальным сервером spawnSync заблокировал бы ответ. */
+function runOracleAsync(args) {
+  return new Promise((resolvePromise) => {
+    const child = spawn(process.execPath, [ORACLE_PATH, ...args]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (status) => resolvePromise({ status, stdout, stderr }));
+  });
+}
+
+async function withServer(handler, fn) {
+  const server = createServer(handler);
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    return await fn(server.address().port);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+}
+
+const modelsHandler = (req, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ data: [{ id: "backup-oracle" }] }));
+};
+
+test("collectAvailableModels(probe=false): сети нет, объявленные модели доступны (поведение прежнее)", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-noprobe-"));
+  try {
+    const modelsPath = join(tmp, "models.yml");
+    writeFileSync(modelsPath, modelsYaml(), "utf8");
+
+    const { available, providers, notes } = await collectAvailableModels(modelsPath, false);
+
+    assert.deepEqual(
+      available.map((a) => a.qualified),
+      ["dead-provider/preferred-oracle"]
+    );
+    assert.equal(providers["dead-provider"].reachable, null, "без probe доступность неизвестна");
+    assert.deepEqual(notes, []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("collectAvailableModels(probe=true): модели недостижимого провайдера исключены", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-probe-"));
+  try {
+    await withServer(modelsHandler, async (port) => {
+      const modelsPath = join(tmp, "models.yml");
+      writeFileSync(modelsPath, modelsYaml(port), "utf8");
+
+      const { available, providers, notes, secrets } = await collectAvailableModels(modelsPath, true);
+      const qualified = available.map((a) => a.qualified);
+
+      assert.equal(providers["dead-provider"].reachable, false);
+      assert.equal(providers["live-provider"].reachable, true);
+      assert.ok(!qualified.some((q) => q.startsWith("dead-provider/")), "dead provider models excluded");
+      assert.ok(qualified.includes("live-provider/backup-oracle"));
+      assert.ok(notes.some((n) => /dead-provider недостижим/.test(n)), JSON.stringify(notes));
+      assert.deepEqual(secrets, ["sk-oracle-fixture-secret"], "ключи только для редактирования вывода");
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("list --probe --json: недостижимый провайдер помечен, exit 0, ключ не печатается", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-list-"));
+  try {
+    await withServer(modelsHandler, async (port) => {
+      const modelsPath = join(tmp, "models.yml");
+      const configPath = writeConfigFile(tmp, "dead-provider/preferred-oracle");
+      const priorityPath = writePriorityFile(tmp, ["preferred-oracle", "backup-oracle"]);
+      writeFileSync(modelsPath, modelsYaml(port), "utf8");
+
+      const res = await runOracleAsync([
+        "list",
+        "--probe",
+        "--json",
+        "--models",
+        modelsPath,
+        "--config",
+        configPath,
+        "--priority",
+        priorityPath,
+      ]);
+
+      assert.equal(res.status, 0, res.stderr);
+      const json = JSON.parse(res.stdout);
+      assert.deepEqual(json.unreachableProviders, ["dead-provider"]);
+      assert.equal(json.providers["dead-provider"].reachable, false);
+      assert.equal(json.providers["live-provider"].reachable, true);
+      assert.equal(json.resolved, "live-provider/backup-oracle");
+      assert.ok(!res.stdout.includes("sk-oracle-fixture-secret"), "apiKey must never be printed");
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("ensure --probe: не выбирает модель провалившего провайдера (регресс)", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-ensure-probe-"));
+  try {
+    await withServer(modelsHandler, async (port) => {
+      const modelsPath = join(tmp, "models.yml");
+      const priorityPath = writePriorityFile(tmp, ["preferred-oracle", "backup-oracle"]);
+      writeFileSync(modelsPath, modelsYaml(port), "utf8");
+
+      // С --probe: первый приоритет (preferred-oracle) живёт у мёртвого провайдера →
+      // выбирается следующий доступный (backup-oracle у отвечающего провайдера).
+      const probeConfig = writeConfigFile(tmp, "some-provider/current-oracle");
+      const withProbe = await runOracleAsync([
+        "ensure",
+        "--probe",
+        "--models",
+        modelsPath,
+        "--config",
+        probeConfig,
+        "--priority",
+        priorityPath,
+      ]);
+      assert.equal(withProbe.status, 0, withProbe.stderr);
+      const afterProbe = readFileSync(probeConfig, "utf8");
+      assert.match(afterProbe, /^ {2}oracle: live-provider\/backup-oracle$/m);
+      assert.match(afterProbe, /^ {4}oracle: live-provider\/backup-oracle$/m);
+      assert.ok(!afterProbe.includes("dead-provider"), "dead provider must not be written");
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("ensure без --probe: поведение прежнее (первый приоритет из declared)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-ensure-noprobe-"));
+  try {
+    const modelsPath = join(tmp, "models.yml");
+    const configPath = writeConfigFile(tmp, "some-provider/current-oracle");
+    const priorityPath = writePriorityFile(tmp, ["preferred-oracle", "backup-oracle"]);
+    writeFileSync(modelsPath, modelsYaml(), "utf8");
+
+    const res = runOracle([
+      "ensure",
+      "--models",
+      modelsPath,
+      "--config",
+      configPath,
+      "--priority",
+      priorityPath,
+    ]);
+
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(readFileSync(configPath, "utf8"), /^ {2}oracle: dead-provider\/preferred-oracle$/m);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("ensure --probe: все провайдеры мертвы → модель не выбрана, config.yml не изменён, exit 1", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-ensure-blocked-"));
+  try {
+    const modelsPath = join(tmp, "models.yml");
+    const configPath = writeConfigFile(tmp, "some-provider/current-oracle");
+    const priorityPath = writePriorityFile(tmp, ["preferred-oracle", "backup-oracle"]);
+    writeFileSync(modelsPath, modelsYaml(), "utf8");
+    const before = readFileSync(configPath, "utf8");
+
+    const res = runOracle([
+      "ensure",
+      "--probe",
+      "--models",
+      modelsPath,
+      "--config",
+      configPath,
+      "--priority",
+      priorityPath,
+    ]);
+
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /недостижимы провайдеры dead-provider/);
+    assert.match(res.stderr, /config\.yml не изменён/);
+    assert.equal(readFileSync(configPath, "utf8"), before, "config must stay byte-identical");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("ensure --probe --json: отказ сообщается машинно (ok:false, unreachableProviders)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-ensure-json-"));
+  try {
+    const modelsPath = join(tmp, "models.yml");
+    const configPath = writeConfigFile(tmp, "some-provider/current-oracle");
+    const priorityPath = writePriorityFile(tmp, ["preferred-oracle"]);
+    writeFileSync(modelsPath, modelsYaml(), "utf8");
+
+    const res = runOracle([
+      "ensure",
+      "--probe",
+      "--json",
+      "--models",
+      modelsPath,
+      "--config",
+      configPath,
+      "--priority",
+      priorityPath,
+    ]);
+
+    assert.equal(res.status, 1);
+    const json = JSON.parse(res.stdout);
+    assert.equal(json.ok, false);
+    assert.deepEqual(json.unreachableProviders, ["dead-provider"]);
+    assert.ok(!res.stdout.includes("sk-oracle-fixture-secret"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

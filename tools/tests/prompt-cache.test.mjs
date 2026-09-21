@@ -13,8 +13,17 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { collectFingerprint, collectSizes, parseSkillFrontmatterText } from "../prompt-lint.mjs";
 import { runCachePolicyCheck, loadPolicy } from "../cache-policy.mjs";
+
+const CLI_PATH = fileURLToPath(new URL("../prompt-lint.mjs", import.meta.url));
+
+/** Запуск CLI prompt-lint в изолированном корне. */
+function runCli(args) {
+  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: "utf8" });
+}
 
 test("collectFingerprint returns four deterministic layers with normalized paths", () => {
   const tmp = mkdtempSync(join(tmpdir(), "pf-test-"));
@@ -217,6 +226,113 @@ test("prompt-lint sizes JSON output format matches contract", () => {
       assert.equal(typeof g.maxLines, "number");
       assert.equal(typeof g.ok, "boolean");
     }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ------------------------------------------------- adversarial (hardening-2) */
+
+test('skills: BOM перед frontmatter не обнуляет бюджет скиллов', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'prompt-lint-bom-'));
+  try {
+    const noHome = join(tmp, 'nohome');
+    const fm = 'name: bom-skill\ndescription: ' + 'd'.repeat(600) + '\n';
+    mkdirSync(join(tmp, 'skills', 'bom-skill'), { recursive: true });
+    writeFileSync(join(tmp, 'skills', 'bom-skill', 'SKILL.md'), '\uFEFF---\n' + fm + '---\n\n# body\n');
+
+    const parsed = parseSkillFrontmatterText('\uFEFF---\n' + fm + '---\n');
+    assert.match(parsed, /name: bom-skill/);
+
+    const res = collectSizes(tmp, noHome);
+    assert.equal(res.groups.skills.bytes, Buffer.byteLength(parsed, 'utf8'));
+    assert.ok(res.groups.skills.bytes > 600, 'frontmatter с BOM должен учитываться, а не 0 байт');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('budget.json с неверными типами/отрицательными значениями не проглатывается молча', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'prompt-lint-budget-bad-'));
+  try {
+    mkdirSync(join(tmp, '.prompt-lint'), { recursive: true });
+    mkdirSync(join(tmp, 'agent'), { recursive: true });
+    writeFileSync(join(tmp, 'agent', 'AGENTS.md'), '# Test\n');
+    writeFileSync(join(tmp, '.prompt-lint', 'budget.json'), JSON.stringify({ always: { maxBytes: '1', maxLines: -3 } }));
+
+    const res = collectSizes(tmp, join(tmp, 'nohome'));
+    assert.equal(res.warnings.length, 2);
+    assert.match(res.warnings.join(' '), /always\.maxBytes/);
+    assert.match(res.warnings.join(' '), /always\.maxLines/);
+    // Дефолтные бюджеты остались нетронутыми
+    assert.equal(res.groups.always.maxLines, 200);
+    assert.equal(res.groups.always.maxBytes, 16384);
+
+    const cli = runCli(['sizes', '--root', tmp, '--check']);
+    assert.equal(cli.status, 2);
+    assert.match(cli.stderr, /budget\.json/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('check: повреждённый baseline.json — код 2 и понятное сообщение, а не стектрейс', () => {
+  for (const bad of ['{not json', '{}', JSON.stringify({ version: 1, surfaces: null })]) {
+    const tmp = mkdtempSync(join(tmpdir(), 'prompt-lint-baseline-'));
+    try {
+      mkdirSync(join(tmp, '.prompt-lint'), { recursive: true });
+      mkdirSync(join(tmp, 'agent'), { recursive: true });
+      writeFileSync(join(tmp, 'agent', 'AGENTS.md'), '# Test\n');
+      writeFileSync(join(tmp, '.prompt-lint', 'baseline.json'), bad);
+
+      const cli = runCli(['check', '--root', tmp]);
+      assert.equal(cli.status, 2, `baseline=${bad}`);
+      assert.match(cli.stderr, /baseline/i);
+      assert.doesNotMatch(cli.stderr, /at cmdCheck|node:internal/, `ожидалась чистая ошибка, получено: ${cli.stderr}`);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+});
+
+test('несуществующий --root не даёт зелёный результат по чужому дереву', () => {
+  const missing = join(tmpdir(), 'prompt-lint-missing-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  for (const cmd of ['scan', 'sizes', 'baseline', 'check', 'fingerprint']) {
+    const cli = runCli([cmd, '--root', missing]);
+    assert.equal(cli.status, 2, cmd);
+    assert.match(cli.stderr, /--root/);
+    assert.equal(existsSync(missing), false, 'CLI не должен создавать несуществующий корень');
+  }
+});
+
+test('неизвестная команда завершается кодом 1, а не 0', () => {
+  const cli = runCli(['scna']);
+  assert.equal(cli.status, 1);
+  assert.match(cli.stderr, /unknown command/);
+});
+
+test('опечатанный или неполный флаг не выключает гейт молча (exit 2)', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'prompt-lint-flags-'));
+  try {
+    mkdirSync(join(tmp, 'agent'), { recursive: true });
+    writeFileSync(join(tmp, 'agent', 'AGENTS.md'), '# Test\n');
+
+    // `--chek` раньше уходил в позиционные аргументы: гейт не включался, exit 0
+    const typo = runCli(['sizes', '--root', tmp, '--chek']);
+    assert.equal(typo.status, 2);
+    assert.match(typo.stderr, /неизвестный флаг --chek/);
+
+    const missing = runCli(['scan', '--root']);
+    assert.equal(missing.status, 2);
+    assert.match(missing.stderr, /--root требует значение/);
+
+    const flagAsValue = runCli(['scan', '--root', '--check']);
+    assert.equal(flagAsValue.status, 2);
+    assert.match(flagAsValue.stderr, /--root требует значение/);
+
+    // Контроль: корректные флаги работают
+    const ok = runCli(['sizes', '--root', tmp, '--check', '--json']);
+    assert.equal(ok.status, 0);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

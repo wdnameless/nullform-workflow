@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "task": "csv-sum",
+  "arm": "oneshot",
+  "run": 2,
+  "startedAt": "2026-09-21T02:12:58.861Z",
+  "durationMs": 12958,
+  "status": "ok",
+  "agentExit": 0,
+  "baseSha": "512fb759823488cea91c3ff9a059aaf67432554c",
+  "headSha": "512fb759823488cea91c3ff9a059aaf67432554c",
+  "commits": 0,
+  "worktreeChanges": 2,
+  "metrics": {
+    "linesAdded": 21,
+    "linesDeleted": 0,
+    "filesChanged": 1,
+    "files": [
+      {
+        "added": 21,
+        "deleted": 0,
+        "file": "src/csv.js"
+      }
+    ]
+  },
+  "toolArtifacts": {
+    "linesAdded": 1044,
+    "linesDeleted": 0,
+    "filesChanged": 7,
+    "files": [
+      {
+        "added": 0,
+        "deleted": 0,
+        "file": ".opencode/index/.failed-batches.d71e9e65840e0842.json.43be1340d41186dff4a2fe6978c2e2d7c70641b5.tmp"
+      },
+      {
+        "added": 1,
+        "deleted": 0,
+        "file": ".opencode/index/background-worker.c2c1c514cd2ae208ef3d6fc006d418e7.lease/heartbeat.be55df6c-1164-4ea9-911c-3dddf25801a1.json"
+      },
+      {
+        "added": 1,
+        "deleted": 0,
+        "file": ".opencode/index/background-worker.c2c1c514cd2ae208ef3d6fc006d418e7.lease/owner.json"
+      },
+      {
+        "added": 1,
+        "deleted": 0,
+        "file": ".opencode/index/codebase.db"
+      },
+      {
+        "added": 0,
+        "deleted": 0,
+        "file": ".opencode/index/codebase.db-shm"
+      },
+      {
+        "added": 1040,
+        "deleted": 0,
+        "file": ".opencode/index/codebase.db-wal"
+      },
+      {
+        "added": 1,
+        "deleted": 0,
+        "file": ".opencode/index/indexing.lock/owner.json"
+      }
+    ]
+  },
+  "metricsWarning": "git add -A не выполнен (error: read error while indexing .opencode/index/codebase.db-shm: Permission denied\nerror: .opencode/index/codebase.db-shm: failed to insert into database\nerror: unable to index file '.opencode/index/codebase.db-shm'\nfatal: adding files failed); метрики собраны из рабочего дерева",
+  "checks": [
+    {
+      "cmd": "node --test test/csv.test.js",
+      "code": 0,
+      "passed": true,
+      "tail": "ℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 78.5913"
+    }
+  ],
+  "logPath": "D:\\TMP\\bench-real\\bench\\runs\\2026-09-21T02-12-25-698Z-csv-sum-oneshot-2\\agent.log"
+}

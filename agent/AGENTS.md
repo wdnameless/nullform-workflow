@@ -57,6 +57,7 @@ task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST 
 ## 5. MEMORY (Hindsight — shared across all user devices)
 - RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>")` — reuse decisions other devices already recorded.
 - RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions")` — bank `main`. Memory hygiene: retain strictly structured ≤~200 words. Durable architectural decisions belong in `docs/adr/`, not in memory.
+- WEEKLY REVIEW (once a week): review the bank — prune stale or superseded memories, fold durable architectural decisions into `docs/adr/`, and keep only what still guides future work.
 ---
 
 # SHELL PATHS (Windows host — get this right the first time)

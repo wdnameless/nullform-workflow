@@ -382,6 +382,126 @@ test("report без прогонов: честное пустое сообщен
   }
 });
 
+/** Фикстура: репозиторий с задачей и src/x.js в истории. */
+function createMetricsRepo(taskId) {
+  const repoDir = createGitRepo();
+  mkdirSync(join(repoDir, "src"), { recursive: true });
+  writeFileSync(join(repoDir, "src", "x.js"), "const x = 1;\n", "utf8");
+  spawnSync("git", ["add", "-A"], { cwd: repoDir });
+  spawnSync("git", ["commit", "-m", "add src"], { cwd: repoDir });
+
+  initBenchmark(repoDir);
+  writeFileSync(
+    join(repoDir, TASKS_FILE),
+    JSON.stringify({
+      version: 1,
+      tasks: [{ id: taskId, title: "t", prompt: "p", setup: [], checks: [], timeoutSec: 60 }],
+    }, null, 2),
+    "utf8"
+  );
+  return repoDir;
+}
+
+test("метрики: служебные артефакты инструментов не приписываются агенту", () => {
+  const repoDir = createMetricsRepo("artifact-task");
+  try {
+    const armCmd =
+      `node -e "const fs=require('fs');` +
+      `fs.writeFileSync('src/x.js','const x = 2;\\n');` +
+      `fs.mkdirSync('.opencode/index',{recursive:true});` +
+      `fs.writeFileSync('.opencode/index/artifact.json','{}\\n')"`;
+
+    const results = runBenchmark({
+      root: repoDir,
+      taskId: "artifact-task",
+      arm: "artifact-arm",
+      cmd: armCmd,
+      yes: true,
+      runs: 1,
+    });
+
+    assert.equal(results.length, 1);
+    const r = results[0];
+
+    // Работа агента: только src/x.js
+    assert.equal(r.metrics.filesChanged, 1);
+    assert.deepEqual(r.metrics.files.map((f) => f.file), ["src/x.js"]);
+    assert.equal(r.metrics.linesAdded, 1);
+    assert.equal(r.metrics.linesDeleted, 1);
+
+    // Служебный артефакт посчитан отдельно и не попал в метрики задачи
+    assert.equal(r.toolArtifacts.filesChanged, 1);
+    assert.equal(r.toolArtifacts.files[0].file, ".opencode/index/artifact.json");
+
+    // Расхождений нет — предупреждения отсутствуют
+    assert.equal(r.metricsWarning, null);
+    assert.ok(r.worktreeChanges >= 1, `worktreeChanges=${r.worktreeChanges}`);
+    assert.equal(r.commits, 0);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("метрики: залоченный .git/index.lock не приводит к молчаливому нулю", () => {
+  const repoDir = createMetricsRepo("locked-index-task");
+  try {
+    const armCmd =
+      `node -e "const fs=require('fs');` +
+      `fs.writeFileSync('src/x.js','const x = 3;\\n');` +
+      `fs.writeFileSync('.git/index.lock','')"`;
+
+    const results = runBenchmark({
+      root: repoDir,
+      taskId: "locked-index-task",
+      arm: "locked-arm",
+      cmd: armCmd,
+      yes: true,
+      runs: 1,
+    });
+
+    const r = results[0];
+    // Правка агента обязана попасть в метрики, несмотря на сломанный git add
+    assert.equal(r.metrics.filesChanged, 1);
+    assert.equal(r.metrics.files[0].file, "src/x.js");
+    assert.equal(r.metrics.linesAdded, 1);
+    assert.equal(r.metrics.linesDeleted, 1);
+    // Молчания нет: причина зафиксирована
+    assert.match(r.metricsWarning, /git add -A/);
+    assert.ok(r.worktreeChanges > 0, `worktreeChanges=${r.worktreeChanges}`);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("метрики: коммит агента не теряется (сравнение с baseSha)", () => {
+  const repoDir = createMetricsRepo("commit-task");
+  try {
+    const armCmd =
+      `node -e "const fs=require('fs');` +
+      `fs.appendFileSync('src/x.js','const y = 4;\\n');` +
+      `require('child_process').execSync('git add -A && git commit -m agent-work')"`;
+
+    const results = runBenchmark({
+      root: repoDir,
+      taskId: "commit-task",
+      arm: "commit-arm",
+      cmd: armCmd,
+      yes: true,
+      runs: 1,
+    });
+
+    const r = results[0];
+    assert.equal(r.commits, 1);
+    assert.notEqual(r.baseSha, r.headSha);
+    assert.equal(r.metrics.filesChanged, 1);
+    assert.equal(r.metrics.files[0].file, "src/x.js");
+    assert.equal(r.metrics.linesAdded, 1);
+    assert.equal(r.metricsWarning, null);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 test("compareArms: на синтетических прогонах дает верные дельты и агрегат", () => {
   const syntheticSummary = {
     total: 4,
@@ -465,4 +585,111 @@ test("compareArms: на синтетических прогонах дает в�
   assert.equal(comp.aggregate.durationPct, -23.3);
   assert.deepEqual(comp.aggregate.baseChecks, { passed: 3, total: 4 });
   assert.deepEqual(comp.aggregate.candidateChecks, { passed: 4, total: 4 });
+});
+
+/* ------------------------------------------------- adversarial (hardening-2) */
+
+test("tasks.json: дублирующийся id — явная ошибка, а не молчаливый выбор первой задачи", () => {
+  const repoDir = createGitRepo();
+  try {
+    initBenchmark(repoDir);
+    writeFileSync(
+      join(repoDir, TASKS_FILE),
+      JSON.stringify({
+        version: 1,
+        tasks: [
+          { id: "dup", title: "first", prompt: "one" },
+          { id: "dup", title: "second", prompt: "two" },
+        ],
+      }),
+      "utf8"
+    );
+
+    assert.throws(() => loadTasks(repoDir), /Дублирующийся id/);
+
+    const cli = spawnSync(process.execPath, [CLI_PATH, "list", "--root", repoDir], { encoding: "utf8" });
+    assert.equal(cli.status, 1);
+    assert.match(cli.stderr, /Дублирующийся id задачи 'dup'/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("tasks.json: неверные типы setup/checks/timeoutSec ловятся, а не превращаются в NaN-таймаут", () => {
+  for (const badTask of [
+    { id: "t", prompt: "p", timeoutSec: "abc" },
+    { id: "t", prompt: "p", setup: "npm install" },
+    { id: "t", prompt: "p", checks: "node -e 1" },
+  ]) {
+    const repoDir = createGitRepo();
+    try {
+      initBenchmark(repoDir);
+      writeFileSync(join(repoDir, TASKS_FILE), JSON.stringify({ version: 1, tasks: [badTask] }), "utf8");
+
+      assert.throws(() => loadTasks(repoDir), /Задача 't'/, JSON.stringify(badTask));
+
+      const cli = spawnSync(process.execPath, [CLI_PATH, "list", "--root", repoDir], { encoding: "utf8" });
+      assert.equal(cli.status, 1, JSON.stringify(badTask));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("CLI: --runs 0/-1 отклоняется с exit 2, а --runs 1 остаётся валидным", () => {
+  const repoDir = createGitRepo();
+  try {
+    initBenchmark(repoDir);
+    writeFileSync(
+      join(repoDir, TASKS_FILE),
+      JSON.stringify({ version: 1, tasks: [{ id: "t", title: "t", prompt: "p" }] }),
+      "utf8"
+    );
+
+    for (const bad of ["0", "-1", "abc"]) {
+      const cli = spawnSync(
+        process.execPath,
+        [CLI_PATH, "run", "--root", repoDir, "--task", "t", "--arm", "a", "--cmd", "x", "--runs", bad, "--dry-run"],
+        { encoding: "utf8" }
+      );
+      assert.equal(cli.status, 2, `--runs ${bad}: ${cli.stderr}`);
+      assert.match(cli.stderr, /--runs/);
+    }
+
+    const ok = spawnSync(
+      process.execPath,
+      [CLI_PATH, "run", "--root", repoDir, "--task", "t", "--arm", "a", "--cmd", "x", "--runs", "1", "--dry-run"],
+      { encoding: "utf8" }
+    );
+    assert.equal(ok.status, 0);
+    assert.match(ok.stdout, /Повторов: 1/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("report: повреждённый result.json не исчезает молча", () => {
+  const repoDir = createGitRepo();
+  try {
+    initBenchmark(repoDir);
+    mkdirSync(join(repoDir, RUNS_DIR, "broken-run"), { recursive: true });
+    writeFileSync(join(repoDir, RUNS_DIR, "broken-run", "result.json"), "{corrupt", "utf8");
+
+    const summary = summarizeRuns(repoDir);
+    assert.equal(summary.total, 0);
+    assert.equal(summary.skipped.length, 1);
+    assert.match(summary.skipped[0].reason, /JSON/);
+
+    const cli = spawnSync(process.execPath, [CLI_PATH, "report", "--root", repoDir], { encoding: "utf8" });
+    assert.equal(cli.status, 1);
+    assert.match(cli.stderr, /пропущен bench\/runs\/broken-run\/result\.json/);
+
+    const cliJson = spawnSync(process.execPath, [CLI_PATH, "report", "--root", repoDir, "--json"], {
+      encoding: "utf8",
+    });
+    assert.equal(cliJson.status, 1);
+    assert.equal(JSON.parse(cliJson.stdout).skipped.length, 1);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
 });

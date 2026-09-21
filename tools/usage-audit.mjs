@@ -17,6 +17,23 @@ import { pathToFileURL } from "node:url";
  *   --help, -h        Справка
  */
 
+/** Объявленные опции CLI; всё остальное — опечатка, которую нельзя проглатывать. */
+const KNOWN_OPTIONS = new Set(["sessions", "days", "top", "mcp", "skills", "json", "help"]);
+
+/**
+ * Разбирает числовой параметр CLI. Молчаливая подмена значения (0 → 1, -5 → 30,
+ * "abc" → дефолт) искажала отчёт, поэтому неверное значение — явная ошибка.
+ */
+function parseCount(raw, flag, min, errors) {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  const value = /^\d+$/.test(text) ? Number(text) : NaN;
+  if (!Number.isInteger(value) || value < min) {
+    errors.push(`${flag} требует целое число >= ${min} (получено: ${JSON.stringify(raw)})`);
+    return null;
+  }
+  return value;
+}
+
 export function parseCliArgs(args = process.argv.slice(2)) {
   const defaultHome = homedir();
   const defaultSessions = join(defaultHome, ".omp", "agent", "sessions");
@@ -28,6 +45,7 @@ export function parseCliArgs(args = process.argv.slice(2)) {
     options: {
       sessions: { type: "string", default: defaultSessions },
       days: { type: "string", default: "30" },
+      top: { type: "string", default: "15" },
       mcp: { type: "string", default: defaultMcp },
       skills: { type: "string", default: defaultSkills },
       json: { type: "boolean", default: false },
@@ -36,16 +54,35 @@ export function parseCliArgs(args = process.argv.slice(2)) {
     strict: false,
   });
 
-  const parsedDays = Number(values.days);
-  const days = Number.isFinite(parsedDays) && parsedDays >= 0 ? parsedDays : 30;
+  const errors = [];
+  for (const key of Object.keys(values)) {
+    if (!KNOWN_OPTIONS.has(key)) {
+      errors.push(`неизвестный параметр --${key}`);
+    }
+  }
+
+  const days = parseCount(values.days, "--days", 1, errors);
+  const top = parseCount(values.top, "--top", 1, errors);
+
+  for (const [flag, value] of [
+    ["--sessions", values.sessions],
+    ["--mcp", values.mcp],
+    ["--skills", values.skills],
+  ]) {
+    if (typeof value !== "string" || value.trim() === "") {
+      errors.push(`${flag} требует непустой путь (получено: ${JSON.stringify(value)})`);
+    }
+  }
 
   return {
     sessionsDir: values.sessions,
-    days,
+    days: days ?? 30,
+    top: top ?? 15,
     mcpPath: values.mcp,
     skillsDir: values.skills,
     json: values.json,
     help: values.help,
+    errors,
   };
 }
 
@@ -80,15 +117,26 @@ export function findJsonlFiles(dir) {
 
 /**
  * Загрузка списка сконфигурированных MCP-серверов из mcp.json.
+ * Ошибки конфигурации не проглатываются: они попадают в `notes` вызывающего,
+ * иначе битый mcp.json выглядел как «конфиг пуст, все серверы используются».
+ *
+ * @param {string} mcpFilePath
+ * @param {string[]} [notes]
+ * @returns {string[]}
  */
-export function loadMcpServers(mcpFilePath) {
-  if (!mcpFilePath || !existsSync(mcpFilePath)) return [];
+export function loadMcpServers(mcpFilePath, notes = []) {
+  if (!mcpFilePath || typeof mcpFilePath !== "string" || !existsSync(mcpFilePath)) return [];
   try {
     const raw = readFileSync(mcpFilePath, "utf8");
     const data = JSON.parse(raw);
-    const servers = data.mcpServers || data.servers || {};
+    const servers = data?.mcpServers ?? data?.servers ?? {};
+    if (!servers || typeof servers !== "object" || Array.isArray(servers)) {
+      notes.push(`mcp.json: список серверов имеет неверный тип — конфигурация не прочитана: ${mcpFilePath}`);
+      return [];
+    }
     return Object.keys(servers);
-  } catch {
+  } catch (err) {
+    notes.push(`mcp.json не читается (${err.message}) — раздел неиспользуемых MCP-серверов неполон: ${mcpFilePath}`);
     return [];
   }
 }
@@ -281,7 +329,7 @@ export function auditUsage(options) {
     }
   }
 
-  const configuredMcpServers = loadMcpServers(mcpPath);
+  const configuredMcpServers = loadMcpServers(mcpPath, notes);
   const installedSkills = loadInstalledSkills(skillsDir);
 
   // Неиспользуемые MCP-серверы
@@ -333,7 +381,7 @@ export function auditUsage(options) {
 /**
  * Текстовое RU форматирование отчёта.
  */
-export function formatAuditReport(data) {
+export function formatAuditReport(data, { top = 15 } = {}) {
   if (data.empty) {
     const lines = [data.reason || "Сессий не найдено"];
     if (data.notes && data.notes.length > 0) {
@@ -348,35 +396,24 @@ export function formatAuditReport(data) {
   lines.push(`Просканировано сессий: ${data.stats.scannedFiles} (всего файлов: ${data.stats.totalFiles})`);
   lines.push(`Обработано строк: ${data.stats.totalLines}${data.stats.malformedLines > 0 ? ` (битых: ${data.stats.malformedLines})` : ""}`);
 
-  lines.push("\n--- ВСТРОЕННЫЕ ТУЛЫ ---");
-  const sortedBuiltins = Object.entries(data.tools.builtins).sort((a, b) => b[1] - a[1]);
-  if (sortedBuiltins.length === 0) {
-    lines.push("(вызовов не обнаружено)");
-  } else {
-    for (const [name, count] of sortedBuiltins) {
-      lines.push(`  ${name.padEnd(20)} : ${count}`);
+  const ranked = (title, counts, pad, emptyText) => {
+    lines.push(`\n${title}`);
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    if (sorted.length === 0) {
+      lines.push(emptyText);
+      return;
     }
-  }
+    for (const [name, count] of sorted.slice(0, top)) {
+      lines.push(`  ${name.padEnd(pad)} : ${count}`);
+    }
+    if (sorted.length > top) {
+      lines.push(`  ... ещё ${sorted.length - top} поз. (ограничение --top ${top})`);
+    }
+  };
 
-  lines.push("\n--- MCP ТУЛЫ ---");
-  const sortedMcp = Object.entries(data.tools.mcp).sort((a, b) => b[1] - a[1]);
-  if (sortedMcp.length === 0) {
-    lines.push("(вызовов не обнаружено)");
-  } else {
-    for (const [name, count] of sortedMcp) {
-      lines.push(`  ${name.padEnd(35)} : ${count}`);
-    }
-  }
-
-  lines.push("\n--- СКИЛЛЫ (skill://) ---");
-  const sortedSkills = Object.entries(data.tools.skills).sort((a, b) => b[1] - a[1]);
-  if (sortedSkills.length === 0) {
-    lines.push("(обращений не обнаружено)");
-  } else {
-    for (const [name, count] of sortedSkills) {
-      lines.push(`  ${name.padEnd(30)} : ${count}`);
-    }
-  }
+  ranked("--- ВСТРОЕННЫЕ ТУЛЫ ---", data.tools.builtins, 20, "(вызовов не обнаружено)");
+  ranked("--- MCP ТУЛЫ ---", data.tools.mcp, 35, "(вызовов не обнаружено)");
+  ranked("--- СКИЛЛЫ (skill://) ---", data.tools.skills, 30, "(обращений не обнаружено)");
 
   lines.push("\n--- НЕИСПОЛЬЗУЕМЫЕ MCP СЕРВЕРЫ (из mcp.json) ---");
   if (data.unusedMcp.length === 0) {
@@ -408,20 +445,39 @@ export function formatAuditReport(data) {
 
 // Запуск при прямом вызове CLI
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const options = parseCliArgs();
-
-  if (options.help) {
-    console.log(`Использование: node tools/usage-audit.mjs [параметры]
+  const USAGE = `Использование: node tools/usage-audit.mjs [параметры]
 
 Параметры:
   --sessions <dir>  Каталог с сессиями (по умолчанию ~/.omp/agent/sessions)
-  --days <n>        Фильтр сессий по возрасту в днях (по умолчанию 30)
+  --days <n>        Фильтр сессий по возрасту в днях, >= 1 (по умолчанию 30)
+  --top <n>         Ограничить ранжированные списки в текстовом отчёте, >= 1 (по умолчанию 15)
   --mcp <path>      Путь к mcp.json (по умолчанию ~/.omp/agent/mcp.json)
   --skills <dir>    Каталог установленных скиллов (по умолчанию ~/.agents/skills)
-  --json            Машиночитаемый вывод JSON
+  --json            Машиночитаемый вывод JSON (полные счётчики, без ограничения --top)
   --help, -h        Справка
-`);
+`;
+
+  let options;
+  try {
+    options = parseCliArgs();
+  } catch (err) {
+    console.error(`Ошибка разбора аргументов: ${err.message}`);
+    console.error(USAGE);
+    process.exit(2);
+  }
+
+  if (options.help) {
+    console.log(USAGE);
     process.exit(0);
+  }
+
+  // Неверный/опечатанный параметр раньше молча менял окно аудита (--day 30 → 30 дней).
+  if (options.errors.length > 0) {
+    for (const err of options.errors) {
+      console.error(`Ошибка: ${err}.`);
+    }
+    console.error(USAGE);
+    process.exit(2);
   }
 
   const auditResult = auditUsage(options);
@@ -429,7 +485,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (options.json) {
     console.log(JSON.stringify(auditResult, null, 2));
   } else {
-    console.log(formatAuditReport(auditResult));
+    console.log(formatAuditReport(auditResult, { top: options.top }));
   }
 
   process.exit(0);

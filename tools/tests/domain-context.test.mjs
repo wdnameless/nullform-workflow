@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import {
   isGitRepo,
   collectDomainFiles,
@@ -229,4 +229,42 @@ test("DECISIONS section: finds matching lines in docs/adr and openspec/changes, 
   assert.strictEqual(foundCtx.decisions.length, 5);
   const foundText = formatRussianOutput(foundCtx);
   assert.match(foundText, /=== DECISIONS ===\r?\n- docs\/adr\/0001-auth-jwt\.md: # 1\. Auth JWT Decision/);
+});
+
+/* ------------------------------------------------- adversarial (hardening-2) */
+
+const CLI = join(process.cwd(), 'tools', 'domain-context.mjs');
+
+test('domain-context CLI: --max-files 0/-1/abc отклоняются (exit 2), а не подменяются на 15', () => {
+  const tmp = createTempDir();
+  try {
+    mkdirSync(join(tmp, 'src', 'billing'), { recursive: true });
+    writeFileSync(join(tmp, 'src', 'billing', 'a.js'), '// a\n');
+
+    const bad = [
+      [['--max-files', '0'], /--max-files/],
+      [['--max-files', '-1'], /--max-files/],
+      [['--max-files', 'abc'], /--max-files/],
+      [['--max-files'], /--max-files/],
+      [['--bogus'], /неизвестный или неполный параметр/],
+    ];
+    for (const [args, re] of bad) {
+      const cli = spawnSync(process.execPath, [CLI, '--domain', 'billing', '--root', tmp, '--no-gh', ...args], {
+        encoding: 'utf8',
+      });
+      assert.equal(cli.status, 2, JSON.stringify(args));
+      assert.match(cli.stderr, re, JSON.stringify(args));
+    }
+
+    // Контроль: валидный --max-files работает и не усекает молча
+    const ok = spawnSync(process.execPath, [CLI, '--domain', 'billing', '--root', tmp, '--no-gh', '--max-files', '1', '--json'], {
+      encoding: 'utf8',
+    });
+    assert.equal(ok.status, 0);
+    const data = JSON.parse(ok.stdout);
+    assert.equal(data.files.length, 1);
+    assert.equal(data.truncated, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

@@ -68,6 +68,181 @@ node tools/benchmark.mjs compare --baseline base-arm --candidate my-agent
 export const DEFAULT_GITIGNORE_CONTENT = `runs/\n`;
 
 /**
+ * Служебные каталоги инструментов (индексатор OMP, карты, воркфлоу-состояние).
+ * Их изменения — не работа агента, в метрики задачи они не попадают.
+ */
+export const TOOL_ARTIFACT_PATHS = [
+  ".opencode",
+  ".archmap",
+  ".workflow",
+  ".prompt-lint",
+  "node_modules",
+  "bench/runs",
+];
+
+/** Служебные каталоги как include-pathspec (для отдельного подсчёта артефактов). */
+const TOOL_ARTIFACT_INCLUDES = TOOL_ARTIFACT_PATHS.map((p) => p);
+
+/** Пустые метрики. */
+function emptyMetrics() {
+  return { linesAdded: 0, linesDeleted: 0, filesChanged: 0, files: [] };
+}
+
+/** Метрики = все изменения минус пути служебных артефактов инструментов. */
+function subtractMetrics(all, tool) {
+  const toolPaths = new Set(tool.files.map((f) => f.file));
+  const files = all.files.filter((f) => !toolPaths.has(f.file));
+  return {
+    linesAdded: files.reduce((s, f) => s + f.added, 0),
+    linesDeleted: files.reduce((s, f) => s + f.deleted, 0),
+    filesChanged: files.length,
+    files,
+  };
+}
+
+/** Синхронный sleep без внешних зависимостей. */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** git в контексте репозитория клона; read-only операции — без записи индекса. */
+function git(repoDir, args, { optionalLocks = false } = {}) {
+  const base = optionalLocks ? ["--no-optional-locks", "-C", repoDir] : ["-C", repoDir];
+  return spawnSync("git", [...base, ...args], { encoding: "utf8", shell: false });
+}
+
+/** stdout успешной git-команды или "" при ошибке. */
+function gitStdout(repoDir, args) {
+  const res = git(repoDir, args);
+  return res.status === 0 ? (res.stdout || "").trim() : "";
+}
+
+/** Разбор `git diff --numstat` в метрики. */
+function parseNumstat(stdout) {
+  const files = [];
+  let linesAdded = 0;
+  let linesDeleted = 0;
+  for (const line of (stdout || "").split("\n")) {
+    if (!line.trim()) continue;
+    const parts = line.split("\t");
+    if (parts.length < 3) continue;
+    const added = parts[0] === "-" ? 0 : parseInt(parts[0], 10) || 0;
+    const deleted = parts[1] === "-" ? 0 : parseInt(parts[1], 10) || 0;
+    files.push({ added, deleted, file: parts.slice(2).join("\t").trim() });
+    linesAdded += added;
+    linesDeleted += deleted;
+  }
+  return { linesAdded, linesDeleted, filesChanged: files.length, files };
+}
+
+/** Число строк в файле (для untracked-файлов в fallback-режиме). */
+function countFileLines(filePath) {
+  try {
+    const text = readFileSync(filePath, "utf8");
+    return text.length === 0 ? 0 : text.split("\n").length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Собирает метрики изменений клона относительно базовой ревизии `baseSha`.
+ *
+ * Гарантии:
+ *  - правки агента не теряются, даже если `git add` не сработал (залоченный индекс
+ *    фоновым индексатором) — используется fallback на diff рабочего дерева;
+ *  - коммиты агента учитываются (сравнение идёт с `baseSha`, а не с новым HEAD);
+ *  - служебные каталоги инструментов считаются отдельно в `toolArtifacts`;
+ *  - расхождение `git status` и метрик никогда не проглатывается — попадает в `warnings`.
+ *
+ * @param {string} repoDir
+ * @param {string} baseSha базовая ревизия (до запуска агента), может быть ""
+ * @returns {{metrics: object, toolArtifacts: object, worktreeChanges: number, warnings: string[]}}
+ */
+export function collectRunMetrics(repoDir, baseSha) {
+  const warnings = [];
+  const ref = baseSha || "HEAD";
+
+  const staged = gitStaged(repoDir, warnings);
+  const diffArgs = staged ? ["diff", "--cached"] : ["diff"];
+
+  /** numstat относительно baseSha + untracked-файлы (только в fallback-режиме). */
+  const collect = (pathspec) => {
+    const res = git(repoDir, [...diffArgs, "--numstat", ref, "--", ...pathspec]);
+    let acc = emptyMetrics();
+    if (res.status === 0) {
+      acc = parseNumstat(res.stdout);
+    } else {
+      warnings.push(`git diff --numstat не выполнен: ${(res.stderr || "").trim() || `exit ${res.status}`}`);
+    }
+    // Fallback: индекс не заполнен (залочен), поэтому untracked-файлы numstat не видит.
+    if (!staged) {
+      const untracked = git(repoDir, ["ls-files", "--others", "--exclude-standard", "--", ...pathspec], {
+        optionalLocks: true,
+      });
+      if (untracked.status === 0) {
+        for (const rel of (untracked.stdout || "").split("\n")) {
+          const file = rel.trim();
+          if (!file) continue;
+          const added = countFileLines(join(repoDir, file));
+          acc.files.push({ added, deleted: 0, file });
+          acc.linesAdded += added;
+          acc.filesChanged += 1;
+        }
+      } else {
+        warnings.push(`git ls-files не выполнен: ${(untracked.stderr || "").trim() || `exit ${untracked.status}`}`);
+      }
+    }
+    return acc;
+  };
+
+  // Все изменения минус служебные артефакты инструментов (они — не работа агента).
+  const all = collect(["."]);
+  const toolArtifacts = collect(TOOL_ARTIFACT_INCLUDES);
+  const metrics = subtractMetrics(all, toolArtifacts);
+
+  // Перекрёстная проверка: рабочее дерево не пусто, а метрики пусты — никогда не молчим.
+  const statusRes = git(repoDir, ["status", "--porcelain"], { optionalLocks: true });
+  let worktreeChanges;
+  if (statusRes.status === 0) {
+    worktreeChanges = (statusRes.stdout || "").split("\n").filter((l) => l.trim()).length;
+    if (worktreeChanges > 0 && metrics.filesChanged === 0) {
+      warnings.push(
+        `git status сообщает о ${worktreeChanges} изменённых путях, но метрики пусты — правки агента не учтены`
+      );
+    }
+  } else {
+    worktreeChanges = metrics.filesChanged;
+    warnings.push(`git status не выполнен: ${(statusRes.stderr || "").trim() || `exit ${statusRes.status}`}`);
+  }
+
+  return { metrics, toolArtifacts, worktreeChanges, warnings };
+}
+
+/**
+ * Индексирует все изменения клона, переживая залоченный индекс (фоновый индексатор,
+ * упавший процесс). При неудаче возвращает false и добавляет причину в `warnings`.
+ *
+ * @param {string} repoDir
+ * @param {string[]} warnings
+ * @returns {boolean} удалось ли проиндексировать изменения
+ */
+function gitStaged(repoDir, warnings) {
+  const first = git(repoDir, ["add", "-A", "--", "."]);
+  if (first.status === 0) return true;
+
+  const firstError = (first.stderr || first.stdout || "").trim();
+  sleepSync(300);
+  const retry = git(repoDir, ["add", "-A", "--", "."]);
+  if (retry.status === 0) return true;
+
+  warnings.push(
+    `git add -A не выполнен (${firstError || `exit ${retry.status}`}); метрики собраны из рабочего дерева`
+  );
+  return false;
+}
+
+/**
  * Проверяет, является ли каталог валидным git-репозиторием.
  * @param {string} dir
  * @returns {boolean}
@@ -162,12 +337,29 @@ export function loadTasks(root) {
     throw new Error(`Некорректный формат ${tasksPath}: ожидается объект со списком tasks.`);
   }
 
+  const seenIds = new Set();
   for (const t of data.tasks) {
     if (!t || typeof t !== "object" || !t.id || typeof t.id !== "string") {
       throw new Error(`Задача в ${tasksPath} должна содержать непустой строковый 'id'.`);
     }
+    if (seenIds.has(t.id)) {
+      throw new Error(`Дублирующийся id задачи '${t.id}' в ${tasksPath}: выбор задачи неоднозначен.`);
+    }
+    seenIds.add(t.id);
     if (!t.prompt || typeof t.prompt !== "string") {
       throw new Error(`Задача '${t.id}' должна содержать строковый 'prompt'.`);
+    }
+    if (t.setup !== undefined && !Array.isArray(t.setup)) {
+      throw new Error(`Задача '${t.id}': 'setup' должен быть массивом команд.`);
+    }
+    if (t.checks !== undefined && !Array.isArray(t.checks)) {
+      throw new Error(`Задача '${t.id}': 'checks' должен быть массивом команд.`);
+    }
+    if (
+      t.timeoutSec !== undefined &&
+      (typeof t.timeoutSec !== "number" || !Number.isFinite(t.timeoutSec) || t.timeoutSec < 0)
+    ) {
+      throw new Error(`Задача '${t.id}': 'timeoutSec' должен быть неотрицательным числом.`);
     }
   }
 
@@ -283,7 +475,12 @@ export function runBenchmark(options) {
     throw new Error("Не указан шаблон команды арма (--cmd)");
   }
 
-  const runCount = Number(runs) > 0 ? Number(runs) : 1;
+  const runCount = runs == null ? 1 : Number(runs);
+  if (!Number.isInteger(runCount) || runCount < 1) {
+    const err = new Error(`Параметр runs должен быть целым числом >= 1 (получено: ${runs})`);
+    err.exitCode = 2;
+    throw err;
+  }
   const taskTimeoutSec = timeoutSec !== undefined && timeoutSec !== null
     ? Number(timeoutSec)
     : (task.timeoutSec || 300);
@@ -362,6 +559,10 @@ export function runBenchmark(options) {
       }
     }
 
+    // 2a. Базовая ревизия: всё, что появилось после неё, — работа агента.
+    // Берётся после setup, чтобы артефакты подготовки не приписывались агенту.
+    const baseSha = gitStdout(repoDir, ["rev-parse", "HEAD"]);
+
     // 3. Подготовка команды арма
     // Плейсхолдеры: {prompt_file}, {run_dir}, {task_id}, {arm}
     let renderedCmd = cmd
@@ -422,35 +623,18 @@ export function runBenchmark(options) {
     const fullLog = `=== STDOUT ===\n${agentStdout}\n=== STDERR ===\n${agentStderr}\n`;
     writeFileSync(logPath, fullLog, "utf8");
 
-    // 4. Метрики изменений: git -C repo add -A then git -C repo diff --cached --numstat HEAD
-    spawnSync("git", ["-C", repoDir, "add", "-A"], { encoding: "utf8", shell: false });
-    const diffRes = spawnSync("git", ["-C", repoDir, "diff", "--cached", "--numstat", "HEAD"], {
-      encoding: "utf8",
-      shell: false,
-    });
-
-    const metrics = {
-      linesAdded: 0,
-      linesDeleted: 0,
-      filesChanged: 0,
-      files: [],
-    };
-
-    if (diffRes.status === 0 && diffRes.stdout) {
-      const lines = diffRes.stdout.trim().split("\n").filter((l) => l.trim().length > 0);
-      for (const line of lines) {
-        const parts = line.split("\t");
-        if (parts.length >= 3) {
-          const added = parts[0] === "-" ? 0 : parseInt(parts[0], 10) || 0;
-          const deleted = parts[1] === "-" ? 0 : parseInt(parts[1], 10) || 0;
-          const file = parts.slice(2).join("\t").trim();
-          metrics.linesAdded += added;
-          metrics.linesDeleted += deleted;
-          metrics.filesChanged += 1;
-          metrics.files.push({ added, deleted, file });
-        }
-      }
+    // 4. Метрики изменений относительно baseSha (правки + коммиты агента),
+    // служебные каталоги инструментов — отдельно.
+    const { metrics, toolArtifacts, worktreeChanges, warnings } = collectRunMetrics(repoDir, baseSha);
+    const headSha = gitStdout(repoDir, ["rev-parse", "HEAD"]);
+    if (!baseSha) {
+      warnings.push("не удалось определить базовую ревизию (git rev-parse HEAD) — коммиты агента могут не попасть в метрики");
     }
+    const commits =
+      baseSha && headSha && baseSha !== headSha
+        ? Number(gitStdout(repoDir, ["rev-list", "--count", `${baseSha}..${headSha}`])) || 0
+        : 0;
+    const metricsWarning = warnings.length > 0 ? warnings.join("; ") : null;
 
     // 5. Проверки checks inside repoDir
     const checksResults = [];
@@ -491,7 +675,13 @@ export function runBenchmark(options) {
       durationMs,
       status,
       agentExit,
+      baseSha,
+      headSha,
+      commits,
+      worktreeChanges,
       metrics,
+      toolArtifacts,
+      metricsWarning,
       checks: checksResults,
       ...(cost !== undefined ? { cost } : {}),
       logPath,
@@ -514,15 +704,16 @@ export function summarizeRuns(root) {
   const absRoot = resolve(root || ".");
   const runsDir = join(absRoot, RUNS_DIR);
 
+  const skipped = [];
   if (!existsSync(runsDir)) {
-    return { byTaskArm: {}, total: 0 };
+    return { byTaskArm: {}, total: 0, skipped };
   }
 
   let entries = [];
   try {
     entries = readdirSync(runsDir);
   } catch {
-    return { byTaskArm: {}, total: 0 };
+    return { byTaskArm: {}, total: 0, skipped };
   }
 
   const byTaskArm = {};
@@ -535,11 +726,16 @@ export function summarizeRuns(root) {
     let res;
     try {
       res = JSON.parse(readFileSync(resFile, "utf8"));
-    } catch {
+    } catch (err) {
+      // Проглоченный result.json исчезал из отчёта и искажал выводы — фиксируем явно.
+      skipped.push({ file: `${RUNS_DIR}/${entry}/result.json`, reason: `некорректный JSON: ${err.message}` });
       continue;
     }
 
-    if (!res || !res.task || !res.arm) continue;
+    if (!res || typeof res !== "object" || !res.task || !res.arm) {
+      skipped.push({ file: `${RUNS_DIR}/${entry}/result.json`, reason: "нет полей task/arm" });
+      continue;
+    }
 
     const key = `${res.task}::${res.arm}`;
     if (!byTaskArm[key]) {
@@ -594,7 +790,7 @@ export function summarizeRuns(root) {
     g.medianCostUsd = g.costs.length > 0 ? Number(median(g.costs).toFixed(4)) : null;
   }
 
-  return { byTaskArm, total: totalRuns };
+  return { byTaskArm, total: totalRuns, skipped };
 }
 
 /**
@@ -770,9 +966,9 @@ export function parseArgs(argv) {
     } else if (arg.startsWith("--cmd=")) {
       args.cmd = arg.slice(6);
     } else if (arg === "--runs") {
-      args.runs = parseInt(argv[++i], 10) || 1;
+      args.runs = parseInt(argv[++i], 10);
     } else if (arg.startsWith("--runs=")) {
-      args.runs = parseInt(arg.slice(7), 10) || 1;
+      args.runs = parseInt(arg.slice(7), 10);
     } else if (arg === "--timeout") {
       args.timeout = parseInt(argv[++i], 10);
     } else if (arg.startsWith("--timeout=")) {
@@ -848,6 +1044,15 @@ export function main(argv = process.argv.slice(2)) {
 
   // Проверка git-репозитория требуется для run, init и остальных команд для предсказуемости
   if (args.command === "run") {
+    // Молчаливое «0/-1 → 1» раньше превращало --runs 0 в настоящий прогон бенчмарка.
+    if (!Number.isInteger(args.runs) || args.runs < 1) {
+      console.error(`Ошибка: --runs требует целое число >= 1 (получено: ${args.runs}).`);
+      return 2;
+    }
+    if (args.timeout !== null && (!Number.isInteger(args.timeout) || args.timeout < 0)) {
+      console.error(`Ошибка: --timeout требует целое число >= 0 секунд (получено: ${args.timeout}).`);
+      return 2;
+    }
     if (!isGitRepo(absRoot)) {
       console.error(`Ошибка: директория '${absRoot}' не является git-репозиторием.`);
       return 2;
@@ -953,6 +1158,14 @@ export function main(argv = process.argv.slice(2)) {
             console.log(
               `  [${res.run}] Статус: ${res.status}, Время: ${res.durationMs}ms, LOC: +${res.metrics.linesAdded}/-${res.metrics.linesDeleted}, Проверки: ${checksPass}/${checksTotal}`
             );
+            if (res.metricsWarning) {
+              console.log(`      ! метрики: ${res.metricsWarning}`);
+            }
+            if (res.toolArtifacts && res.toolArtifacts.filesChanged > 0) {
+              console.log(
+                `      служебные артефакты инструментов (вне метрик): ${res.toolArtifacts.filesChanged} файл(ов), +${res.toolArtifacts.linesAdded}/-${res.toolArtifacts.linesDeleted}`
+              );
+            }
           }
         }
         return 0;
@@ -969,13 +1182,19 @@ export function main(argv = process.argv.slice(2)) {
     case "report": {
       try {
         const summary = summarizeRuns(absRoot);
+
+        // Пропущенные result.json никогда не остаются незамеченными.
+        for (const s of summary.skipped) {
+          console.error(`Предупреждение: пропущен ${s.file} (${s.reason})`);
+        }
+
         if (summary.total === 0) {
           if (args.json) {
-            console.log(JSON.stringify({ total: 0, byTaskArm: {} }, null, 2));
+            console.log(JSON.stringify({ total: 0, byTaskArm: {}, skipped: summary.skipped }, null, 2));
           } else {
             console.log("Запусков нет: сначала выполните benchmark run.");
           }
-          return 0;
+          return summary.skipped.length > 0 ? 1 : 0;
         }
 
         if (args.json) {

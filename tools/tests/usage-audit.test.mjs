@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   findJsonlFiles,
   loadMcpServers,
@@ -263,6 +263,91 @@ test("usage-audit: CLI execution produces valid text and JSON output", () => {
     assert.deepEqual(parsed.unusedMcp, ["unusedSrv"]);
     assert.deepEqual(parsed.unusedSkills, ["bar"]);
     assert.equal(parsed.tools.skills.foo, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ------------------------------------------------- adversarial (hardening-2) */
+
+const CLI = join(process.cwd(), 'tools', 'usage-audit.mjs');
+
+/** Запуск CLI с произвольными аргументами. */
+function runCli(args) {
+  return spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' });
+}
+
+test('usage-audit CLI: неверные --days/--top/опечатки отклоняются, а не подменяются молча', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'audit-bad-args-'));
+  try {
+    const sessions = join(tmp, 'sessions');
+    mkdirSync(sessions, { recursive: true });
+
+    const bad = [
+      [['--days', '0'], /--days/],
+      [['--days', '-5'], /--days/],
+      [['--days', 'abc'], /--days/],
+      [['--days'], /--days/],
+      [['--top', '0'], /--top/],
+      [['--top'], /--top/],
+      [['--day', '30'], /неизвестный параметр --day/],
+      [['--sessions'], /--sessions/],
+    ];
+    for (const [args, re] of bad) {
+      const cli = runCli(['--sessions', sessions, ...args]);
+      assert.equal(cli.status, 2, JSON.stringify(args));
+      assert.equal(cli.stdout.trim(), '', JSON.stringify(args));
+      assert.match(cli.stderr, re, JSON.stringify(args));
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('usage-audit CLI: --top ограничивает текстовые списки и не молчит об усечении', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'audit-top-'));
+  try {
+    const sessions = join(tmp, 'sessions');
+    mkdirSync(sessions, { recursive: true });
+    const lines = ['read', 'write', 'edit', 'grep'].map((name) =>
+      JSON.stringify({ type: 'toolCall', name, input: {} })
+    );
+    writeFileSync(join(sessions, 's.jsonl'), lines.join('\n') + '\n');
+
+    const cli = runCli(['--sessions', sessions, '--days', '30', '--top', '2']);
+    assert.equal(cli.status, 0);
+    assert.match(cli.stdout, /ограничение --top 2/);
+    const shown = cli.stdout.split('\n').filter((l) => /^  (read|write|edit|grep) /.test(l));
+    assert.equal(shown.length, 2);
+
+    // JSON отдаёт полные счётчики независимо от --top
+    const jsonCli = runCli(['--sessions', sessions, '--days', '30', '--top', '2', '--json']);
+    assert.equal(jsonCli.status, 0);
+    const data = JSON.parse(jsonCli.stdout);
+    assert.equal(Object.keys(data.tools.builtins).length, 4);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('usage-audit: битый mcp.json не выглядит как «конфиг пуст»', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'audit-bad-mcp-'));
+  try {
+    const sessions = join(tmp, 'sessions');
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, 's.jsonl'), JSON.stringify({ type: 'toolCall', name: 'read', input: {} }) + '\n');
+
+    const mcpPath = join(tmp, 'mcp.json');
+    writeFileSync(mcpPath, '{broken', 'utf8');
+
+    const res = auditUsage({ sessionsDir: sessions, days: 30, mcpPath, skillsDir: join(tmp, 'nope') });
+    assert.equal(res.unusedMcp.length, 0);
+    assert.match(res.notes.join('\n'), /mcp\.json не читается/);
+    assert.match(formatAuditReport(res), /mcp\.json не читается/);
+
+    const cli = runCli(['--sessions', sessions, '--days', '30', '--mcp', mcpPath]);
+    assert.equal(cli.status, 0);
+    assert.match(cli.stdout, /mcp\.json не читается/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

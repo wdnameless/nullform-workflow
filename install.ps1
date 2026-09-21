@@ -225,13 +225,26 @@ if (Test-Path $lockPath) {
   $lockedNames = @((Get-Content $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json).skills.PSObject.Properties.Name)
   $skipSkills = @($lockedNames | Where-Object { Test-Path "$agentsHome\skills\$_\SKILL.md" })
 }
-$copied = 0; $skipped = @()
+# Skills the operator disabled on purpose (~/.agents/.skills-disabled.json, the
+# same registry record tools/skills-doctor.mjs reports as `info: disabled by
+# operator`): an install must not resurrect what the operator pruned.
+$disabledPath = "$agentsHome\.skills-disabled.json"
+$disabledSkills = @()
+if (Test-Path $disabledPath) {
+  try {
+    $disabledSkills = @((Get-Content $disabledPath -Raw -Encoding UTF8 | ConvertFrom-Json).disabled | Where-Object { $_ -is [string] })
+  } catch {
+    Warn "skills-disabled list unreadable ($disabledPath) - ignored"
+  }
+}
+$copied = 0; $skipped = @(); $disabled = @()
 Get-ChildItem "$PSScriptRoot\skills" -Directory | ForEach-Object {
   if ($skipSkills -contains $_.Name) { $skipped += $_.Name; return }
+  if ($disabledSkills -contains $_.Name) { $disabled += $_.Name; return }
   Copy-Item $_.FullName "$agentsHome\skills\" -Force -Recurse
   $script:copied++
 }
-Ok "skills: $copied installed$(if ($skipped) { ", $(($skipped).Count) lock-managed skipped" })"
+Ok "skills: $copied installed$(if ($skipped) { ", $(($skipped).Count) lock-managed skipped" })$(if ($disabled) { ", $(($disabled).Count) disabled by operator skipped" })"
 # <HARNESS> substitution inside installed skills (destination copies only —
 # a skill that references the tools by absolute path must work on any machine).
 Get-ChildItem "$agentsHome\skills" -Recurse -Filter *.md -ErrorAction SilentlyContinue | ForEach-Object {

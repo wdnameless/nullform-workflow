@@ -23,7 +23,7 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { join, relative, sep, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -48,13 +48,50 @@ const VOLATILE = [
 
 /* ----------------------------------------------------------------- utilities */
 
+const CLI_FLAGS = {
+  "--root": { key: "root" },
+  "--json": { bool: true, key: "json" },
+  "--check": { bool: true, key: "check" },
+  "-h": { bool: true, key: "help" },
+  "--help": { bool: true, key: "help" },
+};
+
 function parseArgs(argv) {
-  const out = { _: [], root: null, json: false, check: false };
+  const out = { _: [], root: null, json: false, check: false, help: false, errors: [] };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--root") out.root = argv[++i];
-    else if (argv[i] === "--json") out.json = true;
-    else if (argv[i] === "--check") out.check = true;
-    else out._.push(argv[i]);
+    const arg = argv[i];
+    const eq = arg.indexOf("=");
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+    const inline = eq === -1 ? null : arg.slice(eq + 1);
+    const spec = CLI_FLAGS[name];
+
+    if (!spec) {
+      if (arg.startsWith("-")) {
+        // Опечатка в флаге раньше становилась позиционным аргументом и молча
+        // выключала проверку (`--chek` → обычный прогон без гейта).
+        out.errors.push(`неизвестный флаг ${arg}`);
+      } else {
+        out._.push(arg);
+      }
+      continue;
+    }
+
+    if (spec.bool) {
+      if (inline !== null) {
+        out.errors.push(`флаг ${name} не принимает значение`);
+        continue;
+      }
+      out[spec.key] = true;
+      continue;
+    }
+
+    const value = inline !== null ? inline : argv[i + 1];
+    if (value === undefined || (inline === null && value.startsWith("-"))) {
+      out.errors.push(`флаг ${name} требует значение`);
+      continue;
+    }
+    if (inline === null) i++;
+    out[spec.key] = value;
   }
   return out;
 }
@@ -238,7 +275,9 @@ const DEFAULT_BUDGETS = {
 };
 
 export function parseSkillFrontmatterText(text) {
-  const norm = text.replace(/\r\n/g, "\n");
+  // BOM в начале файла (частая реальность на Windows) ломает проверку `^---`,
+  // из-за чего весь frontmatter молча считался пустым (0 байт вместо реального размера).
+  const norm = String(text).replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(norm);
   if (!m) return "";
   const lines = m[1].split("\n");
@@ -254,6 +293,36 @@ export function parseSkillFrontmatterText(text) {
   return matched.length ? matched.join("\n") + "\n" : "";
 }
 
+/**
+ * Применяет конфиг бюджетов к дефолтам. Всё, что не удалось применить,
+ * попадает в `warnings`: молчаливая потеря операторского бюджета — ложный зелёный.
+ */
+function mergeBudgets(target, source, label, warnings) {
+  if (source === null || typeof source !== "object" || Array.isArray(source)) {
+    warnings.push(`${label}: ожидался объект с группами бюджетов — ignored`);
+    return;
+  }
+  for (const [group, conf] of Object.entries(source)) {
+    if (!target[group]) {
+      warnings.push(`${label}: неизвестная группа '${group}' — ignored`);
+      continue;
+    }
+    if (!conf || typeof conf !== "object" || Array.isArray(conf)) {
+      warnings.push(`${label}: группа '${group}' должна быть объектом — ignored`);
+      continue;
+    }
+    for (const key of ["maxBytes", "maxLines"]) {
+      const value = conf[key];
+      if (value === undefined) continue;
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        warnings.push(`${label}: ${group}.${key} должен быть неотрицательным числом, получено ${JSON.stringify(value)} — ignored`);
+        continue;
+      }
+      target[group][key] = value;
+    }
+  }
+}
+
 export function collectSizes(root, home, customBudgets = null) {
   const baseRoot = root || process.cwd();
   const userHome = home || process.env.USERPROFILE || process.env.HOME || "";
@@ -265,28 +334,18 @@ export function collectSizes(root, home, customBudgets = null) {
     skills: { ...DEFAULT_BUDGETS.skills },
   };
 
+  const warnings = [];
   const budgetFile = join(baseRoot, ".prompt-lint", "budget.json");
   if (existsSync(budgetFile)) {
     try {
-      const parsed = JSON.parse(readFileSync(budgetFile, "utf8"));
-      for (const [group, conf] of Object.entries(parsed)) {
-        if (mergedBudgets[group] && conf && typeof conf === "object") {
-          if (typeof conf.maxBytes === "number") mergedBudgets[group].maxBytes = conf.maxBytes;
-          if (typeof conf.maxLines === "number") mergedBudgets[group].maxLines = conf.maxLines;
-        }
-      }
-    } catch {
-      // ignore invalid json in budget.json
+      mergeBudgets(mergedBudgets, JSON.parse(readFileSync(budgetFile, "utf8")), ".prompt-lint/budget.json", warnings);
+    } catch (err) {
+      warnings.push(`.prompt-lint/budget.json: некорректный JSON (${err.message}) — ignored, применены дефолтные бюджеты`);
     }
   }
 
-  if (customBudgets && typeof customBudgets === "object") {
-    for (const [group, conf] of Object.entries(customBudgets)) {
-      if (mergedBudgets[group] && conf && typeof conf === "object") {
-        if (typeof conf.maxBytes === "number") mergedBudgets[group].maxBytes = conf.maxBytes;
-        if (typeof conf.maxLines === "number") mergedBudgets[group].maxLines = conf.maxLines;
-      }
-    }
+  if (customBudgets) {
+    mergeBudgets(mergedBudgets, customBudgets, "customBudgets", warnings);
   }
 
   const groups = {
@@ -380,7 +439,7 @@ export function collectSizes(root, home, customBudgets = null) {
     };
   }
 
-  return { ok, groups: results };
+  return { ok, groups: results, warnings };
 }
 
 function cmdSizes(root, home, asJson, checkMode) {
@@ -401,6 +460,14 @@ function cmdSizes(root, home, asJson, checkMode) {
     if (!res.ok) {
       console.log("\nSome prompt size budgets were exceeded.");
     }
+  }
+
+  for (const w of res.warnings || []) {
+    console.error(`prompt-lint: ${w}`);
+  }
+  // Неприменённый конфиг бюджетов — не молчаливый зелёный: сообщаем и падаем.
+  if ((res.warnings || []).length > 0) {
+    return 2;
   }
 
   if (checkMode && !res.ok) {
@@ -482,7 +549,17 @@ function cmdCheck(root, home) {
     console.error("prompt-lint: no baseline. Run `baseline` first.");
     return 2;
   }
-  const base = JSON.parse(readFileSync(p, "utf8"));
+  let base;
+  try {
+    base = JSON.parse(readFileSync(p, "utf8"));
+  } catch (err) {
+    console.error(`prompt-lint: baseline is unreadable (${err.message}). Re-run \`baseline\`.`);
+    return 2;
+  }
+  if (!base || typeof base !== "object" || !base.surfaces || typeof base.surfaces !== "object") {
+    console.error(`prompt-lint: baseline is corrupt (missing "surfaces" object). Re-run \`baseline\`.`);
+    return 2;
+  }
   const files = [...collectSurfaces(root), ...collectInstalled(home)];
   const current = {};
   for (const f of files) current[label(root, f)] = sha(readText(f));
@@ -515,21 +592,49 @@ function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const root = args.root || process.cwd();
   const home = process.env.USERPROFILE || process.env.HOME || "";
+
+  if (args.errors.length > 0) {
+    for (const err of args.errors) {
+      console.error(`prompt-lint: ${err}.`);
+    }
+    printUsage();
+    return 2;
+  }
+
+  if (args.help) {
+    printUsage();
+    return 0;
+  }
+
+  // Несуществующий --root раньше молча давал зелёный результат по чужому дереву
+  // (или по пустому набору поверхностей) — для гейта это ложный зелёный.
+  if (args.root && !(existsSync(root) && statSync(root).isDirectory())) {
+    console.error(`prompt-lint: --root '${args.root}' is not an existing directory.`);
+    return 2;
+  }
+
   switch (args._[0]) {
     case "scan":        return cmdScan(root, home);
     case "baseline":    return cmdBaseline(root, home);
     case "check":       return cmdCheck(root, home);
     case "fingerprint": return cmdFingerprint(root, home, args.json);
     case "sizes":       return cmdSizes(root, home, args.json, args.check);
+    case undefined:     printUsage();
+                        return 0;
     default:
-      console.log("prompt-lint.mjs — prompt-cache safety\n");
-      console.log("  node prompt-lint.mjs scan        --root <harness>   # volatile literals");
-      console.log("  node prompt-lint.mjs baseline    --root <harness>   # record golden hashes");
-      console.log("  node prompt-lint.mjs check       --root <harness>   # fail on drift");
-      console.log("  node prompt-lint.mjs fingerprint --root <harness> [--json] # layered fingerprints");
-      console.log("  node prompt-lint.mjs sizes       --root <harness> [--json] [--check] # size budgets");
-      return 0;
+      console.error(`prompt-lint: unknown command '${args._[0]}'.`);
+      printUsage();
+      return 1;
   }
+}
+
+function printUsage() {
+  console.log("prompt-lint.mjs — prompt-cache safety\n");
+  console.log("  node prompt-lint.mjs scan        --root <harness>   # volatile literals");
+  console.log("  node prompt-lint.mjs baseline    --root <harness>   # record golden hashes");
+  console.log("  node prompt-lint.mjs check       --root <harness>   # fail on drift");
+  console.log("  node prompt-lint.mjs fingerprint --root <harness> [--json] # layered fingerprints");
+  console.log("  node prompt-lint.mjs sizes       --root <harness> [--json] [--check] # size budgets");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -476,20 +476,30 @@ export function formatRussianOutput(data) {
  * Парсер аргументов командной строки.
  */
 export function parseArgs(argv) {
-  const args = { _: [], maxFiles: DEFAULT_MAX_FILES, allowGh: true };
+  const args = { _: [], maxFiles: DEFAULT_MAX_FILES, allowGh: true, errors: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--domain" && i + 1 < argv.length) {
       args.domain = argv[++i];
     } else if (a === "--root" && i + 1 < argv.length) {
       args.root = argv[++i];
-    } else if (a === "--max-files" && i + 1 < argv.length) {
-      args.maxFiles = parseInt(argv[++i], 10) || DEFAULT_MAX_FILES;
+    } else if (a === "--max-files" || a.startsWith("--max-files=")) {
+      // Молчаливое `parseInt(...) || 15` превращало `--max-files 0|abc` в 15,
+      // а `--max-files -1` — в slice(0, -1) с потерей последнего файла.
+      const raw = a === "--max-files" ? argv[++i] : a.slice("--max-files=".length);
+      const value = typeof raw === "string" && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : NaN;
+      if (!Number.isInteger(value) || value < 1) {
+        args.errors.push(`--max-files требует целое число >= 1 (получено: ${JSON.stringify(raw)})`);
+      } else {
+        args.maxFiles = value;
+      }
     } else if (a === "--json") {
       args.json = true;
     } else if (a === "--no-gh") {
       args.allowGh = false;
-    } else if (!a.startsWith("--")) {
+    } else if (a.startsWith("--")) {
+      args.errors.push(`неизвестный или неполный параметр ${a}`);
+    } else {
       args._.push(a);
     }
   }
@@ -505,9 +515,19 @@ const isDirectExecution =
 if (isDirectExecution) {
   const args = parseArgs(process.argv.slice(2));
 
+  const USAGE = "Использование: node tools/domain-context.mjs --domain <name> [--root <dir>] [--json] [--max-files 15] [--no-gh]";
+
+  if (args.errors.length > 0) {
+    for (const err of args.errors) {
+      console.error(`Ошибка: ${err}.`);
+    }
+    console.error(USAGE);
+    process.exit(2);
+  }
+
   if (!args.domain || !args.domain.trim()) {
     console.error("Ошибка: параметр --domain обязателен.");
-    console.error("Использование: node tools/domain-context.mjs --domain <name> [--root <dir>] [--json] [--max-files 15] [--no-gh]");
+    console.error(USAGE);
     process.exit(2);
   }
 

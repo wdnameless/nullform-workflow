@@ -1,13 +1,108 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, cpSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
-import { CORE_TOOLS, runDoctor, parseCliArgs } from "../doctor.mjs";
+import { spawnSync, spawn } from "node:child_process";
+import { createServer } from "node:http";
+import {
+  CORE_TOOLS,
+  runDoctor,
+  parseCliArgs,
+  parseRoleModels,
+  probeProviders,
+  discoverRepoClone,
+  isRepoTree,
+} from "../doctor.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const DOCTOR_PATH = resolve(REPO_ROOT, "tools/doctor.mjs");
+
+/** Каталоги, покрытые манифестом sync.ps1 (та же область, что у orphan-files). */
+const MANIFEST_DIRS = ["tools", "agent", "rules", "core", "templates", "paseo"];
+
+/** Запускает doctor как CLI и возвращает {status, json}. */
+function runDoctorCli(args) {
+  const res = spawnSync(process.execPath, [DOCTOR_PATH, ...args, "--json"], { encoding: "utf8" });
+  let json = null;
+  try {
+    json = JSON.parse(res.stdout);
+  } catch {
+    json = null;
+  }
+  return { status: res.status, json, stdout: res.stdout, stderr: res.stderr };
+}
+
+function checkOf(json, id) {
+  return json.checks.find((c) => c.id === id);
+}
+
+/**
+ * Асинхронный запуск CLI: нужен там, где провайдер обслуживается HTTP-сервером
+ * внутри теста — spawnSync заблокировал бы event loop и сервер не ответил бы.
+ */
+function runDoctorCliAsync(args) {
+  return new Promise((resolvePromise) => {
+    const child = spawn(process.execPath, [DOCTOR_PATH, ...args, "--json"]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (status) => {
+      let json = null;
+      try {
+        json = JSON.parse(stdout);
+      } catch {
+        json = null;
+      }
+      resolvePromise({ status, json, stdout, stderr });
+    });
+  });
+}
+
+/**
+ * Клон репозитория внутри харнесса: маркеры репозитория + зеркало каталогов манифеста.
+ * `extraFiles` попадают ТОЛЬКО в харнесс (это и есть сироты).
+ */
+function addRepoClone(harness, extraFiles = []) {
+  const clone = join(harness, "workflow-repo");
+  for (const dir of MANIFEST_DIRS) {
+    cpSync(join(harness, dir), join(clone, dir), { recursive: true });
+  }
+  writeFileSync(join(clone, "install.ps1"), "# repo marker\n", "utf8");
+  writeFileSync(join(clone, "agent/models.yml.example"), "providers: {}\n", "utf8");
+
+  for (const rel of extraFiles) {
+    const full = join(harness, rel);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, "harness-only\n", "utf8");
+  }
+  return clone;
+}
+
+/** models.yml с одним провайдером; baseUrl намеренно ненадёжен (порт 1 — отказ). */
+function modelsYamlFixture({ livePort = null } = {}) {
+  const lines = ["providers:", "  dead-provider:", "    baseUrl: http://127.0.0.1:1/v1", "    apiKey: sk-fixture-secret-key", "    models:", "      - id: model-a"];
+  if (livePort) {
+    lines.push(
+      "  live-provider:",
+      `    baseUrl: http://127.0.0.1:${livePort}/v1`,
+      "    models:",
+      "      - id: model-b"
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+async function withServer(handler, fn) {
+  const server = createServer(handler);
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    return await fn(server.address().port);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+}
 
 function createMockHarness(baseDir, { omitFiles = [], omitTools = [] } = {}) {
   const harness = join(baseDir, "harness");
@@ -355,6 +450,349 @@ test("configs check handles UTF-8 BOM in mcp.json and flags invalid JSON", () =>
     assert.match(configsCheckInvalid.detail, /не является валидным JSON/);
     assert.equal(jsonInvalid.ok, false);
     assert.equal(resInvalid.status, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("orphan-files: чистое дерево (харнесс == клон) — PASS", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-clean-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const clone = addRepoClone(harness);
+
+    const { status, json } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
+    const check = checkOf(json, "orphan-files");
+
+    assert.equal(check.status, "pass", check.detail);
+    assert.match(check.detail, /присутствуют в репозитории/);
+    assert.equal(json.summary.fail, 0);
+    assert.equal(status, 0);
+    assert.equal(discoverRepoClone(harness), clone);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("orphan-files: лишний файл в tools/ — FAIL (инструмент вне дистрибутива)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-tools-"));
+  try {
+    const harness = createMockHarness(tmp);
+    addRepoClone(harness, ["tools/local-hack.mjs"]);
+
+    const { status, json } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
+    const check = checkOf(json, "orphan-files");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /tools\/ \(1\): tools\/local-hack\.mjs/);
+    assert.equal(json.ok, false);
+    assert.equal(status, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("orphan-files: лишний файл вне tools/ — WARN, exit 0", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-agent-"));
+  try {
+    const harness = createMockHarness(tmp);
+    addRepoClone(harness, ["agent/local-note.md", "rules/scratch.md"]);
+
+    const { status, json } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
+    const check = checkOf(json, "orphan-files");
+
+    assert.equal(check.status, "warn");
+    assert.match(check.detail, /прочие \(2\)/);
+    assert.match(check.detail, /agent\/local-note\.md/);
+    assert.match(check.detail, /rules\/scratch\.md/);
+    assert.equal(json.summary.fail, 0);
+    assert.equal(status, 0);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("orphan-files: конфиги и сессионные каталоги не считаются сиротами", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-configs-"));
+  try {
+    const harness = createMockHarness(tmp);
+    addRepoClone(harness, [
+      "agent/config.yml",
+      "agent/models.yml",
+      "agent/mcp.json",
+      "agent/models.db",
+      "agent/sessions/live.jsonl",
+      "agent/.workflow/state.json",
+      "tools/node_modules/pkg/index.js",
+    ]);
+
+    const { json } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
+    const check = checkOf(json, "orphan-files");
+
+    assert.equal(check.status, "pass", check.detail);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("orphan-files: харнесс сам является репозиторием — SKIP", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-isrepo-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writeFileSync(join(harness, "install.ps1"), "# repo marker\n", "utf8");
+    writeFileSync(join(harness, "agent/models.yml.example"), "providers: {}\n", "utf8");
+
+    const { json } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
+    const check = checkOf(json, "orphan-files");
+
+    assert.equal(isRepoTree(harness), true);
+    assert.equal(check.status, "skip");
+    assert.match(check.detail, /является дистрибутивным репозиторием/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("orphan-files: клон репозитория не обнаружен — SKIP", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-noclone-"));
+  try {
+    const harness = createMockHarness(tmp);
+
+    const { json } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
+    const check = checkOf(json, "orphan-files");
+
+    assert.equal(discoverRepoClone(harness), null);
+    assert.equal(check.status, "skip");
+    assert.match(check.detail, /Клон репозитория не обнаружен/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseCliArgs: --probe включает сетевую проверку, по умолчанию выключена", () => {
+  assert.equal(parseCliArgs(["--harness", "/tmp/h"]).probe, false);
+  assert.equal(parseCliArgs(["--harness", "/tmp/h", "--probe"]).probe, true);
+});
+
+test("parseRoleModels: modelRoles и task.agentModelOverrides, комментарии и кавычки", () => {
+  const config = [
+    "# comment",
+    "providers:",
+    "  streamIdleTimeoutSeconds: 180",
+    "modelRoles:",
+    "  default: openai-codex/gpt-6-astra:high",
+    '  oracle: "opencode-go/deepseek-v4.1-flash" # chosen',
+    "task:",
+    "  agentModelOverrides:",
+    "    fixer: opencode-go/deepseek-v4.1-flash",
+    "    critic: my-provider/gpt-4o",
+    "commands:",
+    "  enableOpencodeUser: false",
+  ].join("\n");
+
+  assert.deepEqual(parseRoleModels(config), [
+    { role: "default", section: "modelRoles", model: "openai-codex/gpt-6-astra:high" },
+    { role: "oracle", section: "modelRoles", model: "opencode-go/deepseek-v4.1-flash" },
+    { role: "fixer", section: "agentModelOverrides", model: "opencode-go/deepseek-v4.1-flash" },
+    { role: "critic", section: "agentModelOverrides", model: "my-provider/gpt-4o" },
+  ]);
+  assert.deepEqual(parseRoleModels(""), []);
+  assert.deepEqual(parseRoleModels("# только комментарий\n"), []);
+});
+
+test("probeProviders: живой /models → reachable, мёртвый порт → unreachable, без baseUrl → null", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-probe-unit-"));
+  try {
+    await withServer(
+      (req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: [{ id: "model-b" }, { id: "model-c" }] }));
+      },
+      async (port) => {
+        const modelsPath = join(tmp, "models.yml");
+        writeFileSync(
+          modelsPath,
+          [
+            "providers:",
+            "  live-provider:",
+            `    baseUrl: http://127.0.0.1:${port}/v1`,
+            "    models:",
+            "      - id: model-b",
+            "  dead-provider:",
+            "    baseUrl: http://127.0.0.1:1/v1",
+            "    models:",
+            "      - id: model-a",
+            "  headless-provider:",
+            "    models:",
+            "      - id: model-z",
+          ].join("\n") + "\n",
+          "utf8"
+        );
+
+        const { providers, notes } = await probeProviders(modelsPath);
+
+        assert.equal(providers["live-provider"].reachable, true);
+        assert.equal(providers["dead-provider"].reachable, false);
+        assert.ok(providers["dead-provider"].error, "dead provider must carry an error");
+        assert.equal(providers["headless-provider"].reachable, null);
+        assert.equal(providers["headless-provider"].error, "baseUrl не задан");
+        assert.equal(notes.length, 1);
+        assert.match(notes[0], /dead-provider недостижим/);
+      }
+    );
+
+    const missing = await probeProviders(join(tmp, "nope.yml"));
+    assert.deepEqual(missing.providers, {});
+    assert.match(missing.notes[0], /models.yml не найден/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("provider-reachability: без --probe проверки нет вовсе (поведение прежнее)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-reach-off-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const agentDir = join(tmp, "agent-dir");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "models.yml"), modelsYamlFixture(), "utf8");
+    writeFileSync(join(agentDir, "config.yml"), "modelRoles:\n  oracle: dead-provider/model-a\n", "utf8");
+
+    const { json } = runDoctorCli(["--harness", harness, "--agent-dir", agentDir]);
+
+    assert.equal(checkOf(json, "provider-reachability"), undefined, "no probe -> no check");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("provider-reachability: недостижимый провайдер → WARN со списком ролей (не FAIL)", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-reach-warn-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const agentDir = join(tmp, "agent-dir");
+    mkdirSync(agentDir, { recursive: true });
+
+    await withServer(
+      (req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: [{ id: "model-b" }] }));
+      },
+      async (port) => {
+        writeFileSync(join(agentDir, "models.yml"), modelsYamlFixture({ livePort: port }), "utf8");
+        writeFileSync(
+          join(agentDir, "config.yml"),
+          [
+            "modelRoles:",
+            "  oracle: dead-provider/model-a",
+            "  task: live-provider/model-b",
+            "task:",
+            "  agentModelOverrides:",
+            "    fixer: dead-provider/model-a",
+          ].join("\n") + "\n",
+          "utf8"
+        );
+
+        const { status, json, stdout } = await runDoctorCliAsync([
+          "--harness",
+          harness,
+          "--agent-dir",
+          agentDir,
+          "--probe",
+        ]);
+        const check = checkOf(json, "provider-reachability");
+
+        assert.equal(check.status, "warn");
+        assert.match(check.detail, /Недостижимые провайдеры: dead-provider/);
+        assert.match(check.detail, /oracle \[dead-provider\/model-a\]/);
+        assert.match(check.detail, /fixer \[dead-provider\/model-a\]/);
+        assert.ok(!check.detail.includes("task ["), "role on a live provider must not be flagged");
+        assert.equal(json.summary.fail, 0, "offline machine must never FAIL");
+        assert.equal(status, 0);
+        assert.ok(!stdout.includes("sk-fixture-secret-key"), "apiKey must never reach the report");
+      }
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("provider-reachability: все провайдеры отвечают → PASS, роли вне models.yml перечислены", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-reach-pass-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const agentDir = join(tmp, "agent-dir");
+    mkdirSync(agentDir, { recursive: true });
+
+    await withServer(
+      (req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: [{ id: "model-b" }] }));
+      },
+      async (port) => {
+        writeFileSync(
+          join(agentDir, "models.yml"),
+          [
+            "providers:",
+            "  live-provider:",
+            `    baseUrl: http://127.0.0.1:${port}/v1`,
+            "    models:",
+            "      - id: model-b",
+          ].join("\n") + "\n",
+          "utf8"
+        );
+        writeFileSync(
+          join(agentDir, "config.yml"),
+          ["modelRoles:", "  oracle: live-provider/model-b", "  designer: external-gateway/some-model"].join("\n") + "\n",
+          "utf8"
+        );
+
+        const { json } = await runDoctorCliAsync(["--harness", harness, "--agent-dir", agentDir, "--probe"]);
+        const check = checkOf(json, "provider-reachability");
+
+        assert.equal(check.status, "pass");
+        assert.match(check.detail, /Провайдеры отвечают \(live-provider\)/);
+        assert.match(check.detail, /роли вне models\.yml не проверялись: external-gateway \(designer\)/);
+      }
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("provider-reachability: config.yml отсутствует → SKIP", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-reach-noconfig-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const agentDir = join(tmp, "agent-dir");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "models.yml"), modelsYamlFixture(), "utf8");
+
+    const { json } = runDoctorCli(["--harness", harness, "--agent-dir", agentDir, "--probe"]);
+    const check = checkOf(json, "provider-reachability");
+
+    assert.equal(check.status, "skip");
+    assert.match(check.detail, /config\.yml не найден/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("runDoctor: probeResults без config.yml не превращается в FAIL", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-reach-direct-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const result = runDoctor({
+      harness,
+      agentDir: join(tmp, "agent-dir"),
+      agentsHome: join(tmp, "agents-home"),
+      mode: "repo",
+      probeResults: { providers: { dead: { reachable: false, error: "fetch failed" } }, notes: [] },
+    });
+
+    const check = result.checks.find((c) => c.id === "provider-reachability");
+    assert.equal(check.status, "skip");
+    assert.equal(result.summary.fail, 0);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

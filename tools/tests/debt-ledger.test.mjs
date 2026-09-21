@@ -389,3 +389,86 @@ test("CLI: missing or non-directory --root outputs RU error to stderr and exits 
   assert.equal(p3.status, 2);
   assert.match(p3.stderr, /Каталог не найден:/);
 });
+
+test("CLI: --write в каталог завершается кодом 2 и RU-ошибкой без стектрейса", () => {
+  const tmp = createTempDir();
+  try {
+    writeFileSync(join(tmp, "a.js"), "// defer: x | ceiling: 1 | upgrade: 2\n", "utf8");
+    const targetDir = join(tmp, "out");
+    mkdirSync(targetDir, { recursive: true });
+
+    const p = spawnSync(process.execPath, [CLI_PATH, "scan", "--root", tmp, "--write", targetDir], {
+      encoding: "utf8",
+    });
+
+    assert.equal(p.status, 2);
+    assert.match(p.stderr, /не удалось записать реестр/i);
+    assert.doesNotMatch(p.stderr, /at main|node:fs/, `ожидалась чистая ошибка, получено: ${p.stderr}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("CLI: опечатанный флаг не превращает гейт в ложный зелёный (exit 2)", () => {
+  const tmp = createTempDir();
+  try {
+    writeFileSync(join(tmp, "a.js"), "// TODO: not a defer marker\n", "utf8");
+
+    // `--markr TODO` до фикса молча игнорировался и давал «Чисто» + exit 0
+    const typo = spawnSync(process.execPath, [CLI_PATH, "scan", "--check", "--markr", "TODO"], {
+      encoding: "utf8",
+    });
+    assert.equal(typo.status, 2);
+    assert.match(typo.stderr, /неизвестный флаг --markr/);
+    assert.doesNotMatch(typo.stdout, /Чисто/);
+
+    // Контроль: тот же прогон с корректным флагом реально проверяет маркер
+    const proper = spawnSync(process.execPath, [CLI_PATH, "scan", "--check", "--marker", "TODO"], {
+      encoding: "utf8",
+    });
+    assert.equal(proper.status, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("CLI: флаг без значения — ошибка (exit 2), а не молчаливый cwd/дефолт", () => {
+  const tmp = createTempDir();
+  try {
+    writeFileSync(join(tmp, "a.js"), "// defer: x\n", "utf8");
+
+    for (const args of [
+      ["scan", "--root"],
+      ["scan", "--root", tmp, "--marker"],
+      ["scan", "--root", tmp, "--write"],
+      ["scan", "--root", tmp, "--json=1"],
+    ]) {
+      const p = spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: "utf8" });
+      assert.equal(p.status, 2, args.join(" "));
+      assert.match(p.stderr, /Ошибка:/, args.join(" "));
+    }
+
+    // Следующий токен — другой флаг: тоже ошибка, а не «значение --marker»
+    const nextFlag = spawnSync(process.execPath, [CLI_PATH, "scan", "--root", tmp, "--marker", "--check"], {
+      encoding: "utf8",
+    });
+    assert.equal(nextFlag.status, 2);
+    assert.match(nextFlag.stderr, /--marker требует значение/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("CLI: --write без пути — ошибка использования (exit 2), а не молчаливый пропуск", () => {
+  const tmp = createTempDir();
+  try {
+    writeFileSync(join(tmp, "a.js"), "// defer: x | ceiling: 1 | upgrade: 2\n", "utf8");
+
+    const p = spawnSync(process.execPath, [CLI_PATH, "scan", "--root", tmp, "--write"], { encoding: "utf8" });
+
+    assert.equal(p.status, 2);
+    assert.match(p.stderr, /--write/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
