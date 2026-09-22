@@ -140,6 +140,7 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Memory cadence** — `tools/memory-cadence.mjs`. Enforces a regular maintenance cadence (default 7 days) over the Hindsight long-term memory bank, tracking last review timestamps and checking configuration freshness.
 - **Mutation testing** — `tools/mutation-test.mjs`. Evaluates test suite quality by injecting deliberate AST/syntax mutations (comparison flips, boolean flips, operator inversions, boundary shifts) into target source files and measuring the percentage of killed mutants.
 - **Gherkin spec** — `tools/gherkin-spec.mjs`. Parses, validates, and lints executable BDD specifications (Given/When/Then scenarios) in `.feature` files and Markdown code blocks, ensuring acceptance criteria are unambiguous and verifiable.
+- **Engineering dashboard** — `tools/dashboard.mjs`. Offline-first, single-page visual cockpit (.workflow/dashboard.html) presenting real-time project progress, brief coverage (R##), live stage pipelines, architectural module topology, and subagent fleet statuses with local HTTP server and live timer updates.
 - **Workspace script** — a service Paseo supervises (`paseo.json`), for long-lived
   processes the user must see. Distinct from **hub process**, which is an
   in-session PTY that dies with the session.

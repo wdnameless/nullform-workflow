@@ -36,7 +36,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { execSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { findPruneCandidates } from "./sync-prune.mjs";
 import { cleanYamlValue, parseModelsYaml, probeProvider } from "./oracle-model.mjs";
@@ -68,6 +68,7 @@ export const CORE_TOOLS = [
   "memory-cadence.mjs",
   "mutation-test.mjs",
   "gherkin-spec.mjs",
+  "dashboard.mjs",
   "audit.ps1",
   "sync.ps1",
 ];
