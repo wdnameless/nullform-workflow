@@ -97,6 +97,7 @@ $Manifest = @(
   'tools\mutation-test.mjs',
   'tools\gherkin-spec.mjs',
   'tools\dashboard.mjs',
+  'tools\fix-plugin-windows.cjs',
   'tools\audit.ps1',
   'tools\sync.ps1',
   'core\PORTABLE.md',

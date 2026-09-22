@@ -456,6 +456,20 @@ if ($SkipPlugins) {
   }
 }
 
+# ---------- 9b. Plugin console windows (Windows only) ----------
+# Paseo (и любой GUI-хост) не имеет своей консоли: дочерний процесс плагина,
+# запущенный без windowsHide, открывает НОВОЕ окно консоли, которое сразу
+# закрывается. Патч идемпотентен и правит только shell/detached-вызовы;
+# правки живут в node_modules и требуют повтора после обновления плагинов.
+if ( -or $env:OS -eq "Windows_NT") {
+  $fixer = Join-Path $HarnessRoot "toolsix-plugin-windows.cjs"
+  if (Test-Path $fixer) {
+    $out = & node $fixer 2>&1
+    $tail = ($out | Select-Object -Last 1)
+    if ($LASTEXITCODE -eq 0) { Ok "plugins: окна консоли — $tail" } else { Warn "plugins: патч окон не применён ($LASTEXITCODE)" }
+  }
+}
+
 # ---------- 10. Run install doctor ----------
 if (Test-Path "$HarnessRoot\tools\doctor.mjs") {
   $doctorOut = & node "$HarnessRoot\tools\doctor.mjs" --harness "$HarnessRoot" --agent-dir "$agentDir" --agents-home "$agentsHome" 2>&1

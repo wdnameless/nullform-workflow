@@ -69,6 +69,7 @@ export const CORE_TOOLS = [
   "mutation-test.mjs",
   "gherkin-spec.mjs",
   "dashboard.mjs",
+  "fix-plugin-windows.cjs",
   "audit.ps1",
   "sync.ps1",
 ];
