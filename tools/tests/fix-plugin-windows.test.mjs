@@ -119,3 +119,64 @@ test("fix-plugin-windows: правка, ломающая синтаксис, о�
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("fix-plugin-windows: patchPiLensEpipe глушит EPIPE/broken pipe в pi-lens", () => {
+  const src = [
+    "var WritableStreamWrapper = class {",
+    "  write(data, encoding) {",
+    "    if (this.stream && !this.stream._hasLspEpipeHandler) {",
+    "      this.stream._hasLspEpipeHandler = true;",
+    "      this.stream.on?.('error', () => {});",
+    "    }",
+    "    return new Promise((resolve136, reject) => {",
+    "      const callback = (error) => {",
+    "        if (error === void 0 || error === null) {",
+    "          resolve136();",
+    "        } else {",
+    "          reject(error);",
+    "        }",
+    "      };",
+    "      if (typeof data === 'string') {",
+    "        this.stream.write(data, encoding, callback);",
+    "      } else {",
+    "        this.stream.write(data, callback);",
+    "      }",
+    "    });",
+    "  }",
+    "};",
+    "var WriteableStreamMessageWriter = class {",
+    "  async doWrite(msg, headers, data) {",
+    "    try {",
+    "      await this.writable.write(headers.join(''), 'ascii');",
+    "      return await this.writable.write(data);",
+    "    } catch (error) {",
+    "      this.handleError(error, msg);",
+    "      return Promise.reject(error);",
+    "    }",
+    "  }",
+    "};",
+  ].join("\n");
+
+  const root = fixture({ "pi-lens/dist/index.js": src });
+  try {
+    const res = spawnSync(process.execPath, [CLI], {
+      encoding: "utf8",
+      env: { ...process.env, USERPROFILE: root, HOME: root },
+    });
+    const patched = readFileSync(join(root, ".omp", "plugins", "node_modules", "pi-lens", "dist", "index.js"), "utf8");
+
+    assert.ok(patched.includes("patched-epipe-handler"), "маркер патча добавлен");
+    assert.ok(patched.includes('error?.code === "EPIPE"'), "проверка EPIPE добавлена в callback");
+    assert.ok(patched.includes("resolve136();"), "resolve136 вызывается при EPIPE");
+    assert.ok(res.stdout.includes("EPIPE-глушитель добавлен: 2"), "отчёт CLI о правке EPIPE");
+
+    // Идемпотентность: второй прогон
+    const res2 = spawnSync(process.execPath, [CLI], {
+      encoding: "utf8",
+      env: { ...process.env, USERPROFILE: root, HOME: root },
+    });
+    assert.ok(res2.stdout.includes("уже пропатчен (EPIPE)"), "повторный прогон идемпотентен");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
