@@ -80,7 +80,7 @@ test("priority resolution order: case-insensitive substring match respects prior
   assert.equal(res.isFallback, false);
 });
 
-test("fallback when no match is available: resolves to gemini-3.8-flash-high", () => {
+test("fallback без совпадений: берётся первая доступная модель (модель-агностично)", () => {
   const priorityEntries = [
     { match: "claude-3-7-sonnet", why: "" },
     { match: "claude-3-5-sonnet", why: "" },
@@ -93,9 +93,11 @@ test("fallback when no match is available: resolves to gemini-3.8-flash-high", (
   ];
 
   const res = resolveOracleModel(priorityEntries, available);
-  assert.equal(res.resolved, "gemini-3.8-flash-high");
-  assert.equal(res.matchedEntry, "gemini-3.8-flash-high");
+  // Модель-агностичный контракт: приоритеты не совпали — берём первую доступную
+  // модель любого провайдера. Прибитой к вендору модели в резерве нет.
+  assert.equal(res.resolved, available[0].qualified, "резерв — первая доступная модель");
   assert.equal(res.isFallback, true);
+  assert.ok(!/gemini/i.test(String(res.resolved)), "вендор в резерве не зашит");
 });
 
 test("config.yml write preserves unrelated lines (byte comparison except the two oracle lines)", () => {

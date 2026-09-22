@@ -21,9 +21,9 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { resolve, isAbsolute } from "node:path";
+import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 export const MUTATION_OPERATORS = [
   // 1. Операторы сравнения
@@ -235,7 +235,8 @@ export function runMutationTesting(options) {
     shell: true,
     encoding: "utf8",
     timeout: timeoutSec * 1000,
-  windowsHide: true});
+    windowsHide: true,
+  });
 
   if (initialRun.status !== 0) {
     throw new Error(
@@ -258,7 +259,8 @@ export function runMutationTesting(options) {
         shell: true,
         encoding: "utf8",
         timeout: timeoutSec * 1000,
-      windowsHide: true});
+        windowsHide: true,
+      });
 
       const isTimeout = run.error && run.error.code === "ETIMEDOUT";
       const isKilled = isTimeout || run.status !== 0;

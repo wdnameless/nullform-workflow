@@ -350,8 +350,9 @@ export function runCommand(testCmd) {
   const result = spawnSync(buildShellCommand(testCmd), {
     shell: true,
     encoding: 'utf-8',
-    maxBuffer: MAX_OUTPUT
-  , windowsHide: true});
+    maxBuffer: MAX_OUTPUT,
+    windowsHide: true,
+  });
   return classifyResult(result, testCmd[0]);
 }
 

@@ -268,16 +268,20 @@ test("generateDashboardHtml: содержит ключевые секции да
 
   const html = generateDashboardHtml(mock);
   assert.ok(html.includes("<!DOCTYPE html>"));
-  assert.ok(html.includes("Nullform"), "заголовок переименован в Nullform Workflow");
-  assert.ok(html.includes('class="logo"'), "логотип отрендерен");
+  assert.ok(html.includes("Nullform Console"), "свой бренд: Nullform Console");
+  assert.ok(html.includes('class="brand"'), "логотип отрендерен");
   assert.ok(html.includes("Demo task"));
   assert.ok(html.includes("Покрытие брифа"));
   assert.ok(html.includes("Ход сборки"));
-  assert.ok(html.includes("Архитектура и модули"));
-  assert.ok(html.includes("Диффы (git)"));
-  assert.ok(html.includes("Критика и ревью"));
-  assert.ok(html.includes("Технический долг"));
   assert.ok(html.includes("Как это работает"));
+  // Вкладки: обзор, архитектура (майндкарта), логи, диффы, критика, долг, история
+  // Вкладки описываются массивом TABS и рисуются клиентским renderRail:
+  // в статическом HTML их разметки нет — проверяем описание и рендер.
+  assert.ok(html.includes('{ id: "arch"') && html.includes('{ id: "logs"'), "описаны вкладки архитектуры и логов");
+  assert.ok(html.includes("renderRail"), "рельс вкладок рендерится");
+  assert.ok(html.includes("drawMap") && html.includes("visibleTree") && html.includes("function layout"), "майндкарта рисуется на клиенте");
+  assert.ok(html.includes("d.session.key"), "дашборд привязан к сессии");
+  assert.ok(html.includes("collectSessionLog") || html.includes("d.log.entries"), "логи сессии выводятся");
   assert.ok(html.includes("/api/diff"));
   assert.ok(html.includes("data-file="), "рендер диффов делает строки кликабельными");
   assert.ok(html.includes("openDiff"), "есть модалка построчного диффа");
@@ -287,9 +291,9 @@ test("generateDashboardHtml: содержит ключевые секции да
   assert.ok(html.includes("function render("), "страница рендерится на клиенте");
   assert.ok(html.includes("/api/state"), "есть опрос живого состояния");
   assert.ok(html.includes("POLL_MS"), "интервал опроса задан");
-  assert.ok(html.includes("live-badge"), "есть индикатор LIVE");
+  assert.ok(html.includes('id="live"'), "есть индикатор LIVE");
   assert.ok(html.includes("flashChanged"), "изменения подсвечиваются");
-  assert.ok(html.includes("renderModules") && html.includes("renderDiffs") && html.includes("renderCritique"), "секции перерисовываются без перезагрузки");
+  assert.ok(html.includes("renderOverview") && html.includes("renderLogs") && html.includes("renderDiffs") && html.includes("renderCritique"), "секции перерисовываются без перезагрузки");
 });
 
 test("parseArgs: валидация аргументов CLI, включая --checks и --serve", () => {
@@ -320,7 +324,7 @@ test("CLI: --json и генерация файла дашборда работа
     const outFile = join(tmp, "dash.html");
     const genProc = spawnSync(process.execPath, [CLI_PATH, "--root", tmp, "--output", outFile], { encoding: "utf8" });
     assert.equal(genProc.status, 0);
-    assert.ok(readFileSync(outFile, "utf8").includes("Nullform"));
+    assert.ok(readFileSync(outFile, "utf8").includes("Nullform Console"));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -372,7 +376,7 @@ test("live: сервер отвечает на /api/health и /api/state, зат
 
     const htmlRes = await fetch(`http://127.0.0.1:${bound.port}/`);
     const html = await htmlRes.text();
-    assert.ok(html.includes("Nullform Workflow"));
+    assert.ok(html.includes("Nullform Console"));
   } finally {
     if (bound) {
       await new Promise((r) => bound.server.close(r));

@@ -177,6 +177,7 @@ export function unpackBuiltinAgents() {
   const res = spawnSync("omp", ["agents", "unpack", "--dir", targetDir, "--json"], {
     encoding: "utf8",
     shell: viaShell,
+    windowsHide: true,
   });
 
   const failure = res.error
@@ -264,7 +265,8 @@ export function runOmp(args, { timeout = 60000 } = {}) {
     encoding: "utf8",
     shell: process.platform === "win32",
     timeout,
-  windowsHide: true});
+    windowsHide: true,
+  });
   return {
     status: res.status,
     stdout: res.stdout || "",
@@ -556,6 +558,7 @@ export function runDoctor(options) {
         const fullPath = join(toolsDir, mjs);
         const res = spawnSync(process.execPath, ["--check", fullPath], {
           encoding: "utf8",
+          windowsHide: true,
         });
         if (res.status !== 0) {
           syntaxErrors.push(mjs);
@@ -598,7 +601,7 @@ export function runDoctor(options) {
       const pLintRes = spawnSync(
         process.execPath,
         [promptLintPath, "fingerprint", "--root", harness],
-        { encoding: "utf8" }
+        { encoding: "utf8", windowsHide: true }
       );
       if (pLintRes.status !== 0) {
         smokeErrors.push(`prompt-lint fingerprint завершился с кодом ${pLintRes.status}`);
@@ -613,7 +616,7 @@ export function runDoctor(options) {
         const dLedgerRes = spawnSync(
           process.execPath,
           [debtLedgerPath, "scan", "--root", tmpTestDir],
-          { encoding: "utf8" }
+          { encoding: "utf8", windowsHide: true }
         );
         if (dLedgerRes.status !== 0) {
           smokeErrors.push(`debt-ledger scan завершился с кодом ${dLedgerRes.status}`);
@@ -751,7 +754,7 @@ export function runDoctor(options) {
       const res = spawnSync(
         process.execPath,
         [skillsDoctorPath, "--installed", installedSkills, "--repo", repoSkills],
-        { encoding: "utf8" }
+        { encoding: "utf8", windowsHide: true }
       );
       const out = (res.stdout || "") + (res.stderr || "");
       const match = /(\d+)\s+installed,\s+(\d+)\s+in repo/i.exec(out);
@@ -835,7 +838,7 @@ export function runDoctor(options) {
         const res = spawnSync(
           process.execPath,
           [promptLintPath, "check", "--root", harness],
-          { encoding: "utf8" }
+          { encoding: "utf8", windowsHide: true }
         );
         if (res.status === 0) {
           checks.push({

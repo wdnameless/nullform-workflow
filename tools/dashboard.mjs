@@ -23,10 +23,11 @@
  *   --help, -h        Справка
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, openSync, readSync, closeSync } from "node:fs";
 import { resolve, join, dirname, relative } from "node:path";
 import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const CHECKS_CACHE = ".workflow/dashboard-checks.json";
@@ -445,7 +446,7 @@ function stageTimings(state) {
 }
 
 /** Полный агрегат данных дашборда. */
-export function collectDashboardData(root = ".") {
+export function collectDashboardData(root = ".", options = {}) {
   const absRoot = resolve(root);
   const wfDir = join(absRoot, ".workflow");
   const statePath = join(wfDir, "state.json");
@@ -557,9 +558,23 @@ export function collectDashboardData(root = ".") {
     { role: "@oracle", name: "Оракул (приёмка)", wave: 4, status: artifacts.oracle ? "done" : "ready" },
   ];
 
+  const session = {
+    key: sessionKey(options.session || null),
+    paseoAgentId: process.env.PASEO_AGENT_ID || null,
+    transcript: null,
+    usage: null,
+  };
+  session.usage = collectSessionUsage(absRoot, session.key);
+  const sessionFile = newestSessionFile(absRoot);
+  if (sessionFile) session.transcript = sessionFile.name;
+
   return {
     timestamp: new Date().toISOString(),
     root: absRoot,
+    session,
+    events: collectEvents(absRoot, 60),
+    log: collectSessionLog(absRoot, 80),
+    arch: collectArchTree(absRoot, modules),
     project: {
       name: absRoot.split(/[\\/]/).pop() || "project",
       branch: git.branch,
@@ -611,17 +626,283 @@ export function collectDashboardData(root = ".") {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Session binding, events, logs, architecture tree                   */
+/* ------------------------------------------------------------------ */
+
+/** Файл событий воркфлоу: start/artifact/check/close — источник вкладки «Логи». */
+export const EVENTS_FILE = ".workflow/events.jsonl";
+
+/** Каталог рантайм-файлов дашбордов: по одному на (проект, сессия). */
+export const DASHBOARDS_DIR = ".workflow/dashboards";
+
+/**
+ * Ключ сессии. Приоритет: явный --session, затем идентификатор агента Paseo,
+ * затем идентификатор сессии OMP из env, иначе «local».
+ * Дашборд привязан к паре (проект, сессия) — у каждой сессии свой экземпляр.
+ */
+export function sessionKey(override = null) {
+  if (override) return String(override);
+  if (process.env.PASEO_AGENT_ID) return `paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`;
+  if (process.env.OMP_SESSION_ID) return `omp-${String(process.env.OMP_SESSION_ID).slice(0, 8)}`;
+  return "local";
+}
+
+/** Стабильный порт для сессии: база + смещение от хеша ключа. */
+export function portForSession(key, base = 4200, span = 60) {
+  let h = 0;
+  const s = String(key);
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return base + (h % span);
+}
+
+/**
+ * Каталог сессий OMP. OMP кодирует путь как `--D--path-with-dashes--`:
+ * и двоеточие, и обратный слэш становятся дефисом. Если для самого каталога
+ * сессий нет (агент работал в родительском проекте), поднимаемся по родителям.
+ */
+export function ompSessionsDir(absRoot) {
+  const base = join(homedir(), ".omp", "agent", "sessions");
+  if (!existsSync(base)) return join(base, "--missing--");
+
+  const slugFor = (p) => "--" + p.replace(/[:\\]/g, "-") + "--";
+  let cur = resolve(absRoot);
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(base, slugFor(cur));
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return join(base, slugFor(resolve(absRoot)));
+}
+
+/** Самый свежий JSONL-транскрипт сессии OMP для проекта (или null). */
+export function newestSessionFile(absRoot) {
+  const dir = ompSessionsDir(absRoot);
+  if (!existsSync(dir)) return null;
+  let best = null;
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".jsonl")) continue;
+      const full = join(dir, f);
+      const st = statSync(full);
+      if (!best || st.mtimeMs > best.mtimeMs) best = { path: full, mtimeMs: st.mtimeMs, name: f };
+    }
+  } catch {}
+  return best;
+}
+
+/** Хвост файла в байтах (не читаем 2 МБ ради последних событий). */
+function tailBytes(path, bytes = 96 * 1024) {
+  try {
+    const st = statSync(path);
+    const start = Math.max(0, st.size - bytes);
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(bytes, st.size));
+      readSync(fd, buf, 0, buf.length, start);
+      return buf.toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Расход сессии: токены, стоимость, модель, статус агента.
+ *
+ * Источник — `paseo inspect <agent-id> --json` (Paseo-сессия). Опрос стоит ~5 с,
+ * поэтому данные НЕ запрашиваются в каждом рендере: читаем кэш и, если он старше
+ * TTL, запускаем фоновое обновление, а странице отдаём последнее известное.
+ * Вне Paseo (или без агент-идентификатора) функция молча возвращает null —
+ * воркфлоу остаётся агностичным к среде.
+ */
+export const USAGE_TTL_MS = 90 * 1000;
+
+export function collectSessionUsage(absRoot, key) {
+  if (!process.env.PASEO_AGENT_ID) return null;
+  const cachePath = join(absRoot, DASHBOARDS_DIR, key + ".usage.json");
+
+  let cached = null;
+  if (existsSync(cachePath)) {
+    try {
+      cached = JSON.parse(readFileSync(cachePath, "utf8"));
+    } catch {}
+  }
+
+  const fresh = cached && Date.now() - (cached.at || 0) < USAGE_TTL_MS;
+  if (!fresh) refreshUsageAsync(absRoot, cachePath);
+
+  if (!cached || !cached.data) return null;
+  const u = cached.data || {};
+  const usage = u.LastUsage || {};
+  return {
+    at: cached.at,
+    stale: !fresh,
+    name: u.Name || null,
+    provider: u.Provider || null,
+    model: u.Model || null,
+    status: u.Status || null,
+    cwd: u.Cwd || null,
+    createdAt: u.CreatedAt || null,
+    updatedAt: u.UpdatedAt || null,
+    inputTokens: usage.InputTokens || 0,
+    outputTokens: usage.OutputTokens || 0,
+    cachedTokens: usage.CachedTokens || 0,
+    costUsd: typeof usage.CostUsd === "number" ? Number(usage.CostUsd.toFixed(4)) : null,
+  };
+}
+
+/** Фоновое обновление кэша расхода: отдельный процесс, не блокирует рендер. */
+function refreshUsageAsync(absRoot, cachePath) {
+  const agentId = process.env.PASEO_AGENT_ID;
+  if (!agentId) return;
+  try {
+    const dir = dirname(cachePath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+    // Хелпер: опросить paseo и записать {at, data}. Отдельный процесс нужен,
+    // потому что paseo отвечает секундами, а страница опрашивается каждые 3 с.
+    const helper = [
+      'const { spawnSync } = require("node:child_process");',
+      'const { writeFileSync } = require("node:fs");',
+      "const id = process.argv[1], out = process.argv[2];",
+      'const bin = process.env.PASEO_CLI || "paseo";',
+      'const res = spawnSync(bin, ["inspect", id, "--json"], { encoding: "utf8", shell: true, windowsHide: true, timeout: 20000 });',
+      "let data = null;",
+      'try { data = JSON.parse(res.stdout); } catch {}',
+      'if (data) { try { writeFileSync(out, JSON.stringify({ at: Date.now(), data }), "utf8"); } catch {} }',
+    ].join(" ");
+
+    const child = spawn(process.execPath, ["-e", helper, agentId, cachePath], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+  } catch {
+    // расход — приятный бонус, не условие работы
+  }
+}
+
+/** События воркфлоу из .workflow/events.jsonl (последние N). */
+export function collectEvents(absRoot, limit = 60) {
+  const path = join(absRoot, EVENTS_FILE);
+  if (!existsSync(path)) return [];
+  const lines = tailBytes(path, 64 * 1024).split("\n").filter(Boolean);
+  const out = [];
+  for (const line of lines) {
+    try {
+      const e = JSON.parse(line);
+      out.push(e);
+    } catch {}
+  }
+  return out.slice(-limit).reverse();
+}
+
+/**
+ * Значимые события сессии OMP: вызовы инструментов, сообщения, системные заметки.
+ * Показываем хвост, а не весь транскрипт — сессии бывают на мегабайты.
+ */
+export function collectSessionLog(absRoot, limit = 80) {
+  const file = newestSessionFile(absRoot);
+  if (!file) return { file: null, entries: [] };
+
+  const raw = tailBytes(file.path, 128 * 1024);
+  const lines = raw.split("\n").filter(Boolean);
+  const entries = [];
+
+  for (const line of lines) {
+    let e;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (e.type === "custom" && e.customType === "tool_execution_start") {
+      const d = e.data || {};
+      const args = d.args || {};
+      const hint = args.command || args.path || args.file || args.query || args.pattern || args.i || "";
+      entries.push({
+        at: e.timestamp || null,
+        kind: "tool",
+        label: d.toolName || "tool",
+        text: String(hint).slice(0, 140),
+      });
+    } else if (e.type === "message") {
+      const m = e.message || {};
+      const text = Array.isArray(m.content)
+        ? m.content.map((c) => (c && c.type === "text" ? c.text : "")).join(" ").trim()
+        : "";
+      if (!text) continue;
+      const role = m.role || "?";
+      if (role === "toolResult") {
+        const isError = /^(error|ошибка|failed|exception)/i.test(text) || /exit code [1-9]/.test(text);
+        entries.push({
+          at: e.timestamp || null,
+          kind: isError ? "error" : "result",
+          label: m.toolName || "result",
+          text: text.slice(0, 160).replace(/\s+/g, " "),
+        });
+      } else if (role === "assistant") {
+        entries.push({ at: e.timestamp || null, kind: "assistant", label: "assistant", text: text.slice(0, 200).replace(/\s+/g, " ") });
+      } else if (role === "user") {
+        entries.push({ at: e.timestamp || null, kind: "user", label: "user", text: text.slice(0, 200).replace(/\s+/g, " ") });
+      }
+    } else if (e.type === "custom_message") {
+      entries.push({
+        at: e.timestamp || null,
+        kind: "notice",
+        label: e.customType || "notice",
+        text: String(e.content || "").slice(0, 200),
+      });
+    }
+  }
+
+  return { file: file.name, entries: entries.slice(-limit) };
+}
+
+/**
+ * Дерево архитектуры для майндкарты: проект → модули → крупнейшие файлы.
+ * Бинарные файлы (шрифты, медиа) в дерево не попадают — они не объясняют устройство.
+ */
+export function collectArchTree(absRoot, modules) {
+  const name = absRoot.split(/[\\/]/).pop() || "project";
+  const kindOf = (m) =>
+    m.name === "tools" ? "code" : m.name === "agent" || m.name === "rules" ? "law" : m.name === "skills" ? "skills" : m.name === "tests" ? "tests" : m.name === "openspec" ? "spec" : "other";
+
+  return {
+    name,
+    kind: "root",
+    lines: modules.reduce((s, m) => s + m.totalLines, 0),
+    files: modules.reduce((s, m) => s + m.fileCount, 0),
+    children: modules.map((m) => ({
+      name: m.path,
+      kind: kindOf(m),
+      files: m.fileCount,
+      lines: m.totalLines,
+      children: (m.files || [])
+        .filter((f) => !isBinaryName(f.name))
+        .slice(0, 8)
+        .map((f) => ({ name: f.name.split("/").pop(), kind: "file", lines: f.lines, path: f.name })),
+    })),
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /*  HTML                                                               */
 /* ------------------------------------------------------------------ */
 
 /**
- * Автономная страница: серверный каркас + клиентский рендер.
+ * Автономная страница «Nullform Console»: серверный каркас + клиентский рендер.
  *
- * Все динамические секции рисуются в браузере из JSON (`DATA` при первом
- * рендере, `/api/state` при опросе) — поэтому страница обновляется на месте,
- * без перезагрузки и без потери места на странице, как дашборд Autopilot.
- * В статичном режиме (file://) опрос молча отключается, и страница остаётся
- * рабочим снимком состояния.
+ * Свой стиль (не копия Autopilot): тёмный консольный холст по умолчанию,
+ * лаймовый акцент, монопространственные значения, левый рельс вкладок.
+ * Вкладки: Обзор · Архитектура (майндкарта) · Логи сессии · Диффы · Критика · Долг · История.
+ * Данные приходят из `/api/state` каждые 3 с и перерисовываются на месте.
  */
 export function generateDashboardHtml(data) {
   const payload = JSON.stringify(data).replace(/</g, "\\u003c");
@@ -631,476 +912,534 @@ export function generateDashboardHtml(data) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nullform Workflow · ${data.project.name}</title>
+<title>Nullform Console · ${data.project.name}</title>
 <style>
   :root {
-    --bg: #ffffff; --page: #fbfbfc; --card: #ffffff; --border: #e6e8eb; --border-soft: #eef0f2;
-    --text: #101418; --muted: #6b7280; --muted-2: #9aa1a9;
-    --green: #16a34a; --green-soft: #eaf7ef; --amber: #d97706; --amber-soft: #fdf3e3;
-    --red: #dc2626; --red-soft: #fdecec; --blue: #2563eb; --blue-soft: #eaf0fe;
-    --purple: #7c3aed; --purple-soft: #f2ecfe;
-    --radius: 14px; --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+    --bg: #0b0e14; --panel: #11151f; --panel-2: #161b28; --line: #232a3a; --line-soft: #1a2030;
+    --text: #e6ebf5; --dim: #8b94a7; --dim-2: #5d6779;
+    --lime: #b8ff2e; --lime-dim: #7fae1f; --amber: #ffb545; --red: #ff5f56; --blue: #6ea8fe; --violet: #c58fff;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --r: 10px;
   }
-  body.dark {
-    --bg: #0d1117; --page: #0d1117; --card: #161b22; --border: #262c36; --border-soft: #21262d;
-    --text: #e6edf3; --muted: #8b949e; --muted-2: #6e7681;
-    --green-soft: #0f2a1a; --amber-soft: #2b1f07; --red-soft: #2d1214; --blue-soft: #101f3d; --purple-soft: #1d1633;
+  body.light {
+    --bg: #f7f8fa; --panel: #ffffff; --panel-2: #f2f4f7; --line: #e2e6ee; --line-soft: #edf0f5;
+    --text: #10141c; --dim: #5f6878; --dim-2: #98a1b0;
+    --lime: #5f8f00; --lime-dim: #7fae1f;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: var(--sans); background: var(--page); color: var(--text); padding: 28px 20px 60px; line-height: 1.45; }
-  .wrap { max-width: 1240px; margin: 0 auto; }
+  body { font-family: var(--sans); background: var(--bg); color: var(--text); line-height: 1.45; }
   .mono { font-family: var(--mono); font-size: 12px; }
-  .muted { color: var(--muted); }
+  a { color: var(--lime); }
 
-  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 26px; }
-  .logo { display: flex; align-items: baseline; gap: 8px; font-size: 26px; font-weight: 800; letter-spacing: -0.5px; }
-  .logo .glyph { display: inline-block; transform: translateY(1px); font-weight: 900; }
-  .logo .sub { font-size: 15px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
-  .controls { display: flex; align-items: center; gap: 8px; }
-  .icon-btn { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; font-size: 14px; display: grid; place-items: center; }
-  .icon-btn:hover { border-color: var(--muted-2); }
-  .lang { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .lang button { border: 0; background: var(--card); color: var(--muted); padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 600; }
-  .lang button.active { background: var(--text); color: var(--card); }
-  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-  .live.on { color: var(--green); border-color: var(--green); }
-  .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
-  .live.on .dot { background: var(--green); animation: pulse 1.8s infinite; }
-  @keyframes pulse { 0% { opacity: 1 } 50% { opacity: .25 } 100% { opacity: 1 } }
+  /* ---------- top bar ---------- */
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 20; }
+  .brand { display: flex; align-items: baseline; gap: 7px; font-weight: 800; letter-spacing: -0.3px; font-size: 17px; }
+  .brand .x { color: var(--lime); font-weight: 900; }
+  .brand .sub { font-size: 12px; font-weight: 500; color: var(--dim); letter-spacing: 0.4px; text-transform: uppercase; }
+  .chip { font-family: var(--mono); font-size: 11px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--dim); white-space: nowrap; }
+  .chip b { color: var(--text); font-weight: 600; }
+  .spacer { flex: 1; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .live.on { color: var(--lime); border-color: color-mix(in srgb, var(--lime) 45%, transparent); }
+  .live .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim-2); }
+  .live.on .dot { background: var(--lime); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .2 } }
+  .ibtn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px; }
+  .ibtn:hover { border-color: var(--dim-2); }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: var(--panel-2); color: var(--dim); padding: 5px 9px; cursor: pointer; font-family: var(--mono); font-size: 11px; }
+  .seg button.active { background: var(--lime); color: #0b0e14; font-weight: 700; }
 
-  .title-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
-  .title-row h1 { font-size: 19px; font-weight: 700; letter-spacing: -0.2px; }
-  .badges { display: flex; gap: 8px; flex-wrap: wrap; }
-  .badge { font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 5px 12px; border-radius: 999px; }
-  .badge-status { background: var(--blue-soft); color: var(--blue); }
-  .badge-sdd { background: var(--purple-soft); color: var(--purple); }
-  .badge-tier { background: var(--amber-soft); color: var(--amber); }
+  /* ---------- layout: rail + content ---------- */
+  .shell { display: grid; grid-template-columns: 208px 1fr; min-height: calc(100vh - 55px); }
+  @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .rail { display: flex; overflow-x: auto; } }
+  .rail { border-right: 1px solid var(--line); background: var(--panel); padding: 14px 10px; }
+  .rail button { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 9px 11px; margin-bottom: 3px; border: 0; border-radius: 8px; background: transparent; color: var(--dim); cursor: pointer; font-size: 13px; }
+  .rail button:hover { background: var(--panel-2); color: var(--text); }
+  .rail button.active { background: var(--panel-2); color: var(--text); box-shadow: inset 2px 0 0 var(--lime); }
+  .rail .ico { width: 16px; text-align: center; opacity: .9; }
+  .rail .badge-n { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--dim-2); }
+  .content { padding: 20px 22px 60px; max-width: 1400px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
 
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
-  .label { font-size: 11px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  /* ---------- cards & metrics ---------- */
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; }
+  .label { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.9px; text-transform: uppercase; color: var(--dim-2); margin-bottom: 8px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+  @media (max-width: 1100px) { .grid4 { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 620px) { .grid4 { grid-template-columns: 1fr; } }
+  .v { font-family: var(--mono); font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+  .v.sm { font-size: 16px; }
+  .note { font-size: 11.5px; color: var(--dim); margin-top: 3px; }
+  .bar { height: 8px; background: var(--line-soft); border-radius: 99px; overflow: hidden; margin: 12px 0 7px; }
+  .bar > i { display: block; height: 100%; background: var(--lime); transition: width .6s ease; }
+  .bar.mini { height: 5px; margin: 7px 0 5px; }
+  .bar.mini > i { background: var(--blue); }
+  .hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+  .hero .pct { font-family: var(--mono); font-size: 40px; font-weight: 800; letter-spacing: -2px; line-height: 1; }
+  .title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .title-row h1 { font-size: 17px; font-weight: 700; }
+  .tag { font-family: var(--mono); font-size: 10.5px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line); color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+  .tag.on { color: var(--lime); border-color: color-mix(in srgb, var(--lime) 40%, transparent); }
+  .tag.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
 
-  .progress-card { margin-bottom: 16px; }
-  .progress-top { display: flex; justify-content: space-between; align-items: flex-start; }
-  .progress-pct { font-size: 34px; font-weight: 800; letter-spacing: -1px; }
-  .bar { height: 10px; background: var(--border-soft); border-radius: 999px; overflow: hidden; margin: 14px 0 8px; }
-  .bar > i { display: block; height: 100%; background: var(--text); border-radius: 999px; transition: width .6s ease; }
-  .bar.mini { height: 6px; margin: 8px 0 6px; }
-  .bar.mini > i { background: var(--green); }
-  .sub { font-size: 12.5px; color: var(--muted); }
-
-  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
-  @media (max-width: 1000px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
-  .metric .value { font-size: 26px; font-weight: 800; letter-spacing: -0.6px; }
-  .metric .value.small { font-size: 18px; font-weight: 700; letter-spacing: -0.2px; }
-  .metric .note { font-size: 12px; color: var(--muted); margin-top: 4px; }
-  .donut { display: block; margin: 2px 0 8px; }
-
-  .section { margin-bottom: 16px; }
-  .timeline { list-style: none; }
-  .stage { display: flex; align-items: center; gap: 12px; padding: 11px 2px; border-bottom: 1px solid var(--border-soft); }
+  /* ---------- stages / waves ---------- */
+  .stage { display: flex; align-items: center; gap: 11px; padding: 9px 2px; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
   .stage:last-child { border-bottom: 0; }
-  .stage-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border); flex: 0 0 auto; }
-  .stage.done .stage-dot { background: var(--green); }
-  .stage.active .stage-dot { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-soft); }
-  .stage.skipped .stage-dot { background: transparent; border: 1px dashed var(--border); width: 9px; height: 9px; }
-  .stage.missed .stage-dot { background: var(--red); }
-  .stage.skipped .stage-name { color: var(--muted-2); }
-  .stage.missed .stage-name { color: var(--red); }
-  .stage-name { flex: 1; font-size: 14px; }
-  .stage.active .stage-name { font-weight: 700; }
-  .stage.pending .stage-name { color: var(--muted); }
-  .stage-note { font-size: 12px; color: var(--muted); font-weight: 400; }
-  .stage-time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: 0 0 auto; }
+  .stage.done .dot { background: var(--lime); }
+  .stage.active .dot { background: var(--amber); box-shadow: 0 0 0 4px color-mix(in srgb, var(--amber) 20%, transparent); }
+  .stage.skipped .dot { background: transparent; border: 1px dashed var(--line); }
+  .stage.missed .dot { background: var(--red); }
+  .stage.skipped .nm { color: var(--dim-2); }
+  .stage .nm { flex: 1; }
+  .stage .tm { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  .stage-note { color: var(--dim-2); font-size: 11.5px; }
+  .wave-title { font-family: var(--mono); font-size: 10.5px; letter-spacing: .8px; text-transform: uppercase; color: var(--dim-2); margin: 14px 0 7px; }
+  .task { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+  .task .idx { font-family: var(--mono); font-size: 10px; color: var(--dim-2); width: 18px; }
+  .task .b { flex: 1; padding: 6px 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600; }
+  .task .b.done { background: color-mix(in srgb, var(--lime) 18%, transparent); color: var(--lime); border: 1px solid color-mix(in srgb, var(--lime) 30%, transparent); }
+  .task .b.active { background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 32%, transparent); }
+  .task .b.pending { background: var(--panel-2); color: var(--dim); border: 1px solid var(--line-soft); }
+  .task .b.skipped { background: transparent; color: var(--dim-2); border: 1px dashed var(--line); font-weight: 500; }
+  .task .t { font-family: var(--mono); font-size: 11px; color: var(--dim); width: 66px; text-align: right; }
 
-  .wave { margin-bottom: 14px; }
-  .wave-title { font-size: 11px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; color: var(--muted); margin: 12px 0 8px; }
-  .task-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-  .task-idx { font-family: var(--mono); font-size: 11px; color: var(--muted-2); width: 20px; }
-  .task-bar { flex: 1; border-radius: 6px; padding: 7px 12px; font-size: 12.5px; font-weight: 600; }
-  .task-bar.done { background: var(--green); color: #fff; }
-  .task-bar.active { background: var(--amber); color: #fff; }
-  .task-bar.pending { background: var(--border-soft); color: var(--muted); }
-  .task-bar.skipped { background: transparent; border: 1px dashed var(--border); color: var(--muted-2); font-weight: 500; }
-  .task-time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; width: 62px; text-align: right; }
-  .wave-agents { margin: 4px 0 0 30px; display: flex; gap: 6px; flex-wrap: wrap; }
-  .chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--border-soft); color: var(--muted); font-family: var(--mono); }
+  /* ---------- lists ---------- */
+  .row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .row:last-child { border-bottom: 0; }
+  .row .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .pill.ok { color: var(--lime); border-color: color-mix(in srgb, var(--lime) 35%, transparent); }
+  .pill.bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); }
+  .pill.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 35%, transparent); }
+  .add { color: var(--lime); } .del { color: var(--red); }
+  .empty { color: var(--dim-2); font-size: 12.5px; padding: 10px 0; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 1000px) { .two { grid-template-columns: 1fr; } }
+  .stack { display: grid; gap: 14px; }
 
-  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 980px) { .two-col { grid-template-columns: 1fr; } }
+  /* ---------- logs ---------- */
+  .log { font-family: var(--mono); font-size: 11.5px; max-height: 62vh; overflow: auto; }
+  .log .ln { display: grid; grid-template-columns: 66px 92px 1fr; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line-soft); }
+  .log .ts { color: var(--dim-2); }
+  .log .k { color: var(--blue); }
+  .log .k.tool { color: var(--violet); }
+  .log .k.error { color: var(--red); }
+  .log .k.notice { color: var(--amber); }
+  .log .k.user { color: var(--lime); }
+  .log .tx { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log .tx.err { color: var(--red); }
 
-  details.module { border-bottom: 1px solid var(--border-soft); }
-  details.module:last-child { border-bottom: 0; }
-  details.module > summary { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; cursor: pointer; list-style: none; }
-  details.module > summary::-webkit-details-marker { display: none; }
-  .module-meta { font-size: 12px; color: var(--muted); }
-  .module-files { padding: 4px 0 10px 12px; }
-  .module-file { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
+  /* ---------- mindmap ---------- */
+  .map-wrap { position: relative; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); }
+  .map-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .map-tools button { font-family: var(--mono); font-size: 11px; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-2); color: var(--dim); cursor: pointer; }
+  .map-tools button:hover { color: var(--text); }
+  svg.map { display: block; }
+  .map .link { fill: none; stroke: var(--line); stroke-width: 1.4; }
+  .map .node rect { fill: var(--panel-2); stroke: var(--line); rx: 8; }
+  .map .node.root rect { fill: color-mix(in srgb, var(--lime) 16%, var(--panel-2)); stroke: color-mix(in srgb, var(--lime) 45%, transparent); }
+  .map .node.code rect { stroke: color-mix(in srgb, var(--blue) 45%, transparent); }
+  .map .node.law rect { stroke: color-mix(in srgb, var(--violet) 45%, transparent); }
+  .map .node.skills rect { stroke: color-mix(in srgb, var(--amber) 40%, transparent); }
+  .map .node.tests rect { stroke: color-mix(in srgb, var(--lime) 35%, transparent); }
+  .map .node.spec rect { stroke: color-mix(in srgb, var(--blue) 30%, transparent); }
+  .map .node { cursor: pointer; }
+  .map .node:hover rect { stroke: var(--lime); }
+  .map .node text { fill: var(--text); font-family: var(--mono); font-size: 11.5px; }
+  .map .node .meta { fill: var(--dim); font-size: 10px; }
+  .map .node.collapsed rect { stroke-dasharray: 4 3; }
 
-  .diff-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
-  .diff-row:hover { background: var(--border-soft); }
-  .diff-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .diff-stat { font-variant-numeric: tabular-nums; font-size: 12px; }
-  .add { color: var(--green); } .del { color: var(--red); }
-  .diff-badge { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
-  .diff-badge.untracked { color: var(--amber); }
-
-  .critique-row, .debt-row, .hist-row { padding: 10px 0; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
-  .critique-row:last-child, .debt-row:last-child, .hist-row:last-child { border-bottom: 0; }
-  .critique-meta { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
-  .verdict { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 999px; letter-spacing: .4px; }
-  .verdict.ok { background: var(--green-soft); color: var(--green); }
-  .verdict.bad { background: var(--red-soft); color: var(--red); }
-  .verdict.warn { background: var(--amber-soft); color: var(--amber); }
-  .hist-row { display: flex; gap: 10px; align-items: baseline; }
-  .hist-task { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .checks-line { font-size: 12px; color: var(--muted); margin-top: 10px; }
-
-  .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
-  .principles { font-size: 13px; }
-  .principles table { width: 100%; border-collapse: collapse; }
-  .principles td { padding: 7px 0; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
-  .principles td:first-child { width: 130px; font-weight: 700; }
-
-  footer { margin-top: 22px; display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-
-  .flash { animation: flash 1.1s ease; }
-  @keyframes flash { 0% { background: var(--amber-soft); } 100% { background: transparent; } }
-
-  #diff-modal { position: fixed; inset: 0; background: rgba(10,12,16,.55); display: none; align-items: center; justify-content: center; padding: 30px; z-index: 50; }
-  #diff-modal.open { display: flex; }
-  #diff-box { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); max-width: 1000px; width: 100%; max-height: 82vh; overflow: auto; padding: 18px 20px; }
-  #diff-box h3 { font-size: 14px; margin-bottom: 10px; font-family: var(--mono); }
-  #diff-box pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
-  .d-add { color: var(--green); } .d-del { color: var(--red); } .d-hunk { color: var(--blue); }
+  #modal { position: fixed; inset: 0; background: rgba(4,6,10,.7); display: none; align-items: center; justify-content: center; padding: 28px; z-index: 50; }
+  #modal.open { display: flex; }
+  #modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); width: 100%; max-width: 1040px; max-height: 84vh; overflow: auto; padding: 16px 18px; }
+  #modal h3 { font-family: var(--mono); font-size: 13px; margin-bottom: 10px; }
+  #modal pre { font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+  .d-add { color: var(--lime); } .d-del { color: var(--red); } .d-hunk { color: var(--blue); }
+  .flash { animation: flash 1.2s ease; }
+  @keyframes flash { 0% { box-shadow: inset 0 0 0 1px var(--lime); } 100% { box-shadow: none; } }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="logo"><span>null</span><span class="glyph">✕</span><span>form</span><span class="sub">workflow</span></div>
-    <div class="controls">
-      <span class="live" id="live-badge"><span class="dot"></span><span id="live-text">снимок</span></span>
-      <button class="icon-btn" onclick="refreshNow()" title="Обновить">⟳</button>
-      <button class="icon-btn" onclick="setTheme('light')" title="Светлая">☀</button>
-      <button class="icon-btn" onclick="setTheme('dark')" title="Тёмная">☾</button>
-      <div class="lang">
-        <button id="lang-ru" class="active" onclick="setLang('ru')">RU</button>
-        <button id="lang-en" onclick="setLang('en')">EN</button>
-      </div>
-    </div>
-  </header>
+<header>
+  <div class="brand"><span>null</span><span class="x">✕</span><span>form</span><span class="sub">console</span></div>
+  <span class="chip">проект <b id="h-project">…</b></span>
+  <span class="chip">сессия <b id="h-session">…</b></span>
+  <span class="chip">модель <b id="h-model">…</b></span>
+  <span class="chip" id="h-branch">…</span>
+  <div class="spacer"></div>
+  <span class="live" id="live"><span class="dot"></span><span id="live-text">снимок</span></span>
+  <button class="ibtn" onclick="refreshNow()" title="Обновить">⟳</button>
+  <button class="ibtn" onclick="setTheme('dark')" title="Тёмная">◐</button>
+  <button class="ibtn" onclick="setTheme('light')" title="Светлая">◑</button>
+  <div class="seg"><button id="l-ru" class="active" onclick="setLang('ru')">RU</button><button id="l-en" onclick="setLang('en')">EN</button></div>
+</header>
 
-  <div class="title-row">
-    <h1 id="task-title">…</h1>
-    <div class="badges" id="task-badges"></div>
-  </div>
-
-  <section class="card progress-card" id="sec-progress"></section>
-  <div class="grid" id="sec-metrics"></div>
-  <section class="card section"><div class="label" id="lbl-stages"></div><ul class="timeline" id="sec-stages"></ul></section>
-  <section class="card section"><div class="label" id="lbl-waves"></div><div id="sec-waves"></div></section>
-
-  <div class="two-col">
-    <section class="card section"><div class="label" id="lbl-modules"></div><div id="sec-modules"></div></section>
-    <section class="card section"><div class="label" id="lbl-diffs"></div><div id="sec-diffs"></div></section>
-  </div>
-
-  <div class="two-col">
-    <section class="card section"><div class="label" id="lbl-critique"></div><div id="sec-critique"></div></section>
-    <section class="card section"><div class="label" id="lbl-debt"></div><div id="sec-debt"></div></section>
-  </div>
-
-  <section class="card section"><div class="label" id="lbl-history"></div><div id="sec-history"></div></section>
-
-  <section class="card section principles">
-    <div class="label" id="lbl-how"></div>
-    <table>
-      <tr><td>Ярусы</td><td><strong>T0</strong> — 1–2 файла, без церемоний · <strong>T1</strong> — 3+ файла, рекогносцировка и 1–2 специалиста · <strong>T2</strong> — архитектура, полный 4-Wave SDD с брифингом и слепой приёмкой · <strong>T3</strong> — программа из нескольких T2-срезов</td></tr>
-      <tr><td>Законы</td><td>Честность (ничего не «готово» без выполненной проверки) · Анализ до правок · Минимализм · Один владелец на файл</td></tr>
-      <tr><td>Коридор</td><td>Гейт артефактов → TDD-тесты → <span class="mono">test-lens</span> → мутационное тестирование → BDD Gherkin → слепая приёмка Оракула</td></tr>
-      <tr><td>Память</td><td>Hindsight (банк <span class="mono">main</span>) + недельная каденция ревизии через <span class="mono">memory-cadence.mjs</span></td></tr>
-      <tr><td>Дашборд</td><td>Открывается сам при <span class="mono">workflow.mjs start</span>; страница обновляется каждые 3 с через <span class="mono">/api/state</span>; клик по файлу в диффах открывает построчный diff</td></tr>
-    </table>
-  </section>
-
-  <footer id="sec-footer"></footer>
+<div class="shell">
+  <nav class="rail" id="rail"></nav>
+  <main class="content">
+    <section class="tab active" id="tab-overview"></section>
+    <section class="tab" id="tab-arch"></section>
+    <section class="tab" id="tab-logs"></section>
+    <section class="tab" id="tab-diffs"></section>
+    <section class="tab" id="tab-critique"></section>
+    <section class="tab" id="tab-debt"></section>
+    <section class="tab" id="tab-history"></section>
+  </main>
 </div>
 
-<div id="diff-modal" onclick="if(event.target===this)closeDiff()">
-  <div id="diff-box">
-    <h3 id="diff-title">diff</h3>
-    <pre id="diff-body">Загрузка…</pre>
-  </div>
+<div id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="box"><h3 id="modal-title">…</h3><pre id="modal-body">…</pre></div>
 </div>
 
 <script>
   var DATA = ${payload};
   var POLL_MS = 3000;
-  var lastFingerprint = null;
+  var TAB = localStorage.getItem("nf-tab") || "overview";
+  var lang = localStorage.getItem("nf-lang") || "ru";
+  var collapsed = null;         // свёрнутые узлы майндкарты (null = ещё не инициализировано)
+  var fingerprint = null;
 
   var I18N = {
-    ru: { stages: "Этапы", waves: "Ход сборки — волны SDD", modules: "Архитектура и модули", diffs: "Диффы (git)", critique: "Критика и ревью", debt: "Технический долг", history: "История работы", how: "Как это работает", live: "LIVE", snapshot: "снимок", progress: "Прогресс проекта", coverage: "Покрытие брифа", currentStage: "Этап сейчас", elapsed: "Прошло времени", remaining: "Осталось (оценка)", artifacts: "Артефакты", debtShort: "Долг", diffsShort: "Диффы", memory: "Память" },
-    en: { stages: "Stages", waves: "Build progress — SDD waves", modules: "Architecture & modules", diffs: "Diffs (git)", critique: "Critique & review", debt: "Technical debt", history: "Work history", how: "How it works", live: "LIVE", snapshot: "snapshot", progress: "Project progress", coverage: "Brief coverage", currentStage: "Current stage", elapsed: "Elapsed", remaining: "Remaining (est.)", artifacts: "Artifacts", debtShort: "Debt", diffsShort: "Diffs", memory: "Memory" }
+    ru: { overview: "Обзор", arch: "Архитектура", logs: "Логи сессии", diffs: "Диффы", critique: "Критика", debt: "Долг", history: "История", live: "LIVE", snapshot: "снимок" },
+    en: { overview: "Overview", arch: "Architecture", logs: "Session log", diffs: "Diffs", critique: "Critique", debt: "Debt", history: "History", live: "LIVE", snapshot: "snapshot" }
   };
-  var lang = localStorage.getItem("nf-lang") || "ru";
-  function t(key) { return (I18N[lang] && I18N[lang][key]) || (I18N.ru[key] || key); }
-
-  function esc(s) {
-    return String(s === null || s === undefined ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
+  function t(k) { return (I18N[lang] && I18N[lang][k]) || k; }
+  function esc(s) { return String(s === null || s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
   function fmtDur(ms) {
     if (ms === null || ms === undefined || ms < 0) return "—";
     var s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    if (h > 0) return h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
-    return m + ":" + String(sec).padStart(2, "0");
+    return (h > 0 ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + String(sec).padStart(2, "0");
   }
-  var STATUS_CLASS = { done: "done", in_progress: "active", missed: "missed", skipped: "skipped", pending: "pending" };
-  function statusClass(s) { return STATUS_CLASS[s] || "pending"; }
-  var STAGE_TIME = { done: "—", skipped: "не требуется", missed: "пропущено", in_progress: "идёт" };
-  function stageTime(st) { return st.durationMs ? fmtDur(st.durationMs) : (STAGE_TIME[st.status] || "не начат"); }
-  var WAVE_TIME = { done: "готово", skipped: "не требуется" };
-  function waveTime(st) { return st.durationMs ? fmtDur(st.durationMs) : (WAVE_TIME[st.status] || "ждёт"); }
-  function statusBadge(s) { return { closed: "ЗАКРЫТА", open: "В РАБОТЕ" }[s] || "ОЖИДАНИЕ"; }
-  function memoryLabel(s) { return { fresh: "В НОРМЕ", overdue: "ПРОСРОЧЕНА" }[s] || "НЕТ ДАННЫХ"; }
+  function fmtTime(iso) {
+    if (!iso) return "";
+    try { var d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0"); } catch (e) { return ""; }
+  }
+  var CLS = { done: "done", in_progress: "active", missed: "missed", skipped: "skipped", pending: "pending" };
+  function scls(s) { return CLS[s] || "pending"; }
+  var STIME = { done: "—", skipped: "не требуется", missed: "пропущено", in_progress: "идёт" };
+  function stime(s) { return s.durationMs ? fmtDur(s.durationMs) : (STIME[s.status] || "не начат"); }
+  var WTIME = { done: "готово", skipped: "не требуется" };
+  function wtime(s) { return s.durationMs ? fmtDur(s.durationMs) : (WTIME[s.status] || "ждёт"); }
+  function badge(s) { return { closed: "ЗАКРЫТА", open: "В РАБОТЕ" }[s] || "ОЖИДАНИЕ"; }
+  function memLabel(s) { return { fresh: "В НОРМЕ", overdue: "ПРОСРОЧЕНА" }[s] || "НЕТ ДАННЫХ"; }
 
-  function renderTitle(d) {
-    document.getElementById("task-title").textContent = d.task.title;
-    document.getElementById("task-badges").innerHTML =
-      '<span class="badge badge-status">' + statusBadge(d.task.status) + "</span>" +
-      '<span class="badge badge-sdd">4-WAVE SDD</span>' +
-      '<span class="badge badge-tier">ЯРУС ' + esc(d.task.tier) + "</span>";
+  /* ------------------------------- rail ------------------------------- */
+  var TABS = [
+    { id: "overview", ico: "◎" },
+    { id: "arch", ico: "⑃" },
+    { id: "logs", ico: "≡" },
+    { id: "diffs", ico: "±" },
+    { id: "critique", ico: "✓" },
+    { id: "debt", ico: "⏚" },
+    { id: "history", ico: "⏱" },
+  ];
+  function renderRail(d) {
+    var counts = { diffs: d.git.files.length, critique: d.critique.length, debt: d.metrics.debt.total, logs: d.log.entries.length, history: d.history.total };
+    document.getElementById("rail").innerHTML = TABS.map(function (x) {
+      return '<button data-tab="' + x.id + '" class="' + (TAB === x.id ? "active" : "") + '">' +
+        '<span class="ico">' + x.ico + "</span><span>" + t(x.id) + "</span>" +
+        (counts[x.id] ? '<span class="badge-n">' + counts[x.id] + "</span>" : "") + "</button>";
+    }).join("");
+    document.querySelectorAll("#rail button").forEach(function (b) {
+      b.addEventListener("click", function () { showTab(b.getAttribute("data-tab")); });
+    });
+  }
+  function showTab(id) {
+    TAB = id;
+    localStorage.setItem("nf-tab", id);
+    document.querySelectorAll(".tab").forEach(function (s) { s.classList.toggle("active", s.id === "tab-" + id); });
+    document.querySelectorAll("#rail button").forEach(function (b) { b.classList.toggle("active", b.getAttribute("data-tab") === id); });
+    if (id === "arch") drawMap();
   }
 
-  function renderProgress(d) {
-    var p = d.progress;
-    var skipped = p.stagesSkipped ? " · " + p.stagesSkipped + " не требуется для яруса " + esc(d.task.tier) : "";
-    document.getElementById("sec-progress").innerHTML =
-      '<div class="progress-top"><div class="label">' + t("progress") + '</div>' +
-      '<div class="progress-pct" id="pct">' + p.percent + "%</div></div>" +
-      '<div class="bar"><i id="pbar" style="width:' + p.percent + '%"></i></div>' +
-      '<div class="sub">' + p.stagesDone + " из " + p.stagesRequired + " обязательных этапов · " +
-      p.artifactsDone + " из " + p.artifactsTotal + " артефактов" + skipped + "</div>";
-  }
-
-  function renderMetrics(d) {
-    var m = d.metrics, g = d.git, closed = d.task.status === "closed";
-    var dash = (m.briefCoverage / 100 * 188.5).toFixed(1);
+  /* ------------------------------ overview ---------------------------- */
+  function renderOverview(d) {
+    var p = d.progress, m = d.metrics, g = d.git;
     var cards = [];
+    cards.push(card("Покрытие брифа", m.briefCoverage + "%", m.requirements.items.length + " требований" + (m.requirements.change ? " · " + esc(m.requirements.change) : "")));
+    cards.push(card("Этап сейчас", esc(d.currentStage.name), d.task.status === "closed" ? "задача завершена" : "Волна " + d.currentStage.wave + " · " + p.stagesDone + " из " + p.stagesRequired));
+    cards.push(card("Прошло", fmtDur(d.timing.elapsedMs), "медиана — " + (d.timing.medianTaskMs ? fmtDur(d.timing.medianTaskMs) : "нет данных"), "elapsed"));
+    cards.push(card("Осталось", d.timing.remainingMin === null ? "—" : d.timing.remainingMin + "…" + d.timing.remainingMax + " мин", d.timing.remainingMin === null ? (d.task.status === "closed" ? "задача закрыта" : "обязательные артефакты собраны") : "по медиане " + d.history.total + " задач"));
+    cards.push(card("Артефакты", p.artifactsDone + " / " + p.artifactsTotal, "бюджет яруса: " + d.task.budget + " вызовов", null, Math.round(p.artifactsDone / Math.max(1, p.artifactsTotal) * 100)));
+    cards.push(card("Долг", String(m.debt.total), "маркеров defer:" + (m.debt.noTrigger ? " · без триггера " + m.debt.noTrigger : "")));
+    cards.push(card("Диффы", String(g.isRepo ? g.files.length : "—"), g.isRepo ? '<span class="add">+' + g.added + '</span> <span class="del">−' + g.deleted + "</span> · untracked " + g.untracked : "не git-репозиторий"));
+    cards.push(card("Память", memLabel(m.memory.status), m.memory.daysSince !== null ? "дней с ревизии: " + m.memory.daysSince : "ревизия не проводилась"));
 
-    cards.push('<div class="card metric"><div class="label">' + t("coverage") + "</div>" +
-      '<svg class="donut" width="72" height="72" viewBox="0 0 72 72">' +
-      '<circle cx="36" cy="36" r="30" fill="none" stroke="var(--border-soft)" stroke-width="9"></circle>' +
-      '<circle cx="36" cy="36" r="30" fill="none" stroke="var(--green)" stroke-width="9" stroke-linecap="round" ' +
-      'stroke-dasharray="' + dash + ' 188.5" transform="rotate(-90 36 36)"></circle></svg>' +
-      '<div class="value">' + m.briefCoverage + "%</div>" +
-      '<div class="note">' + m.requirements.items.length + " требований" + (m.requirements.change ? " · " + esc(m.requirements.change) : "") + "</div></div>");
-
-    cards.push('<div class="card metric"><div class="label">' + t("currentStage") + "</div>" +
-      '<div class="value small">' + esc(d.currentStage.name) + "</div>" +
-      '<div class="note">' + (closed ? "задача завершена" : "Волна " + d.currentStage.wave + " · " + d.progress.stagesDone + " из " + d.progress.stagesRequired + " этапов") + "</div></div>");
-
-    cards.push('<div class="card metric"><div class="label">' + t("elapsed") + "</div>" +
-      '<div class="value" id="elapsed">' + fmtDur(d.timing.elapsedMs) + "</div>" +
-      '<div class="note">медиана задачи — ' + (d.timing.medianTaskMs ? fmtDur(d.timing.medianTaskMs) : "нет данных") + "</div></div>");
-
-    cards.push('<div class="card metric"><div class="label">' + t("remaining") + "</div>" +
-      '<div class="value small">' + (d.timing.remainingMin === null ? "—" : d.timing.remainingMin + " мин … " + d.timing.remainingMax + " мин") + "</div>" +
-      '<div class="note">' + (d.timing.remainingMin === null ? (d.task.status === "closed" ? "задача закрыта" : "обязательные артефакты собраны") : "по медиане " + d.history.total + " закрытых задач") + "</div></div>");
-
-    cards.push('<div class="card metric"><div class="label">' + t("artifacts") + "</div>" +
-      '<div class="value">' + d.progress.artifactsDone + " / " + d.progress.artifactsTotal + "</div>" +
-      '<div class="bar mini"><i style="width:' + Math.round(d.progress.artifactsDone / Math.max(1, d.progress.artifactsTotal) * 100) + '%"></i></div>' +
-      '<div class="note">бюджет яруса: ' + d.task.budget + " вызовов</div></div>");
-
-    cards.push('<div class="card metric"><div class="label">' + t("debtShort") + "</div>" +
-      '<div class="value">' + m.debt.total + "</div>" +
-      '<div class="note">маркеров defer:' + (m.debt.noTrigger ? " · без триггера " + m.debt.noTrigger : "") + "</div></div>");
-
-    var diffNote = g.isRepo
-      ? '<span class="add">+' + g.added + '</span> <span class="del">−' + g.deleted + "</span> · staged " + g.staged + " · untracked " + g.untracked
-      : "не git-репозиторий";
-    cards.push('<div class="card metric"><div class="label">' + t("diffsShort") + "</div>" +
-      '<div class="value">' + (g.isRepo ? g.files.length : "—") + "</div>" +
-      '<div class="note">' + diffNote + "</div></div>");
-
-    cards.push('<div class="card metric"><div class="label">' + t("memory") + "</div>" +
-      '<div class="value small">' + memoryLabel(m.memory.status) + "</div>" +
-      '<div class="note">' + (m.memory.daysSince !== null ? "дней с ревизии: " + m.memory.daysSince : "ревизия не проводилась") + "</div></div>");
-
-    document.getElementById("sec-metrics").innerHTML = cards.join("");
-  }
-
-  function renderStages(d) {
-    document.getElementById("sec-stages").innerHTML = d.stages.map(function (s) {
-      return '<li class="stage ' + statusClass(s.status) + '">' +
-        '<span class="stage-dot"></span>' +
-        '<span class="stage-name">' + esc(s.name) + (s.detail ? ' <span class="stage-note">' + esc(s.detail) + "</span>" : "") + "</span>" +
-        '<span class="stage-time">' + stageTime(s) + "</span></li>";
+    var stages = d.stages.map(function (s) {
+      return '<div class="stage ' + scls(s.status) + '"><span class="dot"></span><span class="nm">' + esc(s.name) +
+        (s.detail ? ' <span class="stage-note">' + esc(s.detail) + "</span>" : "") + '</span><span class="tm">' + stime(s) + "</span></div>";
     }).join("");
-  }
 
-  function renderWaves(d) {
-    var blocks = d.waves.filter(function (w) { return w.stages.length > 0; }).map(function (w) {
+    var waves = d.waves.filter(function (w) { return w.stages.length; }).map(function (w) {
       var rows = w.stages.map(function (s) {
-        // Стадии в waves[] и stages[] — разные объекты после JSON.parse: ищем по id.
-        var idx = String(d.stages.findIndex(function (x) { return x.id === s.id; }) + 1).padStart(2, "0");
-        var cls = statusClass(s.status);
-        return '<div class="task-row ' + cls + '">' +
-          '<span class="task-idx">' + idx + "</span>" +
-          '<span class="task-bar ' + cls + '">' + esc(s.name) + "</span>" +
-          '<span class="task-time">' + waveTime(s) + "</span></div>";
+        var i = d.stages.findIndex(function (x) { return x.id === s.id; });
+        var c = scls(s.status);
+        return '<div class="task"><span class="idx">' + String(i + 1).padStart(2, "0") + '</span><span class="b ' + c + '">' + esc(s.name) + '</span><span class="t">' + wtime(s) + "</span></div>";
       }).join("");
-      var agents = w.agents.length
-        ? '<div class="wave-agents">' + w.agents.map(function (a) { return '<span class="chip">' + esc(a.role) + "</span>"; }).join("") + "</div>"
-        : "";
-      var parallel = w.stages.filter(function (s) { return s.status !== "skipped"; }).length;
-      return '<div class="wave"><div class="wave-title">' + esc(w.title) + (parallel > 1 ? " — " + parallel + " параллельно" : "") + "</div>" + rows + agents + "</div>";
+      var agents = w.agents.length ? '<div class="wave-title" style="margin:6px 0 0 27px">' + w.agents.map(function (a) { return '<span class="chip">' + esc(a.role) + "</span>"; }).join(" ") + "</div>" : "";
+      return '<div class="wave-title">' + esc(w.title) + "</div>" + rows + agents;
     }).join("");
-    document.getElementById("sec-waves").innerHTML = blocks;
-  }
 
-  function renderModules(d) {
-    var open = {};
-    document.querySelectorAll("details.module[open]").forEach(function (el) { open[el.getAttribute("data-module")] = true; });
-
-    if (!d.modules.length) {
-      document.getElementById("sec-modules").innerHTML = '<div class="empty">Модули не найдены</div>';
-      return;
+    var sess = "";
+    if (d.session.usage) {
+      var u = d.session.usage;
+      var tok = (u.inputTokens / 1000).toFixed(0) + "k in · " + (u.outputTokens / 1000).toFixed(0) + "k out";
+      var cachePct = u.inputTokens + u.cachedTokens > 0 ? Math.round(u.cachedTokens / (u.inputTokens + u.cachedTokens) * 100) : 0;
+      sess = '<div class="grid4" style="margin-bottom:14px">' +
+        card("Сессия", esc(d.session.key), esc(u.status || "") + " · " + esc(u.provider || "") + (u.stale ? " · данные обновляются" : "")) +
+        card("Стоимость сессии", u.costUsd !== null ? "$" + u.costUsd : "—", "по данным Paseo") +
+        card("Токены", tok, "кэш: " + cachePct + "% (" + (u.cachedTokens / 1e6).toFixed(1) + "M)") +
+        card("Модель", esc((u.model || "—").split("/").pop()), "провайдер: " + esc(u.provider || "—")) +
+        "</div>";
     }
-    document.getElementById("sec-modules").innerHTML = d.modules.map(function (m) {
-      var files = m.files.map(function (f) {
-        return '<div class="module-file"><span class="mono">' + esc(f.name) + '</span><span class="muted">' + f.lines + " строк</span></div>";
-      }).join("");
-      return '<details class="module" data-module="' + esc(m.path) + '"' + (open[m.path] ? " open" : "") + ">" +
-        '<summary><span class="mono">' + esc(m.path) + '/</span><span class="module-meta">' + m.fileCount + " файлов · " + m.totalLines.toLocaleString("ru-RU") + " строк</span></summary>" +
-        '<div class="module-files">' + files + "</div></details>";
-    }).join("");
+
+    document.getElementById("tab-overview").innerHTML =
+      '<div class="title-row"><h1>' + esc(d.task.title) + "</h1>" +
+      '<span class="tag ' + (d.task.status === "open" ? "on" : "") + '">' + badge(d.task.status) + "</span>" +
+      '<span class="tag">4-Wave SDD</span><span class="tag warn">Ярус ' + esc(d.task.tier) + "</span></div>" +
+      '<div class="card" style="margin-bottom:14px"><div class="hero"><div><div class="label">Прогресс проекта</div>' +
+      '<div class="note">' + p.stagesDone + " из " + p.stagesRequired + " обязательных этапов · " + p.artifactsDone + " из " + p.artifactsTotal + " артефактов" +
+      (p.stagesSkipped ? " · " + p.stagesSkipped + " не требуется для яруса " + esc(d.task.tier) : "") + "</div></div>" +
+      '<div class="pct" id="pct">' + p.percent + "%</div></div>" +
+      '<div class="bar"><i id="pbar" style="width:' + p.percent + '%"></i></div></div>' +
+      sess +
+      '<div class="grid4">' + cards.join("") + "</div>" +
+      '<div class="two"><div class="card"><div class="label">Этапы</div>' + stages + "</div>" +
+      '<div class="card"><div class="label">Ход сборки — волны SDD</div>' + waves + "</div></div>";
+  }
+  function card(label, value, note, id, barPct) {
+    return '<div class="card"><div class="label">' + label + '</div><div class="v' + (String(value).length > 9 ? " sm" : "") + '"' + (id ? ' id="' + id + '"' : "") + ">" + value + "</div>" +
+      (barPct !== undefined && barPct !== null ? '<div class="bar mini"><i style="width:' + barPct + '%"></i></div>' : "") +
+      '<div class="note">' + note + "</div></div>";
   }
 
+  /* -------------------------------- arch ------------------------------ */
+  function visibleTree(node) {
+    if (!collapsed) {
+      // Первый показ: структура проекта видна сразу, файлы раскрываются по клику.
+      collapsed = {};
+      (DATA.arch.children || []).forEach(function (c) { collapsed[c.name] = true; });
+    }
+    if (collapsed[node.name]) return { name: node.name, kind: node.kind, lines: node.lines, files: node.files, children: [] };
+    return {
+      name: node.name, kind: node.kind, lines: node.lines, files: node.files,
+      children: (node.children || []).map(visibleTree),
+    };
+  }
+  function layout(node) {
+    // Горизонтальное дерево: x = глубина, y = порядок листьев (DFS).
+    var rowH = 26, xGap = 210, cursor = 0, nodes = [], links = [];
+    (function walk(n, depth, parent) {
+      var y = cursor * rowH;
+      var kids = n.children || [];
+      if (kids.length === 0) { cursor += 1; y = (cursor - 1) * rowH; }
+      var me = { x: depth * xGap, y: y, node: n, depth: depth };
+      nodes.push(me);
+      if (parent) links.push([parent, me]);
+      if (kids.length) {
+        var first = null, last = null;
+        kids.forEach(function (k) {
+          var child = walk(k, depth + 1, me);
+          if (!first) first = child;
+          last = child;
+        });
+        me.y = (first.y + last.y) / 2;
+      }
+      return me;
+    })(node, 0, null);
+    return { nodes: nodes, links: links, height: Math.max(1, cursor) * rowH + 40, width: 0 };
+  }
+  function drawMap() {
+    var host = document.getElementById("tab-arch");
+    if (!host) return;
+    if (!DATA.arch) { host.innerHTML = '<div class="empty">Нет данных архитектуры</div>'; return; }
+
+    var tree = visibleTree(DATA.arch);
+    var lay = layout(tree);
+    var maxDepth = 0;
+    lay.nodes.forEach(function (n) { if (n.x > maxDepth) maxDepth = n.x; });
+
+    var W = maxDepth + 320, H = lay.height;
+    var longest = 0;
+    lay.nodes.forEach(function (n) { if (String(n.node.name).length > longest) longest = String(n.node.name).length; });
+    var boxW = Math.min(320, Math.max(150, longest * 7.4 + 34)), boxH = 22;
+
+    var links = lay.links.map(function (p) {
+      var a = p[0], b = p[1];
+      var x1 = a.x + boxW, y1 = a.y + boxH / 2, x2 = b.x, y2 = b.y + boxH / 2;
+      var mx = (x1 + x2) / 2;
+      return '<path class="link" d="M' + x1 + " " + y1 + " C" + mx + " " + y1 + ", " + mx + " " + y2 + ", " + x2 + " " + y2 + '"></path>';
+    }).join("");
+
+    var nodes = lay.nodes.map(function (n) {
+      var nd = n.node;
+      var kids = (nd.children || []).length;
+      var cls = "node " + (nd.kind || "other") + (collapsed[nd.name] ? " collapsed" : "");
+      var meta = nd.kind === "file" ? nd.lines + " строк" : (nd.files || 0) + " файлов · " + (nd.lines || 0) + " строк";
+      return '<g class="' + cls + '" transform="translate(' + n.x + "," + n.y + ')" data-name="' + esc(nd.name) + '">' +
+        '<rect width="' + boxW + '" height="' + boxH + '" rx="7"></rect>' +
+        '<text x="10" y="15">' + esc(nd.name) + (kids ? (collapsed[nd.name] ? " ▸" : " ▾") : "") + "</text>" +
+        '<title>' + esc(nd.name) + " — " + esc(meta) + "</title></g>";
+    }).join("");
+
+    host.innerHTML =
+      '<div class="map-tools">' +
+      '<button onclick="mapExpandAll(true)">Свернуть всё</button>' +
+      '<button onclick="mapExpandAll(false)">Развернуть всё</button>' +
+      '<span class="chip">клик по узлу — свернуть/развернуть</span>' +
+      '<span class="chip">файл <b>' + esc(DATA.arch.files) + "</b> · строк <b>" + esc(DATA.arch.lines) + "</b></span>" +
+      "</div>" +
+      '<div class="map-wrap"><svg class="map" width="' + W + '" height="' + H + '">' + links + nodes + "</svg></div>";
+
+    host.querySelectorAll("g.node").forEach(function (g) {
+      g.addEventListener("click", function () {
+        var nm = g.getAttribute("data-name");
+        collapsed[nm] = !collapsed[nm];
+        drawMap();
+      });
+    });
+  }
+  function mapExpandAll(collapse) {
+    collapsed = {};
+    if (collapse) {
+      (DATA.arch.children || []).forEach(function (c) { collapsed[c.name] = true; });
+    }
+    drawMap();
+  }
+  /** Свернуть/развернуть все узлы одного уровня (клик по модулю уже это делает). */
+  function mapToggle(name) {
+    if (!collapsed) collapsed = {};
+    collapsed[name] = !collapsed[name];
+    drawMap();
+  }
+
+  /* -------------------------------- logs ------------------------------ */
+  function renderLogs(d) {
+    var ev = (d.events || []).map(function (e) {
+      return '<div class="ln"><span class="ts">' + esc(fmtTime(e.at)) + '</span><span class="k">' + esc(e.kind || "event") +
+        '</span><span class="tx">' + esc(e.text || "") + "</span></div>";
+    }).join("");
+    var sess = (d.log.entries || []).map(function (e) {
+      var isErr = e.kind === "error";
+      return '<div class="ln"><span class="ts">' + esc(fmtTime(e.at)) + '</span><span class="k ' + esc(e.kind) + '">' + esc(e.label) +
+        '</span><span class="tx' + (isErr ? " err" : "") + '">' + esc(e.text) + "</span></div>";
+    }).join("");
+
+    document.getElementById("tab-logs").innerHTML =
+      '<div class="two"><div class="card"><div class="label">События воркфлоу (.workflow/events.jsonl)</div><div class="log">' +
+      (ev || '<div class="empty">Событий пока нет — они появятся после start/artifact/close</div>') + "</div></div>" +
+      '<div class="card"><div class="label">Сессия агента · ' + esc(d.log.file || "транскрипт не найден") + '</div><div class="log">' +
+      (sess || '<div class="empty">Транскрипт сессии не найден</div>') + "</div></div></div>";
+  }
+
+  /* ------------------------------- diffs ------------------------------ */
   function renderDiffs(d) {
     var g = d.git;
-    var body;
-    if (!g.isRepo) body = '<div class="empty">Не git-репозиторий</div>';
-    else if (!g.files.length) body = '<div class="empty">Рабочее дерево чистое — изменений нет</div>';
-    else body = g.files.map(function (f) {
-      return '<div class="diff-row" data-file="' + esc(f.path) + '">' +
-        '<span class="mono diff-path">' + esc(f.path) + "</span>" +
-        '<span class="diff-stat"><span class="add">+' + f.added + '</span> <span class="del">−' + f.deleted + "</span></span>" +
-        '<span class="diff-badge ' + esc(f.status) + '">' + esc(f.status) + "</span></div>";
-    }).join("");
-
-    var footer = g.isRepo
-      ? '<div class="checks-line">Ветка <span class="mono">' + esc(g.branch) + '</span> · последний коммит <span class="mono">' + esc(g.commit && g.commit.hash) + "</span> " + esc(g.commit && g.commit.when) + "</div>"
-      : "";
-    document.getElementById("sec-diffs").innerHTML = body + footer;
-
-    document.querySelectorAll(".diff-row").forEach(function (row) {
-      row.addEventListener("click", function () { openDiff(row.getAttribute("data-file")); });
+    var body = !g.isRepo ? '<div class="empty">Не git-репозиторий</div>'
+      : !g.files.length ? '<div class="empty">Рабочее дерево чистое</div>'
+      : g.files.map(function (f) {
+          return '<div class="row" data-file="' + esc(f.path) + '" style="cursor:pointer"><span class="mono grow">' + esc(f.path) + "</span>" +
+            '<span class="mono"><span class="add">+' + f.added + '</span> <span class="del">−' + f.deleted + "</span></span>" +
+            '<span class="pill ' + (f.status === "untracked" ? "warn" : "") + '">' + esc(f.status) + "</span></div>";
+        }).join("");
+    document.getElementById("tab-diffs").innerHTML = '<div class="card"><div class="label">Диффы (git) — клик по файлу откроет diff</div>' + body +
+      (g.isRepo ? '<div class="note" style="margin-top:10px">Ветка <span class="mono">' + esc(g.branch) + '</span> · коммит <span class="mono">' + esc(g.commit && g.commit.hash) + "</span> " + esc(g.commit && g.commit.when) + "</div>" : "") + "</div>";
+    document.querySelectorAll("#tab-diffs .row").forEach(function (r) {
+      r.addEventListener("click", function () { openDiff(r.getAttribute("data-file")); });
     });
   }
 
+  /* ------------------------------ critique ---------------------------- */
   function renderCritique(d) {
-    var rows;
-    if (!d.critique.length) {
-      rows = '<div class="empty">Вердиктов оракула пока нет — приёмка не проводилась</div>';
-    } else {
-      rows = d.critique.map(function (c) {
-        var cls = c.verdict === "accept" ? "ok" : c.verdict === "reject" ? "bad" : "warn";
-        var label = c.verdict === "accept" ? "ПРИНЯТО" : c.verdict === "reject" ? "ОТКЛОНЕНО" : c.verdict === "mixed" ? "С ЗАМЕЧАНИЯМИ" : "НЕТ ВЕРДИКТА";
-        return '<div class="critique-row ' + cls + '"><div><strong>' + esc(c.change) + '</strong> <span class="muted mono">' + esc(c.file) + "</span></div>" +
-          '<div class="critique-meta"><span class="verdict ' + cls + '">' + label + '</span><span class="muted">замечаний: ' + c.concerns + "</span></div></div>";
-      }).join("");
-    }
-    var checks = d.metrics.checks && d.metrics.checks.autoReview;
-    var line = checks
-      ? '<div class="checks-line">auto-review: ' + (checks.error ? "ошибка (" + esc(checks.error) + ")" : "проблем — " + (checks.total !== undefined ? checks.total : (checks.problems ? checks.problems.length : 0))) + " · сгенерировано " + esc(new Date(d.metrics.checks.generatedAt).toLocaleString("ru-RU")) + "</div>"
-      : '<div class="checks-line muted">Автопроверки не запускались — добавьте <span class="mono">--checks</span></div>';
-    document.getElementById("sec-critique").innerHTML = rows + line;
+    var rows = !d.critique.length ? '<div class="empty">Вердиктов оракула пока нет</div>'
+      : d.critique.map(function (c) {
+          var cls = c.verdict === "accept" ? "ok" : c.verdict === "reject" ? "bad" : "warn";
+          var lbl = c.verdict === "accept" ? "ПРИНЯТО" : c.verdict === "reject" ? "ОТКЛОНЕНО" : c.verdict === "mixed" ? "С ЗАМЕЧАНИЯМИ" : "НЕТ ВЕРДИКТА";
+          return '<div class="row"><span class="grow"><b>' + esc(c.change) + '</b> <span class="mono" style="color:var(--dim)">' + esc(c.file) + "</span></span>" +
+            '<span class="pill ' + cls + '">' + lbl + '</span><span class="note">замечаний: ' + c.concerns + "</span></div>";
+        }).join("");
+    var ar = d.metrics.checks && d.metrics.checks.autoReview;
+    var line = ar ? '<div class="note" style="margin-top:10px">auto-review: ' + (ar.error ? esc(ar.error) : (ar.ok ? "пройдено, проблем " + (ar.total || 0) : "провалено, проблем " + (ar.total || 0))) + "</div>"
+      : '<div class="note" style="margin-top:10px">Автопроверки не запускались — <span class="mono">dashboard.mjs --checks</span></div>';
+    document.getElementById("tab-critique").innerHTML = '<div class="card"><div class="label">Критика и ревью</div>' + rows + line + "</div>";
   }
 
+  /* -------------------------------- debt ------------------------------ */
   function renderDebt(d) {
-    var debt = d.metrics.debt;
-    if (!debt.items.length) {
-      document.getElementById("sec-debt").innerHTML = '<div class="empty">Осознанного техдолга нет — реестр чист' + (debt.note ? " (" + esc(debt.note) + ")" : "") + "</div>";
-      return;
-    }
-    document.getElementById("sec-debt").innerHTML = debt.items.map(function (x) {
-      return '<div class="debt-row"><div class="mono">' + esc(x.file) + (x.line ? ":" + x.line : "") + "</div>" +
-        "<div>" + esc(x.what) + "</div>" +
-        '<div class="muted">Потолок: ' + esc(x.ceiling || "—") + (x.upgrade ? " · Апгрейд: " + esc(x.upgrade) : "") + "</div></div>";
-    }).join("");
+    var items = d.metrics.debt.items || [];
+    var rows = !items.length ? '<div class="empty">Осознанного техдолга нет — реестр чист</div>'
+      : items.map(function (x) {
+          return '<div class="row"><span class="mono" style="color:var(--dim)">' + esc(x.file) + (x.line ? ":" + x.line : "") + '</span><span class="grow">' + esc(x.what) + "</span>" +
+            '<span class="note">потолок: ' + esc(x.ceiling || "—") + (x.upgrade ? " · апгрейд: " + esc(x.upgrade) : "") + "</span></div>";
+        }).join("");
+    document.getElementById("tab-debt").innerHTML = '<div class="card"><div class="label">Технический долг (' + d.metrics.debt.total + ")</div>" + rows + "</div>";
   }
 
+  /* ------------------------------ history ----------------------------- */
   function renderHistory(d) {
-    var head = '<div class="sub" style="margin-bottom:8px">Всего закрыто задач: <strong>' + d.history.total + "</strong> · медиана: <strong>" +
-      (d.history.medianMs ? fmtDur(d.history.medianMs) : "—") + "</strong> · по ярусам: " +
-      (Object.keys(d.history.byTier).map(function (k) { return '<span class="chip">' + esc(k) + ": " + d.history.byTier[k] + "</span>"; }).join(" ") || "—") + "</div>";
-    var rows = d.history.recent.length
-      ? d.history.recent.map(function (h) {
-          return '<div class="hist-row"><span class="mono">' + esc(h.tier) + '</span><span class="hist-task">' + esc(h.task) + "</span>" +
-            '<span class="muted">' + fmtDur(h.durationMs) + (h.forced ? " · force" : "") + "</span></div>";
-        }).join("")
-      : '<div class="empty">История пуста</div>';
-    document.getElementById("sec-history").innerHTML = head + rows;
+    var tiers = Object.keys(d.history.byTier).map(function (k) { return '<span class="chip">' + esc(k) + ": " + d.history.byTier[k] + "</span>"; }).join(" ");
+    var rows = d.history.recent.length ? d.history.recent.map(function (h) {
+      return '<div class="row"><span class="pill">' + esc(h.tier) + '</span><span class="grow">' + esc(h.task) + '</span><span class="mono" style="color:var(--dim)">' + fmtDur(h.durationMs) + (h.forced ? " · force" : "") + "</span></div>";
+    }).join("") : '<div class="empty">История пуста</div>';
+    document.getElementById("tab-history").innerHTML =
+      '<div class="card"><div class="label">История работы</div>' +
+      '<div class="note" style="margin-bottom:8px">Закрыто задач: <b>' + d.history.total + "</b> · медиана: <b>" + (d.history.medianMs ? fmtDur(d.history.medianMs) : "—") + "</b> · " + tiers + "</div>" +
+      rows + "</div>" +
+      '<div class="card" style="margin-top:14px"><div class="label">Как это работает</div>' +
+      '<div class="note" style="line-height:1.9">' +
+      "<b>Ярусы:</b> T0 — 1–2 файла · T1 — 3+ файла и рекогносцировка · T2 — полный 4-Wave SDD со слепой приёмкой · T3 — программа из T2-срезов<br>" +
+      "<b>Коридор:</b> гейт артефактов → TDD → test-lens → мутационное тестирование → BDD Gherkin → слепая приёмка Оракула<br>" +
+      "<b>Наблюдаемость:</b> дашборд привязан к сессии, обновляется каждые 3 с, показывает события воркфлоу и хвост транскрипта агента</div></div>";
   }
 
-  function renderFooter(d) {
-    document.getElementById("sec-footer").innerHTML =
-      '<span>Проект: <span class="mono">' + esc(d.project.name) + "</span></span>" +
-      '<span>Корень: <span class="mono">' + esc(d.root) + "</span></span>" +
-      '<span>Обновлено: <span class="mono">' + esc(new Date(d.timestamp).toLocaleString("ru-RU")) + "</span></span>" +
-      (d.metrics.requirements.change ? '<span>Change: <span class="mono">' + esc(d.metrics.requirements.change) + "</span></span>" : "");
+  /* ------------------------------- shell ------------------------------ */
+  function renderHeader(d) {
+    document.getElementById("h-project").textContent = d.project.name;
+    var s = d.session;
+    var chip = s.key;
+    if (s.usage) {
+      var st = s.usage.status === "running" ? "● running" : "○ " + (s.usage.status || "idle");
+      var cost = s.usage.costUsd !== null ? " · $" + s.usage.costUsd : "";
+      chip = s.key + " · " + st + cost;
+    }
+    document.getElementById("h-session").textContent = chip;
+    var mchip = document.getElementById("h-model");
+    if (mchip) mchip.textContent = s.usage && s.usage.model ? s.usage.model : "—";
+    document.getElementById("h-branch").textContent = d.project.branch || "—";
   }
-
   function applyLabels() {
-    document.getElementById("lbl-stages").textContent = t("stages");
-    document.getElementById("lbl-waves").textContent = t("waves");
-    document.getElementById("lbl-modules").textContent = t("modules");
-    document.getElementById("lbl-diffs").textContent = t("diffs");
-    document.getElementById("lbl-critique").textContent = t("critique");
-    document.getElementById("lbl-debt").textContent = t("debt");
-    document.getElementById("lbl-history").textContent = t("history");
-    document.getElementById("lbl-how").textContent = t("how");
-    var lt = document.getElementById("live-text");
-    if (lt && lt.getAttribute("data-state") !== "live") lt.textContent = t("snapshot");
+    document.getElementById("live-text").textContent = document.getElementById("live").classList.contains("on") ? t("live") : t("snapshot");
+    renderRail(DATA);
   }
-
   function render(d) {
-    renderTitle(d);
-    renderProgress(d);
-    renderMetrics(d);
-    renderStages(d);
-    renderWaves(d);
-    renderModules(d);
+    DATA = d;
+    renderHeader(d);
+    renderOverview(d);
+    renderLogs(d);
     renderDiffs(d);
     renderCritique(d);
     renderDebt(d);
     renderHistory(d);
-    renderFooter(d);
+    if (TAB === "arch") drawMap();
     applyLabels();
-    DATA = d;
   }
-
-  function setLang(next) {
-    lang = next;
-    localStorage.setItem("nf-lang", next);
-    document.getElementById("lang-ru").classList.toggle("active", next === "ru");
-    document.getElementById("lang-en").classList.toggle("active", next === "en");
+  function setLang(l) {
+    lang = l;
+    localStorage.setItem("nf-lang", l);
+    document.getElementById("l-ru").classList.toggle("active", l === "ru");
+    document.getElementById("l-en").classList.toggle("active", l === "en");
     applyLabels();
   }
   function setTheme(mode) {
     localStorage.setItem("nf-theme", mode);
-    document.body.classList.toggle("dark", mode === "dark");
+    document.body.classList.toggle("light", mode === "light");
   }
+  if (localStorage.getItem("nf-theme") === "light") document.body.classList.add("light");
 
-  var savedTheme = localStorage.getItem("nf-theme");
-  if (savedTheme === "dark") document.body.classList.add("dark");
-  setLang(lang);
-
-  // Живые часы: тикают, пока задача открыта.
   var startMs = DATA.task.startedAt ? new Date(DATA.task.startedAt).getTime() : Date.now();
   setInterval(function () {
     if (DATA.task.status === "closed") return;
@@ -1109,66 +1448,51 @@ export function generateDashboardHtml(data) {
   }, 1000);
 
   function setLive(on) {
-    var badge = document.getElementById("live-badge");
-    var text = document.getElementById("live-text");
-    badge.classList.toggle("on", on);
-    text.setAttribute("data-state", on ? "live" : "snapshot");
-    text.textContent = on ? t("live") : t("snapshot");
+    var b = document.getElementById("live");
+    b.classList.toggle("on", on);
+    document.getElementById("live-text").textContent = on ? t("live") : t("snapshot");
   }
-
-  function fingerprint(d) {
-    return JSON.stringify({
-      p: d.progress,
-      s: d.stages.map(function (x) { return x.id + x.status; }),
-      g: d.git.files.length + ":" + d.git.added + ":" + d.git.deleted + ":" + d.git.untracked,
-      c: d.critique.length,
-      d: d.metrics.debt.total,
-      h: d.history.total,
-    });
+  function fp(d) {
+    return JSON.stringify({ p: d.progress, s: d.stages.map(function (x) { return x.id + x.status; }), g: d.git.files.length + ":" + d.git.added, l: d.log.entries.length, e: (d.events || []).length, c: d.critique.length });
   }
-
   function flashChanged(d) {
-    var fp = fingerprint(d);
-    if (lastFingerprint !== null && fp !== lastFingerprint) {
-      ["sec-progress", "sec-stages", "sec-waves", "sec-diffs", "sec-metrics"].forEach(function (id) {
+    var f = fp(d);
+    if (fingerprint !== null && f !== fingerprint) {
+      ["tab-overview", "tab-logs", "tab-diffs"].forEach(function (id) {
         var el = document.getElementById(id);
-        el.classList.remove("flash");
-        void el.offsetWidth;
-        el.classList.add("flash");
+        el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
       });
     }
-    lastFingerprint = fp;
+    fingerprint = f;
   }
-
   function refreshNow() {
     fetch("/api/state", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (fresh) { render(fresh); flashChanged(fresh); setLive(true); })
       .catch(function () { setLive(false); });
   }
-
   function openDiff(file) {
-    var modal = document.getElementById("diff-modal");
-    var body = document.getElementById("diff-body");
-    document.getElementById("diff-title").textContent = file;
+    var modal = document.getElementById("modal");
+    document.getElementById("modal-title").textContent = file;
+    document.getElementById("modal-body").textContent = "Загрузка…";
     modal.classList.add("open");
-    body.textContent = "Загрузка…";
     fetch("/api/diff?file=" + encodeURIComponent(file))
       .then(function (r) { return r.text(); })
       .then(function (text) {
-        body.innerHTML = text.split("\\n").map(function (l) {
-          var cls = l.startsWith("+") && !l.startsWith("+++") ? "d-add" : l.startsWith("-") && !l.startsWith("---") ? "d-del" : l.startsWith("@@") ? "d-hunk" : "";
+        document.getElementById("modal-body").innerHTML = text.split("\\n").map(function (l) {
+          var c = l.startsWith("+") && !l.startsWith("+++") ? "d-add" : l.startsWith("-") && !l.startsWith("---") ? "d-del" : l.startsWith("@@") ? "d-hunk" : "";
           var e = esc(l);
-          return cls ? '<span class="' + cls + '">' + e + "</span>" : e;
+          return c ? '<span class="' + c + '">' + e + "</span>" : e;
         }).join("\\n");
       })
-      .catch(function () { body.textContent = "Дифф доступен только в живом режиме (--serve)"; });
+      .catch(function () { document.getElementById("modal-body").textContent = "Дифф доступен только в живом режиме"; });
   }
-  function closeDiff() { document.getElementById("diff-modal").classList.remove("open"); }
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeDiff(); });
+  function closeModal() { document.getElementById("modal").classList.remove("open"); }
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
 
   render(DATA);
-  lastFingerprint = fingerprint(DATA);
+  fingerprint = fp(DATA);
+  showTab(TAB);
   refreshNow();
   setInterval(refreshNow, POLL_MS);
 </script>
@@ -1181,10 +1505,32 @@ export function generateDashboardHtml(data) {
 /* ------------------------------------------------------------------ */
 
 /** Файл рантайма: порт и pid живого сервера дашборда. */
-export const RUNTIME_FILE = ".workflow/dashboard.json";
+let SERVER_SESSION = null;
 
-export function runtimePath(root) {
-  return join(resolve(root), RUNTIME_FILE);
+export const RUNTIME_FILE = ".workflow/dashboard.json"; // обратная совместимость (последняя сессия)
+
+/** Рантайм-файл конкретной сессии: .workflow/dashboards/<key>.json */
+export function runtimePath(root, key = null) {
+  const absRoot = resolve(root);
+  if (!key) return join(absRoot, RUNTIME_FILE);
+  return join(absRoot, DASHBOARDS_DIR, key + ".json");
+}
+
+/** Все известные дашборды проекта: [{key, port, url, pid}] — для --list. */
+export function listDashboards(root) {
+  const dir = join(resolve(root), DASHBOARDS_DIR);
+  if (!existsSync(dir)) return [];
+  const out = [];
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".json") || f.endsWith(".usage.json")) continue;
+      try {
+        const j = JSON.parse(readFileSync(join(dir, f), "utf8"));
+        out.push({ key: f.replace(/\.json$/, ""), port: j.port, url: j.url, pid: j.pid, startedAt: j.startedAt });
+      } catch {}
+    }
+  } catch {}
+  return out;
 }
 
 /** Прочитать рантайм-файл дашборда (или null). */
@@ -1201,10 +1547,15 @@ export function readRuntime(root) {
 
 /** Записать рантайм-файл (порт/pid/url/время старта). */
 export function writeRuntime(root, info) {
-  const p = runtimePath(root);
+  const absRoot = resolve(root);
+  const key = info && info.key ? info.key : null;
+  const p = runtimePath(absRoot, key);
   const dir = dirname(p);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(p, JSON.stringify(info, null, 2), "utf8");
+  const text = JSON.stringify(info, null, 2);
+  writeFileSync(p, text, "utf8");
+  // Дублируем «последний» рантайм: старые вызовы и скрипты ждут .workflow/dashboard.json
+  if (key) writeFileSync(runtimePath(absRoot), text, "utf8");
   return p;
 }
 
@@ -1273,7 +1624,7 @@ function handleRequest(req, res, absRoot) {
 
   if (url.pathname === "/api/state") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-    res.end(JSON.stringify(collectDashboardData(absRoot)));
+    res.end(JSON.stringify(collectDashboardData(absRoot, { session: SERVER_SESSION })));
     return;
   }
 
@@ -1293,7 +1644,7 @@ function handleRequest(req, res, absRoot) {
   }
 
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-  res.end(generateDashboardHtml(collectDashboardData(absRoot)));
+  res.end(generateDashboardHtml(collectDashboardData(absRoot, { session: SERVER_SESSION })));
 }
 
 /** Запустить сервер дашборда на первом свободном порту. */
@@ -1311,14 +1662,16 @@ export async function startLiveServer(root, port = 4200, { maxAttempts = 12 } = 
  * иначе поднимаем фоновый процесс и (опционально) открываем браузер.
  * Никогда не бросает: дашборд — наблюдаемость, а не условие работы.
  */
-export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
+export async function ensureDashboard(root, { open = true, port = null, session = null } = {}) {
   const absRoot = resolve(root);
+  const key = sessionKey(session);
+  const chosenPort = port || portForSession(key);
   // В Paseo системный браузер не открываем: страницу показывает браузер IDE,
   // и открывает её агент. Иначе получаем два окна и потерянный фокус.
   const openSystem = open && !isPaseoWorkspace();
 
   // 1. Рантайм-файл: быстрый путь.
-  const existing = readRuntime(absRoot);
+  const existing = readRuntime(absRoot, key);
   if (existing) {
     const probed = await probeDashboard(existing.port);
     if (probed) {
@@ -1330,10 +1683,10 @@ export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
 
   // 2. Рантайм-файл потерян, а дашборд проекта жив (осиротевший демон):
   //    усыновляем его вместо запуска второго сервера на соседнем порту.
-  for (let p = port; p < port + 12; p++) {
+  for (let p = chosenPort; p < chosenPort + 12; p++) {
     const probed = await probeDashboard(p, 400);
     if (probed && resolve(probed.root || "") === absRoot) {
-      writeRuntime(absRoot, {
+      writeRuntime(absRoot, { key,
         pid: probed.pid,
         port: p,
         url: `http://localhost:${p}`,
@@ -1350,7 +1703,7 @@ export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
   const selfPath = fileURLToPath(import.meta.url);
   // cwd НЕ ставим в корень проекта: на Windows это блокирует удаление каталога,
   // пока жив демон. Абсолютный --root делает cwd ненужным.
-  const child = spawn(process.execPath, [selfPath, "--serve", "--no-open", "--root", absRoot, "--port", String(port)], {
+  const child = spawn(process.execPath, [selfPath, "--serve", "--no-open", "--root", absRoot, "--port", String(chosenPort), "--session", key], {
     detached: true,
     stdio: "ignore",
   });
@@ -1358,7 +1711,7 @@ export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
 
   for (let i = 0; i < 25; i++) {
     await new Promise((r) => setTimeout(r, 200));
-    const info = readRuntime(absRoot);
+    const info = readRuntime(absRoot, key);
     if (info && (await isServerAlive(info.port))) {
       const url = `http://localhost:${info.port}`;
       if (openSystem) openInBrowser(url);
@@ -1395,10 +1748,12 @@ export function parseArgs(argv = []) {
     port: 4200,
     json: false,
     url: false,
+    list: false,
+    session: null,
     help: false,
     errors: [],
   };
-  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "help"]);
+  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "list", "session", "help"]);
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -1410,6 +1765,9 @@ export function parseArgs(argv = []) {
     else if (arg === "--checks") options.checks = true;
     else if (arg === "--json") options.json = true;
     else if (arg === "--url") options.url = true;
+    else if (arg === "--list") options.list = true;
+    else if (arg === "--session" || arg.startsWith("--session="))
+      options.session = arg.startsWith("--session=") ? arg.slice("--session=".length) : argv[++i];
     else if (arg === "--root" || arg.startsWith("--root="))
       options.root = arg.startsWith("--root=") ? arg.slice("--root=".length) : argv[++i];
     else if (arg === "--output" || arg.startsWith("--output="))
@@ -1462,11 +1820,29 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   const absRoot = resolve(opts.root);
+  const key = sessionKey(opts.session || null);
 
   if (opts.checks) {
     const checks = runChecks(absRoot);
     process.stdout.write(`Проверки выполнены и закэшированы: ${join(absRoot, CHECKS_CACHE)}\n`);
     if (checks.autoReview?.error) process.stdout.write(`  auto-review: ${checks.autoReview.error}\n`);
+  }
+
+  // --list: какие дашборды уже подняты для проекта (по сессиям).
+  if (opts.list) {
+    const rows = listDashboards(absRoot);
+    // Мёртвые записи (процесс упал, рантайм-файл остался) честно помечаем.
+    for (const r of rows) r.alive = r.port ? await isServerAlive(r.port) : false;
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+    } else if (!rows.length) {
+      process.stdout.write("Дашбордов нет — запустите workflow.mjs start или dashboard.mjs --ensure\n");
+    } else {
+      for (const r of rows) {
+        process.stdout.write(`${r.key.padEnd(22)} ${(r.alive ? r.url || "" : "— мёртв").padEnd(28)} pid ${r.pid} с ${r.startedAt || "?"}\n`);
+      }
+    }
+    return 0;
   }
 
   // --url: только адрес живого дашборда (для агентов и скриптов).
@@ -1506,9 +1882,10 @@ export async function main(argv = process.argv.slice(2)) {
   process.stdout.write(`Дашборд сгенерирован: ${outPath}\n`);
 
   if (opts.serve) {
+    SERVER_SESSION = key;
     const bound = await startLiveServer(absRoot, opts.port);
     const url = `http://localhost:${bound.port}`;
-    writeRuntime(absRoot, {
+    writeRuntime(absRoot, { key,
       pid: process.pid,
       port: bound.port,
       url,
@@ -1519,8 +1896,12 @@ export async function main(argv = process.argv.slice(2)) {
 
     const cleanup = () => {
       try {
-        const info = readRuntime(absRoot);
-        if (info && info.pid === process.pid) rmSync(runtimePath(absRoot), { force: true });
+        const info = readRuntime(absRoot, key);
+        if (info && info.pid === process.pid) {
+          rmSync(runtimePath(absRoot, key), { force: true });
+          const legacy = readRuntime(absRoot);
+          if (legacy && legacy.pid === process.pid) rmSync(runtimePath(absRoot), { force: true });
+        }
       } catch {}
       process.exit(0);
     };

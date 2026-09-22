@@ -169,6 +169,7 @@ export function isGitRepo(root) {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
+      windowsHide: true,
     });
     return out.trim() === "true";
   } catch {
@@ -185,6 +186,7 @@ export function hasGitRemote(root) {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
+      windowsHide: true,
     });
     return remotes.trim().length > 0;
   } catch {
@@ -214,6 +216,7 @@ export function collectRecentCommits(root, files) {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
+      windowsHide: true,
     });
 
     const lines = output
@@ -240,6 +243,7 @@ export function isGhAvailable() {
     execSync("gh --version", {
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
+      windowsHide: true,
     });
     return true;
   } catch {
@@ -279,6 +283,7 @@ export function collectGhIssues(root, domain, allowGh = true) {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
+      windowsHide: true,
     });
 
     const data = JSON.parse(output.trim() || "[]");

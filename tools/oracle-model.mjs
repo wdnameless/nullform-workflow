@@ -16,7 +16,10 @@ import { resolve, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const FALLBACK_MODEL = "gemini-3.8-flash-high";
+// Резервная модель НЕ прибита к вендору: воркфлоу обязан работать с любым
+// провайдером. Приоритеты берутся из oracle-priority.json (его правит оператор),
+// а если файла нет — из первой доступной модели провайдера (см. resolveModel).
+const FALLBACK_MATCH = "best-reasoning";
 
 export function parseArgs(argv) {
   const args = {
@@ -208,7 +211,7 @@ export function resolvePriorityFile(cliPriority) {
 
 /**
  * Read priority file and return array of entries.
- * Ensures the last entry is FALLBACK_MODEL ("gemini-3.8-flash-high").
+ * Ensures the last entry is the neutral fallback marker (FALLBACK_MATCH).
  */
 export function loadPriorityList(priorityPath) {
   let list = [];
@@ -237,9 +240,9 @@ export function loadPriorityList(priorityPath) {
   }
 
   // Ensure last entry is fallback model if not already present
-  const hasFallback = normalized.some((e) => e.match.toLowerCase() === FALLBACK_MODEL.toLowerCase());
+  const hasFallback = normalized.some((e) => e.match.toLowerCase() === FALLBACK_MATCH.toLowerCase());
   if (!hasFallback) {
-    normalized.push({ match: FALLBACK_MODEL, why: "Baseline fallback oracle model" });
+    normalized.push({ match: FALLBACK_MATCH, why: "Neutral fallback: провайдер сам решает, какая модель «сильнейшая»" });
   }
 
   return normalized;
@@ -402,7 +405,7 @@ export async function collectAvailableModels(modelsYamlPath, probe = false) {
  * Match priority entries against available models.
  * Case-insensitive substring match.
  * Resolution = first priority entry matching an available <provider>/<model>.
- * If no priority match succeeds among available models, fallback to gemini-3.8-flash-high.
+ * If no priority match succeeds among available models, use the neutral fallback marker.
  */
 export function resolveOracleModel(priorityEntries, availableModels) {
   for (const entry of priorityEntries) {
@@ -422,24 +425,25 @@ export function resolveOracleModel(priorityEntries, availableModels) {
     }
   }
 
-  // Fallback: check if fallback is present among available models under any provider
-  for (const avail of availableModels) {
-    if (avail.model.toLowerCase().includes(FALLBACK_MODEL.toLowerCase())) {
-      return {
-        resolved: avail.qualified,
-        matchedEntry: FALLBACK_MODEL,
-        isFallback: true,
-        source: avail.source,
-      };
-    }
+  // Модель-агностичный резерв: берём первую доступную модель ЛЮБОГО провайдера.
+  // Прибитой к вендору модели здесь нет намеренно — воркфлоу не должен ломаться
+  // на Ollama, Claude, локальных моделях или любом другом провайдере.
+  if (availableModels.length > 0) {
+    const first = availableModels[0];
+    return {
+      resolved: first.qualified,
+      matchedEntry: "(first available)",
+      isFallback: true,
+      source: first.source,
+    };
   }
 
-  // Default fallback if not found anywhere in available models
+  // Ничего не доступно — модель не выдумываем: вызывающий обязан НЕ писать config.yml.
   return {
-    resolved: FALLBACK_MODEL,
-    matchedEntry: FALLBACK_MODEL,
+    resolved: null,
+    matchedEntry: null,
     isFallback: true,
-    source: "default",
+    source: "none",
   };
 }
 
@@ -633,13 +637,33 @@ export async function run(argv) {
   if (opts.command === "apply" || opts.command === "ensure") {
     // С --probe модель, чей провайдер провалил опрос, не выбирается: запись её в
     // config.yml — ровно тот сценарий, когда все спавны падают на 429/401.
-    const resolvedProvider = resolution.resolved.includes("/")
+    const resolvedProvider = resolution.resolved && resolution.resolved.includes("/")
       ? resolution.resolved.slice(0, resolution.resolved.indexOf("/"))
       : null;
+    // Модель не выбрана: нет ни приоритетного совпадения, ни доступных моделей.
+    // Ничего не пишем — иначе на чужом провайдере в config.yml уехала бы мёртвая модель.
+    if (!resolution.resolved) {
+      // Если причина — мёртвые провайдеры, называем их: это самая полезная часть отказа.
+      const noModel = unreachableProviders.length > 0
+        ? `Модель не выбрана: недостижимы провайдеры ${unreachableProviders.join(", ")}. config.yml не изменён.`
+        : "Модель не выбрана: ни один приоритет не совпал, доступных моделей нет. config.yml не изменён.";
+      if (opts.json) {
+        process.stdout.write(
+          redactSecrets(
+            JSON.stringify({ ok: false, error: noModel, resolved: null, unreachableProviders, providers, notes }, null, 2),
+            secrets
+          ) + "\n"
+        );
+      } else {
+        process.stderr.write(redactSecrets(`[XX] ${noModel}\n`, secrets));
+      }
+      return 1;
+    }
+
     const selectedProviderDead = resolvedProvider
       ? providers[resolvedProvider]?.reachable === false
       : false;
-    const fallbackWithoutProvider = resolution.source === "default" && unreachableProviders.length > 0;
+    const fallbackWithoutProvider = resolution.source === "none" && unreachableProviders.length > 0;
 
     if (opts.probe && (selectedProviderDead || fallbackWithoutProvider)) {
       const errMessage = `Модель ${resolution.resolved} не выбрана: недостижимы провайдеры ${unreachableProviders.join(", ")}. config.yml не изменён.`;

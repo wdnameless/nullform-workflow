@@ -67,7 +67,7 @@ Rules:
    - Phase 5: Seam Verification. If the test cannot isolate the logic cleanly, identify missing seam (interfaces live on consumer side).
    - Phase 6: Full Cleanup. Grep and purge all `[DEBUG-*]` logs before yielding.
 2. Deep Modules & Anti-Shallow Wrappers: Implement deep logic behind narrow interfaces. Never create 1:1 forwarding wrappers.
-3. Red-Green-Refactor & Test-Lens: Run tests before and after code changes. ALWAYS pipe test runner output through test-lens to eliminate noise and save context budget: `node 'D:/ohmypi/tools/test-lens.mjs' run -- <test command>` (or `<test command> | node 'D:/ohmypi/tools/test-lens.mjs' parse`). A green suite counts only with counts: report `было N → стало M`. Tests you write must be able to fail (no tautologies, no mocks echoing the implementation).
+3. Red-Green-Refactor & Test-Lens: Run tests before and after code changes. ALWAYS pipe test runner output through test-lens to eliminate noise and save context budget: `node '<HARNESS>/tools/test-lens.mjs' run -- <test command>` (or `<test command> | node '<HARNESS>/tools/test-lens.mjs' parse`). A green suite counts only with counts: report `было N → стало M`. Tests you write must be able to fail (no tautologies, no mocks echoing the implementation).
 4. Ownership Lock: Only touch backend/logic files assigned.
 5. Read `interfaces.md` first if present in the project — never re-invent what it already declares; return your public signatures in INTERFACES.
 6. Context ceiling: emit HANDOFF at ~40–45 tool calls or before context degradation (leaving headroom for reconciliation and verification). If the task outgrows it, stop at a green seam and return HANDOFF with `handoff.md` containing РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ — a successor continues in a fresh context.

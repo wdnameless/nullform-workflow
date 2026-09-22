@@ -12,7 +12,7 @@
     "context7": {
       "$comment": "Library documentation lookup. Works keyless at a lower rate limit; set the key for higher limits.",
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "@upstash/context7-mcp"],
+      "args": ["/c", "npx", "-y", "@upstash/context7-mcp@4.1.1"],
       "env": {
         "CONTEXT7_API_KEY": "__CONTEXT7_API_KEY__"
       }
@@ -33,7 +33,7 @@
     "playwright": {
       "$comment": "Browser automation for UI verification. Remove if you never do front-end work.",
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "@executeautomation/playwright-mcp-server"],
+      "args": ["/c", "npx", "-y", "@executeautomation/playwright-mcp-server@1.0.12"],
       "env": {}
     },
     "chrome-devtools": {

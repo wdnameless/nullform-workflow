@@ -94,6 +94,7 @@ export async function runAutoReview(opts = {}) {
       stdio: "pipe",
       encoding: "utf8",
       shell: false,
+      windowsHide: true,
     });
     if (tscRes.status === 0) {
       log("✅ TypeScript: проверка типов пройдена успешно без ошибок.");
@@ -117,6 +118,7 @@ export async function runAutoReview(opts = {}) {
       stdio: "pipe",
       encoding: "utf8",
       shell: false,
+      windowsHide: true,
     });
     if (eslintRes.status === 0) {
       log("✅ ESLint: нарушений правил линтинга не найдено.");
@@ -139,7 +141,8 @@ export async function runAutoReview(opts = {}) {
       stdio: "pipe",
       encoding: "utf8",
       shell: false,
-    windowsHide: true});
+      windowsHide: true,
+    });
 
     const combinedOutput = (testRes.stdout || "") + "\n" + (testRes.stderr || "");
 
@@ -174,6 +177,7 @@ export async function runAutoReview(opts = {}) {
     const dlRes = spawnSync(process.execPath, [debtLedgerScript, "scan", "--root", root, "--check"], {
       stdio: "pipe",
       encoding: "utf8",
+      windowsHide: true,
     });
 
     const dlOut = (dlRes.stdout || "").trim();

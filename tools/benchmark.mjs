@@ -15,7 +15,6 @@ import {
   writeFileSync,
   readdirSync,
   statSync,
-  rmSync,
 } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -123,7 +122,7 @@ function sleepSync(ms) {
 /** git в контексте репозитория клона; read-only операции — без записи индекса. */
 function git(repoDir, args, { optionalLocks = false } = {}) {
   const base = optionalLocks ? ["--no-optional-locks", "-C", repoDir] : ["-C", repoDir];
-  return spawnSync("git", [...base, ...args], { encoding: "utf8", shell: false });
+  return spawnSync("git", [...base, ...args], { encoding: "utf8", shell: false, windowsHide: true });
 }
 
 /** stdout успешной git-команды или "" при ошибке. */
@@ -268,6 +267,7 @@ export function isGitRepo(dir) {
       cwd: dir,
       encoding: "utf8",
       shell: false,
+      windowsHide: true,
     });
     return res.status === 0 && res.stdout.trim() === "true";
   } catch {
@@ -431,6 +431,7 @@ function evaluateCost(root, transcriptPath) {
         cwd: absRoot,
         encoding: "utf8",
         shell: false,
+        windowsHide: true,
       });
       if (res.status === 0 && res.stdout) {
         try {
@@ -590,6 +591,7 @@ export function runBenchmark(options) {
       cwd: runDir,
       encoding: "utf8",
       shell: false,
+      windowsHide: true,
     });
     if (cloneRes.status !== 0) {
       throw new Error(`Ошибка git clone: ${cloneRes.stderr || cloneRes.stdout}`);
@@ -603,7 +605,8 @@ export function runBenchmark(options) {
           cwd: repoDir,
           encoding: "utf8",
           shell: true,
-        windowsHide: true});
+          windowsHide: true,
+        });
         if (sRes.status !== 0) {
           // Записываем ошибку setup в лог
           const setupErr = `\n[BENCHMARK SETUP ERROR] '${step}' exited with code ${sRes.status}\n${sRes.stderr || ""}\n`;
@@ -647,7 +650,8 @@ export function runBenchmark(options) {
         shell: true,
         timeout: taskTimeoutSec > 0 ? taskTimeoutSec * 1000 : undefined,
         env,
-      windowsHide: true});
+        windowsHide: true,
+      });
 
       agentStdout = agentRes.stdout || "";
       agentStderr = agentRes.stderr || "";
@@ -698,7 +702,8 @@ export function runBenchmark(options) {
           cwd: repoDir,
           encoding: "utf8",
           shell: true,
-        windowsHide: true});
+          windowsHide: true,
+        });
 
         const code = cRes.status ?? (cRes.signal ? -1 : 0);
         const passed = code === 0;

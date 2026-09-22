@@ -117,7 +117,9 @@ function load(root) {
 function save(root, st) {
   // Atomic write: a crash mid-write must never leave a truncated state.json.
   const target = statePath(root);
-  const tmp = target + ".tmp";
+  // Уникальное имя временного файла: два агента в одном проекте не должны
+  // затирать друг другу запись (раньше это был общий state.json.tmp).
+  const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(tmp, JSON.stringify(st, null, 2));
   renameSync(tmp, target);
@@ -356,6 +358,18 @@ function autoOpenDashboard(root, flags) {
   }
 }
 
+/** Событие воркфлоу для вкладки «Логи» дашборда: одна строка JSON. */
+function logEvent(root, kind, text, extra = {}) {
+  try {
+    const dir = join(root, ".workflow");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const line = JSON.stringify({ at: new Date().toISOString(), kind, text, ...extra }) + "\n";
+    appendFileSync(join(dir, "events.jsonl"), line, "utf8");
+  } catch {
+    // журнал событий — наблюдаемость, а не условие работы
+  }
+}
+
 function cmdStart(root, flags) {
   const tier = String(flags.tier || "").toUpperCase();
   if (!LADDER.includes(tier)) {
@@ -410,6 +424,12 @@ function cmdStart(root, flags) {
   const prev = load(root);
   if (prev && prev.status === "open" && !flags.force) {
     console.error(`workflow: task '${prev.task}' is already open at ${prev.tier}.`);
+    const mine = process.env.PASEO_AGENT_ID
+      ? `paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`
+      : "local";
+    if (prev.session && prev.session !== mine) {
+      console.error(`  opened by another session (${prev.session}); two agents in one project share the lane gate.`);
+    }
     console.error(`  close it first, or pass --force to replace it.`);
     return 2;
   }
@@ -423,6 +443,12 @@ function cmdStart(root, flags) {
     task: String(flags.task || "(untitled)"),
     startedAt: new Date().toISOString(),
     status: "open",
+    // Сессия-владелец: дашборд привязан к ней, а параллельные агенты видят, чья задача.
+    session: process.env.PASEO_AGENT_ID
+      ? `paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`
+      : process.env.OMP_SESSION_ID
+        ? `omp-${String(process.env.OMP_SESSION_ID).slice(0, 8)}`
+        : "local",
     // Declaring a lane IS the lane artifact — `start --tier T2` is the act of
     // classifying. Requiring a second command for it would be ceremony.
     artifacts: { lane: { at: new Date().toISOString(), path: null, detail: tier } },
@@ -431,6 +457,7 @@ function cmdStart(root, flags) {
     st.auto = autoConfig;
   }
   save(root, st);
+  logEvent(root, "start", `${tier} — ${st.task}`);
   console.log(`workflow: ${tier} task opened — ${st.task}`);
   console.log(`  budget: ${tierBudget} tool calls for ${tier}`);
   if (autoConfig) {
@@ -495,7 +522,8 @@ function cmdArtifact(root, flags) {
   st.artifacts[kind] = { at: new Date().toISOString(), path, detail };
   save(root, st);
   const done = Object.keys(st.artifacts).length;
-  console.log(`workflow: ${kind} recorded${path ? ` (${path})` : ""} — ${done}/${reqs.length} for ${st.tier}`);
+    logEvent(root, "artifact", `${kind}${flags.detail ? ": " + String(flags.detail).slice(0, 120) : ""}`);
+console.log(`workflow: ${kind} recorded${path ? ` (${path})` : ""} — ${done}/${reqs.length} for ${st.tier}`);
   return 0;
 }
 
@@ -590,7 +618,8 @@ function cmdClose(root, flags) {
     st.deviation = { forced: true, reason: String(flags.reason), missing: missing.map((m) => m.kind) };
     console.log(`workflow: closed with DEVIATION — ${missing.map((m) => m.kind).join(', ')} (${st.deviation.reason})`);
   } else {
-    console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
+    logEvent(root, "close", `${st.tier} — ${st.task}`);
+  console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
   }
   save(root, st);
   const closedMs = new Date(st.closedAt).getTime();

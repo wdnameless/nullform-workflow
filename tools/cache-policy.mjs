@@ -85,6 +85,7 @@ export function runCachePolicyCheck({ root, policyPath, returnContractPath }) {
   if (existsSync(promptLintPath)) {
     const res = spawnSync("node", [promptLintPath, "scan", "--root", targetRoot], {
       encoding: "utf8",
+      windowsHide: true,
     });
     if (res.status !== 0) {
       errors.push("Gate 1 failed: prompt-lint scan detected volatile literals in prompt surfaces");
