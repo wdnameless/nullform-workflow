@@ -120,7 +120,7 @@ export function scanModules(absRoot) {
 /** Git-состояние: ветка, последний коммит, изменения (staged/unstaged) построчно. */
 export function collectGitStats(absRoot) {
   const git = (args) =>
-    spawnSync("git", args, { cwd: absRoot, encoding: "utf8", timeout: 15000, shell: false });
+    spawnSync("git", args, { cwd: absRoot, encoding: "utf8", timeout: 15000, shell: false , windowsHide: true});
 
   const branchRes = git(["rev-parse", "--abbrev-ref", "HEAD"]);
   const isRepo = branchRes.status === 0;

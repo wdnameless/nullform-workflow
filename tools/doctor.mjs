@@ -264,7 +264,7 @@ export function runOmp(args, { timeout = 60000 } = {}) {
     encoding: "utf8",
     shell: process.platform === "win32",
     timeout,
-  });
+  windowsHide: true});
   return {
     status: res.status,
     stdout: res.stdout || "",

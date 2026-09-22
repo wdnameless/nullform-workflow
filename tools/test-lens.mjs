@@ -351,7 +351,7 @@ export function runCommand(testCmd) {
     shell: true,
     encoding: 'utf-8',
     maxBuffer: MAX_OUTPUT
-  });
+  , windowsHide: true});
   return classifyResult(result, testCmd[0]);
 }
 

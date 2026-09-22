@@ -131,7 +131,7 @@ export async function runAutoReview(opts = {}) {
       stdio: "pipe",
       encoding: "utf8",
       shell: false,
-    });
+    windowsHide: true});
 
     const combinedOutput = (testRes.stdout || "") + "\n" + (testRes.stderr || "");
 

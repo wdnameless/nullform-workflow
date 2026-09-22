@@ -36,7 +36,7 @@ function createTempDir() {
 }
 
 function git(dir, args) {
-  return spawnSync("git", args, { cwd: dir, encoding: "utf8", shell: false });
+  return spawnSync("git", args, { cwd: dir, encoding: "utf8", shell: false , windowsHide: true});
 }
 
 /** Временный git-репозиторий с одним коммитом. */

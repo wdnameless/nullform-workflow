@@ -235,7 +235,7 @@ export function runMutationTesting(options) {
     shell: true,
     encoding: "utf8",
     timeout: timeoutSec * 1000,
-  });
+  windowsHide: true});
 
   if (initialRun.status !== 0) {
     throw new Error(
@@ -258,7 +258,7 @@ export function runMutationTesting(options) {
         shell: true,
         encoding: "utf8",
         timeout: timeoutSec * 1000,
-      });
+      windowsHide: true});
 
       const isTimeout = run.error && run.error.code === "ETIMEDOUT";
       const isKilled = isTimeout || run.status !== 0;

@@ -603,7 +603,7 @@ export function runBenchmark(options) {
           cwd: repoDir,
           encoding: "utf8",
           shell: true,
-        });
+        windowsHide: true});
         if (sRes.status !== 0) {
           // Записываем ошибку setup в лог
           const setupErr = `\n[BENCHMARK SETUP ERROR] '${step}' exited with code ${sRes.status}\n${sRes.stderr || ""}\n`;
@@ -647,7 +647,7 @@ export function runBenchmark(options) {
         shell: true,
         timeout: taskTimeoutSec > 0 ? taskTimeoutSec * 1000 : undefined,
         env,
-      });
+      windowsHide: true});
 
       agentStdout = agentRes.stdout || "";
       agentStderr = agentRes.stderr || "";
@@ -698,7 +698,7 @@ export function runBenchmark(options) {
           cwd: repoDir,
           encoding: "utf8",
           shell: true,
-        });
+        windowsHide: true});
 
         const code = cRes.status ?? (cRes.signal ? -1 : 0);
         const passed = code === 0;

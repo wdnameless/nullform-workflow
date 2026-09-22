@@ -54,7 +54,7 @@ function createTempDir() {
  */
 function createGitRepo() {
   const dir = createTempDir();
-  spawnSync("git", ["init"], { cwd: dir, encoding: "utf8" });
+  spawnSync("git", ["init"], { cwd: dir, encoding: "utf8" , windowsHide: true});
   spawnSync("git", ["config", "user.name", "BenchTester"], { cwd: dir });
   spawnSync("git", ["config", "user.email", "bench@test.local"], { cwd: dir });
   spawnSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir });

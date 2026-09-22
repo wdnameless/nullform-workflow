@@ -33,6 +33,8 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+# Аудит не должен поднимать дашборд наблюдения.
+$env:NF_NO_DASHBOARD = '1'
 if (-not $PSScriptRoot) { $PSScriptRoot = (Get-Location).Path }
 if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
   $HarnessRoot = Split-Path -Parent $PSScriptRoot

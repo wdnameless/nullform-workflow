@@ -183,7 +183,7 @@ test("CLI: --help, --dry-run, --check и --json возвращают ожида�
   assert.equal(helpProc.status, 0);
   assert.ok(helpProc.stdout.includes("mutation-test.mjs"));
 
-  const noTarget = spawnSync(process.execPath, [CLI_PATH], { encoding: "utf8" });
+  const noTarget = spawnSync(process.execPath, [CLI_PATH], { encoding: "utf8" , windowsHide: true});
   assert.equal(noTarget.status, 2);
 
   const tmp = createTempDir();

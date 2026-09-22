@@ -305,6 +305,9 @@ Check 'tier gate enforces artifacts (workflow.mjs)' {
   try {
     $wf = Join-Path $HarnessRoot 'tools\workflow.mjs'
     if (-not (Test-Path $wf)) { throw "workflow.mjs missing" }
+    # Проверяем гейт ярусов, а не дашборд: автозапуск наблюдения выключен,
+    # иначе верификация открывала бы браузер и оставляла фоновые демоны.
+    $env:NF_NO_DASHBOARD = '1'
     # T0 must complete with no artifacts.
     $null = Invoke-Capture 'node' @($wf, 'start', '--tier', 'T0', '--task', 'probe', '--root', $tmp)
     $t0 = Invoke-Capture 'node' @($wf, 'check', '--root', $tmp)
