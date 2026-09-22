@@ -581,14 +581,41 @@ export function collectDashboardData(root = ".", options = {}) {
 
   const session = {
     key: sessionKey(options.session || null),
+    name: null,
     paseoAgentId: process.env.PASEO_AGENT_ID || null,
     transcript: null,
     usage: null,
   };
   session.usage = collectSessionUsage(absRoot, session.key);
+  if (session.usage && session.usage.name) {
+    session.name = session.usage.name;
+  }
   const sessionFile = newestSessionFile(absRoot);
-  if (sessionFile) session.transcript = sessionFile.name;
-
+  if (sessionFile) {
+    session.transcript = sessionFile.name;
+    if (!session.name) {
+      try {
+        const fd = openSync(sessionFile.path, "r");
+        const buf = Buffer.alloc(4096);
+        const readLen = readSync(fd, buf, 0, 4096, 0);
+        closeSync(fd);
+        const chunk = buf.toString("utf8", 0, readLen);
+        for (const line of chunk.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            const j = JSON.parse(line);
+            if (j.type === "title" && j.title) {
+              session.name = j.title;
+              break;
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+  }
+  if (!session.name && state && state.task) {
+    session.name = state.task;
+  }
   return {
     timestamp: new Date().toISOString(),
     root: absRoot,
@@ -1451,8 +1478,10 @@ export function generateDashboardHtml(data) {
     if (d.session.usage) {
       var u = d.session.usage;
       var cachePct = u.inputTokens + u.cachedTokens > 0 ? Math.round(u.cachedTokens / (u.inputTokens + u.cachedTokens) * 100) : 0;
+      var sessionTitle = d.session.name || (u && u.name) || d.session.key;
+      var sessionSub = esc(d.session.key) + (u.status ? " · " + esc(u.status) : "") + (u.stale ? " · " + t("updating") : "");
       sess = '<div class="grid4" style="margin-bottom:14px">' +
-        card(t("sessionCard"), esc(d.session.key), esc(u.status || "") + (u.stale ? " · " + t("updating") : "")) +
+        card(t("sessionCard"), esc(sessionTitle), sessionSub) +
         card(t("cost"), u.costUsd !== null ? "$" + u.costUsd : "—", t("byPaseo")) +
         card(t("tokens"), num(u.inputTokens) + " / " + num(u.outputTokens), t("cache") + " " + cachePct + "%") +
         card(t("model"), esc((u.model || "—").split("/").pop()), t("provider") + ": " + esc(u.provider || "—")) +
@@ -1811,13 +1840,15 @@ export function generateDashboardHtml(data) {
   function renderHeader(d) {
     document.getElementById("h-project").textContent = d.project.name;
     var s = d.session;
-    var chip = s.key;
+    var sessionTitle = s.name || (s.usage && s.usage.name) || s.key;
+    var chip = sessionTitle;
     if (s.usage) {
       var st = s.usage.status === "running" ? "● running" : "○ " + (s.usage.status || "idle");
       var cost = s.usage.costUsd !== null ? " · $" + s.usage.costUsd : "";
-      chip = s.key + " · " + st + cost;
+      chip = sessionTitle + " · " + st + cost;
     }
     document.getElementById("h-session").textContent = chip;
+    document.getElementById("h-session").title = "ID: " + s.key + (s.paseoAgentId ? " (" + s.paseoAgentId + ")" : "");
     var mchip = document.getElementById("h-model");
     if (mchip) mchip.textContent = s.usage && s.usage.model ? s.usage.model : "—";
     document.getElementById("h-branch").textContent = d.project.branch || "—";

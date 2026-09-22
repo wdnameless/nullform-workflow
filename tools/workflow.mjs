@@ -356,7 +356,15 @@ function autoOpenDashboard(root, flags) {
       } catch {}
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
     }
-    console.log(url ? `  dashboard: ${url} (сервер запущен, открывается в браузере)` : "  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
+    if (url) {
+      if (process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI) {
+        console.log(`  dashboard: ${url} — открой во вкладке Paseo: browser_new_tab("${url}")`);
+      } else {
+        console.log(`  dashboard: ${url} (сервер запущен, открывается в браузере)`);
+      }
+    } else {
+      console.log("  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
+    }
   } catch {
     // молча: наблюдаемость не должна ломать гейт
   }

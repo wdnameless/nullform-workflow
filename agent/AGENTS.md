@@ -24,11 +24,11 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
 - Close honestly: `close` refuses while artifacts are missing. If you must deviate,
   `close --force --reason "<why>"` records the deviation so it is visible, not silent.
 - Task genuinely trivial (a typo, one line in one known file)? Say so in one line and use T0.
-- **OBSERVABILITY DASHBOARD**: `start` launches the dashboard in the background and prints its URL.
-  Inside a Paseo workspace, open that URL in the **Paseo browser** (`browser_new_tab`) — that is the
-  development environment and it takes priority over the system browser. Outside Paseo the CLI opens
-  the system browser itself. Read the URL from `.workflow/dashboard.json` or `node tools/dashboard.mjs --url`.
-  The page updates itself every 3 s — do not reload it.
+- **OBSERVABILITY DASHBOARD**: `start` launches the dashboard in the background and prints its live URL.
+  Inside a Paseo workspace (`PASEO_AGENT_ID`), you MUST IMMEDIATELY call `browser_new_tab(url)` right after
+  `workflow.mjs start` so the live dashboard opens directly in the **Paseo IDE browser tab** for the human user.
+  Outside Paseo the CLI opens the system browser itself. Read the URL from `.workflow/dashboard.json` or
+  `node tools/dashboard.mjs --url`. The page updates itself every 3 s — do not reload it.
 
 ## 1. CLASSIFY FIRST — four lanes, output verdict in first line
 - `⚡ [T0 FAST]` 1–2 known files, localized → direct edit or 1 specialist, ≤10 min, NO OpenSpec/interview/oracle.
