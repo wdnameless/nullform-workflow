@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -64,4 +64,51 @@ test("auto-review: fixture with '// defer: x' lacking upgrade fails with exit co
       rmSync(testDir, { recursive: true, force: true });
     } catch {}
   }
+});
+
+/* ------------------------------------------------ --json контракт (bug sweep) */
+
+test("auto-review --json: печатает только JSON, отдаёт ok/exitCode/problems/report", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "ar-json-"));
+  try {
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "x", version: "1.0.0" }), "utf8");
+
+    const proc = spawnSync(process.execPath, [autoReviewScript, "--json", "--root", tmp], { encoding: "utf8" });
+    assert.equal(proc.status, 0);
+
+    // stdout — ровно JSON: иначе дашборд не сможет разобрать вердикт
+    const parsed = JSON.parse(proc.stdout);
+    assert.equal(typeof parsed.ok, "boolean");
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.exitCode, 0);
+    assert.equal(Array.isArray(parsed.problems), true);
+    assert.equal(parsed.total, 0);
+    assert.ok(typeof parsed.report === "string" && parsed.report.length > 0, "текстовый отчёт сохранён");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("auto-review --json: провал гейта даёт ok=false и причину в problems", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "ar-json-fail-"));
+  try {
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    // Маркер defer: без триггера апгрейда — детерминированный провал гейта
+    writeFileSync(join(tmp, "src", "a.js"), "// defer: quick hack | ceiling: 10 users\n", "utf8");
+
+    const proc = spawnSync(process.execPath, [autoReviewScript, "--json", "--root", tmp], { encoding: "utf8" });
+    const parsed = JSON.parse(proc.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(proc.status, 1);
+    assert.ok(parsed.total >= 1, "причина провала попала в problems");
+    assert.ok(parsed.problems[0].message.length > 0);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("auto-review: неизвестный флаг — ошибка, а не молчаливый пропуск", () => {
+  const proc = spawnSync(process.execPath, [autoReviewScript, "--nope"], { encoding: "utf8" });
+  assert.equal(proc.status, 2);
+  assert.ok(proc.stderr.includes("неизвестный параметр"));
 });

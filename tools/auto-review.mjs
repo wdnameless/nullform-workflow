@@ -25,13 +25,21 @@ function npmBin(name) {
 }
 
 function parseArgs(argv) {
-  const flags = { root: "." };
+  const flags = { root: ".", json: false, errors: [] };
+  const known = new Set(["root", "json", "help"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--root" && argv[i + 1]) {
       flags.root = argv[++i];
     } else if (arg.startsWith("--root=")) {
       flags.root = arg.slice("--root=".length);
+    } else if (arg === "--json") {
+      flags.json = true;
+    } else if (arg === "-h" || arg === "--help") {
+      flags.help = true;
+    } else if (arg.startsWith("--")) {
+      const name = arg.slice(2).split("=")[0];
+      if (!known.has(name)) flags.errors.push(`неизвестный параметр: ${arg}`);
     }
   }
   return flags;
@@ -193,22 +201,77 @@ export async function runAutoReview(opts = {}) {
     }
     log("Рекомендация: устраните сбои тестов и добавьте триггеры к маркерам отложенных упрощений перед мерджем.");
     log("================================================================");
-    return { success: false, exitCode: 1, report: reportLines.join("\n") };
+    return { success: false, exitCode: 1, report: reportLines.join("\n"), reasons: failureReasons };
   } else {
     log("✅ ИТОГ: АВТО-РЕВЬЮ ПРОЙДЕНО УСПЕШНО (Код 0)");
     log("Все обязательные гейты пройдены.");
     log("================================================================");
-    return { success: true, exitCode: 0, report: reportLines.join("\n") };
+    return { success: true, exitCode: 0, report: reportLines.join("\n"), reasons: [] };
   }
 }
 
 // CLI entry point
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const flags = parseArgs(process.argv.slice(2));
-  runAutoReview({ root: flags.root }).then((res) => {
-    process.exit(res.exitCode);
-  }).catch((err) => {
-    console.error("Ошибка выполнения auto-review:", err);
+
+  if (flags.help) {
+    process.stdout.write(`auto-review.mjs — детерминированный авто-ревью проекта
+
+Использование:
+  node tools/auto-review.mjs [--root <dir>] [--json]
+
+Параметры:
+  --root <dir>   Корень проекта (по умолчанию: .)
+  --json         Машиночитаемый отчёт вместо текстового
+  -h, --help     Показать эту справку
+`);
+    process.exit(0);
+  }
+
+  if (flags.errors.length > 0) {
+    for (const e of flags.errors) process.stderr.write(`Ошибка: ${e}\n`);
     process.exit(2);
-  });
+  }
+
+  if (flags.json) {
+    // Тихий режим: подавляем текстовый отчёт, отдаём структуру.
+    const originalLog = console.log;
+    const originalInfo = console.info;
+    console.log = () => {};
+    console.info = () => {};
+    runAutoReview({ root: flags.root })
+      .then((res) => {
+        console.log = originalLog;
+        console.info = originalInfo;
+        const reasons = Array.isArray(res.reasons) ? res.reasons : [];
+        process.stdout.write(
+          JSON.stringify(
+            {
+              ok: Boolean(res.success),
+              exitCode: res.exitCode,
+              root: resolve(flags.root),
+              total: reasons.length,
+              problems: reasons.map((r) => ({ message: r })),
+              report: res.report || "",
+            },
+            null,
+            2
+          ) + "\n"
+        );
+        process.exit(res.exitCode);
+      })
+      .catch((err) => {
+        console.log = originalLog;
+        console.info = originalInfo;
+        process.stdout.write(JSON.stringify({ ok: false, error: String(err && err.message ? err.message : err) }) + "\n");
+        process.exit(2);
+      });
+  } else {
+    runAutoReview({ root: flags.root }).then((res) => {
+      process.exit(res.exitCode);
+    }).catch((err) => {
+      console.error("Ошибка выполнения auto-review:", err);
+      process.exit(2);
+    });
+  }
 }

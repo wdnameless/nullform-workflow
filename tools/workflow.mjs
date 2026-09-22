@@ -345,7 +345,12 @@ function autoOpenDashboard(root, flags) {
       const rt = join(root, '.workflow', 'dashboard.json');
       if (existsSync(rt)) url = JSON.parse(readFileSync(rt, 'utf8')).url;
     } catch {}
-    console.log(url ? `  dashboard: ${url}` : "  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
+    if (process.env.PASEO_AGENT_ID || process.env.PASEO_HOME) {
+      // Приоритет — браузер среды разработки: его открывает агент по этому адресу.
+      console.log(url ? `  dashboard: ${url} — открой в браузере Paseo` : "  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
+    } else {
+      console.log(url ? `  dashboard: ${url}` : "  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
+    }
   } catch {
     // молча: наблюдаемость не должна ломать гейт
   }

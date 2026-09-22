@@ -30,6 +30,10 @@ Match tool class to task stage — never bulk-dump everything:
 - **Verification**: deterministic first — `lsp diagnostics`, build, tests. LLM-judgment (@oracle) only for what tools can't decide.
 - **External truth**: `context7` (library docs) before guessing APIs; `web_search` for ecosystem questions.
 - Skip MCP calls whose answer won't change your decision.
+- **Observability dashboard**: `workflow.mjs start` launches it in the background and prints the URL.
+  In a Paseo workspace open that URL in the **Paseo browser** (`browser_new_tab`) — the dev environment
+  takes priority over the system browser (the CLI opens the system one only outside Paseo).
+  URL source: `.workflow/dashboard.json` or `node tools/dashboard.mjs --url`. The page self-updates every 3 s.
 
 ### Wave 0 (T1–T3) MANDATORY INTERVIEW:
 - DO NOT manually grill.

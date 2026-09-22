@@ -465,3 +465,82 @@ test("ensureDashboard: осиротевший демон усыновляетс�
     rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
+
+/* ---------------------------------------------- regressions (bug sweep) */
+
+test("dashboard: история отдаёт medianMs, а не medianTaskMs (регресс на поле-призрак)", () => {
+  const tmp = createTempDir();
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+    const rows = [
+      { task: "a", tier: "T1", durationMs: 1000 },
+      { task: "b", tier: "T1", durationMs: 5000 },
+      { task: "c", tier: "T2", durationMs: 9000 },
+    ];
+    writeFileSync(join(tmp, ".workflow", "metrics.jsonl"), rows.map((r) => JSON.stringify(r)).join("\n"), "utf8");
+
+    const data = collectDashboardData(tmp);
+    assert.equal(data.history.medianMs, 5000, "медиана считается");
+    assert.equal(data.history.medianTaskMs, undefined, "поля-призрака быть не должно");
+    assert.equal(data.timing.medianTaskMs, 5000, "карточка времени берёт медиану из timing");
+
+    // Клиентский рендер читает именно history.medianMs — иначе показывал «—»
+    const html = generateDashboardHtml(data);
+    assert.ok(html.includes("d.history.medianMs"), "история использует существующее поле");
+    assert.ok(!html.includes("d.history.medianTaskMs"), "поле-призрак не читается");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("dashboard: индекс таска в волне ищется по id (JSON-раундтрип ломает ссылки)", () => {
+  const tmp = createTempDir();
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".workflow", "state.json"),
+      JSON.stringify({
+        tier: "T2",
+        task: "wave idx",
+        status: "open",
+        startedAt: new Date().toISOString(),
+        artifacts: { lane: { at: new Date().toISOString(), detail: "T2" }, recon: { at: new Date().toISOString() } },
+      }),
+      "utf8"
+    );
+
+    const data = collectDashboardData(tmp);
+    // Клиент получает данные через JSON: stages и waves.stages — разные объекты.
+    const roundTripped = JSON.parse(JSON.stringify(data));
+    const waveStage = roundTripped.waves.find((w) => w.stages.length > 0).stages[0];
+    assert.equal(
+      roundTripped.stages.indexOf(waveStage),
+      -1,
+      "после JSON.parse ссылочное равенство теряется — значит indexOf не годится"
+    );
+
+    const html = generateDashboardHtml(data);
+    assert.ok(html.includes("findIndex(function (x) { return x.id === s.id; })"), "индекс ищется по id");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("dashboard: шрифты и медиа не вытесняют исходники из списка файлов модуля", () => {
+  const tmp = createTempDir();
+  try {
+    const dir = join(tmp, "skills");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "huge.ttf"), "x".repeat(100) + "\n".repeat(500), "utf8");
+    writeFileSync(join(dir, "photo.png"), "y".repeat(100) + "\n".repeat(400), "utf8");
+    writeFileSync(join(dir, "code.mjs"), "line\n".repeat(50), "utf8");
+
+    const modules = scanModules(tmp);
+    const skills = modules.find((m) => m.name === "skills");
+    assert.ok(skills, "модуль найден");
+    assert.equal(skills.files[0].name.endsWith("code.mjs"), true, "первым идёт исходник, а не шрифт");
+    assert.ok(skills.fileCount === 3, "бинарные файлы всё ещё посчитаны в общем числе");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

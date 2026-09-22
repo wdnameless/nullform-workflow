@@ -58,6 +58,12 @@ const STAGE_DEFS = [
 /*  Data collection                                                    */
 /* ------------------------------------------------------------------ */
 
+/** Расширения, которые не считаем исходником: шрифты, медиа, архивы, замки. */
+const BINARY_EXT = /\.(ttf|otf|woff2?|eot|png|jpe?g|gif|webp|svgz?|ico|bmp|mp[34]|wav|ogg|pdf|zip|gz|tar|7z|rar|xz|exe|dll|so|dylib|bin|wasm|db|sqlite3?|lock)$/i;
+function isBinaryName(name) {
+  return BINARY_EXT.test(name);
+}
+
 /** Рекурсивный сбор файлов модуля (без node_modules/.git). */
 function walkFiles(dir, out = [], limit = 400) {
   let entries;
@@ -83,7 +89,7 @@ function walkFiles(dir, out = [], limit = 400) {
       try {
         if (st.size < 400000) lines = readFileSync(full, "utf8").split("\n").length;
       } catch {}
-      out.push({ name: e, path: full, size: st.size, lines });
+      out.push({ name: e, path: full, size: st.size, lines, binary: isBinaryName(e) });
     }
   }
   return out;
@@ -100,7 +106,10 @@ export function scanModules(absRoot) {
 
     const files = walkFiles(dirPath);
     const totalLines = files.reduce((s, f) => s + f.lines, 0);
-    const top = [...files].sort((a, b) => b.lines - a.lines).slice(0, 12).map((f) => ({
+    const top = [...files]
+      .sort((a, b) => (a.binary === b.binary ? b.lines - a.lines : a.binary ? 1 : -1))
+      .slice(0, 12)
+      .map((f) => ({
       name: relative(absRoot, f.path).replace(/\\/g, "/"),
       lines: f.lines,
     }));
@@ -526,8 +535,9 @@ export function collectDashboardData(root = ".") {
   const history = collectHistory(absRoot);
   const remainingCount = closed ? 0 : required.filter((k) => !artifacts[k]).length;
   const perStage = history.medianMs > 0 ? history.medianMs / Math.max(1, required.length) : 3 * 60000;
-  const remainingMin = closed ? null : Math.max(0, Math.round((remainingCount * perStage) / 60000));
-  const remainingMax = closed ? null : Math.max(remainingMin ?? 0, Math.round((remainingCount * perStage * 2.2) / 60000));
+  const noWorkLeft = closed || remainingCount === 0;
+  const remainingMin = noWorkLeft ? null : Math.max(0, Math.round((remainingCount * perStage) / 60000));
+  const remainingMax = noWorkLeft ? null : Math.max(remainingMin ?? 0, Math.round((remainingCount * perStage * 2.2) / 60000));
 
   const git = collectGitStats(absRoot);
   const modules = scanModules(absRoot);
@@ -898,7 +908,7 @@ export function generateDashboardHtml(data) {
 
     cards.push('<div class="card metric"><div class="label">' + t("remaining") + "</div>" +
       '<div class="value small">' + (d.timing.remainingMin === null ? "—" : d.timing.remainingMin + " мин … " + d.timing.remainingMax + " мин") + "</div>" +
-      '<div class="note">' + (d.timing.remainingMin === null ? "задача закрыта" : "по медиане " + d.history.total + " закрытых задач") + "</div></div>");
+      '<div class="note">' + (d.timing.remainingMin === null ? (d.task.status === "closed" ? "задача закрыта" : "обязательные артефакты собраны") : "по медиане " + d.history.total + " закрытых задач") + "</div></div>");
 
     cards.push('<div class="card metric"><div class="label">' + t("artifacts") + "</div>" +
       '<div class="value">' + d.progress.artifactsDone + " / " + d.progress.artifactsTotal + "</div>" +
@@ -935,7 +945,8 @@ export function generateDashboardHtml(data) {
   function renderWaves(d) {
     var blocks = d.waves.filter(function (w) { return w.stages.length > 0; }).map(function (w) {
       var rows = w.stages.map(function (s) {
-        var idx = String(d.stages.indexOf(s) + 1).padStart(2, "0");
+        // Стадии в waves[] и stages[] — разные объекты после JSON.parse: ищем по id.
+        var idx = String(d.stages.findIndex(function (x) { return x.id === s.id; }) + 1).padStart(2, "0");
         var cls = statusClass(s.status);
         return '<div class="task-row ' + cls + '">' +
           '<span class="task-idx">' + idx + "</span>" +
@@ -1025,7 +1036,7 @@ export function generateDashboardHtml(data) {
 
   function renderHistory(d) {
     var head = '<div class="sub" style="margin-bottom:8px">Всего закрыто задач: <strong>' + d.history.total + "</strong> · медиана: <strong>" +
-      (d.history.medianTaskMs ? fmtDur(d.history.medianTaskMs) : "—") + "</strong> · по ярусам: " +
+      (d.history.medianMs ? fmtDur(d.history.medianMs) : "—") + "</strong> · по ярусам: " +
       (Object.keys(d.history.byTier).map(function (k) { return '<span class="chip">' + esc(k) + ": " + d.history.byTier[k] + "</span>"; }).join(" ") || "—") + "</div>";
     var rows = d.history.recent.length
       ? d.history.recent.map(function (h) {
@@ -1219,6 +1230,15 @@ export async function probeDashboard(port, timeoutMs = 900) {
   }
 }
 
+/**
+ * Мы внутри рабочего пространства Paseo? Тогда браузер по умолчанию — не цель:
+ * приоритет у браузера среды разработки, а его открывает агент (browser_new_tab).
+ * Маркеры ставит сам Paseo для запущенных им процессов.
+ */
+export function isPaseoWorkspace() {
+  return Boolean(process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI);
+}
+
 /** Открыть URL в браузере по умолчанию. */
 export function openInBrowser(url) {
   const platform = process.platform;
@@ -1293,6 +1313,9 @@ export async function startLiveServer(root, port = 4200, { maxAttempts = 12 } = 
  */
 export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
   const absRoot = resolve(root);
+  // В Paseo системный браузер не открываем: страницу показывает браузер IDE,
+  // и открывает её агент. Иначе получаем два окна и потерянный фокус.
+  const openSystem = open && !isPaseoWorkspace();
 
   // 1. Рантайм-файл: быстрый путь.
   const existing = readRuntime(absRoot);
@@ -1300,7 +1323,7 @@ export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
     const probed = await probeDashboard(existing.port);
     if (probed) {
       const url = `http://localhost:${existing.port}`;
-      if (open) openInBrowser(url);
+      if (openSystem) openInBrowser(url);
       return { url, port: existing.port, started: false };
     }
   }
@@ -1319,7 +1342,7 @@ export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
         adopted: true,
       });
       const url = `http://localhost:${p}`;
-      if (open) openInBrowser(url);
+      if (openSystem) openInBrowser(url);
       return { url, port: p, started: false, adopted: true };
     }
   }
@@ -1338,7 +1361,7 @@ export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
     const info = readRuntime(absRoot);
     if (info && (await isServerAlive(info.port))) {
       const url = `http://localhost:${info.port}`;
-      if (open) openInBrowser(url);
+      if (openSystem) openInBrowser(url);
       return { url, port: info.port, started: true };
     }
   }
@@ -1371,10 +1394,11 @@ export function parseArgs(argv = []) {
     checks: false,
     port: 4200,
     json: false,
+    url: false,
     help: false,
     errors: [],
   };
-  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "help"]);
+  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "help"]);
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -1385,6 +1409,7 @@ export function parseArgs(argv = []) {
     else if (arg === "--no-open") options.noOpen = true;
     else if (arg === "--checks") options.checks = true;
     else if (arg === "--json") options.json = true;
+    else if (arg === "--url") options.url = true;
     else if (arg === "--root" || arg.startsWith("--root="))
       options.root = arg.startsWith("--root=") ? arg.slice("--root=".length) : argv[++i];
     else if (arg === "--output" || arg.startsWith("--output="))
@@ -1422,6 +1447,7 @@ export async function main(argv = process.argv.slice(2)) {
   --serve           Локальный сервер (авто-обновление, /api/state, /api/diff)
   --ensure          Поднять фоновый сервер, если его нет, и открыть дашборд (автозапуск)
   --no-open         Не открывать браузер (для фонового демона)
+  --url             Напечатать адрес живого дашборда и выйти (для агентов)
   --checks          Прогнать быстрые гейты (auto-review, prompt-lint) и закэшировать
   --port <n>        Порт сервера (по умолчанию: 4200)
   --json            Вывести агрегированные метрики в JSON
@@ -1441,6 +1467,17 @@ export async function main(argv = process.argv.slice(2)) {
     const checks = runChecks(absRoot);
     process.stdout.write(`Проверки выполнены и закэшированы: ${join(absRoot, CHECKS_CACHE)}\n`);
     if (checks.autoReview?.error) process.stdout.write(`  auto-review: ${checks.autoReview.error}\n`);
+  }
+
+  // --url: только адрес живого дашборда (для агентов и скриптов).
+  if (opts.url) {
+    const info = await ensureDashboard(absRoot, { open: false, port: opts.port });
+    if (info.url) {
+      process.stdout.write(info.url + "\n");
+      return 0;
+    }
+    process.stderr.write(`dashboard: ${info.error || "не удалось запустить"}\n`);
+    return 1;
   }
 
   // --ensure: автозапуск (идемпотентно) — поднять фоновый сервер и открыть страницу.
