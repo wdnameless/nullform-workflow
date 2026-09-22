@@ -441,3 +441,27 @@ test("generateDashboardHtml: клиентский скрипт синтакси�
   assert.doesNotThrow(() => new Function(match[1]), "клиентский JS должен парситься браузером");
   assert.ok(match[1].includes('class="mono"'), "классы в шаблонах рендера не искажены");
 });
+
+test("ensureDashboard: осиротевший демон усыновляется, а не плодит второй сервер", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+
+    // Демон жив, но рантайм-файл потерян — как после ручной чистки .workflow
+    bound = await startLiveServer(tmp, 4430, { maxAttempts: 5 });
+    assert.equal(readRuntime(tmp), null, "рантайм-файла нет — сирота");
+
+    const info = await ensureDashboard(tmp, { open: false, port: 4430 });
+    assert.equal(info.port, bound.port, "усыновили тот же порт, второго сервера нет");
+    assert.equal(info.started, false);
+    assert.equal(info.adopted, true);
+
+    const rec = readRuntime(tmp);
+    assert.equal(rec.port, bound.port);
+    assert.equal(rec.adopted, true);
+  } finally {
+    if (bound) await new Promise((r) => bound.server.close(r));
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+});

@@ -336,7 +336,6 @@ function autoOpenDashboard(root, flags) {
     const child = spawn(process.execPath, [dash, "--ensure", "--root", root], {
       detached: true,
       stdio: "ignore",
-      cwd: root,
     });
     child.unref();
     console.log("  dashboard: открываю http://localhost:4200 (фон)");
@@ -432,7 +431,6 @@ function cmdStart(root, flags) {
   } else {
     console.log(`  no further artifacts required at this tier.`);
   }
-  autoOpenDashboard(root, flags);
   return 0;
 }
 
@@ -618,7 +616,11 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
 
   let code;
   switch (cmd) {
-    case "start":    code = cmdStart(root, args.flags); break;
+    case "start":
+      code = cmdStart(root, args.flags);
+      // Автозапуск дашборда: только в CLI-режиме (не в тестах и не при программном вызове).
+      if (code === 0) autoOpenDashboard(root, args.flags);
+      break;
     case "suggest":  code = cmdSuggest(args.flags); break;
     case "artifact": code = cmdArtifact(root, args.flags); break;
     case "check":    code = cmdCheck(root); break;

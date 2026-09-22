@@ -1199,13 +1199,23 @@ export function writeRuntime(root, info) {
 
 /** Живой ли дашборд на порту (быстрый health-пинг). */
 export async function isServerAlive(port, timeoutMs = 900) {
+  return (await probeDashboard(port, timeoutMs)) !== null;
+}
+
+/**
+ * Опрос дашборда на порту: `{pid, root}` или null.
+ * Нужен, чтобы отличить «наш» дашборд от чужого процесса, занявшего порт.
+ */
+export async function probeDashboard(port, timeoutMs = 900) {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/health`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return res.ok;
+    if (!res.ok) return null;
+    const info = await res.json();
+    return info && info.ok ? info : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -1284,11 +1294,34 @@ export async function startLiveServer(root, port = 4200, { maxAttempts = 12 } = 
 export async function ensureDashboard(root, { open = true, port = 4200 } = {}) {
   const absRoot = resolve(root);
 
+  // 1. Рантайм-файл: быстрый путь.
   const existing = readRuntime(absRoot);
-  if (existing && (await isServerAlive(existing.port))) {
-    const url = `http://localhost:${existing.port}`;
-    if (open) openInBrowser(url);
-    return { url, port: existing.port, started: false };
+  if (existing) {
+    const probed = await probeDashboard(existing.port);
+    if (probed) {
+      const url = `http://localhost:${existing.port}`;
+      if (open) openInBrowser(url);
+      return { url, port: existing.port, started: false };
+    }
+  }
+
+  // 2. Рантайм-файл потерян, а дашборд проекта жив (осиротевший демон):
+  //    усыновляем его вместо запуска второго сервера на соседнем порту.
+  for (let p = port; p < port + 12; p++) {
+    const probed = await probeDashboard(p, 400);
+    if (probed && resolve(probed.root || "") === absRoot) {
+      writeRuntime(absRoot, {
+        pid: probed.pid,
+        port: p,
+        url: `http://localhost:${p}`,
+        root: absRoot,
+        startedAt: new Date().toISOString(),
+        adopted: true,
+      });
+      const url = `http://localhost:${p}`;
+      if (open) openInBrowser(url);
+      return { url, port: p, started: false, adopted: true };
+    }
   }
 
   const selfPath = fileURLToPath(import.meta.url);
