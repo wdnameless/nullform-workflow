@@ -338,21 +338,25 @@ function autoOpenDashboard(root, flags) {
     const child = spawn(process.execPath, [dash, "--ensure", "--root", root], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
     });
     child.unref();
-    // Порт может отличаться (занят другим проектом) — не выдумываем адрес,
-    // а показываем реальный, если рантайм-файл уже есть.
+    // Ждём до 2 с появления рантайм-файла с реальным URL, чтобы напечатать точный адрес
     let url = null;
-    try {
-      const rt = join(root, '.workflow', 'dashboard.json');
-      if (existsSync(rt)) url = JSON.parse(readFileSync(rt, 'utf8')).url;
-    } catch {}
-    if (process.env.PASEO_AGENT_ID || process.env.PASEO_HOME) {
-      // Приоритет — браузер среды разработки: его открывает агент по этому адресу.
-      console.log(url ? `  dashboard: ${url} — открой в браузере Paseo` : "  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
-    } else {
-      console.log(url ? `  dashboard: ${url}` : "  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
+    const rt = join(root, ".workflow", "dashboard.json");
+    for (let i = 0; i < 25; i++) {
+      try {
+        if (existsSync(rt)) {
+          const parsed = JSON.parse(readFileSync(rt, "utf8"));
+          if (parsed && parsed.url) {
+            url = parsed.url;
+            break;
+          }
+        }
+      } catch {}
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
     }
+    console.log(url ? `  dashboard: ${url} (сервер запущен, открывается в браузере)` : "  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
   } catch {
     // молча: наблюдаемость не должна ломать гейт
   }

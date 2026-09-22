@@ -1957,8 +1957,8 @@ export function listDashboards(root) {
 }
 
 /** Прочитать рантайм-файл дашборда (или null). */
-export function readRuntime(root) {
-  const p = runtimePath(root);
+export function readRuntime(root, key = null) {
+  const p = runtimePath(root, key);
   if (!existsSync(p)) return null;
   try {
     const data = JSON.parse(readFileSync(p, "utf8"));
@@ -2017,7 +2017,7 @@ export function isPaseoWorkspace() {
 export function openInBrowser(url) {
   const platform = process.platform;
   if (platform === "win32") {
-    spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+    spawn("cmd.exe", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
   } else if (platform === "darwin") {
     spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
   } else {
@@ -2071,7 +2071,7 @@ function handleRequest(req, res, absRoot) {
 }
 
 /** Запустить сервер дашборда на первом свободном порту. */
-export async function startLiveServer(root, port = 4200, { maxAttempts = 12 } = {}) {
+export async function startLiveServer(root, port = 4200, { maxAttempts = 64 } = {}) {
   const absRoot = resolve(root);
   for (let p = port; p < port + maxAttempts; p++) {
     const bound = await tryListen(p, absRoot);
@@ -2089,9 +2089,8 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   const absRoot = resolve(root);
   const key = sessionKey(session);
   const chosenPort = port || portForSession(key);
-  // В Paseo системный браузер не открываем: страницу показывает браузер IDE,
-  // и открывает её агент. Иначе получаем два окна и потерянный фокус.
-  const openSystem = open && !isPaseoWorkspace();
+  // Открываем браузер всегда, если не передан флаг тишины (--no-open или NF_NO_OPEN=1).
+  const openSystem = Boolean(open) && process.env.NF_NO_OPEN !== "1";
 
   // 1. Рантайм-файл: быстрый путь.
   const existing = readRuntime(absRoot, key);
@@ -2106,7 +2105,7 @@ export async function ensureDashboard(root, { open = true, port = null, session 
 
   // 2. Рантайм-файл потерян, а дашборд проекта жив (осиротевший демон):
   //    усыновляем его вместо запуска второго сервера на соседнем порту.
-  for (let p = chosenPort; p < chosenPort + 12; p++) {
+  for (let p = chosenPort; p < chosenPort + 64; p++) {
     const probed = await probeDashboard(p, 400);
     if (probed && resolve(probed.root || "") === absRoot) {
       writeRuntime(absRoot, { key,
