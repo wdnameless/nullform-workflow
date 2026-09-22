@@ -89,7 +89,7 @@ function readDisabled(agentsHome) {
 
 /* -------------------------------------------------------------------- checks */
 
-function run(installedRoot, repoRoot, disabled = []) {
+function run(installedRoot, repoRoot, disabled = [], agentsHome = null) {
   const problems = [];
   const notes = [];
   const names = new Map();
@@ -130,9 +130,16 @@ function run(installedRoot, repoRoot, disabled = []) {
   // harness root on install (see install.ps1). Parity must compare the repo
   // template against the substituted copy, so normalise the installed text
   // back to the placeholder before hashing.
+  // The pointer is read from the AGENTS home being checked (`--agents-home`), not
+  // from the machine's real ~/.omp: verifying a sandbox or a second harness would
+  // otherwise find no pointer, skip normalisation, and report every templated
+  // skill as a parity failure.
+  const harnessPointer = agentsHome
+    ? join(dirname(agentsHome), ".omp", "agent", ".harness-root")
+    : join(homedir(), ".omp", "agent", ".harness-root");
   let harnessRoot = "";
   try {
-    harnessRoot = readFileSync(join(homedir(), ".omp", "agent", ".harness-root"), "utf8").trim();
+    harnessRoot = readFileSync(harnessPointer, "utf8").trim();
   } catch { /* no harness pointer — nothing to normalise */ }
   const normaliseInstalled = (text) => {
     if (!harnessRoot) return text;
@@ -142,17 +149,23 @@ function run(installedRoot, repoRoot, disabled = []) {
 
     if (repoRoot && repoNames.has(name)) {
       const repoText = readFileSync(join(repoRoot, name, "SKILL.md"), "utf8");
-      const iSha = sha(normaliseInstalled(text)), rSha = sha(repoText);
+      // Canonicalise BOTH sides to the placeholder. Normalising only the installed
+      // copy breaks when the comparison repo is itself an installed harness (its
+      // skills are already substituted), and when it is the clone (its skills still
+      // hold <HARNESS>), leaving a false parity failure in either direction.
+      const iSha = sha(normaliseInstalled(text));
+      const rSha = sha(normaliseInstalled(repoText));
       if (iSha !== rSha) {
         // Compare the SAME normalised text used for hashing; raw text carries
         // the resolved harness path and would misfire the truncation heuristic.
         const instNorm = norm(normaliseInstalled(text));
-        const truncated = norm(repoText).startsWith(instNorm.trimEnd()) || instNorm.length < norm(repoText).length * 0.9;
+        const repoNorm = norm(normaliseInstalled(repoText));
+        const truncated = repoNorm.startsWith(instNorm.trimEnd()) || instNorm.length < repoNorm.length * 0.9;
         problems.push({
           skill: name,
           kind: truncated ? "truncation" : "parity",
           detail: truncated
-            ? `installed copy looks TRUNCATED (${instNorm.length} vs ${norm(repoText).length} bytes)`
+            ? `installed copy looks TRUNCATED (${instNorm.length} vs ${repoNorm.length} bytes)`
             : `installed copy differs from repo (${iSha} vs ${rSha})`,
         });
       }
@@ -201,7 +214,7 @@ if (!existsSync(installedRoot)) {
 }
 
 const disabledList = readDisabled(agentsHome);
-const { problems, notes, infos, installedCount, repoCount, disabledCount } = run(installedRoot, repoRoot, disabledList.disabled);
+const { problems, notes, infos, installedCount, repoCount, disabledCount } = run(installedRoot, repoRoot, disabledList.disabled, agentsHome);
 notes.push(...disabledList.notes);
 
 console.log(`skills-doctor: ${installedCount} installed, ${repoCount} in repo${disabledCount ? `, ${disabledCount} disabled by operator` : ""}`);

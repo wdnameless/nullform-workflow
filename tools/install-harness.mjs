@@ -27,10 +27,15 @@ import {
   writeFileSync,
   readdirSync,
   copyFileSync,
+  lstatSync,
+  readlinkSync,
+  symlinkSync,
+  unlinkSync,
 } from "node:fs";
-import { resolve, join, dirname, isAbsolute } from "node:path";
+import { resolve, join, dirname, relative } from "node:path";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -152,11 +157,28 @@ export function getOpencodeJson(existingPath) {
   return JSON.stringify(cfg, null, 2) + "\n";
 }
 
+/**
+ * `<HARNESS>` is resolved ONLY inside prompt surfaces (agent/, rules/, skills/) —
+ * the same scope install.ps1 and tools/sync.* use. Substituting it inside tools/
+ * too would (a) make every installed tool differ from its repo template, so
+ * `sync` reports permanent drift, and (b) let `sync --promote` write this
+ * machine's absolute path back into the repository.
+ */
+function isPromptSurface(srcPath) {
+  return /^(agent|rules|skills)[\\/]/.test(relative(REPO_ROOT, srcPath));
+}
+
 function copyAndSubstitute(srcPath, destPath, slashRoot) {
+  // Installing over the source tree itself (`--root .` from the clone) must not
+  // rewrite the repository's own files: the repo ships prompt surfaces with the
+  // <HARNESS> placeholder, and substituting it there would leave a dirty clone
+  // and bake this machine's path into the canonical templates.
+  if (resolve(srcPath) === resolve(destPath)) return;
+
   const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(srcPath);
   if (isText) {
     let content = readFileSync(srcPath, "utf8");
-    if (content.includes("<HARNESS>")) {
+    if (content.includes("<HARNESS>") && isPromptSurface(srcPath)) {
       content = content.split("<HARNESS>").join(slashRoot);
     }
     writeFileSync(destPath, content, "utf8");
@@ -172,7 +194,8 @@ function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false) {
   function walk(currentSrc, currentDest) {
     const entries = readdirSync(currentSrc, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "__tmp__") {
+      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "__tmp__" ||
+          entry.name === "__pycache__" || entry.name === ".tmp") {
         continue;
       }
       const srcPath = join(currentSrc, entry.name);
@@ -195,6 +218,73 @@ function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false) {
 
   walk(srcDir, destDir);
   return copied;
+}
+
+/**
+ * Link the role roster into the user home, falling back to a copy when the OS
+ * refuses symlinks (Windows without Developer Mode/privilege). A REAL directory
+ * at the destination is left untouched — it may hold the user's own agent defs —
+ * and an existing link is only ever unlinked (unlink), never recursively
+ * deleted, so the harness tree it points at can never be wiped through it.
+ */
+function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
+  if (planOnly) return [destDir];
+  try {
+    // lstat, not existsSync: existsSync follows the link and reports `false` for a
+    // DANGLING one (harness moved or deleted), after which mkdir on that path
+    // fails with ENOENT and the whole install aborts. A dangling link is exactly
+    // what a re-install after moving the harness finds, so detect and replace it.
+    let stat = null;
+    try {
+      stat = lstatSync(destDir);
+    } catch {
+      stat = null;
+    }
+    if (stat) {
+      if (!stat.isSymbolicLink()) return []; // a real dir: the user's own defs
+      if (existsSync(destDir) &&
+          resolve(dirname(destDir), readlinkSync(destDir)) === resolve(linkTarget)) {
+        return [];
+      }
+      unlinkSync(destDir);
+    }
+    mkdirSync(dirname(destDir), { recursive: true });
+    symlinkSync(linkTarget, destDir, process.platform === "win32" ? "junction" : "dir");
+    return [destDir];
+  } catch {
+    return copyDirRecursive(linkTarget, destDir, slashRoot, false);
+  }
+}
+
+/**
+ * Skills registry: ~/.agents/skills is the tree the harness actually loads, so
+ * copying into the harness root alone installs nothing. Marketplace-locked
+ * skills (installed and recorded in ~/.agents/.skill-lock.json) and skills the
+ * operator disabled on purpose are skipped — an install must not desync the
+ * lock file or resurrect what was pruned.
+ */
+function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false) {
+  if (!existsSync(srcDir)) return [];
+  const skip = new Set();
+  try {
+    const locked = JSON.parse(readFileSync(join(agentsHome, ".skill-lock.json"), "utf8"));
+    for (const name of Object.keys(locked.skills || {})) {
+      if (existsSync(join(destDir, name, "SKILL.md"))) skip.add(name);
+    }
+  } catch {}
+  try {
+    const disabled = JSON.parse(readFileSync(join(agentsHome, ".skills-disabled.json"), "utf8"));
+    for (const name of disabled.disabled || []) {
+      if (typeof name === "string") skip.add(name);
+    }
+  } catch {}
+
+  const out = [];
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || skip.has(entry.name)) continue;
+    out.push(...copyDirRecursive(join(srcDir, entry.name), join(destDir, entry.name), slashRoot, planOnly));
+  }
+  return out;
 }
 
 export function parseCliArgs(argv) {
@@ -277,8 +367,11 @@ export function installHarness(options = {}) {
   };
 
   // 1. Identify core files to copy
-  const coreDirs = ["agent", "rules", "tools", "core", "templates", "skills"];
-  const coreFiles = ["CONTEXT.md", "README.md", "secrets.example.env", "verify.ps1"];
+  const coreDirs = ["agent", "rules", "tools", "core", "templates", "skills", "paseo"];
+  // install.ps1/install.sh deliberately stay behind: audit/sync decide whether a
+  // tree is a repo clone or an installed harness by looking for install.ps1, so
+  // shipping it into the harness would make a standalone install look like a repo.
+  const coreFiles = ["CONTEXT.md", "README.md", "secrets.example.env", "verify.ps1", "verify.sh"];
 
   for (const dir of coreDirs) {
     const srcDir = join(REPO_ROOT, dir);
@@ -355,21 +448,110 @@ export function installHarness(options = {}) {
         break;
       }
       case "omp": {
-        const rootAgents = join(targetRoot, "agent", "AGENTS.md");
-        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law"));
+        // agent/AGENTS.md is the FULL orchestrator law (copied above, <HARNESS>
+        // resolved). Never overwrite it with the short adapter: that would leave
+        // an installed harness whose law file is a stub while the real protocol
+        // file is replaced.
+        const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
+        const lawPath = join(targetRoot, "agent", "AGENTS.md");
+        const law = existsSync(lawSource)
+          ? readFileSync(lawSource, "utf8").split("<HARNESS>").join(slashRoot)
+          : getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law");
+        // In-place install (`--root .` from the clone): the harness root IS the
+        // repo, so leave the template's <HARNESS> placeholder alone — writing the
+        // resolved law back would dirty the clone and bake this machine's path
+        // into the canonical template.
+        if (resolve(lawPath) !== resolve(lawSource)) {
+          if (!options.dryRun) {
+            mkdirSync(dirname(lawPath), { recursive: true });
+            writeFileSync(lawPath, law, "utf8");
+          }
+          plan.adapters.push(lawPath);
+        }
         if (shouldWriteHome) {
           const homeAgentDir = join(userHome, ".omp", "agent");
-          const homeAgents = join(homeAgentDir, "AGENTS.md");
-          const harnessRootPtr = join(homeAgentDir, ".harness-root");
-          writeAdapter(homeAgents, getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law"));
-          writeAdapter(harnessRootPtr, `${targetRoot}\n`);
+          const agentsHome = join(userHome, ".agents");
+          writeAdapter(join(homeAgentDir, "AGENTS.md"), law);
+          writeAdapter(join(homeAgentDir, ".harness-root"), `${targetRoot}\n`);
+          // Seed mcp.json from the example, as install.ps1 does. Without it the
+          // freshly installed harness fails its own verification (`mcp.json parses`
+          // and `mandatory MCP servers present`), and `chrome-devtools` — the one
+          // server marked mandatory — would never be declared on this path.
+          // Placeholder-valued servers are dropped: an absent server is better than
+          // one that fails to connect on every session boot.
+          const mcpTarget = join(homeAgentDir, "mcp.json");
+          if (!existsSync(mcpTarget)) {
+            const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
+            // Drop any server still carrying an unsubstituted placeholder: there is
+            // no secrets.env on this path, so a kept entry would ship a literal
+            // `__X__` into mcp.json (which verification then flags) and fail to
+            // connect on every session boot.
+            for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
+              if (JSON.stringify(entry).includes("__")) delete cfg.mcpServers[name];
+            }
+            writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
+          }
+          // Without these the installed harness has no roles, no skills and no
+          // rules: OMP cannot start the orchestrator at all.
+          plan.filesToCopy.push(
+            ...installRoleRoster(
+              join(targetRoot, "agent", "agents"),
+              join(homeAgentDir, "agents"),
+              slashRoot,
+              options.dryRun
+            )
+          );
+          plan.filesToCopy.push(
+            ...copyDirRecursive(
+              join(targetRoot, "rules"),
+              join(agentsHome, "rules"),
+              slashRoot,
+              options.dryRun
+            )
+          );
+          plan.filesToCopy.push(
+            ...installSkills(
+              join(targetRoot, "skills"),
+              join(agentsHome, "skills"),
+              slashRoot,
+              agentsHome,
+              options.dryRun
+            )
+          );
         }
         break;
       }
     }
   }
 
+  // 3. Prompt-cache baseline, as install.ps1 does. Without it the first audit on a
+  // POSIX install reports `n/a (no baseline)` and later cache-prefix drift — the
+  // change that silently re-bills every session at full price — goes unnoticed.
+  const promptLint = join(targetRoot, "tools", "prompt-lint.mjs");
+  if (!options.dryRun && existsSync(promptLint)) {
+    try {
+      runPromptLintBaseline(promptLint, targetRoot, userHome);
+      plan.baselineRecorded = true;
+    } catch {
+      plan.baselineRecorded = false;
+    }
+  }
+
   return plan;
+}
+
+/**
+ * `prompt-lint baseline` scans ~/.agents too, so both HOME and USERPROFILE are
+ * pointed at the user home being installed into — a sandbox install must not
+ * record the operator's real machine, or the first audit reports every skill as
+ * added/removed.
+ */
+function runPromptLintBaseline(promptLint, harnessRoot, userHome) {
+  spawnSync(process.execPath, [promptLint, "baseline", "--root", harnessRoot], {
+    encoding: "utf8",
+    windowsHide: process.platform === "win32",
+    env: { ...process.env, HOME: userHome, USERPROFILE: userHome },
+  });
 }
 
 export function printHelp() {

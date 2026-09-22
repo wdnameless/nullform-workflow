@@ -1,0 +1,51 @@
+# Нормализация переводов строк и режимов файлов.
+#
+# Зачем это здесь:
+#   • bash-скрипты (`*.sh`) с CRLF падают на POSIX: шебанг получает `\r`,
+#     и оболочка ищет интерпретатор «bash\r». При `core.autocrlf=true`
+#     (типичная настройка на Windows) git сам добавлял бы CRLF при checkout.
+#   • `.ps1` наоборот: Windows PowerShell 5.1 спотыкается на чистом LF в
+#     отдельных конструкциях, поэтому для PowerShell закрепляем CRLF.
+#   • `.mjs`/`.cjs` — всегда LF: Node читает их одинаково, а диффы чище.
+
+# Все текстовые файлы по умолчанию — LF в репозитории.
+* text=auto eol=lf
+
+# Оболочка: LF обязателен, иначе скрипт не запустится на Linux/macOS.
+*.sh text eol=lf
+*.bash text eol=lf
+
+# PowerShell: CRLF ожидается парсером Windows PowerShell 5.1.
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+
+# Бинарные файлы — не трогать.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+
+# Скрипты должны быть исполняемыми в POSIX-системах.
+*.sh text eol=lf
+install.sh text eol=lf
+
+# Сгенерированные артефакты: не показывать в диффах как текст.
+package-lock.json -diff linguist-generated
+*.lock -diff linguist-generated
+
+# Языковая статистика GitHub: не считать vendored-каталоги кодом проекта.
+skills/** linguist-vendored
+openspec/** linguist-documentation
+docs/** linguist-documentation

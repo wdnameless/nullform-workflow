@@ -27,20 +27,37 @@ jobs:
           node-version: 20
 
       - name: Validate OpenSpec changes
+        # `npx openspec` is a dead 0.0.0 placeholder with no bin; the real
+        # package is @fission-ai/openspec. And validate takes a change ID,
+        # not the folder path (a path answers "Unknown item").
         run: |
-          if [ -d "openspec/changes" ]; then
-            for spec_dir in openspec/changes/*; do
+          BASE='${{ github.base_ref
+            || github.event.repository.default_branch }}'
+          CHANGED_SPECS=$(
+            git diff --name-only "origin/$BASE"...HEAD \
+              -- 'openspec/changes/*' 2>/dev/null \
+              | cut -d/ -f1-3 | sort -u || true
+          )
+          if [ -z "$CHANGED_SPECS" ]; then
+            echo "No openspec/changes modified. Skipping."
+          else
+            for spec_dir in $CHANGED_SPECS; do
               if [ -d "$spec_dir" ]; then
                 echo "Validating $spec_dir..."
-                npx --yes openspec validate "$spec_dir" --strict
+                CHANGE_ID="${spec_dir##*/}"
+                npx --yes @fission-ai/openspec@1.13.1 \
+                  validate "$CHANGE_ID" --strict
               fi
             done
           fi
 
       - name: Run unit & regression tests
+        # Unquoted glob on purpose: the shell expands it into explicit paths,
+        # which every Node >= 18 accepts. A quoted glob needs >= 22.6, and the
+        # bare directory form breaks on Node >= 22 ("Cannot find module").
         run: |
           if [ -d "tools/tests" ]; then
-            node --test "tools/tests/*.test.mjs"
+            node --test tools/tests/*.test.mjs
           fi
 
       - name: Auto-review gate
@@ -66,7 +83,9 @@ jobs:
             exit 1
           fi
           if [ -f "tools/tests/fixtures/return-contract/valid.md" ]; then
-            node tools/return-contract.mjs tools/tests/fixtures/return-contract/valid.md
+            node tools/return-contract.mjs \
+              tools/tests/fixtures/return-contract/valid.md
           elif [ -f "tools/tests/fixtures/return-contract.fixture.md" ]; then
-            node tools/return-contract.mjs tools/tests/fixtures/return-contract.fixture.md
+            node tools/return-contract.mjs \
+              tools/tests/fixtures/return-contract.fixture.md
           fi

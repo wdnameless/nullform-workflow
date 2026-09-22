@@ -71,8 +71,11 @@ export const CORE_TOOLS = [
   "dashboard.mjs",
   "fix-plugin-windows.cjs",
   "session_cost.py",
+  "verify.mjs",
   "audit.ps1",
   "sync.ps1",
+  "audit.sh",
+  "sync.sh",
 ];
 
 /**

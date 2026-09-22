@@ -19,7 +19,7 @@
 | **Коридор качества** | TDD → `test-lens` (шум тестов) → мутационное тестирование → BDD Gherkin → независимая приёмка |
 | **Роли** | `orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic` — у каждой свой фокус и права |
 | **Дашборд** | Открывается сам при старте задачи, привязан к сессии, обновляется каждые 3 с, три режима архитектуры (схема / граф зависимостей / таблица) |
-| **Контроль дрейфа** | `sync.ps1` (репозиторий ↔ живая установка), `doctor.mjs` (26 инструментов, роли, плагины, конфиги), `audit.ps1` (14 проверок), `verify.ps1` (29 проверок) |
+| **Контроль дрейфа** | `sync.ps1` / `sync.sh` (репозиторий ↔ живая установка), `doctor.mjs` (26 инструментов, роли, плагины, конфиги), `tools/verify.mjs` — единый раннер: `verify` (29 проверок) и `audit` (14 проверок), обёртки `.ps1`/`.sh` под каждую ОС |
 | **Экономия контекста** | Бюджеты промптов, `prompt-lint`, кеш-бейзлайн, аудит использования плагинов/скиллов |
 
 **Ноль внешних npm-зависимостей** — всё на стандартной библиотеке Node.js.
@@ -104,14 +104,29 @@ node tools/dashboard.mjs --url         # адрес живого дашборд�
 
 ## Сопровождение и синхронизация (Maintenance)
 
-```powershell
-powershell -File tools/audit.ps1               # сводная проверка здоровья всех компонентов
-powershell -File tools/sync.ps1                # проверка дрейфа между репозиторием и установкой
-powershell -File tools/sync.ps1 -Promote       # перенос изменений: рабочая папка -> репозиторий
-powershell -File tools/sync.ps1 -Deploy        # перенос изменений: репозиторий -> рабочая папка
-powershell -File tools/sync.ps1 -Prune         # список кандидатов на удаление (dry-run; удаление только с -Confirm)
+Верификация и аудит — один кросс-платформенный раннер (`tools/verify.mjs`), у него
+тонкие обёртки под каждую ОС: `verify.sh` / `tools/audit.sh` на Linux и macOS,
+`verify.ps1` / `tools/audit.ps1` на Windows.
+
+```bash
+node tools/verify.mjs --profile verify     # 29 проверок установки (то же, что verify.ps1)
+node tools/verify.mjs --profile audit      # сводный аудит (то же, что audit.ps1)
+./verify.sh                                # POSIX-обёртка профиля verify
+./tools/audit.sh                           # POSIX-обёртка профиля audit
+./tools/sync.sh --check                    # дрейф между репозиторием и установкой (POSIX)
+./tools/sync.sh --promote                  # перенос изменений: рабочая папка -> репозиторий
+./tools/sync.sh --deploy                   # перенос изменений: репозиторий -> рабочая папка
+./tools/sync.sh --prune                    # список кандидатов на удаление (dry-run; удаление только с --confirm)
 node tools/prompt-lint.mjs baseline --root .   # обновление базовой линии кэша промптов
-python tools/session_cost.py <transcript.jsonl>
+python3 tools/session_cost.py <transcript.jsonl>
+```
+
+На Windows те же операции доступны в PowerShell:
+
+```powershell
+powershell -File verify.ps1
+powershell -File tools/audit.ps1
+powershell -File tools/sync.ps1 -Promote
 ```
 
 ## После установки
@@ -132,7 +147,7 @@ MIT
 - **Шаблон CI:** `templates/ci/workflow-gate.yml`
   - Настраивает Node.js 20. Внешних npm-зависимостей нет: инструменты работают на стандартной библиотеке Node.
   - Запускает валидацию спецификаций OpenSpec (`openspec validate --strict`) для измененных предложений.
-  - Выполняет регрессионные и модульные тесты (`node --test tools/tests/`).
+  - Выполняет регрессионные и модульные тесты (`node --test tools/tests/*.test.mjs`).
   - Проверяет целостность активного рабочего процесса через `tools/workflow.mjs check`.
 
 - **Инструмент авто-ревью:** `tools/auto-review.mjs`

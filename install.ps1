@@ -219,7 +219,7 @@ if (Test-Path "$PSScriptRoot\paseo") {
 
 # Also drop the repo-level scripts into the harness root, so an install made
 # without keeping the clone can still verify and audit itself.
-foreach ($f in 'verify.ps1', 'README.md', 'CONTEXT.md', 'secrets.example.env') {
+foreach ($f in 'verify.ps1', 'verify.sh', 'README.md', 'CONTEXT.md', 'secrets.example.env') {
   $src = Join-Path $PSScriptRoot $f
   if (Test-Path $src) { Copy-Item $src "$HarnessRoot\$f" -Force }
 }
