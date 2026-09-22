@@ -65,6 +65,25 @@ function isBinaryName(name) {
   return BINARY_EXT.test(name);
 }
 
+/**
+ * TTL-кэш для тяжёлых сборщиков.
+ *
+ * Дашборд опрашивается каждые 3 секунды, а часть данных стоит дорого:
+ * обход 250+ файлов (граф зависимостей), спавн node-процесса (debt-ledger),
+ * три вызова git. Без кэша один поток сервера занят почти постоянно, и
+ * /api/health перестаёт отвечать. Кэш ограничивает пересчёт, не мешая свежести.
+ */
+const TTL_CACHE = new Map();
+
+function cached(key, ttlMs, compute) {
+  const now = Date.now();
+  const hit = TTL_CACHE.get(key);
+  if (hit && now - hit.at < ttlMs) return hit.value;
+  const value = compute();
+  TTL_CACHE.set(key, { at: now, value });
+  return value;
+}
+
 /** Рекурсивный сбор файлов модуля (без node_modules/.git). */
 function walkFiles(dir, out = [], limit = 400) {
   let entries;
@@ -504,10 +523,12 @@ export function collectDashboardData(root = ".", options = {}) {
       stage.status = closed ? "done" : "pending";
     } else if (!required.includes(def.id)) {
       stage.status = "skipped";
-      stage.detail = `ярус ${tier} — не требуется`;
+      // Текст заметки собирает клиент: сервер не навязывает язык.
+      stage.note = "skipped";
+      stage.tier = tier;
     } else if (closed) {
       stage.status = "missed";
-      stage.detail = "закрыто без артефакта";
+      stage.note = "missed";
     } else if (def.id === nextRequired) {
       stage.status = "in_progress";
     }
@@ -527,24 +548,24 @@ export function collectDashboardData(root = ".", options = {}) {
     : 0;
 
   const current = closed
-    ? { name: "Задача закрыта", wave: 4, detail: "" }
+    ? { id: "closed", name: "Задача закрыта", wave: 4, detail: "" }
     : stages.find((s) => s.status === "in_progress") ||
       stages.find((s) => s.status === "pending" && required.includes(s.id)) ||
       stages[stages.length - 1];
 
   // Оценка остатка: по медиане истории и числу незакрытых обязательных артефактов
-  const history = collectHistory(absRoot);
+  const history = cached(`history:${absRoot}`, 10000, () => collectHistory(absRoot));
   const remainingCount = closed ? 0 : required.filter((k) => !artifacts[k]).length;
   const perStage = history.medianMs > 0 ? history.medianMs / Math.max(1, required.length) : 3 * 60000;
   const noWorkLeft = closed || remainingCount === 0;
   const remainingMin = noWorkLeft ? null : Math.max(0, Math.round((remainingCount * perStage) / 60000));
   const remainingMax = noWorkLeft ? null : Math.max(remainingMin ?? 0, Math.round((remainingCount * perStage * 2.2) / 60000));
 
-  const git = collectGitStats(absRoot);
-  const modules = scanModules(absRoot);
-  const requirements = collectRequirements(absRoot);
-  const debt = collectDebt(absRoot);
-  const critique = collectCritique(absRoot);
+  const git = cached(`git:${absRoot}`, 3000, () => collectGitStats(absRoot));
+  const modules = cached(`modules:${absRoot}`, 60000, () => scanModules(absRoot));
+  const requirements = cached(`reqs:${absRoot}`, 30000, () => collectRequirements(absRoot));
+  const debt = cached(`debt:${absRoot}`, 30000, () => collectDebt(absRoot));
+  const critique = cached(`critique:${absRoot}`, 30000, () => collectCritique(absRoot));
 
   const reqDone = (requirements.byStatus["done"] || 0) + (requirements.byStatus["in-spec"] || 0) + (requirements.byStatus["implemented"] || 0);
   const briefCoverage = requirements.total > 0 ? Math.round((reqDone / requirements.total) * 100) : artifacts.oracle ? 100 : 0;
@@ -572,9 +593,10 @@ export function collectDashboardData(root = ".", options = {}) {
     timestamp: new Date().toISOString(),
     root: absRoot,
     session,
-    events: collectEvents(absRoot, 60),
-    log: collectSessionLog(absRoot, 80),
-    arch: collectArchTree(absRoot, modules),
+    events: cached(`events:${absRoot}`, 2000, () => collectEvents(absRoot, 60)),
+    log: cached(`log:${absRoot}`, 5000, () => collectSessionLog(absRoot, 80)),
+    arch: cached(`arch:${absRoot}`, 60000, () => collectArchTree(absRoot, modules)),
+    archGraph: cached(`graph:${absRoot}`, 60000, () => collectDependencyGraph(absRoot, modules)),
     project: {
       name: absRoot.split(/[\\/]/).pop() || "project",
       branch: git.branch,
@@ -733,7 +755,7 @@ export function collectSessionUsage(absRoot, key) {
   }
 
   const fresh = cached && Date.now() - (cached.at || 0) < USAGE_TTL_MS;
-  if (!fresh) refreshUsageAsync(absRoot, cachePath);
+  if (!fresh) refreshUsageAsync(cachePath);
 
   if (!cached || !cached.data) return null;
   const u = cached.data || {};
@@ -756,7 +778,7 @@ export function collectSessionUsage(absRoot, key) {
 }
 
 /** Фоновое обновление кэша расхода: отдельный процесс, не блокирует рендер. */
-function refreshUsageAsync(absRoot, cachePath) {
+function refreshUsageAsync(cachePath) {
   const agentId = process.env.PASEO_AGENT_ID;
   if (!agentId) return;
   try {
@@ -890,6 +912,148 @@ export function collectArchTree(absRoot, modules) {
         .map((f) => ({ name: f.name.split("/").pop(), kind: "file", lines: f.lines, path: f.name })),
     })),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Dependency graph: кто на кого ссылается                            */
+/* ------------------------------------------------------------------ */
+
+/** Идентификатор модуля: первые один-два сегмента пути. */
+function moduleIdOf(relPath) {
+  const parts = relPath.replace(/\\/g, "/").split("/");
+  if (parts.length <= 1) return "root";
+  if (parts[0] === "tools" && parts[1] === "tests") return "tools/tests";
+  return parts[0];
+}
+
+/** Все файлы-исходники и документы, по которым строим граф. */
+function graphSourceFiles(absRoot) {
+  const out = [];
+  const add = (dir, filter, limit = 400) => {
+    const base = join(absRoot, dir);
+    if (!existsSync(base)) return;
+    const walk = (d) => {
+      if (out.length >= limit) return;
+      let entries = [];
+      try {
+        entries = readdirSync(d);
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (e === "node_modules" || e.startsWith(".")) continue;
+        const full = join(d, e);
+        let st;
+        try {
+          st = statSync(full);
+        } catch {
+          continue;
+        }
+        if (st.isDirectory()) walk(full);
+        else if (st.isFile() && filter(e)) out.push(full);
+      }
+    };
+    walk(base);
+  };
+
+  add("tools", (e) => e.endsWith(".mjs"));
+  add("agent", (e) => e.endsWith(".md"));
+  add("skills", (e) => e.endsWith(".md"), 250);
+  add("tests", (e) => e.endsWith(".ps1"));
+  add("core", (e) => e.endsWith(".md"));
+  return out;
+}
+
+/**
+ * Граф зависимостей проекта: узлы — модули, рёбра — реальные ссылки.
+ *
+ * Рёбра строятся из двух источников:
+ *   1. ES-импорты в .mjs (относительные пути → файл → модуль);
+ *   2. ссылки на инструменты в документах (agent/*.md, skills/**, core/*.md):
+ *      `<HARNESS>/tools/x.mjs`, `tools/x.mjs`, `node tools/x.mjs`.
+ * Внешние зависимости (node:, npm-пакеты) считаются отдельно — они не создают
+ * шумных узлов, но показывают «поверхность» проекта.
+ */
+export function collectDependencyGraph(absRoot, modules) {
+  const files = graphSourceFiles(absRoot);
+  const edges = new Map(); // "from→to" → { from, to, weight, kinds:Set }
+  const externalByModule = new Map();
+
+  const bump = (from, to, kind, weight = 1) => {
+    if (!from || !to || from === to) return;
+    const key = `${from}\u0000${to}`;
+    const cur = edges.get(key) || { from, to, weight: 0, kinds: new Set() };
+    cur.weight += weight;
+    cur.kinds.add(kind);
+    edges.set(key, cur);
+  };
+
+  for (const file of files) {
+    const rel = relative(absRoot, file).replace(/\\/g, "/");
+    const from = moduleIdOf(rel);
+    let text = "";
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+
+    if (rel.endsWith(".mjs")) {
+      // Импорты: относительные → ребро графа; внешние → счётчик поверхности
+      const importRe = /from\s+["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g;
+      let m;
+      let external = 0;
+      while ((m = importRe.exec(text)) !== null) {
+        const spec = m[1] || m[2] || "";
+        if (spec.startsWith(".")) {
+          const resolved = join(dirname(file), spec).replace(/\\/g, "/");
+          const relTarget = relative(absRoot, resolved).replace(/\\/g, "/");
+          bump(from, moduleIdOf(relTarget), "import");
+        } else if (spec) {
+          external++;
+        }
+      }
+      if (external > 0) externalByModule.set(from, (externalByModule.get(from) || 0) + external);
+    } else if (rel.endsWith(".md") || rel.endsWith(".ps1")) {
+      // Ссылки на инструменты в тексте: tools/foo.mjs
+      const refRe = /tools[\\/]([a-z0-9._-]+\.(?:mjs|ps1|py))/gi;
+      let m;
+      const seen = new Set();
+      while ((m = refRe.exec(text)) !== null) {
+        const target = m[1].toLowerCase();
+        if (seen.has(target)) continue;
+        seen.add(target);
+        bump(from, "tools", "reference");
+      }
+    }
+  }
+
+  const nodeIds = new Set(modules.map((m) => m.name));
+  nodeIds.add("root");
+  nodeIds.add("tools/tests");
+
+  const nodes = [...nodeIds]
+    .map((id) => {
+      const mod = modules.find((m) => m.name === id);
+      const outgoing = [...edges.values()].filter((e) => e.from === id).reduce((s, e) => s + e.weight, 0);
+      const incoming = [...edges.values()].filter((e) => e.to === id).reduce((s, e) => s + e.weight, 0);
+      return {
+        id,
+        files: mod ? mod.fileCount : 0,
+        lines: mod ? mod.totalLines : 0,
+        external: externalByModule.get(id) || 0,
+        outWeight: outgoing,
+        inWeight: incoming,
+        topFiles: mod ? (mod.files || []).filter((f) => !isBinaryName(f.name)).slice(0, 8).map((f) => f.name) : [],
+      };
+    })
+    .filter((n) => n.files > 0 || n.id === "root");
+
+  const edgeList = [...edges.values()]
+    .map((e) => ({ from: e.from, to: e.to, weight: e.weight, kinds: [...e.kinds] }))
+    .sort((a, b) => b.weight - a.weight);
+
+  return { nodes, edges: edgeList, scannedFiles: files.length };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1053,6 +1217,35 @@ export function generateDashboardHtml(data) {
   .map .node .meta { fill: var(--dim); font-size: 10px; }
   .map .node.collapsed rect { stroke-dasharray: 4 3; }
 
+  /* ---------- architecture: modes, graph, detail panel ---------- */
+  .map-tools button.on { border-color: var(--lime); color: var(--lime); }
+  .inp { font-family: var(--mono); font-size: 11.5px; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); min-width: 170px; }
+  .inp:focus { outline: none; border-color: var(--lime); }
+  .arch-body { display: grid; grid-template-columns: 1fr 300px; gap: 12px; align-items: start; }
+  @media (max-width: 1100px) { .arch-body { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; min-height: 120px; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--line-soft); }
+  .kv:last-child { border-bottom: 0; }
+  .kv span { color: var(--dim); }
+  .kv b { font-family: var(--mono); font-weight: 600; }
+  .map .node.dim { opacity: .25; }
+  .map .node.sel rect { stroke: var(--lime); stroke-width: 2; }
+  .map .gnode { cursor: pointer; }
+  .map .gnode rect { fill: var(--panel-2); stroke: var(--line); }
+  .map .gnode.code rect { stroke: color-mix(in srgb, var(--blue) 45%, transparent); }
+  .map .gnode.law rect { stroke: color-mix(in srgb, var(--violet) 45%, transparent); }
+  .map .gnode.skills rect { stroke: color-mix(in srgb, var(--amber) 40%, transparent); }
+  .map .gnode.tests rect { stroke: color-mix(in srgb, var(--lime) 40%, transparent); }
+  .map .gnode:hover rect, .map .gnode.sel rect { stroke: var(--lime); stroke-width: 2; }
+  .map .gnode.dim { opacity: .25; }
+  .map .gnode text { fill: var(--text); font-family: var(--mono); font-size: 12px; }
+  .map .gnode .meta { fill: var(--dim); font-size: 10px; }
+  .map .edge { fill: none; stroke: var(--dim-2); opacity: .55; }
+  .map .edge.hot { stroke: var(--lime); opacity: 1; }
+  .map .edge-w { fill: var(--dim-2); font-family: var(--mono); font-size: 9.5px; text-anchor: middle; }
+  .row.sel { background: var(--panel-2); }
+  .wave-agents { margin: 4px 0 0 27px; display: flex; gap: 6px; flex-wrap: wrap; }
+
   #modal { position: fixed; inset: 0; background: rgba(4,6,10,.7); display: none; align-items: center; justify-content: center; padding: 28px; z-index: 50; }
   #modal.open { display: flex; }
   #modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); width: 100%; max-width: 1040px; max-height: 84vh; overflow: auto; padding: 16px 18px; }
@@ -1103,11 +1296,99 @@ export function generateDashboardHtml(data) {
   var collapsed = null;         // свёрнутые узлы майндкарты (null = ещё не инициализировано)
   var fingerprint = null;
 
+  /* ============================ i18n ============================ */
   var I18N = {
-    ru: { overview: "Обзор", arch: "Архитектура", logs: "Логи сессии", diffs: "Диффы", critique: "Критика", debt: "Долг", history: "История", live: "LIVE", snapshot: "снимок" },
-    en: { overview: "Overview", arch: "Architecture", logs: "Session log", diffs: "Diffs", critique: "Critique", debt: "Debt", history: "History", live: "LIVE", snapshot: "snapshot" }
+    ru: {
+      // шапка
+      project: "проект", session: "сессия", model: "модель", live: "LIVE", snapshot: "снимок",
+      // вкладки
+      overview: "Обзор", arch: "Архитектура", logs: "Логи сессии", diffs: "Диффы", critique: "Критика", debt: "Долг", history: "История",
+      // обзор
+      progress: "Прогресс проекта", coverage: "Покрытие брифа", stageNow: "Этап сейчас", elapsed: "Прошло", remaining: "Осталось",
+      artifacts: "Артефакты", debtShort: "Долг", diffsShort: "Диффы", memory: "Память",
+      cost: "Стоимость сессии", tokens: "Токены", sessionCard: "Сессия",
+      reqs: "требований", budget: "бюджет яруса", calls: "вызовов", deferMarks: "маркеров defer:",
+      noTrigger: "без триггера", daysSince: "дней с ревизии", noReview: "ревизия не проводилась",
+      stagesDone: "обязательных этапов", artifactsOf: "артефактов", notRequired: "не требуется для яруса",
+      taskClosed: "задача завершена", allArtifacts: "обязательные артефакты собраны", median: "медиана",
+      byMedianOf: "по медиане", closedTasks: "закрытых задач", noData: "нет данных", notGit: "не git-репозиторий",
+      stages: "Этапы", build: "Ход сборки — волны SDD", wave: "Волна",
+      stage_lane: "Ярус и постановка", stage_recon: "Разведка и контекст", stage_manifest: "Манифест требований (R##)",
+      stage_openspec: "Спецификация OpenSpec", stage_interfaces: "Интерфейсы и владельцы",
+      stage_oracle: "Слепая приёмка Оракула", stage_closed: "Закрытие и архив",
+      st_in_progress: "идёт", st_active: "идёт",
+      st_done: "готово", st_wait: "ждёт", st_running: "идёт", st_skipped: "не требуется", st_missed: "пропущено", st_pending: "не начат",
+      status_closed: "ЗАКРЫТА", status_open: "В РАБОТЕ", status_idle: "ОЖИДАНИЕ",
+      mem_fresh: "В НОРМЕ", mem_overdue: "ПРОСРОЧЕНА", mem_none: "НЕТ ДАННЫХ",
+      cache: "кэш", updating: "данные обновляются", byPaseo: "по данным Paseo", provider: "провайдер",
+      // архитектура
+      viewTree: "Схема", viewGraph: "Граф зависимостей", viewTable: "Таблица",
+      collapseAll: "Свернуть всё", expandAll: "Развернуть всё", clickNode: "клик по узлу — детали",
+      files: "файлов", lines: "строк", filter: "фильтр: имя модуля", zoom: "масштаб", reset: "сброс",
+      details: "Детали", incoming: "Входящие", outgoing: "Исходящие", external: "Внешние импорты",
+      topFiles: "Крупнейшие файлы", noDeps: "связей нет", selectNode: "Выберите узел, чтобы увидеть детали",
+      kindCode: "код", kindLaw: "законы", kindSkills: "навыки", kindTests: "тесты", kindSpec: "спеки", kindOther: "прочее", kindRoot: "проект",
+      depImport: "импорт", depRef: "ссылка",
+      // логи
+      wfEvents: "События воркфлоу", agentSession: "Сессия агента", noEvents: "Событий пока нет — они появятся после start/artifact/close",
+      noTranscript: "Транскрипт сессии не найден",
+      // диффы
+      diffHint: "Диффы (git) — клик по файлу откроет diff", cleanTree: "Рабочее дерево чистое",
+      branch: "Ветка", commit: "коммит", modified: "изменён", untracked: "новый",
+      // критика
+      critiqueTitle: "Критика и ревью", noVerdicts: "Вердиктов оракула пока нет",
+      v_accept: "ПРИНЯТО", v_reject: "ОТКЛОНЕНО", v_mixed: "С ЗАМЕЧАНИЯМИ", v_unknown: "НЕТ ВЕРДИКТА",
+      concerns: "замечаний", noChecks: "Автопроверки не запускались",
+      // долг
+      debtTitle: "Технический долг", debtClean: "Осознанного техдолга нет — реестр чист",
+      ceiling: "потолок", upgrade: "апгрейд",
+      // история
+      historyTitle: "История работы", closedCount: "Закрыто задач", byTier: "по ярусам", empty: "пусто",
+      howItWorks: "Как это работает", help: "Справка", close: "Закрыть",
+    },
+    en: {
+      project: "project", session: "session", model: "model", live: "LIVE", snapshot: "snapshot",
+      overview: "Overview", arch: "Architecture", logs: "Session log", diffs: "Diffs", critique: "Critique", debt: "Debt", history: "History",
+      progress: "Project progress", coverage: "Brief coverage", stageNow: "Current stage", elapsed: "Elapsed", remaining: "Remaining",
+      artifacts: "Artifacts", debtShort: "Debt", diffsShort: "Diffs", memory: "Memory",
+      cost: "Session cost", tokens: "Tokens", sessionCard: "Session",
+      reqs: "requirements", budget: "tier budget", calls: "calls", deferMarks: "defer: markers",
+      noTrigger: "no trigger", daysSince: "days since review", noReview: "never reviewed",
+      stagesDone: "required stages", artifactsOf: "artifacts", notRequired: "not required for tier",
+      taskClosed: "task closed", allArtifacts: "all required artifacts collected", median: "median",
+      byMedianOf: "median of", closedTasks: "closed tasks", noData: "no data", notGit: "not a git repo",
+      stages: "Stages", build: "Build — SDD waves", wave: "Wave",
+      stage_lane: "Lane & statement", stage_recon: "Recon & context", stage_manifest: "Requirements manifest (R##)",
+      stage_openspec: "OpenSpec specification", stage_interfaces: "Interfaces & owners",
+      stage_oracle: "Oracle blind acceptance", stage_closed: "Close & archive",
+      st_in_progress: "running", st_active: "running",
+      st_done: "done", st_wait: "waiting", st_running: "running", st_skipped: "not required", st_missed: "missed", st_pending: "not started",
+      status_closed: "CLOSED", status_open: "IN PROGRESS", status_idle: "IDLE",
+      mem_fresh: "FRESH", mem_overdue: "OVERDUE", mem_none: "NO DATA",
+      cache: "cache", updating: "refreshing", byPaseo: "from Paseo", provider: "provider",
+      viewTree: "Scheme", viewGraph: "Dependency graph", viewTable: "Table",
+      collapseAll: "Collapse all", expandAll: "Expand all", clickNode: "click a node for details",
+      files: "files", lines: "lines", filter: "filter: module name", zoom: "zoom", reset: "reset",
+      details: "Details", incoming: "Incoming", outgoing: "Outgoing", external: "External imports",
+      topFiles: "Largest files", noDeps: "no links", selectNode: "Select a node to see details",
+      kindCode: "code", kindLaw: "law", kindSkills: "skills", kindTests: "tests", kindSpec: "specs", kindOther: "other", kindRoot: "project",
+      depImport: "import", depRef: "reference",
+      wfEvents: "Workflow events", agentSession: "Agent session", noEvents: "No events yet — they appear after start/artifact/close",
+      noTranscript: "Session transcript not found",
+      diffHint: "Git diffs — click a file to open the diff", cleanTree: "Working tree is clean",
+      branch: "Branch", commit: "commit", modified: "modified", untracked: "untracked",
+      critiqueTitle: "Critique & review", noVerdicts: "No oracle verdicts yet",
+      v_accept: "ACCEPTED", v_reject: "REJECTED", v_mixed: "WITH CONCERNS", v_unknown: "NO VERDICT",
+      concerns: "concerns", noChecks: "Automated checks were not run",
+      debtTitle: "Technical debt", debtClean: "No deliberate debt — ledger is clean",
+      ceiling: "ceiling", upgrade: "upgrade",
+      historyTitle: "Work history", closedCount: "Closed tasks", byTier: "by tier", empty: "empty",
+      howItWorks: "How it works", help: "Help", close: "Close",
+    }
   };
-  function t(k) { return (I18N[lang] && I18N[lang][k]) || k; }
+  var lang = localStorage.getItem("nf-lang") || "ru";
+  function t(k) { return (I18N[lang] && I18N[lang][k]) || (I18N.ru[k] || k); }
+
   function esc(s) { return String(s === null || s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
   function fmtDur(ms) {
     if (ms === null || ms === undefined || ms < 0) return "—";
@@ -1118,29 +1399,32 @@ export function generateDashboardHtml(data) {
     if (!iso) return "";
     try { var d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0"); } catch (e) { return ""; }
   }
+  function num(n) { return Number(n || 0).toLocaleString(lang === "ru" ? "ru-RU" : "en-US"); }
   var CLS = { done: "done", in_progress: "active", missed: "missed", skipped: "skipped", pending: "pending" };
   function scls(s) { return CLS[s] || "pending"; }
-  var STIME = { done: "—", skipped: "не требуется", missed: "пропущено", in_progress: "идёт" };
-  function stime(s) { return s.durationMs ? fmtDur(s.durationMs) : (STIME[s.status] || "не начат"); }
-  var WTIME = { done: "готово", skipped: "не требуется" };
-  function wtime(s) { return s.durationMs ? fmtDur(s.durationMs) : (WTIME[s.status] || "ждёт"); }
-  function badge(s) { return { closed: "ЗАКРЫТА", open: "В РАБОТЕ" }[s] || "ОЖИДАНИЕ"; }
-  function memLabel(s) { return { fresh: "В НОРМЕ", overdue: "ПРОСРОЧЕНА" }[s] || "НЕТ ДАННЫХ"; }
+  function stime(s) { return s.durationMs ? fmtDur(s.durationMs) : t("st_" + s.status) || t("st_pending"); }
+  function wtime(s) { return s.durationMs ? fmtDur(s.durationMs) : (s.status === "done" ? t("st_done") : s.status === "skipped" ? t("st_skipped") : t("st_wait")); }
+  function badge(s) { return s === "closed" ? t("status_closed") : s === "open" ? t("status_open") : t("status_idle"); }
+  function memLabel(s) { return s === "fresh" ? t("mem_fresh") : s === "overdue" ? t("mem_overdue") : t("mem_none"); }
+  function kindLabel(k) { return t("kind" + k.charAt(0).toUpperCase() + k.slice(1)) || k; }
+  /** Имя стадии переводится по её id: сервер не хранит язык интерфейса. */
+  function stageName(s) { return t("stage_" + s.id) || s.id; }
+  /** Заметка стадии: «не требуется для яруса T1» / «пропущено» — на языке интерфейса. */
+  function stageNote(s) {
+    if (s.note === "skipped") return t("notRequired") + " " + esc(s.tier || "");
+    if (s.note === "missed") return t("st_missed");
+    return s.detail ? esc(s.detail) : "";
+  }
 
-  /* ------------------------------- rail ------------------------------- */
+  /* ============================ rail ============================ */
   var TABS = [
-    { id: "overview", ico: "◎" },
-    { id: "arch", ico: "⑃" },
-    { id: "logs", ico: "≡" },
-    { id: "diffs", ico: "±" },
-    { id: "critique", ico: "✓" },
-    { id: "debt", ico: "⏚" },
-    { id: "history", ico: "⏱" },
+    { id: "overview", ico: "◎" }, { id: "arch", ico: "⑃" }, { id: "logs", ico: "≡" },
+    { id: "diffs", ico: "±" }, { id: "critique", ico: "✓" }, { id: "debt", ico: "⏚" }, { id: "history", ico: "⏱" },
   ];
   function renderRail(d) {
-    var counts = { diffs: d.git.files.length, critique: d.critique.length, debt: d.metrics.debt.total, logs: d.log.entries.length, history: d.history.total };
+    var counts = { diffs: d.git.files.length, critique: d.critique.length, debt: d.metrics.debt.total, logs: d.log.entries.length + (d.events || []).length, history: d.history.total };
     document.getElementById("rail").innerHTML = TABS.map(function (x) {
-      return '<button data-tab="' + x.id + '" class="' + (TAB === x.id ? "active" : "") + '">' +
+      return '<button data-tab="' + x.id + '" class="' + (TAB === x.id ? "active" : "") + '" title="' + t(x.id) + '">' +
         '<span class="ico">' + x.ico + "</span><span>" + t(x.id) + "</span>" +
         (counts[x.id] ? '<span class="badge-n">' + counts[x.id] + "</span>" : "") + "</button>";
     }).join("");
@@ -1149,172 +1433,299 @@ export function generateDashboardHtml(data) {
     });
   }
   function showTab(id) {
-    TAB = id;
-    localStorage.setItem("nf-tab", id);
+    TAB = id; localStorage.setItem("nf-tab", id);
     document.querySelectorAll(".tab").forEach(function (s) { s.classList.toggle("active", s.id === "tab-" + id); });
     document.querySelectorAll("#rail button").forEach(function (b) { b.classList.toggle("active", b.getAttribute("data-tab") === id); });
-    if (id === "arch") drawMap();
+    if (id === "arch") drawArch();
   }
 
-  /* ------------------------------ overview ---------------------------- */
+  /* ========================== overview ========================== */
+  function card(label, value, note, id, barPct) {
+    return '<div class="card"><div class="label">' + esc(label) + '</div><div class="v' + (String(value).length > 9 ? " sm" : "") + '"' + (id ? ' id="' + id + '"' : "") + ">" + value + "</div>" +
+      (barPct !== undefined && barPct !== null ? '<div class="bar mini"><i style="width:' + barPct + '%"></i></div>' : "") +
+      '<div class="note">' + note + "</div></div>";
+  }
   function renderOverview(d) {
     var p = d.progress, m = d.metrics, g = d.git;
-    var cards = [];
-    cards.push(card("Покрытие брифа", m.briefCoverage + "%", m.requirements.items.length + " требований" + (m.requirements.change ? " · " + esc(m.requirements.change) : "")));
-    cards.push(card("Этап сейчас", esc(d.currentStage.name), d.task.status === "closed" ? "задача завершена" : "Волна " + d.currentStage.wave + " · " + p.stagesDone + " из " + p.stagesRequired));
-    cards.push(card("Прошло", fmtDur(d.timing.elapsedMs), "медиана — " + (d.timing.medianTaskMs ? fmtDur(d.timing.medianTaskMs) : "нет данных"), "elapsed"));
-    cards.push(card("Осталось", d.timing.remainingMin === null ? "—" : d.timing.remainingMin + "…" + d.timing.remainingMax + " мин", d.timing.remainingMin === null ? (d.task.status === "closed" ? "задача закрыта" : "обязательные артефакты собраны") : "по медиане " + d.history.total + " задач"));
-    cards.push(card("Артефакты", p.artifactsDone + " / " + p.artifactsTotal, "бюджет яруса: " + d.task.budget + " вызовов", null, Math.round(p.artifactsDone / Math.max(1, p.artifactsTotal) * 100)));
-    cards.push(card("Долг", String(m.debt.total), "маркеров defer:" + (m.debt.noTrigger ? " · без триггера " + m.debt.noTrigger : "")));
-    cards.push(card("Диффы", String(g.isRepo ? g.files.length : "—"), g.isRepo ? '<span class="add">+' + g.added + '</span> <span class="del">−' + g.deleted + "</span> · untracked " + g.untracked : "не git-репозиторий"));
-    cards.push(card("Память", memLabel(m.memory.status), m.memory.daysSince !== null ? "дней с ревизии: " + m.memory.daysSince : "ревизия не проводилась"));
-
+    var sess = "";
+    if (d.session.usage) {
+      var u = d.session.usage;
+      var cachePct = u.inputTokens + u.cachedTokens > 0 ? Math.round(u.cachedTokens / (u.inputTokens + u.cachedTokens) * 100) : 0;
+      sess = '<div class="grid4" style="margin-bottom:14px">' +
+        card(t("sessionCard"), esc(d.session.key), esc(u.status || "") + (u.stale ? " · " + t("updating") : "")) +
+        card(t("cost"), u.costUsd !== null ? "$" + u.costUsd : "—", t("byPaseo")) +
+        card(t("tokens"), num(u.inputTokens) + " / " + num(u.outputTokens), t("cache") + " " + cachePct + "%") +
+        card(t("model"), esc((u.model || "—").split("/").pop()), t("provider") + ": " + esc(u.provider || "—")) +
+        "</div>";
+    }
+    var cards = [
+      card(t("coverage"), m.briefCoverage + "%", m.requirements.items.length + " " + t("reqs") + (m.requirements.change ? " · " + esc(m.requirements.change) : "")),
+      card(t("stageNow"), esc(d.currentStage.id ? t("stage_" + d.currentStage.id) : d.currentStage.name), d.task.status === "closed" ? t("taskClosed") : t("wave") + " " + d.currentStage.wave + " · " + p.stagesDone + "/" + p.stagesRequired),
+      card(t("elapsed"), fmtDur(d.timing.elapsedMs), t("median") + " — " + (d.timing.medianTaskMs ? fmtDur(d.timing.medianTaskMs) : t("noData")), "elapsed"),
+      card(t("remaining"), d.timing.remainingMin === null ? "—" : d.timing.remainingMin + "…" + d.timing.remainingMax + "m", d.timing.remainingMin === null ? (d.task.status === "closed" ? t("taskClosed") : t("allArtifacts")) : t("byMedianOf") + " " + d.history.total + " " + t("closedTasks")),
+      card(t("artifacts"), p.artifactsDone + " / " + p.artifactsTotal, t("budget") + ": " + d.task.budget + " " + t("calls"), null, Math.round(p.artifactsDone / Math.max(1, p.artifactsTotal) * 100)),
+      card(t("debtShort"), String(m.debt.total), t("deferMarks") + (m.debt.noTrigger ? " · " + t("noTrigger") + " " + m.debt.noTrigger : "")),
+      card(t("diffsShort"), String(g.isRepo ? g.files.length : "—"), g.isRepo ? '<span class="add">+' + g.added + '</span> <span class="del">−' + g.deleted + "</span>" : t("notGit")),
+      card(t("memory"), memLabel(m.memory.status), m.memory.daysSince !== null ? t("daysSince") + ": " + m.memory.daysSince : t("noReview")),
+    ];
     var stages = d.stages.map(function (s) {
-      return '<div class="stage ' + scls(s.status) + '"><span class="dot"></span><span class="nm">' + esc(s.name) +
-        (s.detail ? ' <span class="stage-note">' + esc(s.detail) + "</span>" : "") + '</span><span class="tm">' + stime(s) + "</span></div>";
+      var note = stageNote(s);
+      return '<div class="stage ' + scls(s.status) + '"><span class="dot"></span><span class="nm">' + esc(stageName(s)) +
+        (note ? ' <span class="stage-note">' + note + "</span>" : "") + '</span><span class="tm">' + stime(s) + "</span></div>";
     }).join("");
-
     var waves = d.waves.filter(function (w) { return w.stages.length; }).map(function (w) {
       var rows = w.stages.map(function (s) {
         var i = d.stages.findIndex(function (x) { return x.id === s.id; });
         var c = scls(s.status);
-        return '<div class="task"><span class="idx">' + String(i + 1).padStart(2, "0") + '</span><span class="b ' + c + '">' + esc(s.name) + '</span><span class="t">' + wtime(s) + "</span></div>";
+        return '<div class="task"><span class="idx">' + String(i + 1).padStart(2, "0") + '</span><span class="b ' + c + '">' + esc(stageName(s)) + '</span><span class="t">' + wtime(s) + "</span></div>";
       }).join("");
-      var agents = w.agents.length ? '<div class="wave-title" style="margin:6px 0 0 27px">' + w.agents.map(function (a) { return '<span class="chip">' + esc(a.role) + "</span>"; }).join(" ") + "</div>" : "";
-      return '<div class="wave-title">' + esc(w.title) + "</div>" + rows + agents;
+      var agents = w.agents.length ? '<div class="wave-agents">' + w.agents.map(function (a) { return '<span class="chip">' + esc(a.role) + "</span>"; }).join(" ") + "</div>" : "";
+      return '<div class="wave-title">' + t("wave") + " " + w.wave + "</div>" + rows + agents;
     }).join("");
-
-    var sess = "";
-    if (d.session.usage) {
-      var u = d.session.usage;
-      var tok = (u.inputTokens / 1000).toFixed(0) + "k in · " + (u.outputTokens / 1000).toFixed(0) + "k out";
-      var cachePct = u.inputTokens + u.cachedTokens > 0 ? Math.round(u.cachedTokens / (u.inputTokens + u.cachedTokens) * 100) : 0;
-      sess = '<div class="grid4" style="margin-bottom:14px">' +
-        card("Сессия", esc(d.session.key), esc(u.status || "") + " · " + esc(u.provider || "") + (u.stale ? " · данные обновляются" : "")) +
-        card("Стоимость сессии", u.costUsd !== null ? "$" + u.costUsd : "—", "по данным Paseo") +
-        card("Токены", tok, "кэш: " + cachePct + "% (" + (u.cachedTokens / 1e6).toFixed(1) + "M)") +
-        card("Модель", esc((u.model || "—").split("/").pop()), "провайдер: " + esc(u.provider || "—")) +
-        "</div>";
-    }
 
     document.getElementById("tab-overview").innerHTML =
       '<div class="title-row"><h1>' + esc(d.task.title) + "</h1>" +
       '<span class="tag ' + (d.task.status === "open" ? "on" : "") + '">' + badge(d.task.status) + "</span>" +
-      '<span class="tag">4-Wave SDD</span><span class="tag warn">Ярус ' + esc(d.task.tier) + "</span></div>" +
-      '<div class="card" style="margin-bottom:14px"><div class="hero"><div><div class="label">Прогресс проекта</div>' +
-      '<div class="note">' + p.stagesDone + " из " + p.stagesRequired + " обязательных этапов · " + p.artifactsDone + " из " + p.artifactsTotal + " артефактов" +
-      (p.stagesSkipped ? " · " + p.stagesSkipped + " не требуется для яруса " + esc(d.task.tier) : "") + "</div></div>" +
+      '<span class="tag">4-Wave SDD</span><span class="tag warn">' + esc(d.task.tier) + "</span></div>" +
+      '<div class="card" style="margin-bottom:14px"><div class="hero"><div><div class="label">' + t("progress") + "</div>" +
+      '<div class="note">' + p.stagesDone + "/" + p.stagesRequired + " " + t("stagesDone") + " · " + p.artifactsDone + "/" + p.artifactsTotal + " " + t("artifactsOf") +
+      (p.stagesSkipped ? " · " + p.stagesSkipped + " " + t("notRequired") + " " + esc(d.task.tier) : "") + "</div></div>" +
       '<div class="pct" id="pct">' + p.percent + "%</div></div>" +
       '<div class="bar"><i id="pbar" style="width:' + p.percent + '%"></i></div></div>' +
-      sess +
-      '<div class="grid4">' + cards.join("") + "</div>" +
-      '<div class="two"><div class="card"><div class="label">Этапы</div>' + stages + "</div>" +
-      '<div class="card"><div class="label">Ход сборки — волны SDD</div>' + waves + "</div></div>";
-  }
-  function card(label, value, note, id, barPct) {
-    return '<div class="card"><div class="label">' + label + '</div><div class="v' + (String(value).length > 9 ? " sm" : "") + '"' + (id ? ' id="' + id + '"' : "") + ">" + value + "</div>" +
-      (barPct !== undefined && barPct !== null ? '<div class="bar mini"><i style="width:' + barPct + '%"></i></div>' : "") +
-      '<div class="note">' + note + "</div></div>";
+      sess + '<div class="grid4">' + cards.join("") + "</div>" +
+      '<div class="two"><div class="card"><div class="label">' + t("stages") + "</div>" + stages + "</div>" +
+      '<div class="card"><div class="label">' + t("build") + "</div>" + waves + "</div></div>";
   }
 
-  /* -------------------------------- arch ------------------------------ */
+  /* ===================== architecture: 3 modes ===================== */
+  var ARCH_MODE = localStorage.getItem("nf-arch-mode") || "tree";
+  var archFilter = "";
+  var selectedNode = null;
+  var zoom = 1;
+  var collapsed = null;
+
+  function archNodes() { return (DATA.archGraph && DATA.archGraph.nodes) || []; }
+  function archEdges() { return (DATA.archGraph && DATA.archGraph.edges) || []; }
+  function nodeById(id) { return archNodes().filter(function (n) { return n.id === id; })[0] || null; }
+  function matchesFilter(id) { return !archFilter || id.toLowerCase().indexOf(archFilter.toLowerCase()) >= 0; }
+
+  function renderArch() {
+    var host = document.getElementById("tab-arch");
+    var modes = [["tree", t("viewTree")], ["graph", t("viewGraph")], ["table", t("viewTable")]];
+    host.innerHTML =
+      '<div class="map-tools">' +
+      modes.map(function (m) {
+        // Без inline-onclick: кавычки внутри шаблона ломали клиентский скрипт.
+        return '<button class="mode-btn' + (ARCH_MODE === m[0] ? " on" : "") + '" data-mode="' + m[0] + '">' + m[1] + "</button>";
+      }).join("") +
+      '<input id="arch-filter" class="inp" placeholder="' + t("filter") + '" value="' + esc(archFilter) + '">' +
+      (ARCH_MODE === "tree" ? '<button class="exp-btn" data-collapse="1">' + t("collapseAll") + '</button><button class="exp-btn" data-collapse="0">' + t("expandAll") + "</button>" : "") +
+      (ARCH_MODE === "graph" ? '<span class="chip">' + t("zoom") + ': <b id="zoom-val">' + Math.round(zoom * 100) + '%</b></span><button class="zoom-reset">' + t("reset") + "</button>" : "") +
+      '<span class="chip">' + t("files") + " <b>" + num(DATA.arch.files) + "</b> · " + t("lines") + " <b>" + num(DATA.arch.lines) + "</b></span>" +
+      "</div>" +
+      '<div class="arch-body"><div class="map-wrap" id="arch-canvas"></div><aside class="panel" id="arch-panel"></aside></div>';
+
+    host.querySelectorAll(".mode-btn").forEach(function (b) {
+      b.addEventListener("click", function () { setArchMode(b.getAttribute("data-mode")); });
+    });
+    host.querySelectorAll(".exp-btn").forEach(function (b) {
+      b.addEventListener("click", function () { mapExpandAll(b.getAttribute("data-collapse") === "1"); });
+    });
+    var zr = host.querySelector(".zoom-reset");
+    if (zr) zr.addEventListener("click", function () { setZoom(1); });
+    var inp = document.getElementById("arch-filter");
+    if (inp) inp.addEventListener("input", function () { archFilter = inp.value; drawArch(); });
+
+    if (ARCH_MODE === "tree") drawTree();
+    else if (ARCH_MODE === "graph") drawGraph();
+    else drawTable();
+    renderPanel();
+  }
+  function setArchMode(m) { ARCH_MODE = m; localStorage.setItem("nf-arch-mode", m); renderArch(); }
+  function setZoom(z) { zoom = Math.max(0.4, Math.min(2.5, z)); var el = document.getElementById("zoom-val"); if (el) el.textContent = Math.round(zoom * 100) + "%"; drawGraph(); }
+  function drawArch() { if (TAB === "arch") renderArch(); }
+
+  /* --- режим 1: схема (дерево) --- */
   function visibleTree(node) {
     if (!collapsed) {
-      // Первый показ: структура проекта видна сразу, файлы раскрываются по клику.
       collapsed = {};
       (DATA.arch.children || []).forEach(function (c) { collapsed[c.name] = true; });
     }
     if (collapsed[node.name]) return { name: node.name, kind: node.kind, lines: node.lines, files: node.files, children: [] };
-    return {
-      name: node.name, kind: node.kind, lines: node.lines, files: node.files,
-      children: (node.children || []).map(visibleTree),
-    };
+    return { name: node.name, kind: node.kind, lines: node.lines, files: node.files, children: (node.children || []).map(visibleTree) };
   }
-  function layout(node) {
-    // Горизонтальное дерево: x = глубина, y = порядок листьев (DFS).
-    var rowH = 26, xGap = 210, cursor = 0, nodes = [], links = [];
+  function treeLayout(node) {
+    var rowH = 26, xGap = 230, cursor = 0, nodes = [], links = [];
     (function walk(n, depth, parent) {
-      var y = cursor * rowH;
       var kids = n.children || [];
+      var y = cursor * rowH;
       if (kids.length === 0) { cursor += 1; y = (cursor - 1) * rowH; }
       var me = { x: depth * xGap, y: y, node: n, depth: depth };
       nodes.push(me);
       if (parent) links.push([parent, me]);
       if (kids.length) {
         var first = null, last = null;
-        kids.forEach(function (k) {
-          var child = walk(k, depth + 1, me);
-          if (!first) first = child;
-          last = child;
-        });
+        kids.forEach(function (k) { var c = walk(k, depth + 1, me); if (!first) first = c; last = c; });
         me.y = (first.y + last.y) / 2;
       }
       return me;
     })(node, 0, null);
-    return { nodes: nodes, links: links, height: Math.max(1, cursor) * rowH + 40, width: 0 };
+    return { nodes: nodes, links: links, height: Math.max(1, cursor) * rowH + 30 };
   }
-  function drawMap() {
-    var host = document.getElementById("tab-arch");
-    if (!host) return;
-    if (!DATA.arch) { host.innerHTML = '<div class="empty">Нет данных архитектуры</div>'; return; }
-
+  function drawTree() {
+    var canvas = document.getElementById("arch-canvas");
     var tree = visibleTree(DATA.arch);
-    var lay = layout(tree);
-    var maxDepth = 0;
-    lay.nodes.forEach(function (n) { if (n.x > maxDepth) maxDepth = n.x; });
-
-    var W = maxDepth + 320, H = lay.height;
+    var lay = treeLayout(tree);
     var longest = 0;
     lay.nodes.forEach(function (n) { if (String(n.node.name).length > longest) longest = String(n.node.name).length; });
-    var boxW = Math.min(320, Math.max(150, longest * 7.4 + 34)), boxH = 22;
+    var boxW = Math.min(300, Math.max(140, longest * 7.2 + 30)), boxH = 22;
+    var maxX = 0;
+    lay.nodes.forEach(function (n) { if (n.x > maxX) maxX = n.x; });
+    var W = (maxX + boxW + 40) * zoom, H = lay.height * zoom;
 
     var links = lay.links.map(function (p) {
       var a = p[0], b = p[1];
-      var x1 = a.x + boxW, y1 = a.y + boxH / 2, x2 = b.x, y2 = b.y + boxH / 2;
-      var mx = (x1 + x2) / 2;
+      var x1 = a.x + boxW, y1 = a.y + boxH / 2, x2 = b.x, y2 = b.y + boxH / 2, mx = (x1 + x2) / 2;
       return '<path class="link" d="M' + x1 + " " + y1 + " C" + mx + " " + y1 + ", " + mx + " " + y2 + ", " + x2 + " " + y2 + '"></path>';
     }).join("");
 
     var nodes = lay.nodes.map(function (n) {
-      var nd = n.node;
-      var kids = (nd.children || []).length;
-      var cls = "node " + (nd.kind || "other") + (collapsed[nd.name] ? " collapsed" : "");
-      var meta = nd.kind === "file" ? nd.lines + " строк" : (nd.files || 0) + " файлов · " + (nd.lines || 0) + " строк";
+      var nd = n.node, kids = (nd.children || []).length;
+      var dim = !matchesFilter(nd.name) ? " dim" : "";
+      var cls = "node " + (nd.kind || "other") + (collapsed[nd.name] ? " collapsed" : "") + dim + (selectedNode === nd.name ? " sel" : "");
+      var meta = nd.kind === "file" ? num(nd.lines) + " " + t("lines") : num(nd.files) + " " + t("files") + " · " + num(nd.lines) + " " + t("lines");
       return '<g class="' + cls + '" transform="translate(' + n.x + "," + n.y + ')" data-name="' + esc(nd.name) + '">' +
         '<rect width="' + boxW + '" height="' + boxH + '" rx="7"></rect>' +
         '<text x="10" y="15">' + esc(nd.name) + (kids ? (collapsed[nd.name] ? " ▸" : " ▾") : "") + "</text>" +
         '<title>' + esc(nd.name) + " — " + esc(meta) + "</title></g>";
     }).join("");
 
-    host.innerHTML =
-      '<div class="map-tools">' +
-      '<button onclick="mapExpandAll(true)">Свернуть всё</button>' +
-      '<button onclick="mapExpandAll(false)">Развернуть всё</button>' +
-      '<span class="chip">клик по узлу — свернуть/развернуть</span>' +
-      '<span class="chip">файл <b>' + esc(DATA.arch.files) + "</b> · строк <b>" + esc(DATA.arch.lines) + "</b></span>" +
-      "</div>" +
-      '<div class="map-wrap"><svg class="map" width="' + W + '" height="' + H + '">' + links + nodes + "</svg></div>";
-
-    host.querySelectorAll("g.node").forEach(function (g) {
+    canvas.innerHTML = '<svg class="map" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W / zoom + " " + H / zoom + '">' + links + nodes + "</svg>";
+    canvas.querySelectorAll("g.node").forEach(function (g) {
       g.addEventListener("click", function () {
         var nm = g.getAttribute("data-name");
-        collapsed[nm] = !collapsed[nm];
-        drawMap();
+        if (selectedNode === nm) { collapsed[nm] = !collapsed[nm]; } else { selectedNode = nm; }
+        renderArch();
       });
     });
   }
   function mapExpandAll(collapse) {
     collapsed = {};
-    if (collapse) {
-      (DATA.arch.children || []).forEach(function (c) { collapsed[c.name] = true; });
-    }
-    drawMap();
+    if (collapse) (DATA.arch.children || []).forEach(function (c) { collapsed[c.name] = true; });
+    renderArch();
   }
-  /** Свернуть/развернуть все узлы одного уровня (клик по модулю уже это делает). */
-  function mapToggle(name) {
-    if (!collapsed) collapsed = {};
-    collapsed[name] = !collapsed[name];
-    drawMap();
+
+  /* --- режим 2: граф зависимостей --- */
+  function drawGraph() {
+    var canvas = document.getElementById("arch-canvas");
+    var nodes = archNodes().filter(function (n) { return matchesFilter(n.id); });
+    var ids = {};
+    nodes.forEach(function (n) { ids[n.id] = true; });
+    var edges = archEdges().filter(function (e) { return ids[e.from] && ids[e.to]; });
+
+    // Слои: BFS от узла с максимумом исходящих связей (обычно «tools»).
+    var roots = nodes.slice().sort(function (a, b) { return b.outWeight - a.outWeight; });
+    var level = {};
+    var queue = [];
+    if (roots[0]) { level[roots[0].id] = 0; queue.push(roots[0].id); }
+    while (queue.length) {
+      var cur = queue.shift();
+      edges.filter(function (e) { return e.from === cur; }).forEach(function (e) {
+        if (level[e.to] === undefined) { level[e.to] = (level[cur] || 0) + 1; queue.push(e.to); }
+      });
+    }
+    var maxLevel = 0;
+    nodes.forEach(function (n) { if (level[n.id] === undefined) level[n.id] = 0; if (level[n.id] > maxLevel) maxLevel = level[n.id]; });
+
+    var byLevel = {};
+    nodes.forEach(function (n) { (byLevel[level[n.id]] = byLevel[level[n.id]] || []).push(n); });
+    var colW = 250, rowH = 84, boxW = 180, boxH = 40, pad = 30;
+    var maxRows = Math.max.apply(null, Object.keys(byLevel).map(function (k) { return byLevel[k].length; }).concat([1]));
+    var W = (maxLevel + 1) * colW + pad * 2, H = maxRows * rowH + pad * 2;
+    var pos = {};
+    Object.keys(byLevel).forEach(function (lv) {
+      byLevel[lv].forEach(function (n, i) {
+        pos[n.id] = { x: pad + Number(lv) * colW, y: pad + i * rowH + (H - byLevel[lv].length * rowH) / 2 };
+      });
+    });
+
+    var maxWeight = Math.max.apply(null, edges.map(function (e) { return e.weight; }).concat([1]));
+    var links = edges.map(function (e) {
+      var a = pos[e.from], b = pos[e.to];
+      if (!a || !b) return "";
+      var x1 = a.x + boxW, y1 = a.y + boxH / 2, x2 = b.x, y2 = b.y + boxH / 2;
+      var mx = (x1 + x2) / 2;
+      var w = 1 + 3 * (e.weight / maxWeight);
+      var hot = selectedNode && (e.from === selectedNode || e.to === selectedNode);
+      return '<path class="edge' + (hot ? " hot" : "") + '" d="M' + x1 + " " + y1 + " C" + mx + " " + y1 + ", " + mx + " " + y2 + ", " + x2 + " " + y2 + '" stroke-width="' + w.toFixed(1) + '"></path>' +
+        '<text class="edge-w" x="' + mx + '" y="' + ((y1 + y2) / 2 - 4) + '">' + e.weight + "</text>";
+    }).join("");
+
+    var boxes = nodes.map(function (n) {
+      var p = pos[n.id];
+      var dim = !matchesFilter(n.id) ? " dim" : "";
+      return '<g class="gnode ' + esc(n.id.split("/")[0]) + dim + (selectedNode === n.id ? " sel" : "") + '" transform="translate(' + p.x + "," + p.y + ')" data-name="' + esc(n.id) + '">' +
+        '<rect width="' + boxW + '" height="' + boxH + '" rx="8"></rect>' +
+        '<text x="12" y="17">' + esc(n.id) + "</text>" +
+        '<text class="meta" x="12" y="31">' + num(n.files) + " " + t("files") + " · " + num(n.lines) + " " + t("lines") + "</text>" +
+        '<title>' + esc(n.id) + "</title></g>";
+    }).join("");
+
+    canvas.innerHTML = '<svg class="map graph" width="' + W * zoom + '" height="' + H * zoom + '" viewBox="0 0 ' + W + " " + H + '">' + links + boxes + "</svg>";
+    canvas.querySelectorAll("g.gnode").forEach(function (g) {
+      g.addEventListener("click", function () { selectedNode = g.getAttribute("data-name"); renderArch(); });
+    });
+  }
+
+  /* --- режим 3: таблица --- */
+  function drawTable() {
+    var canvas = document.getElementById("arch-canvas");
+    var rows = archNodes().filter(function (n) { return matchesFilter(n.id); }).sort(function (a, b) { return b.lines - a.lines; });
+    var out = rows.map(function (n) {
+      var ins = archEdges().filter(function (e) { return e.to === n.id; }).map(function (e) { return e.from; });
+      var outs = archEdges().filter(function (e) { return e.from === n.id; }).map(function (e) { return e.to; });
+      return '<div class="row' + (selectedNode === n.id ? " sel" : "") + '" data-name="' + esc(n.id) + '" style="cursor:pointer">' +
+        '<span class="grow mono">' + esc(n.id) + "</span>" +
+        '<span class="mono" style="color:var(--dim)">' + num(n.files) + " " + t("files") + " · " + num(n.lines) + " " + t("lines") + "</span>" +
+        '<span class="chip">→ ' + (outs.length ? esc(outs.join(", ")) : t("noDeps")) + "</span>" +
+        '<span class="chip">← ' + (ins.length ? esc(ins.join(", ")) : t("noDeps")) + "</span></div>";
+    }).join("");
+    canvas.innerHTML = '<div class="card" style="border:0;padding:4px 0">' + (out || '<div class="empty">' + t("empty") + "</div>") + "</div>";
+    canvas.querySelectorAll(".row").forEach(function (r) {
+      r.addEventListener("click", function () { selectedNode = r.getAttribute("data-name"); renderArch(); });
+    });
+  }
+
+  /* --- панель деталей --- */
+  function renderPanel() {
+    var panel = document.getElementById("arch-panel");
+    if (!selectedNode) { panel.innerHTML = '<div class="label">' + t("details") + '</div><div class="empty">' + t("selectNode") + "</div>"; return; }
+    var n = nodeById(selectedNode);
+    var fileNode = null;
+    (function find(node) {
+      if (!node || fileNode) return;
+      if (node.name === selectedNode && node.kind === "file") fileNode = node;
+      (node.children || []).forEach(find);
+    })(DATA.arch);
+
+    var ins = archEdges().filter(function (e) { return e.to === selectedNode; });
+    var outs = archEdges().filter(function (e) { return e.from === selectedNode; });
+    var body = "";
+    if (fileNode) {
+      body = '<div class="kv"><span>' + t("lines") + "</span><b>" + num(fileNode.lines) + "</b></div>" +
+        '<div class="kv"><span>' + t("kindCode") + "</span><b>" + esc(fileNode.path || selectedNode) + "</b></div>";
+    } else if (n) {
+      body =
+        '<div class="kv"><span>' + t("files") + "</span><b>" + num(n.files) + "</b></div>" +
+        '<div class="kv"><span>' + t("lines") + "</span><b>" + num(n.lines) + "</b></div>" +
+        '<div class="kv"><span>' + t("external") + "</span><b>" + num(n.external) + "</b></div>" +
+        '<div class="label" style="margin-top:12px">' + t("outgoing") + "</div>" +
+        (outs.length ? outs.map(function (e) { return '<div class="kv"><span class="mono">' + esc(e.to) + '</span><b>' + e.weight + ' <span class="note">' + e.kinds.map(function (k) { return t("dep" + k.charAt(0).toUpperCase() + k.slice(1)); }).join("/") + "</span></b></div>"; }).join("") : '<div class="empty">' + t("noDeps") + "</div>") +
+        '<div class="label" style="margin-top:12px">' + t("incoming") + "</div>" +
+        (ins.length ? ins.map(function (e) { return '<div class="kv"><span class="mono">' + esc(e.from) + "</span><b>" + e.weight + "</b></div>"; }).join("") : '<div class="empty">' + t("noDeps") + "</div>") +
+        (n.topFiles.length ? '<div class="label" style="margin-top:12px">' + t("topFiles") + "</div>" + n.topFiles.map(function (f) { return '<div class="kv"><span class="mono" style="font-size:11px">' + esc(f) + "</span></div>"; }).join("") : "");
+    }
+    panel.innerHTML = '<div class="label">' + t("details") + "</div>" + body;
   }
 
   /* -------------------------------- logs ------------------------------ */
@@ -1490,9 +1901,21 @@ export function generateDashboardHtml(data) {
   function closeModal() { document.getElementById("modal").classList.remove("open"); }
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
 
-  render(DATA);
-  fingerprint = fp(DATA);
-  showTab(TAB);
+  function boot() {
+    try {
+      render(DATA);
+      fingerprint = fp(DATA);
+      showTab(TAB);
+    } catch (e) {
+      // Никогда не оставляем пустой экран без объяснения.
+      var b = document.createElement("div");
+      b.style.cssText = "position:fixed;bottom:12px;left:12px;right:12px;z-index:99;background:#2d1214;border:1px solid #ff5f56;color:#ffb3ae;font-family:var(--mono);font-size:12px;padding:10px 14px;border-radius:10px";
+      b.textContent = "dashboard render error: " + (e && e.message ? e.message : e);
+      document.body.appendChild(b);
+      try { console.error("dashboard render error", e); } catch (_) {}
+    }
+  }
+  boot();
   refreshNow();
   setInterval(refreshNow, POLL_MS);
 </script>

@@ -279,7 +279,7 @@ test("generateDashboardHtml: содержит ключевые секции да
   // в статическом HTML их разметки нет — проверяем описание и рендер.
   assert.ok(html.includes('{ id: "arch"') && html.includes('{ id: "logs"'), "описаны вкладки архитектуры и логов");
   assert.ok(html.includes("renderRail"), "рельс вкладок рендерится");
-  assert.ok(html.includes("drawMap") && html.includes("visibleTree") && html.includes("function layout"), "майндкарта рисуется на клиенте");
+  assert.ok(html.includes("drawTree") && html.includes("drawGraph") && html.includes("visibleTree") && html.includes("treeLayout"), "майндкарта и граф рисуются на клиенте");
   assert.ok(html.includes("d.session.key"), "дашборд привязан к сессии");
   assert.ok(html.includes("collectSessionLog") || html.includes("d.log.entries"), "логи сессии выводятся");
   assert.ok(html.includes("/api/diff"));
