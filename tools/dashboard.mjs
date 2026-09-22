@@ -356,16 +356,23 @@ export function collectHistory(absRoot) {
     byTier[tier] = (byTier[tier] || 0) + 1;
   }
 
-  return {
-    total: records.length,
-    medianMs,
-    byTier,
-    recent: records.slice(-6).reverse().map((r) => ({
+  const tail = records.slice(Math.max(0, records.length - 6));
+  const recent = [];
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const r = tail[i];
+    recent.push({
       task: String(r.task || "").slice(0, 120),
       tier: r.tier || "?",
       durationMs: Number(r.durationMs) || 0,
       forced: Boolean(r.forced),
-    })),
+    });
+  }
+
+  return {
+    total: records.length,
+    medianMs,
+    byTier,
+    recent,
   };
 }
 
@@ -607,18 +614,49 @@ function fmtDuration(ms) {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
+/** CSS-класс стадии/волны по её статусу. */
+const STATUS_CLASS = { done: "done", in_progress: "active", missed: "missed", skipped: "skipped", pending: "pending" };
+function statusClass(status) {
+  return STATUS_CLASS[status] || "pending";
+}
+
+/** Подпись времени для строки этапа (когда длительности ещё нет). */
+const STAGE_TIME_LABEL = { done: "—", skipped: "не требуется", missed: "пропущено", in_progress: "идёт" };
+function stageTimeLabel(stage) {
+  if (stage.durationMs) return fmtDuration(stage.durationMs);
+  return STAGE_TIME_LABEL[stage.status] || "не начат";
+}
+
+/** Подпись времени для строки волны сборки. */
+const WAVE_TIME_LABEL = { done: "готово", skipped: "не требуется" };
+function waveTimeLabel(stage) {
+  if (stage.durationMs) return fmtDuration(stage.durationMs);
+  return WAVE_TIME_LABEL[stage.status] || "ждёт";
+}
+
+/** Метка статуса задачи для бейджа в шапке. */
+const TASK_STATUS_BADGE = { closed: "ЗАКРЫТА", open: "В РАБОТЕ" };
+function taskStatusBadge(status) {
+  return TASK_STATUS_BADGE[status] || "ОЖИДАНИЕ";
+}
+
+/** Метка состояния памяти Hindsight. */
+const MEMORY_LABEL = { fresh: "В НОРМЕ", overdue: "ПРОСРОЧЕНА" };
+function memoryLabel(status) {
+  return MEMORY_LABEL[status] || "НЕТ ДАННЫХ";
+}
+
 /** Автономный HTML в стиле Autopilot. */
 export function generateDashboardHtml(data) {
   const payload = JSON.stringify(data).replace(/</g, "\\u003c");
 
   const stageRows = data.stages
     .map((s) => {
-      const cls = s.status === "done" ? "done" : s.status === "in_progress" ? "active" : s.status === "missed" ? "missed" : s.status === "skipped" ? "skipped" : "pending";
-      const time = s.durationMs ? fmtDuration(s.durationMs) : s.status === "done" ? "—" : s.status === "skipped" ? "не требуется" : s.status === "missed" ? "пропущено" : "не начат";
+      const cls = statusClass(s.status);
       return `<li class="stage ${cls}">
         <span class="stage-dot"></span>
         <span class="stage-name">${s.name}${s.detail ? ` <span class="stage-note">${s.detail}</span>` : ""}</span>
-        <span class="stage-time">${time}</span>
+        <span class="stage-time">${stageTimeLabel(s)}</span>
       </li>`;
     })
     .join("");
@@ -628,13 +666,12 @@ export function generateDashboardHtml(data) {
     .map((w) => {
       const rows = w.stages
         .map((s) => {
-          const cls = s.status === "done" ? "done" : s.status === "in_progress" ? "active" : s.status === "skipped" ? "skipped" : "pending";
-          const time = s.durationMs ? fmtDuration(s.durationMs) : s.status === "done" ? "готово" : s.status === "skipped" ? "не требуется" : "ждёт";
+          const cls = statusClass(s.status);
           const idx = String(data.stages.indexOf(s) + 1).padStart(2, "0");
           return `<div class="task-row ${cls}">
             <span class="task-idx">${idx}</span>
             <span class="task-bar ${cls}">${s.name}</span>
-            <span class="task-time">${time}</span>
+            <span class="task-time">${waveTimeLabel(s)}</span>
           </div>`;
         })
         .join("");
@@ -876,7 +913,7 @@ export function generateDashboardHtml(data) {
   <div class="title-row">
     <h1>${data.task.title}</h1>
     <div class="badges">
-      <span class="badge badge-status">${data.task.status === "closed" ? "ЗАКРЫТА" : data.task.status === "open" ? "В РАБОТЕ" : "ОЖИДАНИЕ"}</span>
+      <span class="badge badge-status">${taskStatusBadge(data.task.status)}</span>
       <span class="badge badge-sdd">4-WAVE SDD</span>
       <span class="badge badge-tier">ЯРУС ${data.task.tier}</span>
     </div>
@@ -942,7 +979,7 @@ export function generateDashboardHtml(data) {
 
     <div class="card metric">
       <div class="label" data-i18n="memory">Память</div>
-      <div class="value small">${data.metrics.memory.status === "fresh" ? "В НОРМЕ" : data.metrics.memory.status === "overdue" ? "ПРОСРОЧЕНА" : "НЕТ ДАННЫХ"}</div>
+      <div class="value small">${memoryLabel(data.metrics.memory.status)}</div>
       <div class="note">${data.metrics.memory.daysSince !== null ? `дней с ревизии: ${data.metrics.memory.daysSince}` : "ревизия не проводилась"}</div>
     </div>
   </div>
@@ -1142,7 +1179,7 @@ export function startLiveServer(root, port = 4200) {
   });
 
   server.listen(port, () => {
-    console.log(`Nullform Workflow dashboard: http://localhost:${port}`);
+    process.stdout.write(`Nullform Workflow dashboard: http://localhost:${port}\n`);
   });
 
   return server;
