@@ -724,6 +724,47 @@ export function runDoctor(options) {
     }
   }
 
+  // 5b. check 'plugin-patches': the console-window / EPIPE patches live in
+  // node_modules and are LOST on every plugin upgrade. Verifying only that the
+  // patcher FILE exists cannot see that: the harness would report healthy while
+  // the unpatched plugin crashes the host with an unhandled rejection
+  // (OMP: "Cannot call write after a stream was destroyed" -> RPC exit 1).
+  {
+    const id = "plugin-patches";
+    // Derived from the resolved agents home, not homedir(): a sandbox install
+    // (`--user-home`) must inspect ITS plugins, and a hardcoded home made the
+    // check both wrong for sandboxes and impossible to test.
+    const plugRoot = join(dirname(agentsHome), ".omp", "plugins", "node_modules");
+    const piLens = join(plugRoot, "pi-lens", "dist", "index.js");
+    const fixer = join(harness, "tools", "fix-plugin-windows.cjs");
+
+    if (!existsSync(fixer)) {
+      checks.push({ id, status: "fail", detail: "tools/fix-plugin-windows.cjs не найден" });
+    } else if (!existsSync(piLens)) {
+      checks.push({ id, status: "pass", detail: "pi-lens не установлен: патчить нечего" });
+    } else {
+      const text = readFileSync(piLens, "utf8");
+      // Only the marker proves the patch: vanilla vscode-jsonrpc already contains
+      // ERR_STREAM_DESTROYED (5 occurrences), so matching that string would report
+      // an unpatched plugin as healthy.
+      const guarded = text.includes("patched-epipe-handler");
+      if (guarded) {
+        checks.push({
+          id,
+          status: "pass",
+          detail: "патчи плагинов применены (pi-lens: EPIPE-глушитель)",
+        });
+      } else {
+        checks.push({
+          id,
+          status: "warn",
+          detail:
+            "pi-lens БЕЗ патча: обновление плагина сняло правки — запустите `node tools/fix-plugin-windows.cjs`",
+        });
+      }
+    }
+  }
+
   // 6. check 'skills' (spawn skills-doctor.mjs)
   {
     const id = "skills";

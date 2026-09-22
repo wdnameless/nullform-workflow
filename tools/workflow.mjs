@@ -31,7 +31,7 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 
 const DIR = ".workflow";
@@ -573,6 +573,52 @@ function cmdStatus(root) {
 }
 
 
+/**
+ * Acceptance staleness: the oracle artifact was recorded at `artifacts.oracle.at`,
+ * so any tracked source file modified after that instant means the verdict
+ * describes a tree that no longer exists.
+ *
+ * Compares against git-tracked files only (via `git ls-files`), so build output,
+ * logs and caches cannot produce a false STALE. Returns a human-readable reason
+ * or null. Best-effort: if git is unavailable the gate stays out of the way
+ * rather than blocking an honest close.
+ */
+function findAcceptanceStaleness(root, st) {
+  const acceptedAt = st.artifacts?.oracle?.at;
+  if (!acceptedAt) return null;
+  const acceptedMs = new Date(acceptedAt).getTime();
+  if (Number.isNaN(acceptedMs)) return null;
+
+  let out;
+  try {
+    out = execFileSync("git", ["ls-files", "-z"], {
+      cwd: root,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  } catch {
+    return null; // not a git tree, or git missing — nothing to compare against
+  }
+
+  const newer = [];
+  for (const rel of out.split("\0")) {
+    if (!rel) continue;
+    try {
+      const m = statSync(join(root, rel)).mtimeMs;
+      if (m > acceptedMs) {
+        newer.push(rel);
+        if (newer.length >= 5) break;
+      }
+    } catch {
+      // deleted since acceptance — that is a change too, but git status owns it
+    }
+  }
+  if (!newer.length) return null;
+  return `${newer.length} tracked file(s) changed after the oracle verdict (${acceptedAt}): ${newer.join(", ")}`;
+}
+
 function cmdClose(root, flags) {
   const st = load(root);
   if (!st) { console.error("workflow: no task state."); return 2; }
@@ -609,17 +655,57 @@ function cmdClose(root, flags) {
     console.error(`workflow: --force requires --reason "<why the artifact is absent>"`);
     return 1;
   }
+
+  // Acceptance staleness: an ACCEPT verdict is evidence only for the tree it was
+  // rendered against. Editing code after the oracle ran and then closing is the
+  // cheapest way to ship unverified work, so refuse unless the verdict is newer
+  // than the last change to a tracked file. `--force --reason` stays the hatch —
+  // but it is recorded below, so the override never disappears silently.
+  let staleAcceptance = null;
+  if (st.artifacts.oracle) {
+    staleAcceptance = findAcceptanceStaleness(root, st);
+    if (staleAcceptance && !flags.force) {
+      console.error(`workflow: cannot close ${st.tier} — acceptance is STALE.`);
+      console.error(`  ${staleAcceptance}`);
+      console.error(`  re-run the oracle on the current tree, or close with --force --reason "<why>"`);
+      return 1;
+    }
+    if (staleAcceptance && flags.force && !flags.reason) {
+      console.error(`workflow: --force requires --reason "<why the stale acceptance is accepted>"`);
+      return 1;
+    }
+  }
+
   st.status = "closed";
   st.closedAt = new Date().toISOString();
   if (flags["diff-lines"] !== undefined) {
     st.diffLines = Number(flags["diff-lines"]);
   }
-  if (missing.length) {
-    st.deviation = { forced: true, reason: String(flags.reason), missing: missing.map((m) => m.kind) };
-    console.log(`workflow: closed with DEVIATION — ${missing.map((m) => m.kind).join(', ')} (${st.deviation.reason})`);
+  // Deviation record: covers BOTH a missing artifact and an overridden stale
+  // acceptance. Leaving the stale case unrecorded made the override invisible in
+  // state.json and metrics (`forced: false`), i.e. the cheapest way to ship
+  // unverified work left no trace at all.
+  const deviation = {};
+  if (missing.length && flags.force) {
+    deviation.forced = true;
+    deviation.reason = String(flags.reason);
+    deviation.missing = missing.map((m) => m.kind);
+  }
+  if (staleAcceptance && flags.force) {
+    deviation.forced = true;
+    deviation.reason = String(flags.reason);
+    deviation.staleAcceptance = staleAcceptance;
+  }
+  if (deviation.forced) {
+    st.deviation = deviation;
+    const what = [
+      deviation.missing ? `missing ${deviation.missing.join(", ")}` : null,
+      deviation.staleAcceptance ? "stale acceptance" : null,
+    ].filter(Boolean).join(" + ");
+    console.log(`workflow: closed with DEVIATION — ${what} (${deviation.reason})`);
   } else {
     logEvent(root, "close", `${st.tier} — ${st.task}`);
-  console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
+    console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
   }
   save(root, st);
   const closedMs = new Date(st.closedAt).getTime();
@@ -627,7 +713,7 @@ function cmdClose(root, flags) {
   const startedMs = Number.isNaN(startedMsRaw) ? closedMs : startedMsRaw;
   const durationMs = Math.max(0, closedMs - startedMs);
   const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
-  const isForced = Boolean(missing.length && flags.force);
+  const isForced = Boolean(deviation.forced);
   const metricRecord = {
     task: st.task || "(untitled)",
     tier: st.tier,

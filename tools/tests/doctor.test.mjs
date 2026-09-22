@@ -1156,3 +1156,37 @@ test("plugins: --require-plugins виден в CLI и в JSON-отчёте", () 
   }
 });
 
+
+test("plugin-patches: снятый патч pi-lens → WARN (иначе краш хоста не виден)", () => {
+  // Патчи живут в node_modules и теряются при обновлении плагина. Проверка только
+  // наличия файла-патчера это не ловит: харнесс рапортует «здоров», а непатченный
+  // pi-lens валит хост Unhandled Rejection'ом.
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-patch-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const agentsHome = join(tmp, ".agents");
+    const piLensDir = join(tmp, ".omp", "plugins", "node_modules", "pi-lens", "dist");
+    mkdirSync(agentsHome, { recursive: true });
+    mkdirSync(piLensDir, { recursive: true });
+    // Ванильный vscode-jsonrpc: ERR_STREAM_DESTROYED присутствует, маркера патча нет —
+    // именно этот случай раньше ошибочно считался пропатченным.
+    const vanilla = 'throw new Error("Cannot call write after a stream was destroyed") // ERR_STREAM_DESTROYED\n';
+    writeFileSync(join(piLensDir, "index.js"), vanilla, "utf8");
+
+    const unpatched = runDoctor({ harness, agentDir: join(tmp, "agent-dir"), agentsHome, mode: "repo" });
+    const warn = checkOf(unpatched, "plugin-patches");
+    assert.equal(warn.status, "warn", "ванильный pi-lens не должен считаться пропатченным");
+    assert.match(warn.detail, /БЕЗ патча/);
+
+    // Маркер патча → PASS.
+    writeFileSync(
+      join(piLensDir, "index.js"),
+      '/* patched-epipe-handler */ return new Promise((r) => r());\n',
+      "utf8"
+    );
+    const patched = runDoctor({ harness, agentDir: join(tmp, "agent-dir"), agentsHome, mode: "repo" });
+    assert.equal(checkOf(patched, "plugin-patches").status, "pass");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
