@@ -94,6 +94,8 @@ $Manifest = @(
   'tools\doctor.mjs',
   'tools\sync-prune.mjs',
   'tools\memory-cadence.mjs',
+  'tools\mutation-test.mjs',
+  'tools\gherkin-spec.mjs',
   'tools\audit.ps1',
   'tools\sync.ps1',
   'core\PORTABLE.md',

@@ -66,6 +66,8 @@ export const CORE_TOOLS = [
   "doctor.mjs",
   "sync-prune.mjs",
   "memory-cadence.mjs",
+  "mutation-test.mjs",
+  "gherkin-spec.mjs",
   "audit.ps1",
   "sync.ps1",
 ];

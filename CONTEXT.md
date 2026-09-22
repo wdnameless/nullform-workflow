@@ -138,6 +138,8 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Benchmark harness** — `tools/benchmark.mjs`. Orchestrates isolated benchmark task runs across arms (`init`, `run`, `report`, `compare`), capturing objective metrics (LOC deltas, duration, check pass rates, safety pass rates across safety-tier tasks, and optional session cost).
 - **Safety tier** — benchmark task tier (`tier: "safety"`) designed to test behavior preservation, boundary conditions, and invariant enforcement where lazy shortcut solutions break observable behavior.
 - **Memory cadence** — `tools/memory-cadence.mjs`. Enforces a regular maintenance cadence (default 7 days) over the Hindsight long-term memory bank, tracking last review timestamps and checking configuration freshness.
+- **Mutation testing** — `tools/mutation-test.mjs`. Evaluates test suite quality by injecting deliberate AST/syntax mutations (comparison flips, boolean flips, operator inversions, boundary shifts) into target source files and measuring the percentage of killed mutants.
+- **Gherkin spec** — `tools/gherkin-spec.mjs`. Parses, validates, and lints executable BDD specifications (Given/When/Then scenarios) in `.feature` files and Markdown code blocks, ensuring acceptance criteria are unambiguous and verifiable.
 - **Workspace script** — a service Paseo supervises (`paseo.json`), for long-lived
   processes the user must see. Distinct from **hub process**, which is an
   in-session PTY that dies with the session.
