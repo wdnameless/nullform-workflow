@@ -461,12 +461,19 @@ if ($SkipPlugins) {
 # запущенный без windowsHide, открывает НОВОЕ окно консоли, которое сразу
 # закрывается. Патч идемпотентен и правит только shell/detached-вызовы;
 # правки живут в node_modules и требуют повтора после обновления плагинов.
-if ( -or $env:OS -eq "Windows_NT") {
-  $fixer = Join-Path $HarnessRoot "toolsix-plugin-windows.cjs"
+if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+  $fixer = Join-Path $HarnessRoot 'tools\fix-plugin-windows.cjs'
   if (Test-Path $fixer) {
     $out = & node $fixer 2>&1
+    $code = $LASTEXITCODE
     $tail = ($out | Select-Object -Last 1)
-    if ($LASTEXITCODE -eq 0) { Ok "plugins: окна консоли — $tail" } else { Warn "plugins: патч окон не применён ($LASTEXITCODE)" }
+    if ($code -eq 0) {
+      Ok "plugins: console windows patched ($tail)"
+    } else {
+      Warn "plugins: window patch failed (exit $code)"
+    }
+  } else {
+    Warn "plugins: window patcher not found ($fixer)"
   }
 }
 

@@ -518,7 +518,18 @@ const isDirectExecution =
     process.argv[1].endsWith("domain-context.mjs"));
 
 if (isDirectExecution) {
-  const args = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  // --help/-h — запрос справки; без него инструмент требует --domain.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`Использование: node tools/domain-context.mjs --domain <name> [--root <dir>] [--json] [--max-files 15] [--no-gh]
+
+Собирает контекст предметной области: файлы, связанные с доменом, последние коммиты,
+открытые issue, DECISIONS из docs/adr и openspec, заметки о пробелах (нет codemap/gh).
+
+Флаги: --domain <name> (обязателен), --root <dir>, --max-files <n>, --no-gh, --json, --help`);
+    process.exit(0);
+  }
+  const args = parseArgs(argv);
 
   const USAGE = "Использование: node tools/domain-context.mjs --domain <name> [--root <dir>] [--json] [--max-files 15] [--no-gh]";
 

@@ -1835,7 +1835,7 @@ export function generateDashboardHtml(data) {
     renderCritique(d);
     renderDebt(d);
     renderHistory(d);
-    if (TAB === "arch") drawMap();
+    if (TAB === "arch") drawArch();   // v3: рендер архитектуры (схема/граф/таблица)
     applyLabels();
   }
   function setLang(l) {
@@ -2340,6 +2340,14 @@ export async function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const res = main(process.argv.slice(2));
-  if (typeof res === "number") process.exit(res);
+  // main() асинхронный: без .then() код возврата терялся и CLI всегда выходил с 0.
+  Promise.resolve(main(process.argv.slice(2)))
+    .then((code) => {
+      if (typeof code === "number") process.exit(code);
+    })
+    .catch((err) => {
+      process.stderr.write(`dashboard: ${err && err.message ? err.message : err}
+`);
+      process.exit(2);
+    });
 }

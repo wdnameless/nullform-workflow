@@ -495,6 +495,10 @@ const FLAG_SPEC = {
  * Опечатанный или неполный флаг — ошибка, а не молчаливый пропуск:
  * `--need` без значения раньше уходил в неизвестность, а `--bogus` игнорировался.
  */
+function printUsage() {
+  console.log(`Использование: node tools/context-inbox.mjs <init|request|list|resolve|check> [опции]\n\n  init    [--root <dir>]\n  request --category <c> --need "<описание>" [--why "<причина>"] [--hint "<подсказка>"] [--root <dir>] [--json]\n  list    [--root <dir>] [--json]\n  resolve --id <N> [--note "<итог>"] [--root <dir>]\n  check   [--root <dir>] [--json]   exit 1, если есть открытые запросы\n\nФлаги: --root, --category, --need, --why, --hint, --id, --note, --json, --help`);
+}
+
 export function parseArgs(argv) {
   const args = { _: [], errors: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -503,6 +507,12 @@ export function parseArgs(argv) {
     const name = eq === -1 ? a : a.slice(0, eq);
     const inline = eq === -1 ? null : a.slice(eq + 1);
     const spec = FLAG_SPEC[name];
+
+    // --help/-h — это запрос справки, а не неизвестный флаг.
+    if (a === "--help" || a === "-h") {
+      args.help = true;
+      continue;
+    }
 
     if (!spec) {
       if (a.startsWith("-")) {
@@ -541,6 +551,10 @@ const isDirectExecution =
 
 if (isDirectExecution) {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printUsage();
+    process.exit(0);
+  }
   const command = args._[0];
   const root = args.root || process.cwd();
 

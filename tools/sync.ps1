@@ -72,7 +72,6 @@ $Manifest = @(
   'agent\agents\librarian.md',
   'agent\agents\sonic.md',
   "rules\enterprise-directives.md`t$AgentsRoot",
-  "skills\architecture-observability\SKILL.md`t$AgentsRoot",
   'tools\codemap.mjs',
   'tools\prompt-lint.mjs',
   'tools\skills-doctor.mjs',

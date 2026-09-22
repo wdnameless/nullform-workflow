@@ -187,7 +187,20 @@ export function validateReturnContract(rawText) {
 const isMain = process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("return-contract.mjs");
 
 if (isMain) {
-  const args = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+
+  // --help/-h — запрос справки, а не файл с таким именем.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`Использование: node tools/return-contract.mjs [<file>] [--text "<контракт>"] [--json]
+
+Проверяет контракт возврата субагента: обязательные секции (STATUS/FILES/TESTS/INTERFACES/
+REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TESTS (было N → стало M).
+
+Флаги: <file> — путь к файлу, --text <строка> — контракт текстом, --json — машинный отчёт, --help`);
+    process.exit(0);
+  }
+
+  const args = parseArgs(argv);
   let content = "";
 
   if (args.text !== null) {

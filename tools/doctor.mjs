@@ -70,6 +70,7 @@ export const CORE_TOOLS = [
   "gherkin-spec.mjs",
   "dashboard.mjs",
   "fix-plugin-windows.cjs",
+  "session_cost.py",
   "audit.ps1",
   "sync.ps1",
 ];

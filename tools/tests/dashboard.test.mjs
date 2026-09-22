@@ -548,3 +548,30 @@ test("dashboard: шрифты и медиа не вытесняют исходн
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('dashboard: в клиентском скрипте нет ссылок на несуществующие функции рендера', () => {
+  const html = generateDashboardHtml({
+    project: { name: 'x' }, task: { title: 't', tier: 'T1', status: 'open' },
+    progress: { percent: 0, stagesDone: 0, stagesRequired: 1, stagesSkipped: 0, artifactsDone: 0, artifactsTotal: 1 },
+    stages: [], waves: [], currentStage: {}, timing: {}, metrics: { requirements: { items: [], byStatus: {} }, debt: { items: [] }, memory: {}, checks: null },
+    git: { isRepo: false, files: [] }, session: {}, arch: { children: [] }, archGraph: { nodes: [], edges: [] },
+    history: { recent: [], byTier: {} }, critique: [], log: { entries: [] }, events: [], fleet: [],
+  });
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  // Каждое имя вида draw*(...) и render*(...) должно быть объявлено в скрипте
+  const declared = new Set([...script.matchAll(/function\s+([A-Za-z_$][\w$]*)/g)].map(m => m[1]));
+  [...script.matchAll(/\b(draw[A-Z]\w*|render[A-Z]\w*)\s*\(/g)].forEach(m => {
+    assert.ok(declared.has(m[1]), 'вызов ' + m[1] + '() без объявления — устаревшая ссылка');
+  });
+});
+
+test("CLI: неверный порт завершает процесс с кодом 2, а не с нулём (регресс на async main)", () => {
+  const tmp = createTempDir();
+  try {
+    const proc = spawnSync(process.execPath, [CLI_PATH, "--root", tmp, "--port", "99999"], { encoding: "utf8" });
+    assert.equal(proc.status, 2, "код возврата main() должен доходить до process.exit");
+    assert.ok(proc.stderr.includes("--port"), "пользователь видит причину");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

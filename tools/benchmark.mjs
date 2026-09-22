@@ -423,7 +423,9 @@ function evaluateCost(root, transcriptPath) {
   }
 
   // Сначала пробуем заданный извне интерпретатор, затем типовые имена/пути.
-  const commands = [process.env.PYTHON_PATH, "python3", "python", "D:/Python312/python.exe", "py"].filter(Boolean);
+  // Только переносимые имена: конкретные пути машины в дистрибутиве недопустимы,
+  // при необходимости путь задаётся снаружи через PYTHON_PATH.
+  const commands = [process.env.PYTHON_PATH, "python3", "python", "py"].filter(Boolean);
   let lastErr = "";
   for (const py of commands) {
     try {
