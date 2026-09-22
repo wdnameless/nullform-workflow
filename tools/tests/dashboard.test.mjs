@@ -12,6 +12,13 @@ import { fileURLToPath } from "node:url";
 
 import {
   REQUIRED_ARTIFACTS_BY_TIER,
+  RUNTIME_FILE,
+  runtimePath,
+  readRuntime,
+  writeRuntime,
+  isServerAlive,
+  startLiveServer,
+  ensureDashboard,
   scanModules,
   collectGitStats,
   collectRequirements,
@@ -272,19 +279,29 @@ test("generateDashboardHtml: содержит ключевые секции да
   assert.ok(html.includes("Технический долг"));
   assert.ok(html.includes("Как это работает"));
   assert.ok(html.includes("/api/diff"));
-  assert.ok(html.includes("data-file=\"a.js\""), "строка диффа кликабельна");
+  assert.ok(html.includes("data-file="), "рендер диффов делает строки кликабельными");
+  assert.ok(html.includes("openDiff"), "есть модалка построчного диффа");
   assert.ok(html.includes("setLang"), "есть переключатель языка");
   assert.ok(html.includes("setTheme"), "есть переключатель темы");
+  // Динамика: клиентский рендер + опрос состояния + индикатор LIVE
+  assert.ok(html.includes("function render("), "страница рендерится на клиенте");
+  assert.ok(html.includes("/api/state"), "есть опрос живого состояния");
+  assert.ok(html.includes("POLL_MS"), "интервал опроса задан");
+  assert.ok(html.includes("live-badge"), "есть индикатор LIVE");
+  assert.ok(html.includes("flashChanged"), "изменения подсвечиваются");
+  assert.ok(html.includes("renderModules") && html.includes("renderDiffs") && html.includes("renderCritique"), "секции перерисовываются без перезагрузки");
 });
 
 test("parseArgs: валидация аргументов CLI, включая --checks и --serve", () => {
-  const clean = parseArgs(["--root", "proj", "--output", "o.html", "--port", "5000", "--open", "--checks", "--serve"]);
+  const clean = parseArgs(["--root", "proj", "--output", "o.html", "--port", "5000", "--open", "--checks", "--serve", "--ensure", "--no-open"]);
   assert.equal(clean.root, "proj");
   assert.equal(clean.output, "o.html");
   assert.equal(clean.port, 5000);
   assert.equal(clean.open, true);
   assert.equal(clean.checks, true);
   assert.equal(clean.serve, true);
+  assert.equal(clean.ensure, true);
+  assert.equal(clean.noOpen, true);
   assert.equal(clean.errors.length, 0);
 
   assert.ok(parseArgs(["--port", "nope"]).errors.some((e) => e.includes("--port")));
@@ -307,4 +324,120 @@ test("CLI: --json и генерация файла дашборда работа
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+/* ------------------------------------------------ live mode (автозапуск) */
+
+test("runtime: writeRuntime/readRuntime хранят порт и pid, битый файл не ломает чтение", () => {
+  const tmp = createTempDir();
+  try {
+    assert.equal(readRuntime(tmp), null, "без файла — null");
+
+    const p = writeRuntime(tmp, { pid: 4242, port: 4321, url: "http://localhost:4321", root: tmp });
+    assert.equal(p, runtimePath(tmp));
+    assert.ok(p.endsWith("dashboard.json"));
+
+    const back = readRuntime(tmp);
+    assert.equal(back.port, 4321);
+    assert.equal(back.pid, 4242);
+
+    writeFileSync(join(tmp, RUNTIME_FILE), "{ это не json", "utf8");
+    assert.equal(readRuntime(tmp), null, "битый рантайм-файл читается как «нет дашборда»");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("live: сервер отвечает на /api/health и /api/state, затем освобождает порт", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  try {
+    writeFileSync(join(tmp, "state.json"), "{}", "utf8");
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "state.json"),
+      JSON.stringify({ tier: "T1", task: "live test", status: "open", startedAt: new Date().toISOString(), artifacts: { lane: { at: new Date().toISOString() } } }),
+      "utf8"
+    );
+
+    bound = await startLiveServer(tmp, 4399, { maxAttempts: 5 });
+    assert.ok(bound.port >= 4399, "сервер занял порт из диапазона");
+    assert.equal(await isServerAlive(bound.port), true, "health-пинг подтверждает живость");
+
+    const stateRes = await fetch(`http://127.0.0.1:${bound.port}/api/state`);
+    const state = await stateRes.json();
+    assert.equal(state.task.title, "live test");
+    assert.equal(state.task.tier, "T1");
+
+    const htmlRes = await fetch(`http://127.0.0.1:${bound.port}/`);
+    const html = await htmlRes.text();
+    assert.ok(html.includes("Nullform Workflow"));
+  } finally {
+    if (bound) {
+      await new Promise((r) => bound.server.close(r));
+    }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("ensureDashboard: поднимает фоновый сервер, пишет рантайм и переиспользует его", async () => {
+  const tmp = createTempDir();
+  let info = null;
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+    info = await ensureDashboard(tmp, { open: false, port: 4410 });
+    assert.ok(info.url, `ожидали живой URL, получили: ${JSON.stringify(info)}`);
+    assert.equal(info.started, true);
+
+    const recorded = readRuntime(tmp);
+    assert.equal(recorded.port, info.port);
+
+    // Повторный вызов переиспользует уже поднятый сервер, а не плодит новый
+    const again = await ensureDashboard(tmp, { open: false, port: 4410 });
+    assert.equal(again.started, false);
+    assert.equal(again.port, info.port);
+  } finally {
+    if (info && info.port) {
+      const rec = readRuntime(tmp);
+      if (rec && rec.pid) {
+        try { process.kill(rec.pid); } catch {}
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+});
+
+test("generateDashboardHtml: клиентский скрипт синтаксически валиден (регресс на съеденные экранирования)", () => {
+  const mock = {
+    timestamp: new Date().toISOString(),
+    root: "/tmp/x",
+    project: { name: "demo", branch: "main", commit: { hash: "abc", message: "m", when: "now" } },
+    task: { title: "T", tier: "T1", status: "open", startedAt: new Date().toISOString(), elapsedMs: 0, budget: 25 },
+    progress: { percent: 10, stagesDone: 1, stagesRequired: 2, stagesSkipped: 0, artifactsDone: 1, artifactsTotal: 2 },
+    stages: [{ id: "lane", name: "Ярус", wave: 0, status: "done", detail: "T1" }],
+    currentStage: { name: "Разведка", wave: 1, detail: "" },
+    timing: { elapsedMs: 0, remainingMin: 1, remainingMax: 2, medianTaskMs: 0 },
+    metrics: {
+      briefCoverage: 0,
+      requirements: { total: 0, byStatus: {}, items: [], change: null },
+      debt: { total: 0, noTrigger: 0, items: [] },
+      memory: { status: "fresh", daysSince: 0 },
+      checks: null,
+    },
+    waves: [{ wave: 0, title: "ВОЛНА 0", stages: [], agents: [] }],
+    git: { isRepo: true, branch: "main", commit: { hash: "abc", when: "now" }, files: [], added: 0, deleted: 0, staged: 0, unstaged: 0, untracked: 0 },
+    modules: [{ name: "tools", path: "tools", fileCount: 1, totalLines: 10, files: [{ name: "tools/a.js", lines: 10 }] }],
+    critique: [],
+    history: { total: 0, medianMs: 0, byTier: {}, recent: [] },
+    fleet: [],
+  };
+
+  const html = generateDashboardHtml(mock);
+  const match = html.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(match, "в странице есть клиентский скрипт");
+  // Парсим без выполнения: любая съеденная кавычка/экранирование ловится здесь.
+  assert.doesNotThrow(() => new Function(match[1]), "клиентский JS должен парситься браузером");
+  assert.ok(match[1].includes('class="mono"'), "классы в шаблонах рендера не искажены");
 });

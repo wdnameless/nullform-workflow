@@ -31,6 +31,7 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 
 const DIR = ".workflow";
@@ -321,6 +322,29 @@ function parse(argv) {
   return o;
 }
 
+/**
+ * Автозапуск дашборда (best-effort): поднимает фоновый сервер наблюдения и
+ * открывает страницу. Никогда не влияет на код возврата воркфлоу — дашборд
+ * это наблюдаемость, а не условие работы. Отключается --no-dashboard или NF_NO_DASHBOARD=1.
+ */
+function autoOpenDashboard(root, flags) {
+  if (flags && flags["no-dashboard"]) return;
+  if (process.env.NF_NO_DASHBOARD === "1") return;
+  try {
+    const dash = join(dirname(fileURLToPath(import.meta.url)), "dashboard.mjs");
+    if (!existsSync(dash)) return;
+    const child = spawn(process.execPath, [dash, "--ensure", "--root", root], {
+      detached: true,
+      stdio: "ignore",
+      cwd: root,
+    });
+    child.unref();
+    console.log("  dashboard: открываю http://localhost:4200 (фон)");
+  } catch {
+    // молча: наблюдаемость не должна ломать гейт
+  }
+}
+
 function cmdStart(root, flags) {
   const tier = String(flags.tier || "").toUpperCase();
   if (!LADDER.includes(tier)) {
@@ -408,6 +432,7 @@ function cmdStart(root, flags) {
   } else {
     console.log(`  no further artifacts required at this tier.`);
   }
+  autoOpenDashboard(root, flags);
   return 0;
 }
 
