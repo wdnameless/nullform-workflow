@@ -338,7 +338,14 @@ function autoOpenDashboard(root, flags) {
       stdio: "ignore",
     });
     child.unref();
-    console.log("  dashboard: открываю http://localhost:4200 (фон)");
+    // Порт может отличаться (занят другим проектом) — не выдумываем адрес,
+    // а показываем реальный, если рантайм-файл уже есть.
+    let url = null;
+    try {
+      const rt = join(root, '.workflow', 'dashboard.json');
+      if (existsSync(rt)) url = JSON.parse(readFileSync(rt, 'utf8')).url;
+    } catch {}
+    console.log(url ? `  dashboard: ${url}` : "  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
   } catch {
     // молча: наблюдаемость не должна ломать гейт
   }
