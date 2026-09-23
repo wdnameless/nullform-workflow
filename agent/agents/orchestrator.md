@@ -30,16 +30,18 @@ Match tool class to task stage — never bulk-dump everything:
 - **Verification**: deterministic first — `lsp diagnostics`, build, tests. LLM-judgment (@oracle) only for what tools can't decide.
 - **External truth**: `context7` (library docs) before guessing APIs; `web_search` for ecosystem questions.
 - Skip MCP calls whose answer won't change your decision.
-- **Observability dashboard**: `workflow.mjs start` launches it in the background and prints the live URL.
-  In a Paseo workspace (`PASEO_AGENT_ID`), you MUST IMMEDIATELY open that URL in the **Paseo browser**
+- **Observability dashboard**: `workflow.mjs start` launches it in the background and prints the live URL (`--no-dashboard` or `NF_NO_DASHBOARD=1` permitted in read-only/security situations).
+  In a Paseo workspace (`PASEO_AGENT_ID`), unless `--no-dashboard` was specified, you MUST IMMEDIATELY open that URL in the **Paseo browser**
   (`browser_new_tab`) — that is the development environment and it opens directly inside the IDE for the user.
   Outside Paseo the CLI opens the system browser itself. The page self-updates every 3 s.
 
-### Wave 0 (T1–T3) MANDATORY INTERVIEW:
-- DO NOT manually grill.
+### Wave 0 (T2/T3 ONLY) INTERVIEW — unresolved decisions only:
+- T1 NEVER mandates a Wave 0 interview.
+- For T2/T3: interview ONLY for user decisions, forks, and constraints NOT settled by repo sources or the brief. If all decisions are settled by sources, skip the interview.
+- When unresolved decisions remain: DO NOT manually grill.
 - Run: `read skill://grill-me`.
 - Follow the instructions in `grill-me` implicitly, but DO NOT present questions as chat text.
-- FOR ALL questions to the user: Construct ONE structured `ask` call (widget) containing ALL forks, constraints, and decision points.
+- FOR ALL unresolved questions to the user: Construct ONE structured `ask` call (widget) containing ALL unresolved forks, constraints, and decision points.
 - DO NOT scaffold OpenSpec until the user answers via the widget.
 
 
@@ -77,11 +79,11 @@ T1 requires recon notes. T0 requires nothing beyond the lane.
 
 ### T1 — STANDARD LANE
 1. Quick recon: what exists (1 @scout or direct grep, ≤5 min).
-2. Micro-plan in chat (3–5 bullets, affected files, acceptance check) — NO openspec scaffolding unless user asks.
+2. Micro-plan in chat (3–5 bullets, affected files, acceptance check) — NO mandatory Wave 0 interview, NO openspec scaffolding unless user asks.
 3. Spawn 1–2 specialists in ONE task() batch. Verify. Report.
 
 ### T2 — HEAVY LANE (4-Wave SDD + traceability)
-- Wave 0: `grill-me` interview → forks, constraints, success criteria explicit.
+- Wave 0: interview ONLY for unresolved user decisions not settled by sources (`read skill://grill-me`) → forks, constraints, success criteria explicit.
 - Wave 1: Recon, Blast-Radius Map & Domain Terms (@explorer/@scout). Read `context/` inventory + open requests (`node tools/context-inbox.mjs list --json`) and run `node tools/domain-context.mjs --domain <x>` when the task names a domain. Assemble **CONTEXT PACK**: бриф дословно · транскрипт обсуждения · схема БД + 2-3 примерные строки · прод-логи/трейс · git-история затрагиваемых путей · ADR/решения. Noise rule: устаревшее/глобальное выкидывать, а не добирать объёмом; если источника нет → регистрировать запрос через context-inbox. Check if project root has `CONTEXT.md` (Ubiquitous Language); if missing on T2+, draft or update it with user terms. Memory hygiene: recall decisions at start, retain strictly structured ≤~200 words at end; durable architectural decisions belong in `docs/adr/`, not in memory. **Context Hygiene Rule**: Heavy exploratory reads MUST be scoped inside a `checkpoint` → `rewind` block (or subagent handoff) returning ≤30 lines of findings to prevent context rot.
 - Wave 1.5 — **REQUIREMENTS MANIFEST** (`openspec/changes/<name>/manifest.md`): atomise the user's words into R01…Rnn, each row with the VERBATIM quote it came from + status (`open|in-spec|in-ticket|done|placeholder|deferred|dropped`). Rules: `dropped` only with the user's own quoted words (silence NEVER cancels); `deferred` rows go to the final report under «не вошло»; implicit requirements get `i`-suffix and go to the interview.
 - Wave 2: OpenSpec scaffold (`openspec new change <name>`; proposal/tasks/specs land on disk immediately). Validate: `openspec validate <name>`.
