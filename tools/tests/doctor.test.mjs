@@ -135,6 +135,22 @@ name: ${role.replace(".md", "")}
 # Role
 `, "utf8");
   }
+  // Plugins manifest
+  writeFileSync(
+    join(harness, "agent/plugins.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        plugins: [
+          { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+          { name: "oh-my-pi-plugin-morph", spec: "oh-my-pi-plugin-morph@0.6.0", required: true },
+        ],
+      },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
   // Templates & paseo
   mkdirSync(join(harness, "templates"), { recursive: true });
   mkdirSync(join(harness, "paseo"), { recursive: true });
@@ -298,13 +314,19 @@ function writeBuiltinAgents(dir, entries) {
 }
 
 /** Прямой вызов runDoctor в режиме repo на моковом харнессе с заданным каталогом встроенных. */
-function runDoctorOnMockHarness(tmp, { builtinAgentsDir } = {}) {
+function runDoctorOnMockHarness(tmp, { builtinAgentsDir, runOmp } = {}) {
   return runDoctor({
     harness: join(tmp, "harness"),
     agentDir: join(tmp, "agent-dir"),
     agentsHome: join(tmp, "agents-home"),
     mode: "repo",
     builtinAgentsDir,
+    runOmp: runOmp ?? fakeOmp({
+      installed: [
+        { name: "pi-lens", version: "4.2.1" },
+        { name: "oh-my-pi-plugin-morph", version: "0.6.0" },
+      ],
+    }),
   });
 }
 
@@ -1180,7 +1202,7 @@ test("plugins: ненулевой код omp plugin doctor → WARN с хвос�
     writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@0.1.17" }]);
 
     const result = runDoctorWithOmp(tmp, {
-      runOmp: fakeOmp({ installed: ["pi-qq"], doctorStatus: 1, doctorStderr: "boom: broken plugin\nsecond line" }),
+      runOmp: fakeOmp({ installed: ["pi-qq@0.1.17"], doctorStatus: 1, doctorStderr: "boom: broken plugin\nsecond line" }),
     });
     const check = checkOf(result, "plugins");
 

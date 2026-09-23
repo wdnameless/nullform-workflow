@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,21 @@ const SETUP_PASEO_PATH = resolve(REPO_ROOT, "paseo/setup-paseo.ps1");
 const PLUGINS_MANIFEST_PATH = resolve(REPO_ROOT, "agent/plugins.json");
 const PROFILES_MANIFEST_PATH = resolve(REPO_ROOT, "paseo/profiles.json");
 const INSTALL_PATH = resolve(REPO_ROOT, "install.ps1");
+
+const POWERSHELL_PATH = process.platform === "win32"
+  ? join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+  : "pwsh";
+
+function pathWithoutOmp() {
+  const nodeDir = dirname(process.execPath);
+  const sysRoot = process.env.SystemRoot || "C:\\Windows";
+  const sysDirs = [
+    join(sysRoot, "System32"),
+    join(sysRoot, "System32", "WindowsPowerShell", "v1.0"),
+    sysRoot,
+  ];
+  return [nodeDir, ...sysDirs].join(process.platform === "win32" ? ";" : ":");
+}
 
 test("agent/plugins.json: versions are pinned exact and required plugins marked", () => {
   const content = JSON.parse(readFileSync(PLUGINS_MANIFEST_PATH, "utf8"));
@@ -44,7 +59,7 @@ test("paseo/profiles.json: profile contains notes with <HarnessRoot> template", 
 test("setup-paseo.ps1: standalone setup without -Model fails actionably when new profile needed", () => {
   const tmpHome = mkdtempSync(join(tmpdir(), "paseo-test-fresh-"));
   try {
-    const res = spawnSync("powershell", [
+    const res = spawnSync(POWERSHELL_PATH, [
       "-ExecutionPolicy", "Bypass",
       "-File", SETUP_PASEO_PATH,
       "-UserProfileDir", tmpHome,
@@ -62,7 +77,7 @@ test("setup-paseo.ps1: standalone setup with -Model creates profile and expands 
   const tmpHome = mkdtempSync(join(tmpdir(), "paseo-test-with-model-"));
   const fakeHarness = "C:/test/my-harness-root";
   try {
-    const res = spawnSync("powershell", [
+    const res = spawnSync(POWERSHELL_PATH, [
       "-ExecutionPolicy", "Bypass",
       "-File", SETUP_PASEO_PATH,
       "-UserProfileDir", tmpHome,
@@ -113,7 +128,7 @@ test("setup-paseo.ps1: preserves existing model when called without -Model and e
     };
     writeFileSync(join(paseoDir, "config.json"), JSON.stringify(initialConfig, null, 2), "utf8");
 
-    const res = spawnSync("powershell", [
+    const res = spawnSync(POWERSHELL_PATH, [
       "-ExecutionPolicy", "Bypass",
       "-File", SETUP_PASEO_PATH,
       "-UserProfileDir", tmpHome,
@@ -140,7 +155,7 @@ test("install.ps1: -SetupPaseo without provider model warns and skips Paseo with
   const tmpHome = mkdtempSync(join(tmpdir(), "install-paseo-fresh-"));
   const tmpHarness = join(tmpHome, "omp-workflow");
   try {
-    const res = spawnSync("powershell", [
+    const res = spawnSync(POWERSHELL_PATH, [
       "-ExecutionPolicy", "Bypass",
       "-File", INSTALL_PATH,
       "-UserHome", tmpHome,
@@ -163,8 +178,8 @@ test("install.ps1: fails if omp is missing and -SkipPlugins not passed", () => {
   const tmpHome = mkdtempSync(join(tmpdir(), "install-no-omp-"));
   const tmpHarness = join(tmpHome, "omp-workflow");
   try {
-    const env = { ...process.env, PATH: "C:\\Windows\\System32" };
-    const res = spawnSync("powershell", [
+    const env = { ...process.env, PATH: pathWithoutOmp() };
+    const res = spawnSync(POWERSHELL_PATH, [
       "-ExecutionPolicy", "Bypass",
       "-File", INSTALL_PATH,
       "-UserHome", tmpHome,
@@ -184,8 +199,8 @@ test("install.ps1: succeeds without omp if -SkipPlugins is passed", () => {
   const tmpHome = mkdtempSync(join(tmpdir(), "install-skip-plugins-"));
   const tmpHarness = join(tmpHome, "omp-workflow");
   try {
-    const env = { ...process.env, PATH: "C:\\Windows\\System32" };
-    const res = spawnSync("powershell", [
+    const env = { ...process.env, PATH: pathWithoutOmp() };
+    const res = spawnSync(POWERSHELL_PATH, [
       "-ExecutionPolicy", "Bypass",
       "-File", INSTALL_PATH,
       "-UserHome", tmpHome,
