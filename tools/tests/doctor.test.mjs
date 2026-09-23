@@ -1033,7 +1033,7 @@ function fakeOmp({ installed = [], listStdout = null, listStatus = 0, listStderr
 }
 
 /** runDoctor на моковом харнессе с подставным `omp` (встроенных агентов не распаковываем). */
-function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false } = {}) {
+function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false, skipPluginCheck = false } = {}) {
   return runDoctor({
     harness: join(tmp, "harness"),
     agentDir: join(tmp, "agent-dir"),
@@ -1042,12 +1042,15 @@ function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false } = {}) {
     builtinAgentsDir: join(tmp, "нет-встроенных"),
     runOmp,
     requirePlugins,
+    skipPluginCheck,
   });
 }
 
 test("parseCliArgs: --require-plugins по умолчанию выключен", () => {
   assert.equal(parseCliArgs(["--harness", "/tmp/h"]).requirePlugins, false);
   assert.equal(parseCliArgs(["--harness", "/tmp/h", "--require-plugins"]).requirePlugins, true);
+  assert.equal(parseCliArgs(["--harness", "/tmp/h"]).skipPluginCheck, false);
+  assert.equal(parseCliArgs(["--harness", "/tmp/h", "--skip-plugin-check"]).skipPluginCheck, true);
 });
 
 test("plugins: только опциональные плагины отсутствуют → WARN с именами и командой установки (ok: true)", () => {
@@ -1118,7 +1121,8 @@ test("plugins: --require-plugins превращает недостающие о�
 test("plugins: без манифеста проверка дает FAIL (fail-closed)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-nomanifest-"));
   try {
-    createMockHarness(tmp);
+    const harness = createMockHarness(tmp);
+    rmSync(join(harness, "agent", "plugins.json"), { force: true });
     let calls = 0;
     const result = runDoctorWithOmp(tmp, {
       runOmp: () => {
@@ -1132,6 +1136,27 @@ test("plugins: без манифеста проверка дает FAIL (fail-cl
     assert.match(check.detail, /Манифест плагинов отсутствует/);
     assert.equal(calls, 0, "без манифеста omp не вызывается");
     assert.equal(result.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: --skip-plugin-check пропускает проверку плагинов (SKIP)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-skip-"));
+  try {
+    const harness = createMockHarness(tmp);
+    rmSync(join(harness, "agent", "plugins.json"), { force: true });
+
+    const result = runDoctorWithOmp(tmp, {
+      skipPluginCheck: true,
+      runOmp: () => ({ status: 127, stdout: "", stderr: "omp not found", error: null }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "skip");
+    assert.match(check.detail, /Проверка плагинов пропущена/);
+    assert.equal(result.summary.fail, 0);
+    assert.equal(result.ok, true);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

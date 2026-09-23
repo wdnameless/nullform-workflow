@@ -441,6 +441,7 @@ export function parseCliArgs(args) {
   let probe = false;
   let requirePlugins = false;
   let pruneLogs = false;
+  let skipPluginCheck = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--harness") {
@@ -461,7 +462,8 @@ export function parseCliArgs(args) {
       requirePlugins = true;
     } else if (arg === "--prune-logs") {
       pruneLogs = true;
-    } else if (arg === "-h" || arg === "--help") {
+    } else if (arg === "--skip-plugin-check") {
+      skipPluginCheck = true;
     }
   }
 
@@ -478,6 +480,7 @@ export function parseCliArgs(args) {
     quiet,
     probe,
     requirePlugins,
+    skipPluginCheck,
     pruneLogs,
     help: false,
   };
@@ -993,18 +996,25 @@ export function runDoctor(options) {
   // Опциональные плагины по умолчанию дают WARN, и только `--require-plugins` делает их FAIL.
   {
     const id = "plugins";
-    const manifestPath = join(harness, "agent", "plugins.json");
-    const omp = options.runOmp || runOmp;
-
-    let declared = null;
-    let manifestError = null;
-    if (!existsSync(manifestPath)) {
+    if (options.skipPluginCheck) {
       checks.push({
         id,
-        status: "fail",
-        detail: "Манифест плагинов отсутствует (agent/plugins.json): требуемые плагины не определены",
+        status: "skip",
+        detail: "Проверка плагинов пропущена (--skip-plugin-check)",
       });
     } else {
+      const manifestPath = join(harness, "agent", "plugins.json");
+      const omp = options.runOmp || runOmp;
+
+      let declared = null;
+      let manifestError = null;
+      if (!existsSync(manifestPath)) {
+        checks.push({
+          id,
+          status: "fail",
+          detail: "Манифест плагинов отсутствует (agent/plugins.json): требуемые плагины не определены",
+        });
+      } else {
       try {
         declared = readPluginsManifest(manifestPath);
       } catch (err) {
@@ -1123,6 +1133,7 @@ export function runDoctor(options) {
       }
     }
   }
+}
 
   // 10. check 'orphan-files': файлы каталогов манифеста, которых нет в репозитории.
   // tools/ → FAIL (инструмент вне дистрибутива ломает установку у других),

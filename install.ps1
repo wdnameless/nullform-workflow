@@ -528,7 +528,11 @@ if ($IsWindows -or $env:OS -eq 'Windows_NT') {
 
 # ---------- 10. Run install doctor ----------
 if (Test-Path "$HarnessRoot\tools\doctor.mjs") {
-  $doctorOut = & node "$HarnessRoot\tools\doctor.mjs" --harness "$HarnessRoot" --agent-dir "$agentDir" --agents-home "$agentsHome" 2>&1
+  $doctorArgs = @("$HarnessRoot\tools\doctor.mjs", "--harness", "$HarnessRoot", "--agent-dir", "$agentDir", "--agents-home", "$agentsHome")
+  if ($SkipPlugins) {
+    $doctorArgs += "--skip-plugin-check"
+  }
+  $doctorOut = & node @doctorArgs 2>&1
   $doctorExit = $LASTEXITCODE
   if ($doctorExit -ne 0) {
     Write-Host ""
