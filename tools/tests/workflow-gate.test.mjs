@@ -37,21 +37,21 @@ test("gate: T2 rejects registering manifest, openspec, or interfaces without a p
 
     // Manifest without path must fail
     assert.equal(
-      cmdArtifact(root, { kind: "manifest", detail: "R01 captured verbatim" }),
+      cmdArtifact(root, { kind: "manifest", detail: "captured R01 verbatim from the brief" }),
       1,
       "manifest without --path must be rejected"
     );
 
     // Interfaces without path must fail
     assert.equal(
-      cmdArtifact(root, { kind: "interfaces", detail: "public signatures fn(): void" }),
+      cmdArtifact(root, { kind: "interfaces", detail: "public signatures recorded: fn() -> void, plus invariants" }),
       1,
       "interfaces without --path must be rejected"
     );
 
     // Openspec without path must fail
     assert.equal(
-      cmdArtifact(root, { kind: "openspec", detail: "validated change proposal" }),
+      cmdArtifact(root, { kind: "openspec", detail: "change proposal scaffolded and validated" }),
       1,
       "openspec without --path must be rejected"
     );
@@ -66,7 +66,7 @@ test("gate: path escaping project root is rejected", () => {
     cmdStart(root, { tier: "T2", task: "escape-path" });
 
     assert.equal(
-      cmdArtifact(root, { kind: "manifest", path: "../outside.md", detail: "R01 captured verbatim" }),
+      cmdArtifact(root, { kind: "manifest", path: "../outside.md", detail: "captured R01 verbatim from the brief" }),
       1,
       "manifest with escaping path must be rejected"
     );
@@ -81,11 +81,11 @@ test("gate: shared validator ensures cmdCheck and cmdClose agree when manifest i
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "empty-manifest" });
 
-    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "R01 captured" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change ready" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public API exported fn(): void" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: all verified clean" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
 
     // Empty the manifest file
     writeFileSync(join(root, "manifest.md"), "", "utf8");
@@ -104,10 +104,10 @@ test("gate: T2 rejects negative oracle verdict at close", () => {
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "negative-oracle" });
 
-    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "R01 captured" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change ready" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public API exported fn(): void" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
     assert.equal(cmdArtifact(root, { kind: "oracle", detail: "REJECT: acceptance tests failed on boundary checks" }), 0);
 
     const checkCode = cmdCheck(root);
@@ -129,11 +129,11 @@ test("gate: retained evidence check refuses close if artifact file is deleted be
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "deleted-artifact" });
 
-    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "R01 captured" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change ready" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public API exported fn(): void" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: all requirements passed" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
 
     // Delete manifest file after recording
     rmSync(join(root, "manifest.md"));
