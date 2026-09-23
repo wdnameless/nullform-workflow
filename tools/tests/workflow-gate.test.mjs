@@ -11,7 +11,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -221,4 +221,23 @@ test("check-ci: validates committed T2 OpenSpec artifacts (manifest + proposal +
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+test("ci contract: workflow gate configurations trigger on label changes", () => {
+  const root = join(import.meta.dirname, "../..");
+  const repoGatePath = join(root, ".github", "workflows", "repo-gate.yml");
+  const templatePath = join(root, "templates", "ci", "workflow-gate.yml");
+
+  const repoGateYaml = readFileSync(repoGatePath, "utf8");
+  assert.match(
+    repoGateYaml,
+    /types:\s*\[opened,\s*synchronize,\s*reopened,\s*labeled,\s*unlabeled\]/,
+    "repo-gate.yml must trigger on PR label changes"
+  );
+
+  const templateYaml = readFileSync(templatePath, "utf8");
+  assert.match(
+    templateYaml,
+    /types:\s*\[opened,\s*synchronize,\s*reopened,\s*labeled,\s*unlabeled\]/,
+    "templates/ci/workflow-gate.yml must trigger on PR label changes"
+  );
 });
