@@ -371,7 +371,7 @@ test("live: сервер отвечает на /api/health и /api/state, зат
 
     const stateRes = await fetch(`http://127.0.0.1:${bound.port}/api/state`);
     const state = await stateRes.json();
-    assert.equal(state.task.title, "live test");
+    assert.equal(state.task.title, "Задача T1");
     assert.equal(state.task.tier, "T1");
 
     const htmlRes = await fetch(`http://127.0.0.1:${bound.port}/`);
@@ -572,6 +572,133 @@ test("CLI: неверный порт завершает процесс с код
     assert.equal(proc.status, 2, "код возврата main() должен доходить до process.exit");
     assert.ok(proc.stderr.includes("--port"), "пользователь видит причину");
   } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R05: HTTP-границы (/, /api/state, /api/diff) не отдают чувствительные свободные данные, сохраняя метаданные", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  try {
+    git(tmp, ["init", "-q"]);
+    git(tmp, ["config", "user.name", "Workflow Tester"]);
+    git(tmp, ["config", "user.email", "workflow@nullform.io"]);
+
+    const MARKER_TASK = "TASK_LEAK_SECRET_9911";
+    const MARKER_ORACLE = "ORACLE_DETAIL_SECRET_8822";
+    const MARKER_COMMIT = "COMMIT_SUBJECT_SECRET_7733";
+    const MARKER_EVENT = "EVENT_TEXT_SECRET_6644";
+    const MARKER_DIFF_PATCH = "PATCH_LINE_SECRET_4466";
+    const MARKER_DIFF_QUERY = "ARBITRARY_DIFF_QUERY_PARAM_3322";
+
+    const testFile = join(tmp, "service.js");
+    writeFileSync(testFile, "const initial = 1;\n", "utf8");
+    git(tmp, ["add", "service.js"]);
+    git(tmp, ["commit", "-q", "-m", `init ${MARKER_COMMIT}`]);
+
+    writeFileSync(testFile, `const initial = 1;\nconst secret = "${MARKER_DIFF_PATCH}";\n`, "utf8");
+
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "state.json"),
+      JSON.stringify({
+        tier: "T2",
+        task: `Secret Task: ${MARKER_TASK}`,
+        status: "open",
+        startedAt: new Date().toISOString(),
+        artifacts: {
+          lane: { at: new Date().toISOString(), detail: "T2" },
+          recon: { at: new Date().toISOString(), detail: `recon detail ${MARKER_ORACLE}` },
+        },
+      }),
+      "utf8"
+    );
+
+    // Создаём файл оракула с маркером
+    const oracleDir = join(tmp, "openspec", "changes", "feat-1");
+    mkdirSync(oracleDir, { recursive: true });
+    writeFileSync(
+      join(oracleDir, "oracle.md"),
+      `# Oracle Verdict\n\nACCEPT\n\nNotes with ${MARKER_ORACLE}\n`,
+      "utf8"
+    );
+
+    writeFileSync(
+      join(wfDir, "events.jsonl"),
+      JSON.stringify({
+        at: new Date().toISOString(),
+        kind: "artifact",
+        text: `recon: detail with ${MARKER_EVENT}`,
+      }) + "\n",
+      "utf8"
+    );
+
+    bound = await startLiveServer(tmp, 4520, { maxAttempts: 10 });
+    const port = bound.port;
+
+    // --- 0. /api/health ---
+    const healthRes = await fetch(`http://127.0.0.1:${port}/api/health`);
+    const healthRaw = await healthRes.text();
+    assert.ok(!healthRaw.includes(tmp), "api/health не должен раскрывать абсолютный путь root");
+    const health = JSON.parse(healthRaw);
+    assert.equal(health.ok, true);
+    assert.equal(health.root, undefined, "поле root удалено из ответа /api/health");
+    assert.ok(typeof health.project === "string" && health.project.length >= 8);
+
+    // --- 1. /api/state ---
+    const stateRes = await fetch(`http://127.0.0.1:${port}/api/state`);
+    const stateRaw = await stateRes.text();
+
+    assert.ok(!stateRaw.includes(MARKER_TASK), "api/state не должен содержать state.task");
+    assert.ok(!stateRaw.includes(MARKER_ORACLE), "api/state не должен содержать детали оракула / артефактов");
+    assert.ok(!stateRaw.includes(MARKER_COMMIT), "api/state не должен содержать тему коммита");
+    assert.ok(!stateRaw.includes(MARKER_EVENT), "api/state не должен содержать свободный текст событий");
+    assert.ok(!stateRaw.includes(MARKER_DIFF_PATCH), "api/state не должен содержать сырой патч");
+    assert.ok(!stateRaw.includes(tmp), "api/state не должен содержать абсолютный путь root");
+    const state = JSON.parse(stateRaw);
+    assert.equal(state.task.tier, "T2");
+    assert.equal(state.task.title, "Задача T2", "заголовок задачи проецируется в безопасную форму");
+    assert.equal(state.task.status, "open");
+    assert.equal(state.git.isRepo, true);
+    assert.ok(state.git.branch, "ветка репозитория сохранена");
+    assert.equal(state.git.commit.message, undefined, "тема коммита удалена из git.commit");
+    assert.equal(state.git.files[0].path, "service.js", "пути файлов в diff-селекторе сохранены для навигации");
+    assert.ok(state.git.added > 0);
+    assert.ok(state.arch && state.arch.name, "архитектурное дерево доступно");
+    assert.ok(Array.isArray(state.modules), "список модулей доступен");
+    assert.equal(state.events[0].kind, "artifact");
+    assert.equal(state.events[0].status, "recon");
+    // --- 2. / (HTML) ---
+    const htmlRes = await fetch(`http://127.0.0.1:${port}/`);
+    const htmlRaw = await htmlRes.text();
+
+    assert.ok(!htmlRaw.includes(MARKER_TASK), "HTML не должен содержать state.task");
+    assert.ok(!htmlRaw.includes(MARKER_ORACLE), "HTML не должен содержать детали оракула / артефактов");
+    assert.ok(!htmlRaw.includes(MARKER_COMMIT), "HTML не должен содержать тему коммита");
+    assert.ok(!htmlRaw.includes(MARKER_EVENT), "HTML не должен содержать свободный текст событий");
+    assert.ok(!htmlRaw.includes(MARKER_DIFF_PATCH), "HTML не должен содержать сырой патч");
+    assert.ok(!htmlRaw.includes(tmp), "HTML не должен содержать абсолютный путь root");
+    assert.ok(htmlRaw.includes("Nullform Console"), "HTML каркас консоли сохранен");
+    assert.ok(htmlRaw.includes("Задача T2"), "HTML содержит безопасный заголовок");
+    assert.ok(htmlRaw.includes("service.js"), "HTML содержит путь файла в diff-списке");
+    assert.ok(htmlRaw.includes("data-file="), "HTML сохраняет кликабельность diff-строк");
+    // --- 3. /api/diff ---
+    const diffRes = await fetch(`http://127.0.0.1:${port}/api/diff?file=${encodeURIComponent(MARKER_DIFF_QUERY)}`);
+    const diffRaw = await diffRes.text();
+
+    assert.ok(!diffRaw.includes(MARKER_DIFF_QUERY), "api/diff не должен эхо-повторять путь файла из запроса");
+    assert.ok(!diffRaw.includes(MARKER_DIFF_PATCH), "api/diff не должен содержать сырой патч");
+
+    const validDiffRes = await fetch(`http://127.0.0.1:${port}/api/diff?file=service.js`);
+    const validDiffRaw = await validDiffRes.text();
+    assert.ok(!validDiffRaw.includes(MARKER_DIFF_PATCH), "api/diff для существующего файла не раскрывает патч");
+    assert.ok(validDiffRaw.includes("+ добавлено строк: 1"), "api/diff возвращает счетчик добавленных строк");
+    assert.ok(validDiffRaw.includes("- удалено строк: 0"), "api/diff возвращает счетчик удаленных строк");
+  } finally {
+    if (bound) {
+      await new Promise((r) => bound.server.close(r));
+    }
     rmSync(tmp, { recursive: true, force: true });
   }
 });

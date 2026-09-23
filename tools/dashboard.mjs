@@ -26,14 +26,16 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, openSync, readSync, closeSync } from "node:fs";
 import { resolve, join, dirname, relative } from "node:path";
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { scanRepo } from "./debt-ledger.mjs";
 
+export function projectToken(absPath) {
+  return createHash("sha256").update(resolve(absPath)).digest("hex").slice(0, 16);
+}
 const CHECKS_CACHE = ".workflow/dashboard-checks.json";
-const MAX_DIFF_LINES = 500;
-
 /**
  * Обязательные артефакты по ярусам (совпадает с гейтом tools/workflow.mjs).
  * Всё, что не требуется ярусом, дашборд показывает как «не требуется», а не «не начато».
@@ -55,6 +57,15 @@ const STAGE_DEFS = [
   { id: "oracle", name: "Слепая приёмка Оракула", wave: 4 },
   { id: "closed", name: "Закрытие и архив", wave: 4 },
 ];
+
+export function buildWaves(stages, fleet) {
+  return [0, 1, 2, 3, 4].map((w) => ({
+    wave: w,
+    title: `ВОЛНА ${w}`,
+    stages: stages.filter((s) => s.wave === w),
+    agents: fleet.filter((f) => f.wave === w),
+  }));
+}
 
 /* ------------------------------------------------------------------ */
 /*  Data collection                                                    */
@@ -673,12 +684,7 @@ export function collectDashboardData(root = ".", options = {}) {
       memory,
       checks: critique.checks,
     },
-    waves: [0, 1, 2, 3, 4].map((w) => ({
-      wave: w,
-      title: `ВОЛНА ${w}`,
-      stages: stages.filter((s) => s.wave === w),
-      agents: fleet.filter((f) => f.wave === w),
-    })),
+    waves: buildWaves(stages, fleet),
     git,
     modules,
     critique: critique.verdicts,
@@ -914,10 +920,26 @@ export function collectEvents(absRoot, limit = 60) {
   if (!existsSync(path)) return [];
   const lines = tailBytes(path, 64 * 1024).split("\n").filter(Boolean);
   const out = [];
+  const allowedStages = new Set(["lane", "recon", "spec", "manifest", "interfaces", "tasks", "verification", "oracle", "closed"]);
   for (const line of lines) {
     try {
       const e = JSON.parse(line);
-      out.push(e);
+      let status = "ok";
+      if (e.kind === "start") {
+        status = "started";
+      } else if (e.kind === "close") {
+        status = "closed";
+      } else if (e.kind === "artifact") {
+        const firstWord = String(e.text || "").trim().split(/[\s:—]/)[0]?.toLowerCase();
+        status = allowedStages.has(firstWord) ? firstWord : (e.status || "recorded");
+      } else if (e.status) {
+        status = String(e.status).slice(0, 30);
+      }
+      out.push({
+        at: e.at || null,
+        kind: e.kind || "event",
+        status,
+      });
     } catch {}
   }
   return out.slice(-limit).reverse();
@@ -945,45 +967,52 @@ export function collectSessionLog(absRoot, limit = 80) {
 
     if (e.type === "custom" && e.customType === "tool_execution_start") {
       const d = e.data || {};
-      const args = d.args || {};
-      const hint = args.command || args.path || args.file || args.query || args.pattern || args.i || "";
       entries.push({
         at: e.timestamp || null,
         kind: "tool",
         label: d.toolName || "tool",
-        text: String(hint).slice(0, 140),
+        status: "start",
       });
     } else if (e.type === "message") {
       const m = e.message || {};
-      const text = Array.isArray(m.content)
-        ? m.content.map((c) => (c && c.type === "text" ? c.text : "")).join(" ").trim()
-        : "";
-      if (!text) continue;
       const role = m.role || "?";
       if (role === "toolResult") {
-        const isError = /^(error|ошибка|failed|exception)/i.test(text) || /exit code [1-9]/.test(text);
+        const text = Array.isArray(m.content)
+          ? m.content.map((c) => (c && c.type === "text" ? c.text : "")).join(" ").trim()
+          : "";
+        const isError = /^(error|ошибка|failed|exception)/i.test(text) || /exit code [1-9]/.test(text) || Boolean(m.isError);
         entries.push({
           at: e.timestamp || null,
           kind: isError ? "error" : "result",
           label: m.toolName || "result",
-          text: text.slice(0, 160).replace(/\s+/g, " "),
+          status: isError ? "error" : "ok",
         });
       } else if (role === "assistant") {
-        entries.push({ at: e.timestamp || null, kind: "assistant", label: "assistant", text: text.slice(0, 200).replace(/\s+/g, " ") });
+        entries.push({
+          at: e.timestamp || null,
+          kind: "assistant",
+          label: "assistant",
+          status: "message",
+        });
       } else if (role === "user") {
-        entries.push({ at: e.timestamp || null, kind: "user", label: "user", text: text.slice(0, 200).replace(/\s+/g, " ") });
+        entries.push({
+          at: e.timestamp || null,
+          kind: "user",
+          label: "user",
+          status: "message",
+        });
       }
     } else if (e.type === "custom_message") {
       entries.push({
         at: e.timestamp || null,
         kind: "notice",
         label: e.customType || "notice",
-        text: String(e.content || "").slice(0, 200),
+        status: "notice",
       });
     }
   }
 
-  return { file: file.name, entries: entries.slice(-limit) };
+  return { file: "активна", entries: entries.slice(-limit) };
 }
 
 /**
@@ -1832,19 +1861,22 @@ export function generateDashboardHtml(data) {
   /* -------------------------------- logs ------------------------------ */
   function renderLogs(d) {
     var ev = (d.events || []).map(function (e) {
+      var desc = e.status || e.text || "";
       return '<div class="ln"><span class="ts">' + esc(fmtTime(e.at)) + '</span><span class="k">' + esc(e.kind || "event") +
-        '</span><span class="tx">' + esc(e.text || "") + "</span></div>";
+        '</span><span class="tx">' + esc(desc) + "</span></div>";
     }).join("");
-    var sess = (d.log.entries || []).map(function (e) {
+    var sess = (d.log && d.log.entries || []).map(function (e) {
       var isErr = e.kind === "error";
-      return '<div class="ln"><span class="ts">' + esc(fmtTime(e.at)) + '</span><span class="k ' + esc(e.kind) + '">' + esc(e.label) +
-        '</span><span class="tx' + (isErr ? " err" : "") + '">' + esc(e.text) + "</span></div>";
+      var desc = e.status || e.text || "";
+      return '<div class="ln"><span class="ts">' + esc(fmtTime(e.at)) + '</span><span class="k ' + esc(e.kind) + '">' + esc(e.label || "") +
+        '</span><span class="tx' + (isErr ? " err" : "") + '">' + esc(desc) + "</span></div>";
     }).join("");
 
+    var sessTitle = d.log && d.log.file ? "Сессия агента · " + esc(d.log.file) : "Сессия агента";
     document.getElementById("tab-logs").innerHTML =
       '<div class="two"><div class="card"><div class="label">События воркфлоу (.workflow/events.jsonl)</div><div class="log">' +
       (ev || '<div class="empty">Событий пока нет — они появятся после start/artifact/close</div>') + "</div></div>" +
-      '<div class="card"><div class="label">Сессия агента · ' + esc(d.log.file || "транскрипт не найден") + '</div><div class="log">' +
+      '<div class="card"><div class="label">' + sessTitle + '</div><div class="log">' +
       (sess || '<div class="empty">Транскрипт сессии не найден</div>') + "</div></div></div>";
   }
 
@@ -2140,40 +2172,414 @@ function tryListen(port, absRoot) {
   });
 }
 
+/**
+ * R05: Санитизация состояния для HTTP-ответов (/api/state, /, dashboard.html).
+ * Исключает чувствительные свободные данные (сообщения, аргументы вызовов,
+ * текст задач, произвольные детали оракула, патчи, пути файлов), сохраняя
+ * структурные ключи, статусы, тайминги и счётчики для рендера.
+ */
+export function sanitizeHttpState(data) {
+  if (!data) return data;
+
+  const ALLOWED_TIERS = new Set(["T0", "T1", "T2", "T3"]);
+  const tier = ALLOWED_TIERS.has(data.task?.tier) ? data.task.tier : "T1";
+
+  const ALLOWED_TASK_STATUSES = new Set(["idle", "open", "in_progress", "closed"]);
+  const taskStatus = ALLOWED_TASK_STATUSES.has(data.task?.status) ? data.task.status : "open";
+
+  const ALLOWED_KINDS = new Set(["start", "artifact", "check", "close", "tool", "error", "result", "assistant", "user", "notice", "event"]);
+  const ALLOWED_STAGES = new Set(["lane", "recon", "spec", "manifest", "interfaces", "tasks", "verification", "oracle", "closed"]);
+  const ALLOWED_STATUSES = new Set([
+    "started", "closed", "check", "recorded", "ok", "error", "pending", "in_progress", "done", "skipped", "missed", "ready", "active", "idle", "message", "start",
+    ...ALLOWED_STAGES,
+  ]);
+
+  const STAGE_NAMES = {
+    lane: "Ярус и постановка",
+    recon: "Разведка и контекст",
+    spec: "Спецификация OpenSpec",
+    manifest: "Манифест изменений",
+    interfaces: "Интерфейсы и TDD",
+    tasks: "Параллельные подзадачи",
+    verification: "Сводная верификация",
+    oracle: "Оракул и аудит",
+    closed: "Задача закрыта",
+  };
+
+  const STAGE_WAVES = {
+    lane: 0,
+    recon: 1,
+    spec: 2,
+    manifest: 2,
+    interfaces: 3,
+    tasks: 3,
+    verification: 4,
+    oracle: 4,
+    closed: 4,
+  };
+
+  const stages = (data.stages || []).map((s) => {
+    const id = ALLOWED_STAGES.has(s?.id) ? s.id : "lane";
+    const st = ALLOWED_STATUSES.has(s?.status) ? s.status : "pending";
+    const note = s?.note === "skipped" || s?.note === "missed" ? s.note : "";
+    return {
+      id,
+      name: STAGE_NAMES[id] || "Этап",
+      wave: STAGE_WAVES[id] ?? 0,
+      status: st,
+      detail: "",
+      note,
+      tier: s?.tier ? (ALLOWED_TIERS.has(s.tier) ? s.tier : tier) : undefined,
+      durationMs: typeof s?.durationMs === "number" ? Math.max(0, s.durationMs) : undefined,
+    };
+  });
+
+  const curId = ALLOWED_STAGES.has(data.currentStage?.id) ? data.currentStage.id : "lane";
+  const currentStage = {
+    id: curId,
+    name: STAGE_NAMES[curId] || "—",
+    wave: STAGE_WAVES[curId] ?? 0,
+    detail: "",
+  };
+
+  const fleet = [
+    { role: "@orchestrator", name: "Оркестратор", wave: 0, status: taskStatus === "closed" ? "idle" : "active" },
+    { role: "@explorer", name: "Разведчик AST", wave: 1, status: "ready" },
+    { role: "@librarian", name: "Библиотекарь", wave: 1, status: "ready" },
+    { role: "@designer", name: "Дизайнер UI/UX", wave: 3, status: "ready" },
+    { role: "@fixer", name: "Fixer (TDD)", wave: 3, status: "ready" },
+    { role: "@oracle", name: "Оракул (приёмка)", wave: 4, status: "ready" },
+  ];
+
+  const waves = buildWaves(stages, fleet);
+
+  const gitFiles = (data.git?.files || []).map((f) => ({
+    path: String(f?.path || "").replace(/\\/g, "/"),
+    added: Number(f?.added) || 0,
+    deleted: Number(f?.deleted) || 0,
+    status: f?.status === "untracked" ? "untracked" : "modified",
+  }));
+
+  const commitHash = typeof data.git?.commit?.hash === "string" ? data.git.commit.hash.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) : "";
+
+  const git = {
+    isRepo: Boolean(data.git?.isRepo),
+    branch: String(data.git?.branch || "main"),
+    commit: { hash: commitHash, when: "" },
+    files: gitFiles,
+    added: Number(data.git?.added) || 0,
+    deleted: Number(data.git?.deleted) || 0,
+    staged: Number(data.git?.staged) || 0,
+    unstaged: Number(data.git?.unstaged) || 0,
+    untracked: Number(data.git?.untracked) || 0,
+  };
+
+  const ALLOWED_REQ_STATUSES = new Set(["done", "in-spec", "implemented", "dropped", "pending", "open", "closed", "todo"]);
+  const reqItems = (data.metrics?.requirements?.items || []).map((r) => ({
+    id: typeof r?.id === "string" && /^R\d+[a-z]?$/i.test(r.id) ? r.id : "R00",
+    status: ALLOWED_REQ_STATUSES.has(r?.status) ? r.status : "in-spec",
+  }));
+
+  const reqByStatus = {};
+  for (const [k, v] of Object.entries(data.metrics?.requirements?.byStatus || {})) {
+    if (ALLOWED_REQ_STATUSES.has(k)) {
+      reqByStatus[k] = Number(v) || 0;
+    }
+  }
+
+  const debtItems = (data.metrics?.debt?.items || []).map((_, i) => ({
+    file: `marker #${i + 1}`,
+    line: 0,
+    what: "debt marker",
+    ceiling: "",
+    upgrade: "",
+  }));
+
+  const memStatus = data.metrics?.memory?.status === "fresh" || data.metrics?.memory?.status === "overdue"
+    ? data.metrics.memory.status
+    : "fresh";
+
+  const metrics = {
+    briefCoverage: Number(data.metrics?.briefCoverage) || 0,
+    requirements: {
+      total: Number(data.metrics?.requirements?.total) || reqItems.length,
+      byStatus: reqByStatus,
+      items: reqItems,
+      change: String(data.metrics?.requirements?.change || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50),
+    },
+    debt: {
+      total: Number(data.metrics?.debt?.total) || 0,
+      noTrigger: Number(data.metrics?.debt?.noTrigger) || 0,
+      items: debtItems,
+    },
+    memory: {
+      status: memStatus,
+      daysSince: typeof data.metrics?.memory?.daysSince === "number" ? data.metrics.memory.daysSince : null,
+    },
+    checks: null,
+  };
+
+  const critique = (data.critique || []).map((c) => {
+    const verdict = c?.verdict === "accept" || c?.verdict === "reject" || c?.verdict === "mixed" ? c.verdict : "unknown";
+    return {
+      change: String(c?.change || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50),
+      file: "oracle.md",
+      verdict,
+      concerns: Number(c?.concerns) || 0,
+      blockers: Number(c?.blockers) || 0,
+      size: Number(c?.size) || 0,
+    };
+  });
+
+  const recentHistory = (data.history?.recent || []).map((h) => ({
+    tier: ALLOWED_TIERS.has(h?.tier) ? h.tier : "T1",
+    task: `Задача ${ALLOWED_TIERS.has(h?.tier) ? h.tier : "T1"}`,
+    durationMs: Number(h?.durationMs) || 0,
+    forced: Boolean(h?.forced),
+  }));
+
+  const byTier = {};
+  for (const [k, v] of Object.entries(data.history?.byTier || {})) {
+    if (ALLOWED_TIERS.has(k)) byTier[k] = Number(v) || 0;
+  }
+
+  const history = {
+    total: Number(data.history?.total) || 0,
+    medianMs: Number(data.history?.medianMs) || 0,
+    byTier,
+    recent: recentHistory,
+  };
+
+  const events = (data.events || []).map((e) => {
+    const rawKind = String(e?.kind || "").toLowerCase();
+    const kind = ALLOWED_KINDS.has(rawKind) ? rawKind : "event";
+    const rawStatus = String(e?.status || "").toLowerCase();
+    const st = ALLOWED_STATUSES.has(rawStatus) ? rawStatus : "ok";
+    return {
+      at: e?.at || null,
+      kind,
+      status: st,
+    };
+  });
+
+  const ALLOWED_TOOLS = new Set(["read", "edit", "write", "bash", "glob", "grep", "lsp", "ast_grep", "hub", "yield", "fast_edit", "fastcompact", "tool"]);
+  const ALLOWED_ROLES = new Set(["assistant", "user", "notice", "result", "error"]);
+  const ALLOWED_LOG_KINDS = new Set(["tool", "error", "result", "assistant", "user", "notice"]);
+  const ALLOWED_LOG_STATUSES = new Set(["start", "ok", "error", "message", "notice"]);
+
+  const logEntries = (data.log?.entries || []).map((e) => {
+    const rawKind = String(e?.kind || "").toLowerCase();
+    const kind = ALLOWED_LOG_KINDS.has(rawKind) ? rawKind : "tool";
+    const rawLabel = String(e?.label || "").toLowerCase();
+    const label = ALLOWED_TOOLS.has(rawLabel) || ALLOWED_ROLES.has(rawLabel) ? rawLabel : (kind === "result" ? "result" : "tool");
+    const rawStatus = String(e?.status || "").toLowerCase();
+    const status = ALLOWED_LOG_STATUSES.has(rawStatus) ? rawStatus : (kind === "error" ? "error" : "ok");
+    return {
+      at: e?.timestamp || e?.at || null,
+      kind,
+      label,
+      status,
+    };
+  });
+
+  const ALLOWED_USAGE_STATUSES = new Set(["active", "idle", "busy", "running", "stopped", "done", "error"]);
+  const u = data.session?.usage;
+  const usage = u ? {
+    at: Number(u.at) || Date.now(),
+    stale: Boolean(u.stale),
+    name: null,
+    provider: String(u.provider || "provider").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 30),
+    model: String(u.model || "model").split("/").pop()?.replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 40) || "model",
+    status: ALLOWED_USAGE_STATUSES.has(String(u.status).toLowerCase()) ? String(u.status).toLowerCase() : "active",
+    cwd: null,
+    createdAt: null,
+    updatedAt: null,
+    inputTokens: Number(u.inputTokens) || 0,
+    outputTokens: Number(u.outputTokens) || 0,
+    cachedTokens: Number(u.cachedTokens) || 0,
+    costUsd: typeof u.costUsd === "number" ? u.costUsd : null,
+  } : null;
+
+  const session = {
+    key: "local",
+    name: "session",
+    paseoAgentId: null,
+    transcript: null,
+    usage,
+  };
+
+  const modules = (data.modules || []).map((m) => ({
+    name: String(m?.name || ""),
+    path: String(m?.path || ""),
+    fileCount: Number(m?.fileCount) || 0,
+    totalLines: Number(m?.totalLines) || 0,
+    files: (m?.files || []).map((f) => ({
+      name: String(f?.name || ""),
+      lines: Number(f?.lines) || 0,
+    })),
+  }));
+
+  function cleanArchNode(node) {
+    if (!node) return null;
+    return {
+      name: String(node.name || ""),
+      kind: node.kind === "file" ? "file" : "dir",
+      lines: Number(node.lines) || 0,
+      path: node.path ? String(node.path).replace(/\\/g, "/") : undefined,
+      children: Array.isArray(node.children) ? node.children.map(cleanArchNode).filter(Boolean) : undefined,
+    };
+  }
+  const arch = cleanArchNode(data.arch) || { name: "project", kind: "dir", lines: 0, children: [] };
+
+  const archGraph = {
+    nodes: (data.archGraph?.nodes || []).map((n) => ({
+      id: String(n.id || ""),
+      files: Number(n.files) || 0,
+      lines: Number(n.lines) || 0,
+      external: Number(n.external) || 0,
+      topFiles: Array.isArray(n.topFiles) ? n.topFiles.map((tf) => String(tf).replace(/\\/g, "/")) : [],
+    })),
+    edges: (data.archGraph?.edges || []).map((e) => ({
+      from: String(e.from || ""),
+      to: String(e.to || ""),
+      weight: Number(e.weight) || 0,
+      kinds: Array.isArray(e.kinds) ? e.kinds.map(String) : [],
+    })),
+  };
+
+  return {
+    timestamp: data.timestamp || new Date().toISOString(),
+    root: "",
+    session,
+    events,
+    log: { file: data.log?.file ? "активна" : null, entries: logEntries },
+    arch,
+    archGraph,
+    project: {
+      name: String(data.project?.name || "project"),
+      branch: String(data.project?.branch || data.git?.branch || "main"),
+      commit: { hash: commitHash, when: "" },
+    },
+    task: {
+      title: `Задача ${tier}`,
+      tier,
+      status: taskStatus,
+      startedAt: data.task?.startedAt || null,
+      elapsedMs: Number(data.task?.elapsedMs) || 0,
+      budget: Number(data.task?.budget) || 25,
+    },
+    progress: {
+      percent: Number(data.progress?.percent) || 0,
+      stagesDone: Number(data.progress?.stagesDone) || 0,
+      stagesRequired: Number(data.progress?.stagesRequired) || 0,
+      stagesSkipped: Number(data.progress?.stagesSkipped) || 0,
+      artifactsDone: Number(data.progress?.artifactsDone) || 0,
+      artifactsTotal: Number(data.progress?.artifactsTotal) || 0,
+    },
+    stages,
+    currentStage,
+    timing: {
+      elapsedMs: Number(data.timing?.elapsedMs) || 0,
+      remainingMin: data.timing?.remainingMin ?? null,
+      remainingMax: data.timing?.remainingMax ?? null,
+      medianTaskMs: Number(data.timing?.medianTaskMs) || 0,
+    },
+    metrics,
+    waves,
+    git,
+    modules,
+    critique,
+    history,
+    fleet,
+  };
+}
+
 /** HTTP-обработчик: страница, /api/state, /api/diff, /api/health. */
 function handleRequest(req, res, absRoot) {
   const url = new URL(req.url, "http://127.0.0.1");
 
   if (url.pathname === "/api/health") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, pid: process.pid, root: absRoot }));
+    res.end(JSON.stringify({ ok: true, pid: process.pid, project: projectToken(absRoot) }));
     return;
   }
 
   if (url.pathname === "/api/state") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-    res.end(JSON.stringify(collectDashboardData(absRoot, { session: SERVER_SESSION })));
+    const raw = collectDashboardData(absRoot, { session: SERVER_SESSION });
+    res.end(JSON.stringify(sanitizeHttpState(raw)));
     return;
   }
 
   if (url.pathname === "/api/diff") {
     const file = url.searchParams.get("file") || "";
-    const safe = file.replace(/\.\./g, "");
-    const diff = spawnSync("git", ["diff", "HEAD", "--", safe], {
-      cwd: absRoot,
-      encoding: "utf8",
-      timeout: 15000,
-      shell: false,
-      windowsHide: true,
-    });
-    const text = (diff.stdout || diff.stderr || "Нет изменений").split("\n").slice(0, MAX_DIFF_LINES).join("\n");
+    const safe = file.replace(/\.\./g, "").replace(/^[/\\]+/, "");
+    let added = 0;
+    let deleted = 0;
+    let found = false;
+
+    if (safe) {
+      const statRes = spawnSync("git", ["diff", "HEAD", "--numstat", "--", safe], {
+        cwd: absRoot,
+        encoding: "utf8",
+        timeout: 15000,
+        shell: false,
+        windowsHide: true,
+      });
+      const statLines = (statRes.stdout || "").trim().split("\n").filter(Boolean);
+      for (const line of statLines) {
+        const parts = line.split("\t");
+        if (parts.length >= 2) {
+          found = true;
+          added += parts[0] === "-" ? 0 : parseInt(parts[0], 10) || 0;
+          deleted += parts[1] === "-" ? 0 : parseInt(parts[1], 10) || 0;
+        }
+      }
+      if (!found) {
+        const statusRes = spawnSync("git", ["status", "--porcelain", "--", safe], {
+          cwd: absRoot,
+          encoding: "utf8",
+          timeout: 15000,
+          shell: false,
+          windowsHide: true,
+        });
+        const st = (statusRes.stdout || "").trim();
+        if (st.startsWith("??")) {
+          found = true;
+          try {
+            const content = readFileSync(join(absRoot, safe), "utf8");
+            added = content.split("\n").length;
+          } catch {
+            added = 0;
+          }
+        }
+      }
+    }
+
+    let responseText = "";
+    if (!found) {
+      responseText = [
+        "+ добавлено строк: 0",
+        "- удалено строк: 0",
+        "(Метаданные: изменений не обнаружено)",
+      ].join("\n");
+    } else {
+      responseText = [
+        `+ добавлено строк: ${added}`,
+        `- удалено строк: ${deleted}`,
+        `Сводка: ${added + deleted} изменённых строк`,
+        "(Метаданные: исходный патч скрыт политикой безопасности R05)",
+      ].join("\n");
+    }
+
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end(text);
+    res.end(responseText);
     return;
   }
 
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-  res.end(generateDashboardHtml(collectDashboardData(absRoot, { session: SERVER_SESSION })));
+  const raw = collectDashboardData(absRoot, { session: SERVER_SESSION });
+  res.end(generateDashboardHtml(sanitizeHttpState(raw)));
 }
 
 /** Запустить сервер дашборда на первом свободном порту. */
@@ -2211,9 +2617,10 @@ export async function ensureDashboard(root, { open = true, port = null, session 
 
   // 2. Рантайм-файл потерян, а дашборд проекта жив (осиротевший демон):
   //    усыновляем его вместо запуска второго сервера на соседнем порту.
+  const expectedProject = projectToken(absRoot);
   for (let p = chosenPort; p < chosenPort + 64; p++) {
     const probed = await probeDashboard(p, 400);
-    if (probed && resolve(probed.root || "") === absRoot) {
+    if (probed && (probed.project === expectedProject || resolve(probed.root || "") === absRoot)) {
       writeRuntime(absRoot, { key,
         pid: probed.pid,
         port: p,
@@ -2227,7 +2634,6 @@ export async function ensureDashboard(root, { open = true, port = null, session 
       return { url, port: p, started: false, adopted: true };
     }
   }
-
   const selfPath = fileURLToPath(import.meta.url);
   // cwd НЕ ставим в корень проекта: на Windows это блокирует удаление каталога,
   // пока жив демон. Абсолютный --root делает cwd ненужным.
@@ -2258,7 +2664,8 @@ export function refreshDashboardFile(root) {
   try {
     const dir = dirname(outPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(outPath, generateDashboardHtml(collectDashboardData(absRoot)), "utf8");
+    const raw = collectDashboardData(absRoot);
+    writeFileSync(outPath, generateDashboardHtml(sanitizeHttpState(raw)), "utf8");
     return outPath;
   } catch {
     return null;
