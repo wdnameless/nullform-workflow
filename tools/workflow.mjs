@@ -30,9 +30,10 @@
  * Budgets: .workflow/budgets.json (optional, defaults {T0:10, T1:25, T2:45, T3:45}).
  * Zero dependencies. Node 18+ / Bun.
  */
-import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync } from "node:fs";
 import { spawn, execFileSync } from "node:child_process";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve, relative, isAbsolute } from "node:path";
+import { createHash } from "node:crypto";
 
 const DIR = ".workflow";
 const FILE = "state.json";
@@ -53,9 +54,9 @@ const REQUIREMENTS = {
     { kind: "recon", label: "recon notes: files touched + acceptance check", path: null, minDetail: 20 },
   ],
   T2: [
-    { kind: "manifest", label: "manifest.md with R## rows + verbatim user quotes", path: "openspec/changes/<name>/manifest.md", mustContain: /R\d\d/ },
-    { kind: "openspec", label: "openspec change validated", path: "openspec/changes/<name>" },
-    { kind: "interfaces", label: "interfaces.md: boundaries + signatures + owners", path: null, minDetail: 40 },
+    { kind: "manifest", label: "manifest.md with R## rows + verbatim user quotes", path: "openspec/changes/<name>/manifest.md", requiresPath: true, mustContain: /R\d\d/ },
+    { kind: "openspec", label: "openspec change validated", path: "openspec/changes/<name>", requiresPath: true },
+    { kind: "interfaces", label: "interfaces.md: boundaries + signatures + owners", path: "openspec/changes/<name>/interfaces.md", requiresPath: true, minDetail: 40 },
     { kind: "oracle", label: "oracle verdict + its reasons", path: null, minDetail: 30, mustContain: /ACCEPT|REJECT/i },
   ],
   T3: [
@@ -486,6 +487,201 @@ function cmdStart(root, flags) {
 }
 
 
+function hashFile(fullPath) {
+  try {
+    const buf = readFileSync(fullPath);
+    return createHash("sha256").update(buf).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function isPathInsideRoot(root, userPath) {
+  if (!userPath || typeof userPath !== "string") return false;
+  const absRoot = resolve(root);
+  const absTarget = resolve(root, userPath);
+  const rel = relative(absRoot, absTarget);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+function isExcludedFromSnapshot(relPath) {
+  if (!relPath) return true;
+  const normalized = relPath.replace(/\\/g, "/");
+  const base = normalized.split("/").pop();
+
+  // Exclude harness state, runtime state, caches, VCS
+  if (
+    normalized === DIR ||
+    normalized.startsWith(`${DIR}/`) ||
+    normalized === ".git" ||
+    normalized.startsWith(".git/") ||
+    normalized.includes("/.git/") ||
+    normalized === "node_modules" ||
+    normalized.startsWith("node_modules/") ||
+    normalized.includes("/node_modules/")
+  ) {
+    return true;
+  }
+
+  // Security: NEVER read, touch or hash credentials, secret files, or model configs
+  if (
+    base === "models.yml" ||
+    base === "models.yaml" ||
+    base === "mcp.json" ||
+    base.startsWith(".env") ||
+    base.startsWith("secrets") ||
+    /credentials|\.secret|secrets\.|\.key$|\.pem$/i.test(base)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function scanWorktree(root) {
+  try {
+    const trackedOut = execFileSync("git", ["ls-files", "-z"], {
+      cwd: root,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    const untrackedOut = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+      cwd: root,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    function collectFiles(output) {
+      const map = {};
+      for (const rel of output.split("\0")) {
+        if (!rel || isExcludedFromSnapshot(rel)) continue;
+        const full = join(root, rel);
+        const hash = hashFile(full);
+        if (hash !== null) {
+          try {
+            const s = statSync(full);
+            map[rel] = { hash, mtimeMs: s.mtimeMs, size: s.size };
+          } catch {}
+        }
+      }
+      return map;
+    }
+    const tracked = collectFiles(trackedOut);
+    const untracked = collectFiles(untrackedOut);
+    return { isGit: true, tracked, untracked };
+  } catch {
+    const files = {};
+    function walk(dir, relPrefix = "") {
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+        if (isExcludedFromSnapshot(rel)) continue;
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full, rel);
+        } else if (entry.isFile()) {
+          const hash = hashFile(full);
+          if (hash !== null) {
+            try {
+              const s = statSync(full);
+              files[rel] = { hash, mtimeMs: s.mtimeMs, size: s.size };
+            } catch {}
+          }
+        }
+      }
+    }
+    walk(root);
+    return { isGit: false, files };
+  }
+}
+function takeAcceptanceSnapshot(root) {
+  return scanWorktree(root);
+}
+
+function validateArtifacts(root, st) {
+  const reqs = requiredFor(st.tier);
+  const missing = [];
+  const invalid = [];
+
+  for (const r of reqs) {
+    const a = st.artifacts[r.kind];
+    if (!a) {
+      missing.push(r.kind);
+      continue;
+    }
+
+    if (r.requiresPath || a.path) {
+      if (!a.path) {
+        invalid.push(`${r.kind}: missing required file path`);
+        continue;
+      }
+      if (!isPathInsideRoot(root, a.path)) {
+        invalid.push(`${r.kind}: path '${a.path}' must be a relative path inside project root`);
+        continue;
+      }
+      const fullPath = join(root, a.path);
+      if (!existsSync(fullPath)) {
+        invalid.push(`${r.kind}: path '${a.path}' does not exist on disk`);
+        continue;
+      }
+      const s = statSync(fullPath);
+      if (r.kind === "openspec") {
+        if (!s.isDirectory()) {
+          invalid.push(`${r.kind}: path '${a.path}' must be a directory`);
+          continue;
+        }
+        let entries = [];
+        try { entries = readdirSync(fullPath); } catch {}
+        if (entries.length === 0) {
+          invalid.push(`${r.kind}: directory '${a.path}' is empty`);
+          continue;
+        }
+      } else {
+        if (!s.isFile()) {
+          invalid.push(`${r.kind}: path '${a.path}' must be a file`);
+          continue;
+        }
+        let body = "";
+        try { body = readFileSync(fullPath, "utf8"); } catch {}
+        if (body.trim().length === 0) {
+          invalid.push(`${r.kind}: file '${a.path}' is empty`);
+          continue;
+        }
+        if (r.mustContain && !r.mustContain.test(body)) {
+          invalid.push(`${r.kind}: file '${a.path}' does not contain expected pattern (${r.mustContain})`);
+          continue;
+        }
+        if (r.kind === "interfaces" && body.trim().length < 10) {
+          invalid.push(`${r.kind}: file '${a.path}' is too short (< 10 chars)`);
+          continue;
+        }
+      }
+    }
+
+    if (r.kind === "oracle") {
+      const detail = a.detail || "";
+      if (/\bREJECT\b/i.test(detail) || !/\bACCEPT\b/i.test(detail)) {
+        invalid.push("oracle: verdict is REJECT (must be ACCEPT)");
+      }
+      if (a.path) {
+        const fullPath = join(root, a.path);
+        if (existsSync(fullPath)) {
+          let body = "";
+          try { body = readFileSync(fullPath, "utf8"); } catch {}
+          if (/\bREJECT\b/i.test(body) || !/\bACCEPT\b/i.test(body)) {
+            invalid.push(`oracle: verdict in '${a.path}' is REJECT`);
+          }
+        }
+      }
+    }
+  }
+
+  return { reqs, missing, invalid, ok: missing.length === 0 && invalid.length === 0 };
+}
+
 function cmdArtifact(root, flags) {
   const st = load(root);
   if (!st || st.status !== "open") { console.error("workflow: no open task. Run `start` first."); return 2; }
@@ -497,17 +693,57 @@ function cmdArtifact(root, flags) {
     console.error(`  required: ${reqs.map((r) => r.kind).join(', ')}`);
     return 2;
   }
-  const path = flags.path ? String(flags.path) : null;
-  // A claimed path must exist: "I wrote it" is the claim this exists to reject.
-  if (path && !existsSync(join(root, path))) {
-    console.error(`workflow: ${kind} -> '${path}' does not exist on disk.`);
-    if (kind === "openspec") console.error(`  create it: openspec new change <name>   then  openspec validate <name>`);
+  const path = flags.path ? String(flags.path).trim() : null;
+  if (req.requiresPath && !path) {
+    console.error(`workflow: ${kind} requires a file path (--path <file>).`);
     return 1;
+  }
+
+  if (path) {
+    if (!isPathInsideRoot(root, path)) {
+      console.error(`workflow: ${kind} -> '${path}' must be a relative path inside project root.`);
+      return 1;
+    }
+    const fullPath = join(root, path);
+    if (!existsSync(fullPath)) {
+      console.error(`workflow: ${kind} -> '${path}' does not exist on disk.`);
+      if (kind === "openspec") console.error(`  create it: openspec new change <name>   then  openspec validate <name>`);
+      return 1;
+    }
+    const stFile = statSync(fullPath);
+    if (kind === "openspec") {
+      if (!stFile.isDirectory()) {
+        console.error(`workflow: ${kind} -> '${path}' must be a directory.`);
+        return 1;
+      }
+      const entries = readdirSync(fullPath);
+      if (entries.length === 0) {
+        console.error(`workflow: ${kind} -> directory '${path}' is empty.`);
+        return 1;
+      }
+    } else {
+      if (!stFile.isFile()) {
+        console.error(`workflow: ${kind} -> '${path}' must be a file.`);
+        return 1;
+      }
+      const body = readFileSync(fullPath, "utf8");
+      if (body.trim().length === 0) {
+        console.error(`workflow: ${kind} -> '${path}' is empty.`);
+        return 1;
+      }
+      if (req.mustContain && !req.mustContain.test(body)) {
+        console.error(`workflow: ${path} does not contain requirement rows (expected ${req.mustContain}).`);
+        console.error(`  a manifest lists R01..Rnn, each with the verbatim quote it came from.`);
+        return 1;
+      }
+      if (kind === "interfaces" && body.trim().length < 10) {
+        console.error(`workflow: ${kind} -> '${path}' is too short to be a valid interfaces specification.`);
+        return 1;
+      }
+    }
   }
   const detail = flags.detail ? String(flags.detail) : null;
 
-  // Evidence floor. Without this, `artifact --kind oracle --detail ok` satisfies a
-  // T2 gate and the gate is theatre.
   if (req.minDetail && (!detail || detail.trim().length < req.minDetail)) {
     console.error(`workflow: ${kind} needs a real description (>= ${req.minDetail} chars).`);
     console.error(`  got: ${detail ? JSON.stringify(detail) : "(nothing)"}`);
@@ -519,41 +755,42 @@ function cmdArtifact(root, flags) {
     console.error(`  e.g. --detail "ACCEPT: verified X and Y, no gaps"`);
     return 1;
   }
-  // A manifest without requirement rows is not a manifest.
-  if (req.mustContain && path) {
-    try {
-      const body = readFileSync(join(root, path), "utf8");
-      if (!req.mustContain.test(body)) {
-        console.error(`workflow: ${path} does not contain requirement rows (expected ${req.mustContain}).`);
-        console.error(`  a manifest lists R01..Rnn, each with the verbatim quote it came from.`);
-        return 1;
-      }
-    } catch { /* existence already checked above */ }
-  }
 
-  st.artifacts[kind] = { at: new Date().toISOString(), path, detail };
+  const record = { at: new Date().toISOString(), path, detail };
+  if (kind === "oracle") {
+    record.snapshot = takeAcceptanceSnapshot(root);
+  }
+  st.artifacts[kind] = record;
   save(root, st);
   const done = Object.keys(st.artifacts).length;
-    logEvent(root, "artifact", `${kind}${flags.detail ? ": " + String(flags.detail).slice(0, 120) : ""}`);
-console.log(`workflow: ${kind} recorded${path ? ` (${path})` : ""} — ${done}/${reqs.length} for ${st.tier}`);
+  logEvent(root, "artifact", `${kind}${flags.detail ? ": " + String(flags.detail).slice(0, 120) : ""}`);
+  console.log(`workflow: ${kind} recorded${path ? ` (${path})` : ""} — ${done}/${reqs.length} for ${st.tier}`);
   return 0;
 }
 
 function cmdCheck(root) {
   const st = load(root);
   if (!st) { console.error("workflow: no task state. Run `start --tier <T> --task \"...\"`."); return 1; }
-  const reqs = requiredFor(st.tier);
-  const missing = reqs.filter((r) => !st.artifacts[r.kind]);
-  const ok = missing.length === 0;
+  const { reqs, missing, invalid, ok } = validateArtifacts(root, st);
 
   console.log(`workflow: ${st.tier} "${st.task}" — ${ok ? "COMPLETE" : "INCOMPLETE"}`);
   for (const r of reqs) {
     const a = st.artifacts[r.kind];
-    console.log(`  ${a ? "done" : "MISS"} ${r.kind.padEnd(11)} ${a && a.path ? a.path : r.label}`);
+    const isInvalid = invalid.some((inv) => inv.startsWith(`${r.kind}:`));
+    console.log(`  ${a && !isInvalid ? "done" : "MISS"} ${r.kind.padEnd(11)} ${a && a.path ? a.path : r.label}`);
   }
   if (!ok) {
-    console.log(`\n${missing.length} artifact(s) missing for ${st.tier}.`);
-    for (const m of missing) console.log(`  record it: node workflow.mjs artifact --kind ${m.kind}${m.path ? " --path <file>" : ""}`);
+    if (missing.length) {
+      console.log(`\n${missing.length} artifact(s) missing for ${st.tier}.`);
+      for (const m of missing) {
+        const r = reqs.find((req) => req.kind === m);
+        console.log(`  record it: node workflow.mjs artifact --kind ${m}${r?.path ? " --path <file>" : ""}`);
+      }
+    }
+    if (invalid.length) {
+      console.log(`\n${invalid.length} artifact(s) invalid for ${st.tier}:`);
+      for (const inv of invalid) console.log(`  - ${inv}`);
+    }
     return 1;
   }
   return 0;
@@ -586,49 +823,122 @@ function cmdStatus(root) {
 
 
 /**
- * Acceptance staleness: the oracle artifact was recorded at `artifacts.oracle.at`,
- * so any tracked source file modified after that instant means the verdict
- * describes a tree that no longer exists.
- *
- * Compares against git-tracked files only (via `git ls-files`), so build output,
- * logs and caches cannot produce a false STALE. Returns a human-readable reason
- * or null. Best-effort: if git is unavailable the gate stays out of the way
- * rather than blocking an honest close.
+ * Acceptance staleness: verifies full tree content state (tracked + untracked)
+ * recorded at acceptance against current tree using SHA-256 content hashes,
+ * timestamps, and file existence. Detects modified files even with matching
+ * mtime/size or restored timestamps, deleted files, and newly added untracked files.
  */
 function findAcceptanceStaleness(root, st) {
-  const acceptedAt = st.artifacts?.oracle?.at;
+  const oracleArtifact = st.artifacts?.oracle;
+  const acceptedAt = oracleArtifact?.at;
   if (!acceptedAt) return null;
   const acceptedMs = new Date(acceptedAt).getTime();
   if (Number.isNaN(acceptedMs)) return null;
 
-  let out;
-  try {
-    out = execFileSync("git", ["ls-files", "-z"], {
-      cwd: root,
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 10000,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-  } catch {
-    return null; // not a git tree, or git missing — nothing to compare against
+  const snapshot = oracleArtifact.snapshot;
+  const current = scanWorktree(root);
+
+  if (current.isGit) {
+    const newer = [];
+    const deleted = [];
+    const untrackedAdded = [];
+
+    for (const [rel, meta] of Object.entries(current.tracked)) {
+      const snap = snapshot?.tracked?.[rel];
+      if (snap) {
+        if (meta.hash !== snap.hash || meta.mtimeMs > acceptedMs) {
+          newer.push(rel);
+        }
+      } else {
+        const untrackedSnap = snapshot?.untracked?.[rel];
+        if (untrackedSnap) {
+          if (meta.hash !== untrackedSnap.hash || meta.mtimeMs > acceptedMs) {
+            newer.push(rel);
+          }
+        } else {
+          newer.push(rel);
+        }
+      }
+    }
+
+    if (snapshot && snapshot.tracked) {
+      for (const rel of Object.keys(snapshot.tracked)) {
+        if (!(rel in current.tracked)) {
+          deleted.push(rel);
+        }
+      }
+    }
+
+    if (snapshot && snapshot.untracked) {
+      for (const rel of Object.keys(snapshot.untracked)) {
+        if (!(rel in current.tracked) && !(rel in current.untracked)) {
+          deleted.push(rel);
+        }
+      }
+    }
+
+    for (const [rel, meta] of Object.entries(current.untracked)) {
+      const snap = snapshot?.untracked?.[rel];
+      if (!snap) {
+        untrackedAdded.push(rel);
+      } else if (meta.hash !== snap.hash || meta.mtimeMs > acceptedMs) {
+        newer.push(rel);
+      }
+    }
+
+    const reasons = [];
+    if (newer.length > 0) {
+      reasons.push(`${newer.length} tracked file(s) changed after the oracle verdict (${acceptedAt}): ${newer.slice(0, 5).join(", ")}`);
+    }
+    if (deleted.length > 0) {
+      reasons.push(`${deleted.length} tracked file(s) deleted after the oracle verdict (${acceptedAt}): ${deleted.slice(0, 5).join(", ")}`);
+    }
+    if (untrackedAdded.length > 0) {
+      reasons.push(`${untrackedAdded.length} untracked source file(s) added after the oracle verdict (${acceptedAt}): ${untrackedAdded.slice(0, 5).join(", ")}`);
+    }
+
+    return reasons.length > 0 ? reasons.join("; ") : null;
+  }
+
+  // Non-git filesystem inspection
+  if (!snapshot || !snapshot.files) {
+    const newer = Object.keys(current.files).filter((rel) => current.files[rel].mtimeMs > acceptedMs);
+    if (newer.length > 0) {
+      return `${newer.length} file(s) changed after the oracle verdict (${acceptedAt}): ${newer.slice(0, 5).join(", ")}`;
+    }
+    return `cannot verify tree freshness in non-git directory without acceptance snapshot`;
   }
 
   const newer = [];
-  for (const rel of out.split("\0")) {
-    if (!rel) continue;
-    try {
-      const m = statSync(join(root, rel)).mtimeMs;
-      if (m > acceptedMs) {
-        newer.push(rel);
-        if (newer.length >= 5) break;
-      }
-    } catch {
-      // deleted since acceptance — that is a change too, but git status owns it
+  const deleted = [];
+  const added = [];
+
+  for (const [rel, snap] of Object.entries(snapshot.files)) {
+    if (!(rel in current.files)) {
+      deleted.push(rel);
+    } else if (current.files[rel].hash !== snap.hash || current.files[rel].mtimeMs > acceptedMs) {
+      newer.push(rel);
     }
   }
-  if (!newer.length) return null;
-  return `${newer.length} tracked file(s) changed after the oracle verdict (${acceptedAt}): ${newer.join(", ")}`;
+
+  for (const rel of Object.keys(current.files)) {
+    if (!(rel in snapshot.files)) {
+      added.push(rel);
+    }
+  }
+
+  const reasons = [];
+  if (newer.length > 0) {
+    reasons.push(`${newer.length} file(s) changed after the oracle verdict (${acceptedAt}): ${newer.slice(0, 5).join(", ")}`);
+  }
+  if (deleted.length > 0) {
+    reasons.push(`${deleted.length} file(s) deleted after the oracle verdict (${acceptedAt}): ${deleted.slice(0, 5).join(", ")}`);
+  }
+  if (added.length > 0) {
+    reasons.push(`${added.length} file(s) added after the oracle verdict (${acceptedAt}): ${added.slice(0, 5).join(", ")}`);
+  }
+
+  return reasons.length > 0 ? reasons.join("; ") : null;
 }
 
 function cmdClose(root, flags) {
@@ -653,20 +963,24 @@ function cmdClose(root, flags) {
     }
   }
 
-  const reqs = requiredFor(st.tier);
-  const missing = reqs.filter((r) => !st.artifacts[r.kind]);
+  const { missing, invalid } = validateArtifacts(root, st);
 
   if (missing.length && !flags.force) {
-    console.error(`workflow: cannot close ${st.tier} — ${missing.length} artifact(s) missing: ${missing.map((m) => m.kind).join(', ')}`);
+    console.error(`workflow: cannot close ${st.tier} — ${missing.length} artifact(s) missing: ${missing.join(', ')}`);
     console.error(`  finish them, or close with --force --reason "<why>" to record the deviation.`);
     return 1;
   }
-  // A forced close must state a reason: an unexplained deviation is the thing
-  // this mechanism exists to make visible.
   if (missing.length && flags.force && !flags.reason) {
     console.error(`workflow: --force requires --reason "<why the artifact is absent>"`);
     return 1;
   }
+
+  if (invalid.length) {
+    console.error(`workflow: cannot close ${st.tier} — retained evidence invalid:\n  ${invalid.join('\n  ')}`);
+    return 1;
+  }
+
+
 
   // Acceptance staleness: an ACCEPT verdict is evidence only for the tree it was
   // rendered against. Editing code after the oracle ran and then closing is the
@@ -739,14 +1053,179 @@ function cmdClose(root, flags) {
   appendMetric(root, metricRecord);
   return 0;
 }
+function cmdCheckCi(root, flags) {
+  let tier = null;
+  if (flags.labels !== undefined) {
+    const raw = Array.isArray(flags.labels) ? flags.labels : String(flags.labels).split(/[\s,]+/);
+    const matches = raw
+      .map((l) => String(l).trim())
+      .filter((l) => /^workflow:T[0-3]$/i.test(l))
+      .map((l) => l.split(":")[1].toUpperCase());
+    if (matches.length === 0) {
+      console.error("workflow check-ci: PR missing required workflow tier label (workflow:T0, workflow:T1, workflow:T2, or workflow:T3).");
+      return 1;
+    }
+    if (matches.length > 1) {
+      console.error(`workflow check-ci: PR has ${matches.length} workflow tier labels; exactly one is required.`);
+      return 1;
+    }
+    tier = matches[0];
+    if (flags.tier && String(flags.tier).toUpperCase() !== tier) {
+      console.error(`workflow check-ci: --tier (${flags.tier}) contradicts PR label (${tier}).`);
+      return 1;
+    }
+  } else if (flags.tier) {
+    tier = String(flags.tier).toUpperCase();
+  }
+
+  if (!tier || !["T0", "T1", "T2", "T3"].includes(tier)) {
+    console.error("workflow check-ci: --tier T0|T1|T2|T3 is required.");
+    return 1;
+  }
+
+  // T0 and T1 stay lean
+  if (tier === "T0" || tier === "T1") {
+    console.log(`workflow check-ci: tier ${tier} passed (lean tier).`);
+    return 0;
+  }
+
+  // T2 and T3 require committed change artifacts
+  const changeId = flags.change ? String(flags.change).trim() : null;
+  if (!changeId) {
+    console.error(`workflow check-ci: --change <id> is required for ${tier}.`);
+    return 1;
+  }
+
+  const changeDir = join(root, "openspec", "changes", changeId);
+  if (!existsSync(changeDir)) {
+    console.error(`workflow check-ci: OpenSpec change directory '${changeDir}' does not exist.`);
+    return 1;
+  }
+
+  // 1. Manifest
+  const manifestPath = join(changeDir, "manifest.md");
+  if (!existsSync(manifestPath)) {
+    console.error(`workflow check-ci: missing manifest.md in '${changeDir}'.`);
+    return 1;
+  }
+  const manifestBody = readFileSync(manifestPath, "utf8");
+  if (!/R\d\d/.test(manifestBody)) {
+    console.error(`workflow check-ci: manifest.md in '${changeDir}' must contain requirement rows (R##).`);
+    return 1;
+  }
+
+  // 2. Proposal (proposal.md)
+  const proposalPath = join(changeDir, "proposal.md");
+  if (!existsSync(proposalPath) || !statSync(proposalPath).isFile() || readFileSync(proposalPath, "utf8").trim().length === 0) {
+    console.error(`workflow check-ci: missing proposal.md in '${changeDir}'.`);
+    return 1;
+  }
+
+  // 3. Tasks (tasks.md)
+  const tasksPath = join(changeDir, "tasks.md");
+  if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) {
+    console.error(`workflow check-ci: missing tasks.md in '${changeDir}'.`);
+    return 1;
+  }
+
+  // 4. Specs (specs/ directory)
+  const specsDir = join(changeDir, "specs");
+  if (!existsSync(specsDir) || !statSync(specsDir).isDirectory()) {
+    console.error(`workflow check-ci: missing specs/ directory in '${changeDir}'.`);
+    return 1;
+  }
+  const specEntries = readdirSync(specsDir);
+  if (specEntries.length === 0) {
+    console.error(`workflow check-ci: specs/ directory in '${changeDir}' is empty.`);
+    return 1;
+  }
+
+  // 3. Interfaces
+  const interfacesPath = join(changeDir, "interfaces.md");
+  if (!existsSync(interfacesPath)) {
+    console.error(`workflow check-ci: missing interfaces.md in '${changeDir}'.`);
+    return 1;
+  }
+  const interfacesBody = readFileSync(interfacesPath, "utf8");
+  if (interfacesBody.trim().length === 0) {
+    console.error(`workflow check-ci: interfaces.md in '${changeDir}' is empty.`);
+    return 1;
+  }
+
+  // 4. Oracle / acceptance evidence
+  let oraclePath = null;
+  const entries = readdirSync(changeDir);
+  for (const entry of entries) {
+    if (/^oracle(-[A-Za-z0-9]+)?\.md$/i.test(entry) || entry.toLowerCase() === "acceptance.md") {
+      oraclePath = join(changeDir, entry);
+      break;
+    }
+  }
+  if (!oraclePath || !existsSync(oraclePath)) {
+    console.error(`workflow check-ci: missing oracle evidence (oracle.md) in '${changeDir}'.`);
+    return 1;
+  }
+
+  const oracleBody = readFileSync(oraclePath, "utf8");
+  if (!/ACCEPT/i.test(oracleBody)) {
+    console.error(`workflow check-ci: oracle evidence in '${oraclePath}' must state ACCEPT verdict.`);
+    return 1;
+  }
+  if (/\bREJECT\b/i.test(oracleBody)) {
+    console.error(`workflow check-ci: oracle evidence in '${oraclePath}' has REJECT verdict.`);
+    return 1;
+  }
+
+  // 5. Worktree cleanliness check against post-acceptance changes
+  try {
+    const gitStatus = execFileSync("git", ["status", "--porcelain", "-uall"], {
+      cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
+    });
+    const dirty = gitStatus.split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.endsWith(".workflow") && !l.includes("/.workflow/") && !l.includes(".workflow/"));
+    if (dirty.length > 0) {
+      console.error(`workflow check-ci: uncommitted changes detected in worktree after acceptance:\n  ${dirty.slice(0, 5).join("\n  ")}`);
+      return 1;
+    }
+  } catch {
+    // Non-git environment or git error
+  }
+
+  try {
+    const oracleRel = relative(root, oraclePath).replace(/\\/g, "/");
+    const oracleCommit = execFileSync("git", ["log", "-1", "--format=%H", "--", oracleRel], {
+      cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
+    }).trim();
+    if (oracleCommit) {
+      const postOracleDiff = execFileSync("git", ["diff", "--name-only", `${oracleCommit}..HEAD`], {
+        cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
+      }).trim();
+      if (postOracleDiff) {
+        const changedFiles = postOracleDiff.split("\n")
+          .map((f) => f.trim())
+          .filter((f) => f && !f.startsWith("openspec/") && !f.startsWith(".workflow/"));
+        if (changedFiles.length > 0) {
+          console.error(`workflow check-ci: files modified in commits after oracle acceptance (${oracleCommit.slice(0, 8)}):\n  ${changedFiles.slice(0, 5).join("\n  ")}`);
+          return 1;
+        }
+      }
+    }
+  } catch {
+    // If commit history is not available, ignore
+  }
+
+  console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
+  return 0;
+}
+
 
 
 /* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdClose, cmdMetrics, loadMetrics, appendMetric, load, save, parse };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdClose, cmdMetrics, loadMetrics, appendMetric, load, save, parse, cmdCheckCi };
 
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
 
 if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
   const args = parse(process.argv.slice(2));
@@ -766,6 +1245,7 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
     case "status":   code = cmdStatus(root); break;
     case "close":    code = cmdClose(root, args.flags); break;
     case "metrics":  code = cmdMetrics(root); break;
+    case "check-ci": code = cmdCheckCi(root, args.flags); break;
     default:
       console.log("workflow.mjs — tier enforcement\n");
       console.log("  node workflow.mjs suggest --files a.ts,b.ts [--task \"...\"]");
@@ -777,6 +1257,7 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
       console.log("  node workflow.mjs close [--force --reason \"...\"] [--auto] [--diff-lines N]");
       console.log("  node workflow.mjs metrics [--root .]");
       console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
+      console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
   }
   process.exit(code);
 }

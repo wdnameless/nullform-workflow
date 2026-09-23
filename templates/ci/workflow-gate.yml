@@ -2,9 +2,9 @@ name: Workflow Gate
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
 
 permissions:
   contents: read
@@ -67,14 +67,51 @@ jobs:
         run: |
           node tools/auto-review.mjs --root .
 
-      - name: Check active workflow state
-        # Checks workflow state if project is under active workflow execution
+      - name: Workflow gate validation
+        if: github.event_name == 'pull_request'
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+          BASE_REF: '${{ github.base_ref
+            || github.event.repository.default_branch }}'
         run: |
-          if [ -f ".workflow/state.json" ]; then
-            echo "Checking .workflow/state.json..."
-            node tools/workflow.mjs check
+          TIER_LABELS=$(
+            echo "$LABELS_JSON" \
+              | jq -r '.[].name // empty' \
+              | grep -E '^workflow:T[0-3]$' || true
+          )
+          LABEL_COUNT=$(echo "$TIER_LABELS" | grep -c . || true)
+          if [ "$LABEL_COUNT" -eq 0 ]; then
+            echo "::error::PR is missing mandatory workflow tier label."
+            exit 1
+          fi
+          if [ "$LABEL_COUNT" -gt 1 ]; then
+            echo "::error::PR carries multiple workflow tier labels."
+            exit 1
+          fi
+          TIER="${TIER_LABELS#workflow:}"
+          echo "PR declared workflow tier: $TIER"
+
+          if [ "$TIER" = "T2" ] || [ "$TIER" = "T3" ]; then
+            CHANGED_SPECS=$(
+              git diff --name-only "origin/$BASE_REF"...HEAD \
+                -- 'openspec/changes/*' 2>/dev/null \
+                | cut -d/ -f1-3 | sort -u || true
+            )
+            if [ -z "$CHANGED_SPECS" ]; then
+              echo "::error::Tier $TIER PR needs openspec/changes/<id>."
+              exit 1
+            fi
+            for spec_dir in $CHANGED_SPECS; do
+              if [ -d "$spec_dir" ]; then
+                CHANGE_ID="${spec_dir##*/}"
+                echo "Validating workflow CI evidence for $CHANGE_ID ($TIER)..."
+                node tools/workflow.mjs check-ci \
+                  --tier "$TIER" --change "$CHANGE_ID"
+              fi
+            done
           else
-            echo "No active .workflow/state.json found. Skipping."
+            echo "Validating lean workflow tier $TIER..."
+            node tools/workflow.mjs check-ci --tier "$TIER"
           fi
 
       - name: Post PR Comment with Auto-Review Summary

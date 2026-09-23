@@ -11,7 +11,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -157,6 +157,165 @@ test("staleness: a lane without an oracle artifact is unaffected (T0/T1 stay che
     assert.equal(cmdStart(root, { tier: "T0", task: "typo" }), 0);
     const code = cmdClose(root, {});
     assert.equal(code, 0, "T0 has no acceptance to go stale");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test("staleness: an untracked source file added after the oracle verdict blocks close", () => {
+  const root = project();
+  try {
+    cmdStart(root, { tier: "T2", task: "probe-untracked" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+    sleepMs(1100);
+    writeFileSync(join(root, "untracked.ts"), "export const a = 1;\n", "utf8");
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "close must refuse when an untracked file is added after oracle");
+    const st = load(root);
+    assert.equal(st.status, "open", "the task must stay open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleness: deleting a tracked file after the oracle verdict blocks close", () => {
+  const root = project();
+  try {
+    cmdStart(root, { tier: "T2", task: "probe-deleted" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+    sleepMs(1100);
+    rmSync(join(root, "tracked.txt"));
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "close must refuse when a tracked file is deleted after oracle");
+    const st = load(root);
+    assert.equal(st.status, "open", "the task must stay open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleness: non-git directory does not silently treat modified evidence as fresh", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-nongit-"));
+  try {
+    writeFileSync(join(root, "code.txt"), "hello world\n", "utf8");
+    cmdStart(root, { tier: "T2", task: "probe-nongit" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+    sleepMs(1100);
+    writeFileSync(join(root, "code.txt"), "hello modified\n", "utf8");
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "non-git close must refuse modified evidence after oracle");
+    const st = load(root);
+    assert.equal(st.status, "open", "the task must stay open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test("staleness: content modified with restored mtime still blocks close via content hash", () => {
+  const root = project();
+  try {
+    cmdStart(root, { tier: "T2", task: "probe-hash" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+
+    const filePath = join(root, "tracked.txt");
+    const prevStat = statSync(filePath);
+
+    // Modify content with exact same byte length
+    writeFileSync(filePath, "y\n", "utf8");
+    // Restore original atime and mtime
+    utimesSync(filePath, prevStat.atime, prevStat.mtime);
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "close must refuse edit even with identical mtime and size");
+    const st = load(root);
+    assert.equal(st.status, "open", "the task must stay open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test("staleness: newly tracked file added with backdated mtime blocks close", () => {
+  const root = project();
+  try {
+    cmdStart(root, { tier: "T2", task: "probe-backdated-tracked" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+
+    // Add and stage a new tracked file with backdated mtime
+    const newFile = join(root, "added.txt");
+    writeFileSync(newFile, "added\n", "utf8");
+    const past = new Date(Date.now() - 3600000);
+    utimesSync(newFile, past, past);
+    git(root, ["add", "added.txt"]);
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "close must refuse newly tracked file even if backdated");
+    const st = load(root);
+    assert.equal(st.status, "open", "the task must stay open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleness: deleting an untracked file present at snapshot blocks close", () => {
+  const root = project();
+  try {
+    const untrackedFile = join(root, "scratch.txt");
+    writeFileSync(untrackedFile, "temp\n", "utf8");
+
+    cmdStart(root, { tier: "T2", task: "probe-deleted-untracked" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+
+    // Delete the untracked file that was present during oracle snapshot
+    rmSync(untrackedFile);
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "close must refuse when untracked file from snapshot is deleted");
+    const st = load(root);
+    assert.equal(st.status, "open", "the task must stay open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleness: credential and secret files are excluded from scanWorktree snapshot", () => {
+  const root = project();
+  try {
+    mkdirSync(join(root, "agent"), { recursive: true });
+    // Write synthetic credential fixtures (NOT real secrets)
+    writeFileSync(join(root, "agent", "models.yml"), "synthetic: token\n", "utf8");
+    writeFileSync(join(root, ".env.local"), "SYNTHETIC_KEY=fake\n", "utf8");
+    writeFileSync(join(root, "secrets.json"), "{\"synthetic\": true}\n", "utf8");
+
+    cmdStart(root, { tier: "T2", task: "probe-credentials-skipped" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+
+    const st = load(root);
+    const snap = st.artifacts?.oracle?.snapshot;
+    assert.ok(snap, "snapshot must exist");
+
+    // Assert synthetic credential files are NOT included in snapshot
+    const allSnapshotKeys = [
+      ...Object.keys(snap.tracked || {}),
+      ...Object.keys(snap.untracked || {}),
+      ...Object.keys(snap.files || {}),
+    ];
+    for (const key of allSnapshotKeys) {
+      assert.doesNotMatch(key, /models\.ya?ml|mcp\.json|\.env|secrets/i, "credential path must not be snapshotted");
+    }
+
+    // Modifying synthetic credential files must not cause acceptance staleness
+    writeFileSync(join(root, "agent", "models.yml"), "synthetic: modified_fake\n", "utf8");
+    writeFileSync(join(root, ".env.local"), "SYNTHETIC_KEY=modified_fake\n", "utf8");
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 0, "modifying credential files must not trigger staleness");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
