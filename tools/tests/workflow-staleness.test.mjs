@@ -320,3 +320,22 @@ test("staleness: credential and secret files are excluded from scanWorktree snap
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("staleness: generated worktrees and caches do not invalidate acceptance in a non-git project", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-generated-"));
+  try {
+    writeFileSync(join(root, "code.txt"), "source\n", "utf8");
+    cmdStart(root, { tier: "T2", task: "probe-generated" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified source before generated files appeared" }), 0);
+
+    for (const dir of [".tmp/worktrees", ".archmap", ".codemap", ".opencode", "cache", "logs"]) {
+      const target = join(root, dir);
+      mkdirSync(target, { recursive: true });
+      writeFileSync(join(target, "generated.txt"), "generated output\n", "utf8");
+    }
+    assert.equal(cmdClose(root, {}), 0, "generated files must not make accepted source stale");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

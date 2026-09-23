@@ -506,7 +506,10 @@ function isPathInsideRoot(root, userPath) {
 function isExcludedFromSnapshot(relPath) {
   if (!relPath) return true;
   const normalized = relPath.replace(/\\/g, "/");
-  const base = normalized.split("/").pop();
+  const parts = normalized.split("/");
+  const base = parts[parts.length - 1];
+  if (parts.some((part) => [".tmp", ".archmap", ".codemap", ".opencode"].includes(part)) ||
+      ["cache", "logs"].includes(parts[0])) return true;
 
   // Exclude harness state, runtime state, caches, VCS
   if (
