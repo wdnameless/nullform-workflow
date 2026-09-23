@@ -29,6 +29,7 @@ import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { scanRepo } from "./debt-ledger.mjs";
 
 const CHECKS_CACHE = ".workflow/dashboard-checks.json";
 const MAX_DIFF_LINES = 500;
@@ -213,39 +214,49 @@ export function collectGitStats(absRoot) {
 }
 
 /** Технический долг: запуск debt-ledger (быстро) или чтение кэша. */
+function flattenDebtMarkers(parsed) {
+  const items = [];
+  for (const [file, markers] of Object.entries(parsed?.byFile || {})) {
+    for (const m of Array.isArray(markers) ? markers : []) {
+      items.push({
+        file: file.replace(/\\/g, "/"),
+        line: m.line || null,
+        what: m.what || "",
+        ceiling: m.ceiling || "",
+        upgrade: m.upgrade || "",
+        noTrigger: Boolean(m.noTrigger),
+      });
+    }
+  }
+  return items;
+}
+
 export function collectDebt(absRoot) {
   const script = join(absRoot, "tools", "debt-ledger.mjs");
   if (!existsSync(script)) return { total: 0, noTrigger: 0, items: [], note: "debt-ledger.mjs не найден" };
 
-  const res = spawnSync(process.execPath, [script, "--json", "--root", absRoot], {
-    cwd: absRoot,
-    encoding: "utf8",
-    timeout: 20000,
-    shell: false,
-  });
-
-  if (res.status !== 0) {
-    return { total: 0, noTrigger: 0, items: [], note: "debt-ledger завершился с ошибкой" };
-  }
-
+  // 1. Быстрый вызов в том же процессе без запуска дочерних процессов (0 окон node.exe)
   try {
-    const parsed = JSON.parse(res.stdout);
-    const items = [];
-    for (const [file, markers] of Object.entries(parsed.byFile || {})) {
-      for (const m of Array.isArray(markers) ? markers : []) {
-        items.push({
-          file: file.replace(/\\/g, "/"),
-          line: m.line || null,
-          what: m.what || "",
-          ceiling: m.ceiling || "",
-          upgrade: m.upgrade || "",
-          noTrigger: Boolean(m.noTrigger),
-        });
-      }
-    }
-    return { total: parsed.total || 0, noTrigger: parsed.noTrigger || 0, items: items.slice(0, 40) };
+    const parsed = scanRepo(absRoot);
+    return { total: parsed.total || 0, noTrigger: parsed.noTrigger || 0, items: flattenDebtMarkers(parsed).slice(0, 40) };
   } catch {
-    return { total: 0, noTrigger: 0, items: [], note: "debt-ledger JSON не разобран" };
+    // Резервный вызов через CLI с обязательным windowsHide: true
+    try {
+      const res = spawnSync(process.execPath, [script, "--json", "--root", absRoot], {
+        cwd: absRoot,
+        encoding: "utf8",
+        timeout: 20000,
+        shell: false,
+        windowsHide: true,
+      });
+      if (res.status !== 0) {
+        return { total: 0, noTrigger: 0, items: [], note: "debt-ledger завершился с ошибкой" };
+      }
+      const parsed = JSON.parse(res.stdout);
+      return { total: parsed.total || 0, noTrigger: parsed.noTrigger || 0, items: flattenDebtMarkers(parsed).slice(0, 40) };
+    } catch {
+      return { total: 0, noTrigger: 0, items: [], note: "debt-ledger JSON не разобран" };
+    }
   }
 }
 
@@ -416,6 +427,7 @@ export function runChecks(absRoot) {
       encoding: "utf8",
       timeout: 45000,
       shell: false,
+      windowsHide: true,
     });
     try {
       out.autoReview = JSON.parse(res.stdout);
@@ -431,6 +443,7 @@ export function runChecks(absRoot) {
       encoding: "utf8",
       timeout: 30000,
       shell: false,
+      windowsHide: true,
     });
     try {
       out.promptBudget = JSON.parse(res.stdout);
@@ -770,70 +783,129 @@ function tailBytes(path, bytes = 96 * 1024) {
  */
 export const USAGE_TTL_MS = 90 * 1000;
 
+/**
+ * Быстрое извлечение метаданных агента напрямую с диска Paseo (без дочерних процессов).
+ */
+export function readAgentFromDisk(agentId) {
+  if (!agentId) return null;
+  const base = join(homedir(), ".paseo", "agents");
+  if (!existsSync(base)) return null;
+  try {
+    for (const dir of readdirSync(base)) {
+      const fullDir = join(base, dir);
+      try {
+        if (!statSync(fullDir).isDirectory()) continue;
+      } catch { continue; }
+      const file = join(fullDir, `${agentId}.json`);
+      if (existsSync(file)) {
+        const json = JSON.parse(readFileSync(file, "utf8"));
+        return {
+          Name: json.title || json.name || null,
+          Provider: json.provider || null,
+          Model: json.config?.model || json.runtimeInfo?.model || null,
+          Status: json.lastStatus || json.status || null,
+          Cwd: json.cwd || null,
+          CreatedAt: json.createdAt || null,
+          UpdatedAt: json.updatedAt || null,
+          nativeHandle: json.persistence?.nativeHandle || null,
+        };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/** Подсчёт расхода токенов из транскрипта сессии (JSONL) без вызова дочерних процессов. */
+export function readSessionTokensFromTranscript(jsonlPath) {
+  if (!jsonlPath || !existsSync(jsonlPath)) return null;
+  try {
+    const content = tailBytes(jsonlPath, 1024 * 1024);
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cachedTokens = 0;
+    let costUsd = 0;
+    for (const line of content.split("\n")) {
+      if (!line.includes('"usage"') && !line.includes('"totalTokens"')) continue;
+      try {
+        const obj = JSON.parse(line);
+        const u = obj.message?.usage || obj.data?.usage || obj.usage;
+        if (u) {
+          if (typeof u.input === "number") inputTokens += u.input;
+          if (typeof u.output === "number") outputTokens += u.output;
+          if (typeof u.cacheRead === "number") cachedTokens += u.cacheRead;
+          if (typeof u.totalCost === "number") costUsd += u.totalCost;
+          else if (typeof u.cost?.total === "number") costUsd += u.cost.total;
+        }
+      } catch {}
+    }
+    return { inputTokens, outputTokens, cachedTokens, costUsd: Number(costUsd.toFixed(4)) };
+  } catch {
+    return null;
+  }
+}
+
 export function collectSessionUsage(absRoot, key) {
-  if (!process.env.PASEO_AGENT_ID) return null;
+  const agentId = process.env.PASEO_AGENT_ID;
+  if (!agentId) return null;
   const cachePath = join(absRoot, DASHBOARDS_DIR, key + ".usage.json");
 
-  let cached = null;
+  // 1. Прямое чтение с диска без запуска процессов (0 окон node.exe / cmd.exe)
+  const agent = readAgentFromDisk(agentId);
+  if (agent) {
+    let tokens = null;
+    if (agent.nativeHandle) {
+      tokens = readSessionTokensFromTranscript(agent.nativeHandle);
+    }
+    const data = {
+      at: Date.now(),
+      stale: false,
+      name: agent.Name,
+      provider: agent.Provider,
+      model: agent.Model,
+      status: agent.Status,
+      cwd: agent.Cwd,
+      createdAt: agent.CreatedAt,
+      updatedAt: agent.UpdatedAt,
+      inputTokens: tokens?.inputTokens || 0,
+      outputTokens: tokens?.outputTokens || 0,
+      cachedTokens: tokens?.cachedTokens || 0,
+      costUsd: tokens?.costUsd ?? null,
+    };
+    try {
+      const dir = dirname(cachePath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(cachePath, JSON.stringify({ at: Date.now(), data }), "utf8");
+    } catch {}
+    return data;
+  }
+
+  // 2. Фолбэк на кэш
   if (existsSync(cachePath)) {
     try {
-      cached = JSON.parse(readFileSync(cachePath, "utf8"));
+      const cached = JSON.parse(readFileSync(cachePath, "utf8"));
+      if (cached && cached.data) {
+        const u = cached.data;
+        const usage = u.LastUsage || {};
+        return {
+          at: cached.at,
+          stale: true,
+          name: u.Name || u.name || null,
+          provider: u.Provider || u.provider || null,
+          model: u.Model || u.model || null,
+          status: u.Status || u.status || null,
+          cwd: u.Cwd || u.cwd || null,
+          createdAt: u.CreatedAt || u.createdAt || null,
+          updatedAt: u.UpdatedAt || u.updatedAt || null,
+          inputTokens: u.inputTokens ?? usage.InputTokens ?? 0,
+          outputTokens: u.outputTokens ?? usage.OutputTokens ?? 0,
+          cachedTokens: u.cachedTokens ?? usage.CachedTokens ?? 0,
+          costUsd: u.costUsd ?? (typeof usage.CostUsd === "number" ? Number(usage.CostUsd.toFixed(4)) : null),
+        };
+      }
     } catch {}
   }
 
-  const fresh = cached && Date.now() - (cached.at || 0) < USAGE_TTL_MS;
-  if (!fresh) refreshUsageAsync(cachePath);
-
-  if (!cached || !cached.data) return null;
-  const u = cached.data || {};
-  const usage = u.LastUsage || {};
-  return {
-    at: cached.at,
-    stale: !fresh,
-    name: u.Name || null,
-    provider: u.Provider || null,
-    model: u.Model || null,
-    status: u.Status || null,
-    cwd: u.Cwd || null,
-    createdAt: u.CreatedAt || null,
-    updatedAt: u.UpdatedAt || null,
-    inputTokens: usage.InputTokens || 0,
-    outputTokens: usage.OutputTokens || 0,
-    cachedTokens: usage.CachedTokens || 0,
-    costUsd: typeof usage.CostUsd === "number" ? Number(usage.CostUsd.toFixed(4)) : null,
-  };
-}
-
-/** Фоновое обновление кэша расхода: отдельный процесс, не блокирует рендер. */
-function refreshUsageAsync(cachePath) {
-  const agentId = process.env.PASEO_AGENT_ID;
-  if (!agentId) return;
-  try {
-    const dir = dirname(cachePath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-    // Хелпер: опросить paseo и записать {at, data}. Отдельный процесс нужен,
-    // потому что paseo отвечает секундами, а страница опрашивается каждые 3 с.
-    const helper = [
-      'const { spawnSync } = require("node:child_process");',
-      'const { writeFileSync } = require("node:fs");',
-      "const id = process.argv[1], out = process.argv[2];",
-      'const bin = process.env.PASEO_CLI || "paseo";',
-      'const res = spawnSync(bin, ["inspect", id, "--json"], { encoding: "utf8", shell: true, windowsHide: true, timeout: 20000 });',
-      "let data = null;",
-      'try { data = JSON.parse(res.stdout); } catch {}',
-      'if (data) { try { writeFileSync(out, JSON.stringify({ at: Date.now(), data }), "utf8"); } catch {} }',
-    ].join(" ");
-
-    const child = spawn(process.execPath, ["-e", helper, agentId, cachePath], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-  } catch {
-    // расход — приятный бонус, не условие работы
-  }
+  return null;
 }
 
 /** События воркфлоу из .workflow/events.jsonl (последние N). */
@@ -2092,6 +2164,7 @@ function handleRequest(req, res, absRoot) {
       encoding: "utf8",
       timeout: 15000,
       shell: false,
+      windowsHide: true,
     });
     const text = (diff.stdout || diff.stderr || "Нет изменений").split("\n").slice(0, MAX_DIFF_LINES).join("\n");
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
@@ -2161,6 +2234,7 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   const child = spawn(process.execPath, [selfPath, "--serve", "--no-open", "--root", absRoot, "--port", String(chosenPort), "--session", key], {
     detached: true,
     stdio: "ignore",
+    windowsHide: true,
   });
   child.unref();
 
