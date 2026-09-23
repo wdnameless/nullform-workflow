@@ -302,32 +302,60 @@ function readPluginsManifest(path) {
     }));
 }
 
-/** Имена установленных плагинов из вывода `omp plugin list --json` (npm и marketplace). */
-function installedPluginNames(stdout) {
+/** Ожидаемая версия из spec вида 'package@1.2.3'; null если версия не указана. */
+function expectedVersionOf(plugin) {
+  if (!plugin || typeof plugin.spec !== "string") return null;
+  const spec = plugin.spec;
+  const lastAt = spec.lastIndexOf("@");
+  if (lastAt > 0) {
+    return spec.slice(lastAt + 1);
+  }
+  return null;
+}
+
+/** Установленные плагины из вывода `omp plugin list --json` → Map<name, {name, version}>. */
+function installedPlugins(stdout) {
   let parsed;
   try {
     parsed = JSON.parse(stdout);
   } catch (e) {
     throw new Error(`Ошибка разбора JSON: ${e.message}`);
   }
-  const names = new Set();
+  const map = new Map();
   if (Array.isArray(parsed?.npm)) {
     for (const p of parsed.npm) {
-      if (p && typeof p.name === "string" && p.name) names.add(p.name);
+      if (p && typeof p.name === "string" && p.name) {
+        map.set(p.name, {
+          name: p.name,
+          version: typeof p.version === "string" ? p.version : null,
+        });
+      }
     }
   }
   if (Array.isArray(parsed?.marketplace)) {
     for (const p of parsed.marketplace) {
-      if (p && typeof p.id === "string") {
-        const id = p.id.includes("@") ? p.id.split("@")[0] : p.id;
-        names.add(id);
+      if (p) {
+        let name = typeof p.name === "string" ? p.name : null;
+        let version = typeof p.version === "string" ? p.version : null;
+        if (!name && typeof p.id === "string") {
+          const lastAt = p.id.lastIndexOf("@");
+          if (lastAt > 0) {
+            name = p.id.slice(0, lastAt);
+            if (!version) version = p.id.slice(lastAt + 1);
+          } else {
+            name = p.id;
+          }
+        }
+        if (name) {
+          map.set(name, { name, version });
+        }
       }
     }
   }
-  if (names.size === 0 && !Array.isArray(parsed?.npm) && !Array.isArray(parsed?.marketplace)) {
+  if (map.size === 0 && !Array.isArray(parsed?.npm) && !Array.isArray(parsed?.marketplace)) {
     throw new Error("в выводе нет массива npm или marketplace");
   }
-  return [...names];
+  return map;
 }
 
 /** Причина WARN по результату `omp plugin doctor`; пустая строка — чисто. */
@@ -1010,7 +1038,7 @@ export function runDoctor(options) {
             : `omp plugin list завершился с кодом ${listed.status}${tail ? `: ${tail}` : ""}`;
         } else {
           try {
-            installed = installedPluginNames(listed.stdout);
+            installed = installedPlugins(listed.stdout);
           } catch (err) {
             listError = `вывод omp plugin list не разобран: ${err.message}`;
           }
@@ -1023,31 +1051,64 @@ export function runDoctor(options) {
             detail: `Не удалось проверить установку плагинов: ${listError}. Проверьте вручную: omp plugin list --json`,
           });
         } else {
-          const missing = declared.filter((p) => !installed.includes(p.name));
-          const extra = installed.filter((n) => !declared.some((p) => p.name === n));
+          const missing = declared.filter((p) => !installed.has(p.name));
+          const extra = [...installed.keys()].filter((n) => !declared.some((p) => p.name === n));
+
+          const versionMismatches = [];
+          for (const p of declared) {
+            if (installed.has(p.name)) {
+              const inst = installed.get(p.name);
+              const exp = expectedVersionOf(p);
+              if (exp && inst.version && inst.version !== exp) {
+                versionMismatches.push({
+                  name: p.name,
+                  expected: exp,
+                  installed: inst.version,
+                  required: isRequiredPlugin(p),
+                  spec: p.spec,
+                });
+              }
+            }
+          }
+
+          const missingRequired = missing.filter((p) => isRequiredPlugin(p));
+          const missingOptional = missing.filter((p) => !isRequiredPlugin(p));
+          const mismatchedRequired = versionMismatches.filter((m) => m.required);
+          const mismatchedOptional = versionMismatches.filter((m) => !m.required);
 
           let status = "pass";
           let detail = `${declared.length}/${declared.length} плагинов установлено`;
-          const missingRequired = missing.filter((p) => isRequiredPlugin(p));
-          const missingOptional = missing.filter((p) => !isRequiredPlugin(p));
 
+          const parts = [];
           if (missingRequired.length > 0) {
-            status = "fail";
             const reqHints = summarizeList(missingRequired.map((p) => `omp plugin install ${p.spec}`));
-            detail = `Не установлены обязательные плагины (${missingRequired.length}): ${summarizeList(missingRequired.map((p) => p.name))}. Установить: ${reqHints}`;
-            if (missingOptional.length > 0) {
-              const optHints = summarizeList(missingOptional.map((p) => `omp plugin install ${p.spec}`));
-              detail += `. Не установлены опциональные плагины (${missingOptional.length}): ${summarizeList(missingOptional.map((p) => p.name))}. Установить: ${optHints}`;
-            }
-          } else if (missingOptional.length > 0) {
+            parts.push(`Не установлены обязательные плагины (${missingRequired.length}): ${summarizeList(missingRequired.map((p) => p.name))}. Установить: ${reqHints}`);
+          }
+          if (mismatchedRequired.length > 0) {
+            const vHints = summarizeList(mismatchedRequired.map((m) => `${m.name} (${m.installed} != ${m.expected})`));
+            const installHints = summarizeList(mismatchedRequired.map((m) => `omp plugin install ${m.spec}`));
+            parts.push(`Несоответствие версии обязательных плагинов (${mismatchedRequired.length}): ${vHints}. Обновить: ${installHints}`);
+          }
+          if (missingOptional.length > 0) {
+            const optHints = summarizeList(missingOptional.map((p) => `omp plugin install ${p.spec}`));
+            parts.push(`Не установлены опциональные плагины (${missingOptional.length} из ${declared.length}): ${summarizeList(missingOptional.map((p) => p.name))}. Установить: ${optHints}`);
+          }
+          if (mismatchedOptional.length > 0) {
+            const optVHints = summarizeList(mismatchedOptional.map((m) => `${m.name} (${m.installed} != ${m.expected})`));
+            const installHints = summarizeList(mismatchedOptional.map((m) => `omp plugin install ${m.spec}`));
+            parts.push(`Несоответствие версии опциональных плагинов (${mismatchedOptional.length}): ${optVHints}. Обновить: ${installHints}`);
+          }
+
+          if (missingRequired.length > 0 || mismatchedRequired.length > 0) {
+            status = "fail";
+            detail = parts.join(". ");
+          } else if (missingOptional.length > 0 || mismatchedOptional.length > 0) {
             status = options.requirePlugins ? "fail" : "warn";
-            const hints = summarizeList(missingOptional.map((p) => `omp plugin install ${p.spec}`));
-            detail = `Не установлены опциональные плагины (${missingOptional.length} из ${declared.length}): ${summarizeList(missingOptional.map((p) => p.name))}. Установить: ${hints}`;
+            detail = parts.join(". ");
           }
           if (extra.length > 0) {
             detail += ` Установлены сверх манифеста (${extra.length}): ${summarizeList(extra)}`;
           }
-
           // Необязательный health-чек самих плагинов: его ненулевой код — WARN
           // с хвостом вывода, но никогда не FAIL (и не запускается, если `omp`
           // уже не ответил выше — иначе одна причина дала бы два предупреждения).
