@@ -14,7 +14,9 @@
 .PARAMETER UserRoot
     Alias for UserProfileDir.
 .PARAMETER Model
-    Override model to set for newly installed profile(s). If omitted and profile is new, model is left blank or default.
+    Override model to set for newly installed profile(s). If omitted and profile is new, fails actionably.
+.PARAMETER HarnessRoot
+    Root path of the installed workflow harness. Used to expand <HarnessRoot> in profile notes.
 .PARAMETER Force
     Force re-application of owned profile fields while still preserving unrelated profiles.
 #>
@@ -23,6 +25,7 @@ param(
     [string]$UserHome = "",
     [string]$UserRoot = "",
     [string]$Model = "",
+    [string]$HarnessRoot = "",
     [switch]$Force
 )
 
@@ -47,6 +50,25 @@ $ProfilesSource = Join-Path $ScriptDir "profiles.json"
 if (-not (Test-Path $ProfilesSource)) {
     Write-Error "Source profiles.json not found at $ProfilesSource"
     exit 1
+}
+
+# Resolve HarnessRoot for expanding <HarnessRoot> tokens in profile notes
+if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
+    $harnessPointer = Join-Path $UserProfileDir ".omp\agent\.harness-root"
+    if (Test-Path $harnessPointer) {
+        $HarnessRoot = (Get-Content $harnessPointer -Raw -Encoding UTF8).Trim()
+    }
+    if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
+        $HarnessRoot = Split-Path -Parent $ScriptDir
+    }
+}
+$harnessSlash = $HarnessRoot.Replace([char]92, [char]47).TrimEnd('/')
+
+function Expand-Notes($notesText) {
+    if ($notesText -is [string] -and $notesText -match '<HarnessRoot>') {
+        return $notesText.Replace('<HarnessRoot>', $harnessSlash)
+    }
+    return $notesText
 }
 
 $PaseoConfigDir = Join-Path $UserProfileDir ".paseo"
@@ -120,11 +142,15 @@ foreach ($p in $existingProfiles) {
             }
             # Preserve user's configured model if set and user didn't specify a new -Model
             if ([string]::IsNullOrWhiteSpace($Model)) {
-                if ($p.PSObject.Properties["model"] -and -not [string]::IsNullOrWhiteSpace($p.model) -and $p.model -ne "my-provider/default") {
+                if ($p.PSObject.Properties["model"] -and -not [string]::IsNullOrWhiteSpace($p.model)) {
                     $merged["model"] = $p.model
                 }
             } else {
                 $merged["model"] = $Model
+            }
+            # Expand <HarnessRoot> in notes
+            if ($merged.Contains("notes")) {
+                $merged["notes"] = Expand-Notes $merged["notes"]
             }
             # Preserve existing identity fields (id, name, provider)
             $merged["id"] = $p.id
@@ -142,7 +168,11 @@ foreach ($p in $existingProfiles) {
             }
             $retainedProfiles += (New-Object PSObject -Property $merged)
         } else {
-            # Without -Force: preserve existing profile entirely (user-defined model, notes, etc.)
+            # Without -Force: preserve existing profile entirely (user-defined model, etc.),
+            # but expand <HarnessRoot> in notes if present
+            if ($p.PSObject.Properties["notes"]) {
+                $p.notes = Expand-Notes $p.notes
+            }
             $retainedProfiles += $p
         }
     }
@@ -167,7 +197,11 @@ foreach ($sp in $sourceProfiles) {
         }
         $newP = [ordered]@{}
         foreach ($prop in $sp.PSObject.Properties) {
-            $newP[$prop.Name] = $prop.Value
+            $val = $prop.Value
+            if ($prop.Name -eq "notes") {
+                $val = Expand-Notes $val
+            }
+            $newP[$prop.Name] = $val
         }
         $newP["model"] = $targetModel
         $retainedProfiles += (New-Object PSObject -Property $newP)

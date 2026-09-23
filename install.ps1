@@ -15,8 +15,8 @@
 
   -SkipPlugins skips the plugin step. `agent\plugins.json` lists the OMP plugins
   this harness expects; each `omp plugin install <spec>` is idempotent, so the
-  step is safe to re-run. A missing `omp` or a single failed plugin is reported
-  as a warning - plugins are an add-on, never a precondition for the install.
+  step is safe to re-run. Required plugins (pi-lens, oh-my-pi-plugin-morph) fail
+  installation if absent; optional plugins report a warning.
 
   Where things land (all OMP-native paths):
     <HarnessRoot>\agent\           agent definitions + tools (the "live tree")
@@ -367,17 +367,47 @@ if ($SetupPaseo) {
   if (-not (Test-Path $setupScript)) {
     Die "setup-paseo.ps1 not found at $setupScript"
   }
-  $paseoArgs = @("-ExecutionPolicy", "Bypass", "-File", $setupScript, "-UserProfileDir", $UserHome)
-  # The collected inputs name it $modelId; $configuredModel never existed, so a
-  # clean -SetupPaseo install silently dropped -Model and setup-paseo.ps1 died.
-  if ($providerBase -and $modelId) {
-    $paseoArgs += @("-Model", "my-provider/$modelId")
+
+  $hasConfiguredModel = [bool]($providerBase -and $modelId)
+  $paseoConfigFile = Join-Path $UserHome ".paseo\config.json"
+  $hasExistingPaseoModel = $false
+  if (Test-Path $paseoConfigFile) {
+    try {
+      $paseoCfg = Get-Content -Raw -Encoding UTF8 $paseoConfigFile | ConvertFrom-Json
+      if ($paseoCfg.daemon -and $paseoCfg.daemon.agentProfiles) {
+        foreach ($p in $paseoCfg.daemon.agentProfiles) {
+          if ($p.id -eq "agent_profile_orchestrator" -or ($p.provider -eq "omp" -and $p.name -eq "Orchestrator")) {
+            if ($p.model -and -not [string]::IsNullOrWhiteSpace($p.model) -and $p.model -ne "my-provider/default") {
+              $hasExistingPaseoModel = $true
+              break
+            }
+          }
+        }
+      }
+    } catch {}
   }
-  & powershell @paseoArgs
-  if ($LASTEXITCODE -ne 0) {
-    Die "setup-paseo.ps1 failed with exit code $LASTEXITCODE. If configuring a brand-new profile, ensure an explicit model is available."
+
+  if (-not $hasConfiguredModel -and -not $hasExistingPaseoModel) {
+    Warn "Paseo setup skipped: no provider model configured. Run 'powershell -File paseo/setup-paseo.ps1 -Model <provider/model>' after configuring a model."
+  } else {
+    $paseoArgs = @("-ExecutionPolicy", "Bypass", "-File", $setupScript, "-UserProfileDir", $UserHome, "-HarnessRoot", $HarnessRoot)
+    if ($hasConfiguredModel) {
+      $paseoArgs += @("-Model", "my-provider/$modelId")
+    }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      & powershell @paseoArgs
+      $paseoExit = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $prevEap
+    }
+    if ($paseoExit -ne 0) {
+      Warn "setup-paseo.ps1 returned code $paseoExit. Paseo profile integration was skipped or incomplete."
+    } else {
+      Ok "Optional Paseo integration executed via setup-paseo.ps1"
+    }
   }
-  Ok "Optional Paseo integration executed via setup-paseo.ps1"
 } else {
   Ok "Base install leaves Paseo untouched. To configure Paseo profiles explicitly, run: powershell -File paseo/setup-paseo.ps1"
 }
@@ -405,32 +435,41 @@ if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
 
 # ---------- 9. OMP plugins ----------
 # Manifest-driven (`agent\plugins.json`): every `omp plugin install <spec>` is
-# idempotent, and a single failure is reported without failing the harness
-# install — a plugin is an add-on, not a precondition for the harness.
+# idempotent. Required plugins marked in the manifest must install successfully.
+# Missing manifest, unparseable manifest, missing omp, or failed required plugin
+# aborts the harness install unless -SkipPlugins is explicitly passed.
+# Optional plugins report warnings without failing the harness install.
 if ($SkipPlugins) {
   Warn "plugins: skipped (-SkipPlugins)"
 } else {
   $pluginsManifest = Join-Path $HarnessRoot "agent\plugins.json"
   if (-not (Test-Path $pluginsManifest)) {
-    Warn "plugins: manifest not found ($pluginsManifest)"
-  } elseif (-not (Get-Command omp -ErrorAction SilentlyContinue)) {
-    Warn "omp not found in PATH - plugins not installed. Run 'omp plugin install <spec>' for each entry of $pluginsManifest"
-  } else {
-    $plugins = $null
-    try {
-      $plugins = @((Get-Content $pluginsManifest -Raw -Encoding UTF8 | ConvertFrom-Json).plugins | Where-Object { $_.spec })
-    } catch {
-      Warn "plugins: manifest not parsed ($($_.Exception.Message))"
-    }
+    Die "plugins: manifest not found ($pluginsManifest). Pass -SkipPlugins to skip plugin installation."
+  }
+  if (-not (Get-Command omp -ErrorAction SilentlyContinue)) {
+    Die "omp not found in PATH - required plugins cannot be installed. Pass -SkipPlugins to skip plugin installation or install omp."
+  }
+  $plugins = $null
+  try {
+    $plugins = @((Get-Content $pluginsManifest -Raw -Encoding UTF8 | ConvertFrom-Json).plugins | Where-Object { $_.spec })
+  } catch {
+    Die "plugins: manifest not parsed ($($_.Exception.Message))"
+  }
 
-    if ($null -ne $plugins) {
-      $pluginsOk = 0
-      $pluginsFailed = @()
-      foreach ($plugin in $plugins) {
-        if ($plugin.name -eq 'cocoindex-code' -and -not (Get-Command ccc -ErrorAction SilentlyContinue)) {
+  if ($null -ne $plugins) {
+    $pluginsOk = 0
+    $requiredFailed = @()
+    $optionalFailed = @()
+    foreach ($plugin in $plugins) {
+      $isReq = ($plugin.required -eq $true)
+      if ($plugin.name -eq 'cocoindex-code' -and -not (Get-Command ccc -ErrorAction SilentlyContinue)) {
+        if ($isReq) {
+          $requiredFailed += $plugin.name
+        } else {
           Warn "plugin cocoindex-code skipped: 'ccc' binary not found on PATH. Run: uv tool install 'cocoindex-code[full]'"
-          continue
         }
+        continue
+      }
         # A native command that writes to stderr must not become a terminating
         # error here: one bad plugin may not abort the remaining installs.
         $prevEap = $ErrorActionPreference
@@ -444,17 +483,27 @@ if ($SkipPlugins) {
         } finally {
           $ErrorActionPreference = $prevEap
         }
-        if ($pluginExit -eq 0) { $pluginsOk++ } else { $pluginsFailed += $plugin.name }
+        if ($pluginExit -eq 0) {
+          $pluginsOk++
+        } else {
+          if ($isReq) {
+            $requiredFailed += $plugin.name
+          } else {
+            $optionalFailed += $plugin.name
+          }
+        }
       }
-      foreach ($name in $pluginsFailed) { Warn "plugin failed: $name" }
-      if ($pluginsFailed.Count -eq 0) {
-        Ok "plugins: $pluginsOk ok, 0 failed"
+      foreach ($name in $optionalFailed) { Warn "optional plugin failed: $name" }
+      foreach ($name in $requiredFailed) { Write-Host "  [XX] required plugin failed: $name" -ForegroundColor Red }
+      if ($requiredFailed.Count -gt 0) {
+        Die "Required plugin(s) failed to install: $($requiredFailed -join ', '). Mandated workflow depends on these plugins."
+      } elseif ($optionalFailed.Count -gt 0) {
+        Warn "plugins: $pluginsOk ok, $($optionalFailed.Count) optional failed"
       } else {
-        Warn "plugins: $pluginsOk ok, $($pluginsFailed.Count) failed"
+        Ok "plugins: $pluginsOk ok, 0 failed"
       }
     }
   }
-}
 
 # ---------- 9b. Plugin console windows (Windows only) ----------
 # Paseo (и любой GUI-хост) не имеет своей консоли: дочерний процесс плагина,
