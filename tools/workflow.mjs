@@ -503,13 +503,14 @@ function isPathInsideRoot(root, userPath) {
   const rel = relative(absRoot, absTarget);
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
+const GENERATED_DIRS = new Set([".tmp", ".archmap", ".codemap", ".opencode"]);
 function isExcludedFromSnapshot(relPath) {
   if (!relPath) return true;
   const normalized = relPath.replace(/\\/g, "/");
   const parts = normalized.split("/");
   const base = parts[parts.length - 1];
-  if (parts.some((part) => [".tmp", ".archmap", ".codemap", ".opencode"].includes(part)) ||
-      ["cache", "logs"].includes(parts[0])) return true;
+  if (parts.some((part) => GENERATED_DIRS.has(part)) ||
+      parts[0] === "cache" || parts[0] === "logs") return true;
 
   // Exclude harness state, runtime state, caches, VCS
   if (
@@ -599,9 +600,6 @@ function scanWorktree(root) {
     walk(root);
     return { isGit: false, files };
   }
-}
-function takeAcceptanceSnapshot(root) {
-  return scanWorktree(root);
 }
 
 function validateArtifacts(root, st) {
@@ -761,7 +759,7 @@ function cmdArtifact(root, flags) {
 
   const record = { at: new Date().toISOString(), path, detail };
   if (kind === "oracle") {
-    record.snapshot = takeAcceptanceSnapshot(root);
+    record.snapshot = scanWorktree(root);
   }
   st.artifacts[kind] = record;
   save(root, st);

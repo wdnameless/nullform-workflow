@@ -280,9 +280,6 @@ export function runOmp(args, { timeout = 60000 } = {}) {
   };
 }
 
-function isRequiredPlugin(plugin) {
-  return plugin?.required === true;
-}
 
 /** Манифест плагинов `agent/plugins.json` → `[{name, spec, required}]`; без `spec` берётся имя. */
 function readPluginsManifest(path) {
@@ -1074,15 +1071,15 @@ export function runDoctor(options) {
                   name: p.name,
                   expected: exp,
                   installed: inst.version,
-                  required: isRequiredPlugin(p),
+                  required: p.required,
                   spec: p.spec,
                 });
               }
             }
           }
 
-          const missingRequired = missing.filter((p) => isRequiredPlugin(p));
-          const missingOptional = missing.filter((p) => !isRequiredPlugin(p));
+          const missingRequired = missing.filter((p) => p.required);
+          const missingOptional = missing.filter((p) => !p.required);
           const mismatchedRequired = versionMismatches.filter((m) => m.required);
           const mismatchedOptional = versionMismatches.filter((m) => !m.required);
 
