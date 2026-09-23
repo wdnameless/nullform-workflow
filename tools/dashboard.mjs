@@ -2044,8 +2044,10 @@ export function isPaseoWorkspace() {
   return Boolean(process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI);
 }
 
-/** Открыть URL в браузере по умолчанию. */
+/** Открыть URL в браузере по умолчанию (вне Paseo IDE). */
 export function openInBrowser(url) {
+  // Внутри Paseo никогда не запускаем внешний браузер ОС: дашборд открывается только в IDE browser (browser_new_tab).
+  if (isPaseoWorkspace() && process.env.NF_FORCE_SYSTEM_BROWSER !== "1") return;
   const platform = process.platform;
   if (platform === "win32") {
     spawn("cmd.exe", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
@@ -2120,8 +2122,8 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   const absRoot = resolve(root);
   const key = sessionKey(session);
   const chosenPort = port || portForSession(key);
-  // Открываем браузер всегда, если не передан флаг тишины (--no-open или NF_NO_OPEN=1).
-  const openSystem = Boolean(open) && process.env.NF_NO_OPEN !== "1";
+  // В Paseo системный браузер не открываем: страницу показывает встроенный браузер IDE (browser_new_tab).
+  const openSystem = Boolean(open) && !isPaseoWorkspace() && process.env.NF_NO_OPEN !== "1";
 
   // 1. Рантайм-файл: быстрый путь.
   const existing = readRuntime(absRoot, key);
