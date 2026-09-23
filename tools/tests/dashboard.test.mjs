@@ -667,6 +667,19 @@ test("R05: HTTP-границы (/, /api/state, /api/diff) не отдают чу
     assert.ok(state.git.added > 0);
     assert.ok(state.arch && state.arch.name, "архитектурное дерево доступно");
     assert.ok(Array.isArray(state.modules), "список модулей доступен");
+    // Регресс: Схема архитектуры не должна терять fileCount и показывать "файлов 0"
+    const totalModuleFiles = state.modules.reduce((s, m) => s + m.fileCount, 0);
+    assert.equal(state.arch.files, totalModuleFiles, "количество файлов в корне схемы совпадает с суммой по модулям");
+    for (const child of state.arch.children || []) {
+      const mod = state.modules.find((m) => m.path === child.name);
+      if (mod) {
+        assert.equal(child.files, mod.fileCount, `файлы в узле схемы ${child.name} совпадают с модулем`);
+      }
+      const graphNode = state.archGraph.nodes.find((n) => n.id === child.name);
+      if (graphNode) {
+        assert.equal(child.files, graphNode.files, `файлы в узле схемы ${child.name} совпадают с графом`);
+      }
+    }
     assert.equal(state.events[0].kind, "artifact");
     assert.equal(state.events[0].status, "recon");
     // --- 2. / (HTML) ---

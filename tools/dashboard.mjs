@@ -2421,15 +2421,18 @@ export function sanitizeHttpState(data) {
 
   function cleanArchNode(node) {
     if (!node) return null;
+    const isFile = node.kind === "file";
+    const files = typeof node.files === "number" ? Math.max(0, node.files) : (Array.isArray(node.children) ? node.children.length : 0);
     return {
       name: String(node.name || ""),
-      kind: node.kind === "file" ? "file" : "dir",
+      kind: isFile ? "file" : (node.kind === "root" ? "root" : (node.kind || "dir")),
       lines: Number(node.lines) || 0,
+      files: isFile ? undefined : files,
       path: node.path ? String(node.path).replace(/\\/g, "/") : undefined,
       children: Array.isArray(node.children) ? node.children.map(cleanArchNode).filter(Boolean) : undefined,
     };
   }
-  const arch = cleanArchNode(data.arch) || { name: "project", kind: "dir", lines: 0, children: [] };
+  const arch = cleanArchNode(data.arch) || { name: "project", kind: "dir", lines: 0, files: 0, children: [] };
 
   const archGraph = {
     nodes: (data.archGraph?.nodes || []).map((n) => ({
