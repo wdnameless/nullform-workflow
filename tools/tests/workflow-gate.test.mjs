@@ -271,7 +271,7 @@ test("gate: external manifest or openspec symlink pointing outside project root 
   }
 });
 
-test("check-ci: rejects oracle with NOT ACCEPTED verdict", () => {
+test("check-ci: distinguishes anchored positive/negative verdicts from prose words", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-gate-not-accepted-"));
   try {
     const changeId = "feature-verdict";
@@ -284,18 +284,25 @@ test("check-ci: rejects oracle with NOT ACCEPTED verdict", () => {
     writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
     writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- export fn(): void\n", "utf8");
 
-    // NOT ACCEPTED must be rejected even though it contains substring ACCEPT
+    // (1) Verdict: NOT ACCEPTED must fail
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: NOT ACCEPTED\nBoundary checks failed.\n", "utf8");
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "NOT ACCEPTED verdict must fail");
 
-    // Explicit positive verdict passes
-    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nBoundary checks passed.\n", "utf8");
-    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "explicit positive ACCEPT verdict must pass");
+    // (2) Anchored Verdict: REJECT alongside anchored ACCEPT must fail
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nVerdict: REJECT\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "contradictory anchored REJECT alongside ACCEPT must fail");
+
+    // (3) Verdict: ACCEPT with ordinary prose using the word 'rejected' must pass
+    writeFileSync(
+      join(changeDir, "oracle.md"),
+      "# Oracle\nVerdict: ACCEPT\nExternal symlink artifacts are rejected; contradictory wrapper status is rejected.\n",
+      "utf8"
+    );
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "Verdict: ACCEPT with prose 'rejected' must pass");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
-
 test("check-ci: rejects manifest modified in commits after oracle acceptance", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-gate-post-oracle-"));
   function git(...args) {

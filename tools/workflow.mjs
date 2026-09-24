@@ -782,6 +782,14 @@ function scanWorktree(root) {
     return { isGit: false, files };
   }
 }
+const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict\*{0,2}:\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict\*{0,2}\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
+const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict\*{0,2}:\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict\*{0,2}\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
+
+function isPositiveOracleVerdict(text) {
+  if (!text || typeof text !== "string") return false;
+  return POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text);
+}
+
 
 function validateArtifacts(root, st) {
   const reqs = requiredFor(st.tier);
@@ -859,9 +867,7 @@ function validateArtifacts(root, st) {
 
     if (r.kind === "oracle") {
       const detail = a.detail || "";
-      const isNegated = /\b(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?\b/i.test(detail) || /\bREJECT(?:ED)?\b/i.test(detail);
-      const isPositive = /(?:^|\n)\s*(?:#+\s*)?(?:Verdict:\s*)?ACCEPT(?::|\s|$)/i.test(detail) || /(?:^|\n)\s*\|\s*Verdict\s*\|\s*ACCEPT\b/i.test(detail);
-      if (isNegated || !isPositive) {
+      if (!isPositiveOracleVerdict(detail)) {
         invalid.push("oracle: verdict is REJECT (must be ACCEPT)");
       }
       if (a.path) {
@@ -869,9 +875,7 @@ function validateArtifacts(root, st) {
         if (existsSync(fullPath)) {
           let body = "";
           try { body = readFileSync(fullPath, "utf8"); } catch {}
-          const bodyNegated = /\b(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?\b/i.test(body) || /\bREJECT(?:ED)?\b/i.test(body);
-          const bodyPositive = /(?:^|\n)\s*(?:#+\s*)?(?:Verdict:\s*)?ACCEPT(?::|\s|$)/im.test(body) || /(?:^|\n)\s*\|\s*Verdict\s*\|\s*ACCEPT\b/i.test(body);
-          if (bodyNegated || !bodyPositive) {
+          if (!isPositiveOracleVerdict(body)) {
             invalid.push(`oracle: verdict in '${a.path}' is REJECT`);
           }
         }
@@ -1481,9 +1485,7 @@ function cmdCheckCi(root, flags) {
   }
 
   const oracleBody = readFileSync(oraclePath, "utf8");
-  const isNegated = /\b(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?\b/i.test(oracleBody) || /\bREJECT(?:ED)?\b/i.test(oracleBody);
-  const hasAnchoredPositive = /(?:^|\n)\s*(?:#+\s*)?(?:Verdict:\s*)?ACCEPT(?::|\s|$)/im.test(oracleBody) || /(?:^|\n)\s*\|\s*Verdict\s*\|\s*ACCEPT\b/i.test(oracleBody);
-  if (isNegated || !hasAnchoredPositive) {
+  if (!isPositiveOracleVerdict(oracleBody)) {
     console.error(`workflow check-ci: oracle evidence in '${oraclePath}' must state an explicit anchored positive ACCEPT verdict.`);
     return 1;
   }
