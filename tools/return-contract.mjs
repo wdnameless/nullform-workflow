@@ -290,11 +290,9 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
   }
 
   const args = parseArgs(argv);
-  let content = "";
-
   if (args.text !== null) {
     content = args.text;
-  } else if (args._[0]) {
+  } else if (args._[0] && args._[0] !== "-") {
     const file = args._[0];
     if (!existsSync(file)) {
       if (args.json) {
@@ -306,12 +304,28 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
     }
     content = readFileSync(file, "utf8");
   } else {
-    console.log("return-contract.mjs — валидация контракта возврата субагента\n");
-    console.log("  node return-contract.mjs <file> [--json]");
-    console.log("  node return-contract.mjs --text \"<content>\" [--json]\n");
-    process.exit(0);
+    // Read from stdin (file descriptor 0 or "-" argument)
+    try {
+      content = readFileSync(0, "utf8");
+    } catch {
+      content = "";
+    }
+    if (!content.trim()) {
+      if (process.stdin.isTTY) {
+        console.log("return-contract.mjs — валидация контракта возврата субагента\n");
+        console.log("  node return-contract.mjs <file> [--json]");
+        console.log("  node return-contract.mjs --text \"<content>\" [--json]");
+        console.log("  echo \"<content>\" | node return-contract.mjs [--json]\n");
+        process.exit(1);
+      }
+      if (args.json) {
+        console.log(JSON.stringify({ valid: false, errors: ["Пустой ввод: контракт возврата не получен на stdin."] }, null, 2));
+      } else {
+        console.error("ОШИБКА: пустой ввод: контракт возврата не получен на stdin.");
+      }
+      process.exit(1);
+    }
   }
-
   const result = validateReturnContract(content);
 
   if (args.json) {

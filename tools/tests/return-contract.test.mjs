@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { validateReturnContract } from "../return-contract.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -198,4 +199,34 @@ test("accepts wrapper with outer status: 'partial' when summary specifies DONE_W
   const result = validateReturnContract(wrapperPayload);
   assert.equal(result.valid, true);
   assert.equal(result.status, "DONE_WITH_CONCERNS");
+});
+
+test("CLI return-contract.mjs reads valid contract from piped stdin", () => {
+  const scriptPath = join(__dirname, "..", "return-contract.mjs");
+  const input = JSON.stringify({
+    status: "success",
+    tests_passed: false,
+    summary: "STATUS: DONE · FILES: tools/a.mjs · TESTS: not-run(parent-owned) · INTERFACES: none · REQUIREMENTS: R11 · CONCERNS: none",
+  });
+
+  const res = spawnSync(process.execPath, [scriptPath, "--json"], {
+    input,
+    encoding: "utf8",
+  });
+  assert.equal(res.status, 0);
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.status, "DONE");
+});
+
+test("CLI return-contract.mjs fails with non-zero exit on empty stdin", () => {
+  const scriptPath = join(__dirname, "..", "return-contract.mjs");
+  const res = spawnSync(process.execPath, [scriptPath, "--json"], {
+    input: "   \n   ",
+    encoding: "utf8",
+  });
+  assert.notEqual(res.status, 0);
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.valid, false);
+  assert.ok(parsed.errors.some((e) => e.includes("Пустой ввод")));
 });
