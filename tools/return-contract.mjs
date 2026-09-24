@@ -290,6 +290,7 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
   }
 
   const args = parseArgs(argv);
+  let content = "";
   if (args.text !== null) {
     content = args.text;
   } else if (args._[0] && args._[0] !== "-") {
