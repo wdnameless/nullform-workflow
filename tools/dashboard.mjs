@@ -35,6 +35,60 @@ import { scanRepo } from "./debt-ledger.mjs";
 export function projectToken(absPath) {
   return createHash("sha256").update(resolve(absPath)).digest("hex").slice(0, 16);
 }
+function computeDashboardBuild() {
+  try {
+    const code = readFileSync(fileURLToPath(import.meta.url));
+    return createHash("sha256").update(code).digest("hex").slice(0, 16);
+  } catch {
+    return "unknown";
+  }
+}
+
+export const DASHBOARD_PROTOCOL = "nullform-dashboard/v2";
+export const DASHBOARD_PROTOCOL_VERSION = 2;
+export const DASHBOARD_BUILD = computeDashboardBuild();
+/**
+ * R15: Проверка заголовка Host.
+ * Разрешены только loopback-адреса (localhost, 127.0.0.1, [::1]) с опциональным портом.
+ * Любые внешние/враждебные хосты (включая DNS rebinding вроде attacker.example) отклоняются.
+ */
+export function isAllowedHost(hostHeader) {
+  if (!hostHeader || typeof hostHeader !== "string") return false;
+  const raw = hostHeader.trim().toLowerCase();
+  if (!raw) return false;
+
+  // IPv6: [::1] или [::1]:port или [0:0:0:0:0:0:0:1]
+  if (raw.startsWith("[")) {
+    const close = raw.indexOf("]");
+    if (close === -1) return false;
+    const ip = raw.slice(1, close);
+    const rest = raw.slice(close + 1);
+    if (rest && !/^:\d+$/.test(rest)) return false;
+    return ip === "::1" || ip === "0:0:0:0:0:0:0:1";
+  }
+
+  // IPv4 или имя хоста: localhost, 127.0.0.1 с опциональным :port
+  const parts = raw.split(":");
+  if (parts.length > 2) return false;
+  if (parts.length === 2 && !/^\d+$/.test(parts[1])) return false;
+  const host = parts[0];
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+/**
+ * R01: Проверка совместимости здоровья дашборда на порту.
+ * Сервер должен возвращать ok: true, правильный токен проекта, актуальный протокол и сборку.
+ * Устаревшие серверы (формат {ok, pid, root}), серверы других проектов или старых сборок не переиспользуются.
+ */
+export function isCompatibleDashboard(info, absRoot) {
+  if (!info || typeof info !== "object") return false;
+  if (info.ok !== true) return false;
+  if (!info.project || info.project !== projectToken(absRoot)) return false;
+  if (info.protocol !== DASHBOARD_PROTOCOL) return false;
+  if (info.protocolVersion !== DASHBOARD_PROTOCOL_VERSION) return false;
+  if (info.build !== DASHBOARD_BUILD) return false;
+  return true;
+}
 const CHECKS_CACHE = ".workflow/dashboard-checks.json";
 /**
  * Обязательные артефакты по ярусам (совпадает с гейтом tools/workflow.mjs).
@@ -2118,8 +2172,11 @@ export function writeRuntime(root, info) {
 }
 
 /** Живой ли дашборд на порту (быстрый health-пинг). */
-export async function isServerAlive(port, timeoutMs = 900) {
-  return (await probeDashboard(port, timeoutMs)) !== null;
+export async function isServerAlive(port, timeoutMs = 900, absRoot = null) {
+  const probed = await probeDashboard(port, timeoutMs);
+  if (!probed) return false;
+  if (absRoot) return isCompatibleDashboard(probed, absRoot);
+  return probed.ok === true;
 }
 
 /**
@@ -2499,11 +2556,25 @@ export function sanitizeHttpState(data) {
 
 /** HTTP-обработчик: страница, /api/state, /api/diff, /api/health. */
 function handleRequest(req, res, absRoot) {
+  const host = req.headers.host;
+  if (!isAllowedHost(host)) {
+    res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Forbidden: invalid Host");
+    return;
+  }
+
   const url = new URL(req.url, "http://127.0.0.1");
 
   if (url.pathname === "/api/health") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, pid: process.pid, project: projectToken(absRoot) }));
+    res.end(JSON.stringify({
+      ok: true,
+      pid: process.pid,
+      project: projectToken(absRoot),
+      protocol: DASHBOARD_PROTOCOL,
+      protocolVersion: DASHBOARD_PROTOCOL_VERSION,
+      build: DASHBOARD_BUILD,
+    }));
     return;
   }
 
@@ -2611,7 +2682,7 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   const existing = readRuntime(absRoot, key);
   if (existing) {
     const probed = await probeDashboard(existing.port);
-    if (probed) {
+    if (isCompatibleDashboard(probed, absRoot)) {
       const url = `http://localhost:${existing.port}`;
       if (openSystem) openInBrowser(url);
       return { url, port: existing.port, started: false };
@@ -2620,10 +2691,9 @@ export async function ensureDashboard(root, { open = true, port = null, session 
 
   // 2. Рантайм-файл потерян, а дашборд проекта жив (осиротевший демон):
   //    усыновляем его вместо запуска второго сервера на соседнем порту.
-  const expectedProject = projectToken(absRoot);
   for (let p = chosenPort; p < chosenPort + 64; p++) {
     const probed = await probeDashboard(p, 400);
-    if (probed && (probed.project === expectedProject || resolve(probed.root || "") === absRoot)) {
+    if (isCompatibleDashboard(probed, absRoot)) {
       writeRuntime(absRoot, { key,
         pid: probed.pid,
         port: p,
@@ -2650,10 +2720,13 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   for (let i = 0; i < 25; i++) {
     await new Promise((r) => setTimeout(r, 200));
     const info = readRuntime(absRoot, key);
-    if (info && (await isServerAlive(info.port))) {
-      const url = `http://localhost:${info.port}`;
-      if (openSystem) openInBrowser(url);
-      return { url, port: info.port, started: true };
+    if (info && (!existing || info.pid !== existing.pid || info.port !== existing.port)) {
+      const probed = await probeDashboard(info.port);
+      if (isCompatibleDashboard(probed, absRoot)) {
+        const url = `http://localhost:${info.port}`;
+        if (openSystem) openInBrowser(url);
+        return { url, port: info.port, started: true };
+      }
     }
   }
 
@@ -2771,7 +2844,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (opts.list) {
     const rows = listDashboards(absRoot);
     // Мёртвые записи (процесс упал, рантайм-файл остался) честно помечаем.
-    for (const r of rows) r.alive = r.port ? await isServerAlive(r.port) : false;
+    for (const r of rows) r.alive = r.port ? await isServerAlive(r.port, 900, absRoot) : false;
     if (opts.json) {
       process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
     } else if (!rows.length) {

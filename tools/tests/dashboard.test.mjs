@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -27,6 +28,13 @@ import {
   collectDashboardData,
   generateDashboardHtml,
   parseArgs,
+  DASHBOARD_PROTOCOL,
+  DASHBOARD_PROTOCOL_VERSION,
+  DASHBOARD_BUILD,
+  projectToken,
+  isAllowedHost,
+  isCompatibleDashboard,
+  probeDashboard,
 } from "../dashboard.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../dashboard.mjs", import.meta.url)));
@@ -712,6 +720,260 @@ test("R05: HTTP-границы (/, /api/state, /api/diff) не отдают чу
     if (bound) {
       await new Promise((r) => bound.server.close(r));
     }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ---------------------------------------------- R01, R15 regressions */
+
+test("R15: HTTP-маршруты отклоняют не-loopback Host (включая DNS-rebind) и принимают localhost/127.0.0.1", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  try {
+    writeFileSync(join(tmp, "state.json"), "{}", "utf8");
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "state.json"),
+      JSON.stringify({ tier: "T1", task: "host test", status: "open", startedAt: new Date().toISOString(), artifacts: { lane: { at: new Date().toISOString() } } }),
+      "utf8"
+    );
+
+    bound = await startLiveServer(tmp, 4560, { maxAttempts: 10 });
+    const port = bound.port;
+
+    // Unit-проверка функции isAllowedHost
+    assert.equal(isAllowedHost("localhost"), true);
+    assert.equal(isAllowedHost(`localhost:${port}`), true);
+    assert.equal(isAllowedHost("127.0.0.1"), true);
+    assert.equal(isAllowedHost(`127.0.0.1:${port}`), true);
+    assert.equal(isAllowedHost(`[::1]:${port}`), true);
+    assert.equal(isAllowedHost("attacker.example"), false);
+    assert.equal(isAllowedHost(`attacker.example:${port}`), false);
+    assert.equal(isAllowedHost("rebind.evil.com"), false);
+    assert.equal(isAllowedHost("localhost.attacker.com"), false);
+    assert.equal(isAllowedHost("192.168.1.5"), false);
+    assert.equal(isAllowedHost(""), false);
+    assert.equal(isAllowedHost(null), false);
+
+    const routes = ["/api/health", "/api/state", "/api/diff", "/"];
+    const hostileHosts = ["attacker.example", `attacker.example:${port}`, "rebind.evil.com", "192.168.1.100"];
+
+    for (const route of routes) {
+      for (const hostile of hostileHosts) {
+        const res = await fetch(`http://127.0.0.1:${port}${route}`, {
+          headers: { Host: hostile },
+        });
+        assert.equal(res.status, 403, `маршрут ${route} с Host: ${hostile} должен возвращать 403`);
+        assert.equal(res.ok, false);
+      }
+
+      // Легитимный localhost / 127.0.0.1
+      const resLocalhost = await fetch(`http://127.0.0.1:${port}${route}`, {
+        headers: { Host: `localhost:${port}` },
+      });
+      assert.equal(resLocalhost.status, 200, `маршрут ${route} с Host: localhost:${port} должен быть успешен`);
+
+      const resLoopback = await fetch(`http://127.0.0.1:${port}${route}`, {
+        headers: { Host: `127.0.0.1:${port}` },
+      });
+      assert.equal(resLoopback.status, 200, `маршрут ${route} с Host: 127.0.0.1:${port} должен быть успешен`);
+    }
+  } finally {
+    if (bound) await new Promise((r) => bound.server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R01: устаревший протокол здоровья ({ok, pid, root}) и чужой проект отвергаются fast path и orphan scan без убийства процесса", async () => {
+  const tmp = createTempDir();
+  let legacyServer = null;
+  let wrongProjectServer = null;
+  let boundCurrent = null;
+  const legacyPort = 4680;
+  const wrongPort = 4681;
+  const validPort = 4682;
+
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+
+    // Синтетический старый сервер (legacy process shape: { ok: true, pid: 7688, root })
+    legacyServer = createServer((req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (url.pathname === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, pid: 7688, root: tmp }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("legacy");
+    });
+    await new Promise((resolve) => legacyServer.listen(legacyPort, "127.0.0.1", resolve));
+
+    // Синтетический сервер с другим проектом
+    wrongProjectServer = createServer((req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (url.pathname === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: true,
+          pid: 9999,
+          project: "foreign_token_123",
+          protocol: DASHBOARD_PROTOCOL,
+          protocolVersion: DASHBOARD_PROTOCOL_VERSION,
+          build: DASHBOARD_BUILD,
+        }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("wrong project");
+    });
+    await new Promise((resolve) => wrongProjectServer.listen(wrongPort, "127.0.0.1", resolve));
+
+    // 1. Проверка compatibility helper
+    const probedLegacy = await probeDashboard(legacyPort);
+    assert.equal(isCompatibleDashboard(probedLegacy, tmp), false, "старая форма {ok, pid, root} несовместима");
+
+    const probedWrong = await probeDashboard(wrongPort);
+    assert.equal(isCompatibleDashboard(probedWrong, tmp), false, "чужой project несовместим");
+
+    // 2. Fast path: рантайм-файл указывает на legacyPort
+    writeRuntime(tmp, {
+      key: "local",
+      port: legacyPort,
+      pid: 7688,
+      url: `http://localhost:${legacyPort}`,
+      root: tmp,
+      startedAt: new Date().toISOString(),
+    });
+
+    // ensureDashboard должен отказать в переиспользовании legacyPort
+    // и поднять текущий дашборд на свободном порту, обновив маркер
+    boundCurrent = await startLiveServer(tmp, validPort, { maxAttempts: 5 });
+    assert.ok(boundCurrent.port >= validPort);
+    const probedCurrent = await probeDashboard(boundCurrent.port);
+    assert.equal(isCompatibleDashboard(probedCurrent, tmp), true, "текущий сервер совместим");
+
+    // Вызов ensureDashboard при наличии несовместимого рантайма:
+    // должен отказать в fast path и усыновить совместимый orphan сервер boundCurrent на validPort
+    const info = await ensureDashboard(tmp, { open: false, port: legacyPort });
+    assert.equal(info.port, boundCurrent.port, "переиспользован совместимый порт, а не старый");
+    assert.notEqual(info.port, legacyPort, "legacyPort не был переиспользован");
+
+    // Проверяем, что не верифицированный legacyServer не был убит и продолжает слушать
+    assert.equal(legacyServer.listening, true, "старый сервер не завершён");
+    const checkLegacy = await probeDashboard(legacyPort);
+    assert.equal(checkLegacy?.pid, 7688, "старый процесс по-прежнему отвечает");
+
+    // Маркер в рантайме обновлен на порт актуального сервера
+    const marker = readRuntime(tmp);
+    assert.equal(marker.port, boundCurrent.port, "маркер обновлен на порт актуального сервера");
+
+    // 3. Orphan scan: удаляем рантайм, сканируем диапазон, начинающийся с legacyPort
+    rmSync(runtimePath(tmp, "local"), { force: true });
+    rmSync(runtimePath(tmp), { force: true });
+    assert.equal(readRuntime(tmp), null);
+
+    const orphanInfo = await ensureDashboard(tmp, { open: false, port: legacyPort });
+    assert.equal(orphanInfo.port, boundCurrent.port, "сирота усыновлена только с валидного порта");
+    assert.equal(orphanInfo.adopted, true);
+    assert.equal(legacyServer.listening, true, "legacyServer жив после orphan scan");
+  } finally {
+    if (boundCurrent) await new Promise((r) => boundCurrent.server.close(r));
+    if (legacyServer) await new Promise((r) => legacyServer.close(r));
+    if (wrongProjectServer) await new Promise((r) => wrongProjectServer.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R01: /api/health возвращает протокол, версию сборки и токен проекта, не раскрывая root", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  try {
+    bound = await startLiveServer(tmp, 4710, { maxAttempts: 10 });
+    const res = await fetch(`http://127.0.0.1:${bound.port}/api/health`);
+    assert.equal(res.status, 200);
+    const health = await res.json();
+
+    assert.equal(health.ok, true);
+    assert.equal(health.project, projectToken(tmp));
+    assert.equal(health.protocol, DASHBOARD_PROTOCOL);
+    assert.equal(health.protocolVersion, DASHBOARD_PROTOCOL_VERSION);
+    assert.equal(health.build, DASHBOARD_BUILD);
+    assert.equal(typeof DASHBOARD_BUILD, "string");
+    assert.equal(DASHBOARD_BUILD.length, 16, "DASHBOARD_BUILD вычисляется как 16-значный sha256 хеш исходника");
+    assert.equal(health.root, undefined, "поле root не раскрывается в /api/health");
+    assert.equal(typeof health.pid, "number");
+  } finally {
+    if (bound) await new Promise((r) => bound.server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R01: сервер с отличающимся build ID отвергается isCompatibleDashboard, fast path и orphan scan", async () => {
+  const tmp = createTempDir();
+  let staleBuildServer = null;
+  let boundCurrent = null;
+  const stalePort = 4720;
+  const validPort = 4721;
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+
+    // Сервер со старым build ID (например, после обновления исходного кода)
+    staleBuildServer = createServer((req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (url.pathname === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: true,
+          pid: 7689,
+          project: projectToken(tmp),
+          protocol: DASHBOARD_PROTOCOL,
+          protocolVersion: DASHBOARD_PROTOCOL_VERSION,
+          build: "stale_build_9999",
+        }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("stale build");
+    });
+    await new Promise((resolve) => staleBuildServer.listen(stalePort, "127.0.0.1", resolve));
+
+    // 1. isCompatibleDashboard отвергает иной build
+    const probedStale = await probeDashboard(stalePort);
+    assert.equal(isCompatibleDashboard(probedStale, tmp), false, "сервер с другим build ID отвергается");
+
+    // 2. Fast path: рантайм указывает на stalePort
+    writeRuntime(tmp, {
+      key: "local",
+      port: stalePort,
+      pid: 7689,
+      url: `http://localhost:${stalePort}`,
+      root: tmp,
+      startedAt: new Date().toISOString(),
+    });
+
+    boundCurrent = await startLiveServer(tmp, validPort, { maxAttempts: 5 });
+    const probedCurrent = await probeDashboard(boundCurrent.port);
+    assert.equal(isCompatibleDashboard(probedCurrent, tmp), true);
+
+    // ensureDashboard отказывается переиспользовать stalePort с иным build ID
+    const info = await ensureDashboard(tmp, { open: false, port: stalePort });
+    assert.equal(info.port, boundCurrent.port, "переиспользован актуальный build, а не устаревший");
+    assert.notEqual(info.port, stalePort);
+    assert.equal(staleBuildServer.listening, true, "процесс со старым build ID не был убит");
+
+    // 3. Orphan scan: не усыновляет порт с устаревшим build ID
+    rmSync(runtimePath(tmp, "local"), { force: true });
+    rmSync(runtimePath(tmp), { force: true });
+
+    const orphanInfo = await ensureDashboard(tmp, { open: false, port: stalePort });
+    assert.equal(orphanInfo.port, boundCurrent.port, "orphan scan усыновил только сервер с текущим build ID");
+    assert.equal(orphanInfo.adopted, true);
+    assert.equal(staleBuildServer.listening, true);
+  } finally {
+    if (boundCurrent) await new Promise((r) => boundCurrent.server.close(r));
+    if (staleBuildServer) await new Promise((r) => staleBuildServer.close(r));
     rmSync(tmp, { recursive: true, force: true });
   }
 });
