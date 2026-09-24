@@ -449,3 +449,30 @@ test("verify: testTierGate passes probe with subprocess status assertions", () =
   const res = testTierGate(harnessRoot, true);
   assert.equal(res, "T0 passes, T2 blocks, fake paths rejected, forced close recorded");
 });
+
+test("check-ci: rejects external symlink in change directory or artifacts", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-ci-symlink-root-"));
+  const outside = mkdtempSync(join(tmpdir(), "wf-gate-ci-symlink-outside-"));
+  try {
+    const changeId = "symlink-change";
+    const changeDir = join(root, "openspec", "changes", changeId);
+    mkdirSync(join(changeDir, "specs"), { recursive: true });
+
+    writeFileSync(join(outside, "manifest.md"), "| R01 | quote |\n", "utf8");
+    writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task\n", "utf8");
+    writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
+    writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
+
+    try {
+      symlinkSync(join(outside, "manifest.md"), join(changeDir, "manifest.md"));
+      assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "external symlink manifest must fail check-ci");
+    } catch (err) {
+      if (err.code !== "EPERM") throw err;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});

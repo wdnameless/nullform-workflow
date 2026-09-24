@@ -210,7 +210,7 @@ function sleepSync(ms) {
   }
 }
 
-function acquireLock(root, timeoutMs = 5000) {
+function acquireLock(root, timeoutMs = 5000, staleMs = 60000) {
   const dir = join(root, DIR);
   if (!existsSync(dir)) {
     try { mkdirSync(dir, { recursive: true }); } catch {}
@@ -263,8 +263,9 @@ function acquireLock(root, timeoutMs = 5000) {
             } catch (kErr) {
               if (kErr.code === "ESRCH") isDead = true;
             }
-            // NEVER steal from a live PID, only verified dead PID
-            if (isDead) {
+            const isExpired = typeof staleMs === "number" && staleMs > 0 && (Date.now() - (info.createdAt || 0) > staleMs);
+            // Recover if process is verified dead OR if wall-clock stale fallback expired
+            if (isDead || isExpired) {
               try { rmSync(lockFile, { force: true }); } catch {}
               continue;
             }
@@ -1394,16 +1395,18 @@ function cmdCheckCi(root, flags) {
     return 1;
   }
 
-  const changeDir = join(root, "openspec", "changes", changeId);
-  if (!existsSync(changeDir)) {
-    console.error(`workflow check-ci: OpenSpec change directory '${changeDir}' does not exist.`);
+  const relChangeDir = join("openspec", "changes", changeId);
+  const changeDir = join(root, relChangeDir);
+  if (!existsSync(changeDir) || !isRealPathInsideRoot(root, relChangeDir)) {
+    console.error(`workflow check-ci: OpenSpec change directory '${changeDir}' does not exist or resolves outside project root.`);
     return 1;
   }
 
   // 1. Manifest
+  const relManifest = join(relChangeDir, "manifest.md");
   const manifestPath = join(changeDir, "manifest.md");
-  if (!existsSync(manifestPath)) {
-    console.error(`workflow check-ci: missing manifest.md in '${changeDir}'.`);
+  if (!existsSync(manifestPath) || !isRealPathInsideRoot(root, relManifest)) {
+    console.error(`workflow check-ci: missing manifest.md in '${changeDir}' or resolves outside project root.`);
     return 1;
   }
   const manifestBody = readFileSync(manifestPath, "utf8");
@@ -1413,22 +1416,25 @@ function cmdCheckCi(root, flags) {
   }
 
   // 2. Proposal (proposal.md)
+  const relProposal = join(relChangeDir, "proposal.md");
   const proposalPath = join(changeDir, "proposal.md");
-  if (!existsSync(proposalPath) || !statSync(proposalPath).isFile() || readFileSync(proposalPath, "utf8").trim().length === 0) {
+  if (!existsSync(proposalPath) || !isRealPathInsideRoot(root, relProposal) || !statSync(proposalPath).isFile() || readFileSync(proposalPath, "utf8").trim().length === 0) {
     console.error(`workflow check-ci: missing proposal.md in '${changeDir}'.`);
     return 1;
   }
 
   // 3. Tasks (tasks.md)
+  const relTasks = join(relChangeDir, "tasks.md");
   const tasksPath = join(changeDir, "tasks.md");
-  if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) {
+  if (!existsSync(tasksPath) || !isRealPathInsideRoot(root, relTasks) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) {
     console.error(`workflow check-ci: missing tasks.md in '${changeDir}'.`);
     return 1;
   }
 
   // 4. Specs (specs/ directory)
+  const relSpecs = join(relChangeDir, "specs");
   const specsDir = join(changeDir, "specs");
-  if (!existsSync(specsDir) || !statSync(specsDir).isDirectory()) {
+  if (!existsSync(specsDir) || !isRealPathInsideRoot(root, relSpecs) || !statSync(specsDir).isDirectory()) {
     console.error(`workflow check-ci: missing specs/ directory in '${changeDir}'.`);
     return 1;
   }
@@ -1437,11 +1443,19 @@ function cmdCheckCi(root, flags) {
     console.error(`workflow check-ci: specs/ directory in '${changeDir}' is empty.`);
     return 1;
   }
+  for (const entry of specEntries) {
+    const relSpecEntry = join(relSpecs, entry);
+    if (!isRealPathInsideRoot(root, relSpecEntry)) {
+      console.error(`workflow check-ci: spec entry '${entry}' in '${changeDir}' resolves outside project root.`);
+      return 1;
+    }
+  }
 
-  // 3. Interfaces
+  // 5. Interfaces
+  const relInterfaces = join(relChangeDir, "interfaces.md");
   const interfacesPath = join(changeDir, "interfaces.md");
-  if (!existsSync(interfacesPath)) {
-    console.error(`workflow check-ci: missing interfaces.md in '${changeDir}'.`);
+  if (!existsSync(interfacesPath) || !isRealPathInsideRoot(root, relInterfaces)) {
+    console.error(`workflow check-ci: missing interfaces.md in '${changeDir}' or resolves outside project root.`);
     return 1;
   }
   const interfacesBody = readFileSync(interfacesPath, "utf8");
@@ -1450,17 +1464,19 @@ function cmdCheckCi(root, flags) {
     return 1;
   }
 
-  // 4. Oracle / acceptance evidence
+  // 6. Oracle / acceptance evidence
   let oraclePath = null;
+  let relOracle = null;
   const entries = readdirSync(changeDir);
   for (const entry of entries) {
     if (/^oracle(-[A-Za-z0-9]+)?\.md$/i.test(entry) || entry.toLowerCase() === "acceptance.md") {
       oraclePath = join(changeDir, entry);
+      relOracle = join(relChangeDir, entry);
       break;
     }
   }
-  if (!oraclePath || !existsSync(oraclePath)) {
-    console.error(`workflow check-ci: missing oracle evidence (oracle.md) in '${changeDir}'.`);
+  if (!oraclePath || !existsSync(oraclePath) || !isRealPathInsideRoot(root, relOracle)) {
+    console.error(`workflow check-ci: missing oracle evidence in '${changeDir}' or resolves outside project root.`);
     return 1;
   }
 
