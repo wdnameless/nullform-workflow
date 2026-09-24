@@ -92,6 +92,9 @@ if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 function WriteText([string]$path, [string]$text) {
+  # .NET treats "\" as a literal char on Linux/macOS, not a separator; use "/"
+  # which .NET accepts on every OS so paths land in the right directory.
+  $path = $path.Replace([char]92, [char]47)
   $dir = Split-Path -Parent $path
   if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
   [System.IO.File]::WriteAllText($path, $text, $Utf8NoBom)   # a BOM makes the first YAML/JSON key unparsable
