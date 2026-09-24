@@ -338,25 +338,30 @@ if (-not $SkipMcp) {
   }
 } else { Warn "MCP step skipped (-SkipMcp)" }
 
-# ---------- 6. Agent-defs junction ----------
-$junction = "$agentDir\agents"
+# ---------- 6. Agent-defs link ----------
+# Windows uses a Junction (no admin/developer mode needed); Linux/macOS use a
+# symbolic link. Build paths with Join-Path so separators are correct per OS.
+$isWin = $IsWindows -or ($env:OS -eq 'Windows_NT')
+$linkKind = if ($isWin) { 'Junction' } else { 'SymbolicLink' }
+$linkTarget = Join-Path $HarnessRoot 'agent\agents'
+$junction = Join-Path $agentDir 'agents'
 if (Test-Path $junction) {
   $item = Get-Item $junction -Force
-  if ($item.LinkType -eq 'Junction') {
+  if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
     $target = ($item.Target | Select-Object -First 1)
-    if ($target -ne "$HarnessRoot\agent\agents") {
-      # Remove ONLY the junction reparse point: PS 5.1 Remove-Item -Recurse can
-      # traverse a junction and delete the TARGET directory's contents.
+    if ($target -ne $linkTarget) {
+      # Remove ONLY the link reparse point: Remove-Item -Recurse can traverse a
+      # link and delete the TARGET directory's contents.
       [System.IO.Directory]::Delete($junction, $false)
-      New-Item -ItemType Junction -Path $junction -Target "$HarnessRoot\agent\agents" | Out-Null
-      Ok "junction re-pointed -> $HarnessRoot\agent\agents"
-    } else { Ok "junction already correct" }
+      New-Item -ItemType $linkKind -Path $junction -Target $linkTarget | Out-Null
+      Ok "link re-pointed -> $linkTarget"
+    } else { Ok "link already correct" }
   } else {
-    Warn "$junction is a real directory -> agent defs there will shadow the harness. Move it aside to use the junction."
+    Warn "$junction is a real directory -> agent defs there will shadow the harness. Move it aside to use the link."
   }
 } else {
-  New-Item -ItemType Junction -Path $junction -Target "$HarnessRoot\agent\agents" | Out-Null
-  Ok "junction $junction -> $HarnessRoot\agent\agents"
+  New-Item -ItemType $linkKind -Path $junction -Target $linkTarget | Out-Null
+  Ok "link $junction -> $linkTarget"
 }
 
 # ---------- 7. Optional Paseo integration ----------
