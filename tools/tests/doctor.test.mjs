@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, cpSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, cpSync, chmodSync } from "node:fs";
+import { join, resolve, dirname, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -21,6 +21,55 @@ import {
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const DOCTOR_PATH = resolve(REPO_ROOT, "tools/doctor.mjs");
+
+function setupOmpShim() {
+  const dir = mkdtempSync(join(tmpdir(), "doctor-omp-shim-"));
+  const pluginsJson = JSON.stringify({
+    npm: [
+      { name: "@dietrichgebert/ponytail", version: "4.10.0" },
+      { name: "@plannotator/pi-extension", version: "0.27.16" },
+      { name: "oh-my-pi-plugin-grok-build", version: "0.2.2" },
+      { name: "oh-my-pi-plugin-morph", version: "0.6.0" },
+      { name: "omp-plugin-duplicate-detector", version: "0.3.0" },
+      { name: "omp-typescript-complexity-evaluator", version: "1.0.3" },
+      { name: "omp-url-pin", version: "1.2.0" },
+      { name: "pi-bar", version: "0.3.44" },
+      { name: "pi-gh-cli", version: "0.2.5" },
+      { name: "pi-goal-x", version: "0.31.6" },
+      { name: "pi-lens", version: "4.2.1" },
+      { name: "pi-linter", version: "0.2.7" },
+      { name: "pi-prompt-shelf", version: "1.1.2" },
+      { name: "pi-qq", version: "0.1.17" },
+    ],
+  });
+
+  const nodeScript = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'plugin' && args[1] === 'list') {",
+    `  process.stdout.write(${JSON.stringify(pluginsJson)});`,
+    "  process.exit(0);",
+    "}",
+    "if (args[0] === 'plugin' && args[1] === 'doctor') {",
+    "  process.exit(0);",
+    "}",
+    "process.exit(0);",
+  ].join("\n");
+
+  const ompPath = join(dir, "omp");
+  writeFileSync(ompPath, nodeScript, { encoding: "utf8", mode: 0o755 });
+  chmodSync(ompPath, 0o755);
+
+  if (process.platform === "win32") {
+    writeFileSync(join(dir, "omp.cmd"), `@node "%~dp0omp" %*\r\n`, "utf8");
+  }
+
+  return dir;
+}
+
+const OMP_SHIM_DIR = setupOmpShim();
+const ORIGINAL_PATH = process.env.PATH || "";
+process.env.PATH = `${OMP_SHIM_DIR}${delimiter}${ORIGINAL_PATH}`;
 
 /** Каталоги, покрытые манифестом sync.ps1 (та же область, что у orphan-files). */
 const MANIFEST_DIRS = ["tools", "agent", "rules", "core", "templates", "paseo"];
@@ -1252,7 +1301,7 @@ test("plugins: omp недоступен или вывод не разобран 
     const absent = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ error: enoent }), requirePlugins: true });
     const absentCheck = checkOf(absent, "plugins");
     assert.equal(absentCheck.status, "fail", "отсутствие omp дает FAIL (fail-closed)");
-    assert.match(absentCheck.detail, /omp не запущен/);
+    assert.match(absentCheck.detail, /(?:omp не запущен|omp не найден в PATH)/);
     assert.equal(absent.ok, false);
 
     const garbage = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ listStdout: "not json at all" }) });
@@ -1264,6 +1313,33 @@ test("plugins: omp недоступен или вывод не разобран 
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+test("doctor CLI: absent omp on PATH fails closed for required plugins", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-cli-noomp-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const nodeDir = dirname(process.execPath);
+    const isolatedEnv = {
+      ...process.env,
+      PATH: process.platform === "win32"
+        ? `${nodeDir};${process.env.SystemRoot || "C:\\Windows"}\\System32`
+        : `${nodeDir}:/bin:/usr/bin`,
+    };
+    const res = spawnSync(
+      process.execPath,
+      [DOCTOR_PATH, "--harness", harness, "--json"],
+      { encoding: "utf8", env: isolatedEnv }
+    );
+    const json = JSON.parse(res.stdout);
+    assert.equal(json.ok, false);
+    assert.equal(res.status, 1);
+    const check = checkOf(json, "plugins");
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /(?:omp не запущен|omp не найден в PATH)/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 
 test("plugins: манифест с синтаксической ошибкой → FAIL", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-bad-"));

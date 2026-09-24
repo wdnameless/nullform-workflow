@@ -13,18 +13,55 @@ const PLUGINS_MANIFEST_PATH = resolve(REPO_ROOT, "agent/plugins.json");
 const PROFILES_MANIFEST_PATH = resolve(REPO_ROOT, "paseo/profiles.json");
 const INSTALL_PATH = resolve(REPO_ROOT, "install.ps1");
 
-const POWERSHELL_PATH = process.platform === "win32"
-  ? join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-  : "pwsh";
+function getPowerShellPath() {
+  const candidates = process.platform === "win32"
+    ? [
+        join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        "powershell.exe",
+        "pwsh.exe",
+        "pwsh",
+      ]
+    : [
+        "pwsh",
+        "/usr/bin/pwsh",
+        "/usr/local/bin/pwsh",
+        "/opt/microsoft/powershell/7/pwsh",
+      ];
+  for (const c of candidates) {
+    try {
+      const res = spawnSync(c, ["-NoProfile", "-Command", "Write-Output ps-ok"], {
+        encoding: "utf8",
+        timeout: 5000,
+        windowsHide: true,
+      });
+      if (res.status === 0 && (res.stdout || "").includes("ps-ok")) {
+        return c;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+const POWERSHELL_PATH = getPowerShellPath();
 
 function pathWithoutOmp() {
   const nodeDir = dirname(process.execPath);
   const sysRoot = process.env.SystemRoot || "C:\\Windows";
-  const sysDirs = [
-    join(sysRoot, "System32"),
-    join(sysRoot, "System32", "WindowsPowerShell", "v1.0"),
-    sysRoot,
-  ];
+  const psDir = POWERSHELL_PATH && (POWERSHELL_PATH.includes("\\") || POWERSHELL_PATH.includes("/"))
+    ? dirname(POWERSHELL_PATH)
+    : "";
+  const sysDirs = process.platform === "win32"
+    ? [
+        join(sysRoot, "System32"),
+        join(sysRoot, "System32", "WindowsPowerShell", "v1.0"),
+        sysRoot,
+        psDir,
+      ].filter(Boolean)
+    : [
+        "/bin",
+        "/usr/bin",
+        psDir,
+      ].filter(Boolean);
   return [nodeDir, ...sysDirs].join(process.platform === "win32" ? ";" : ":");
 }
 
@@ -56,7 +93,11 @@ test("paseo/profiles.json: profile contains notes with <HarnessRoot> template", 
   assert.match(orchestrator.notes, /<HarnessRoot>/);
 });
 
-test("setup-paseo.ps1: standalone setup without -Model fails actionably when new profile needed", () => {
+test("setup-paseo.ps1: standalone setup without -Model fails actionably when new profile needed", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
   const tmpHome = mkdtempSync(join(tmpdir(), "paseo-test-fresh-"));
   try {
     const res = spawnSync(POWERSHELL_PATH, [
@@ -67,13 +108,17 @@ test("setup-paseo.ps1: standalone setup without -Model fails actionably when new
 
     assert.notEqual(res.status, 0, "Standalone setup without -Model must fail for fresh profile");
     const combinedOutput = (res.stdout || "") + (res.stderr || "");
-    assert.match(combinedOutput, /Cannot add new profile 'agent_profile_orchestrator' without a model/);
+    assert.match(combinedOutput, /Cannot add new profile\s+'agent_profile_orchestrator'\s+without a\s+model/);
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }
 });
 
-test("setup-paseo.ps1: standalone setup with -Model creates profile and expands <HarnessRoot> in notes", () => {
+test("setup-paseo.ps1: standalone setup with -Model creates profile and expands <HarnessRoot> in notes", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
   const tmpHome = mkdtempSync(join(tmpdir(), "paseo-test-with-model-"));
   const fakeHarness = "C:/test/my-harness-root";
   try {
@@ -100,7 +145,11 @@ test("setup-paseo.ps1: standalone setup with -Model creates profile and expands 
   }
 });
 
-test("setup-paseo.ps1: preserves existing model when called without -Model and expands <HarnessRoot>", () => {
+test("setup-paseo.ps1: preserves existing model when called without -Model and expands <HarnessRoot>", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
   const tmpHome = mkdtempSync(join(tmpdir(), "paseo-test-existing-"));
   const fakeHarness = "D:/test/expanded-harness";
   try {
@@ -151,7 +200,11 @@ test("setup-paseo.ps1: preserves existing model when called without -Model and e
   }
 });
 
-test("setup-paseo.ps1: synthetic config remains valid and untouched after injected failure (R07 atomic replacement)", () => {
+test("setup-paseo.ps1: synthetic config remains valid and untouched after injected failure (R07 atomic replacement)", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
   const tmpHome = mkdtempSync(join(tmpdir(), "paseo-atomic-fail-"));
   try {
     const paseoDir = join(tmpHome, ".paseo");
@@ -214,7 +267,11 @@ test("setup-paseo.ps1: synthetic config remains valid and untouched after inject
   }
 });
 
-test("setup-paseo.ps1: atomic replacement preserves unrelated fields and writes without BOM", () => {
+test("setup-paseo.ps1: atomic replacement preserves unrelated fields and writes without BOM", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
   const tmpHome = mkdtempSync(join(tmpdir(), "paseo-atomic-success-"));
   try {
     const paseoDir = join(tmpHome, ".paseo");
@@ -271,7 +328,11 @@ test("setup-paseo.ps1: atomic replacement preserves unrelated fields and writes 
   }
 });
 
-test("install.ps1: -SetupPaseo without provider model warns and skips Paseo without aborting install", () => {
+test("install.ps1: -SetupPaseo without provider model warns and skips Paseo without aborting install", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
   const tmpHome = mkdtempSync(join(tmpdir(), "install-paseo-fresh-"));
   const tmpHarness = join(tmpHome, "omp-workflow");
   try {
@@ -294,7 +355,11 @@ test("install.ps1: -SetupPaseo without provider model warns and skips Paseo with
   }
 });
 
-test("install.ps1: fails if omp is missing and -SkipPlugins not passed", () => {
+test("install.ps1: fails if omp is missing and -SkipPlugins not passed", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
   const tmpHome = mkdtempSync(join(tmpdir(), "install-no-omp-"));
   const tmpHarness = join(tmpHome, "omp-workflow");
   try {
@@ -315,7 +380,11 @@ test("install.ps1: fails if omp is missing and -SkipPlugins not passed", () => {
   }
 });
 
-test("install.ps1: succeeds without omp if -SkipPlugins is passed", () => {
+test("install.ps1: succeeds without omp if -SkipPlugins is passed", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
   const tmpHome = mkdtempSync(join(tmpdir(), "install-skip-plugins-"));
   const tmpHarness = join(tmpHome, "omp-workflow");
   try {
