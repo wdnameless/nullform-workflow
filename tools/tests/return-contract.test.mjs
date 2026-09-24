@@ -142,3 +142,27 @@ test("accepts tests_passed: true when summary contains numeric count transition"
   assert.equal(result.valid, true);
   assert.equal(result.status, "DONE");
 });
+
+test("validates actual subagent wrapper payload with structured summary contract", () => {
+  const wrapperPayload = {
+    status: "success",
+    tests_passed: false,
+    files_modified: ["tools/a.mjs"],
+    summary: "STATUS: DONE · FILES: tools/a.mjs · TESTS: not-run(parent-owned) · INTERFACES: none · REQUIREMENTS: R11 · CONCERNS: none",
+  };
+  const result = validateReturnContract(wrapperPayload);
+  assert.equal(result.valid, true);
+  assert.equal(result.status, "DONE");
+  assert.equal(result.errors.length, 0);
+});
+
+test("rejects tests_passed: true when combined with not-run(parent-owned)", () => {
+  const wrapperPayload = {
+    status: "success",
+    tests_passed: true,
+    summary: "STATUS: DONE · FILES: tools/a.mjs · TESTS: not-run(parent-owned) · INTERFACES: none · REQUIREMENTS: R11 · CONCERNS: none",
+  };
+  const result = validateReturnContract(wrapperPayload);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes("not-run(parent-owned)")));
+});

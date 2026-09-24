@@ -482,17 +482,15 @@ export function installHarness(options = {}) {
           // one that fails to connect on every session boot.
           const mcpTarget = join(homeAgentDir, "mcp.json");
           if (!existsSync(mcpTarget)) {
-            try {
-              const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
-              // Drop any server still carrying an unsubstituted placeholder: there is
-              // no secrets.env on this path, so a kept entry would ship a literal
-              // `__X__` into mcp.json (which verification then flags) and fail to
-              // connect on every session boot.
-              for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
-                if (JSON.stringify(entry).includes("__")) delete cfg.mcpServers[name];
-              }
-              writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
-            } catch {}
+            const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
+            // Drop any server still carrying an unsubstituted placeholder: there is
+            // no secrets.env on this path, so a kept entry would ship a literal
+            // `__X__` into mcp.json (which verification then flags) and fail to
+            // connect on every session boot.
+            for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
+              if (JSON.stringify(entry).includes("__")) delete cfg.mcpServers[name];
+            }
+            writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
           }
           // Without these the installed harness has no roles, no skills and no
           // rules: OMP cannot start the orchestrator at all.
