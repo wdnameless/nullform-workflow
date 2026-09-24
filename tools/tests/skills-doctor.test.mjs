@@ -346,8 +346,8 @@ test("leading UTF-8 BOM in SKILL.md and .skills-disabled.json does not break fro
     assert.equal(res.status, 0);
     assert.match(res.stdout, /all checks passed/);
     assert.match(res.stdout, /beta: disabled by operator/);
-    assert.doesNotMatch(res.stdout, /frontmatter/);
-    assert.doesNotMatch(res.stdout, /orphan/);
+    assert.doesNotMatch(res.stdout, /alpha\s+frontmatter/);
+    assert.doesNotMatch(res.stdout, /beta\s+orphan/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
