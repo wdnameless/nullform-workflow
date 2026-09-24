@@ -11,14 +11,14 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, statSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, statSync, utimesSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { cmdStart, cmdArtifact, cmdClose, load } from "../workflow.mjs";
 
-const CLI = fileURLToPath(new URL("../workflow.mjs", import.meta.url));
+const _CLI = fileURLToPath(new URL("../workflow.mjs", import.meta.url));
 
 function git(root, args) {
   return spawnSync("git", args, {
@@ -337,5 +337,57 @@ test("staleness: generated worktrees and caches do not invalidate acceptance in 
     assert.equal(cmdClose(root, {}), 0, "generated files must not make accepted source stale");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleness: touching a tracked file with identical content does not invalidate acceptance", () => {
+  const root = project();
+  try {
+    cmdStart(root, { tier: "T2", task: "probe-identical-touch" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+
+    // Touch with identical content (timestamp advances, content hash unchanged)
+    sleepMs(1100);
+    writeFileSync(join(root, "tracked.txt"), "x\n", "utf8");
+    utimesSync(join(root, "tracked.txt"), new Date(), new Date());
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 0, "touching with identical content hash must not invalidate acceptance");
+
+    const st = load(root);
+    assert.equal(st.status, "closed");
+    assert.equal(st.deviation, undefined, "honest close with unchanged content produces no deviation");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleness: out-of-root symlinks are excluded from worktree snapshot without hashing", () => {
+  const root = project();
+  const outside = mkdtempSync(join(tmpdir(), "wf-outside-secret-"));
+  try {
+    const secretFile = join(outside, "secret.key");
+    writeFileSync(secretFile, "SUPER_SECRET_KEY\n", "utf8");
+
+    try {
+      symlinkSync(secretFile, join(root, "symlink-secret.txt"));
+      git(root, ["add", "-A"]);
+      git(root, ["commit", "-qm", "add symlink"]);
+
+      cmdStart(root, { tier: "T2", task: "probe-symlink" });
+      completeT2(root);
+      assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief" }), 0);
+
+      const st = load(root);
+      const snapshot = st.artifacts?.oracle?.snapshot;
+      // Symlink pointing outside must NOT be indexed in tracked snapshot
+      assert.equal(snapshot?.tracked?.["symlink-secret.txt"], undefined);
+    } catch (err) {
+      if (err.code !== "EPERM") throw err;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });

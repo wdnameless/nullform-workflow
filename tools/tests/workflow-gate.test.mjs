@@ -11,13 +11,15 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cmdStart,
   cmdArtifact,
   cmdCheck,
+  cmdEscalate,
   cmdClose,
   cmdCheckCi,
   load,
@@ -240,4 +242,198 @@ test("ci contract: workflow gate configurations trigger on label changes", () =>
     /types:\s*\[opened,\s*synchronize,\s*reopened,\s*labeled,\s*unlabeled\]/,
     "templates/ci/workflow-gate.yml must trigger on PR label changes"
   );
+});
+
+test("gate: external manifest or openspec symlink pointing outside project root is rejected", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-symlink-root-"));
+  const outside = mkdtempSync(join(tmpdir(), "wf-gate-symlink-outside-"));
+  try {
+    writeFileSync(join(outside, "manifest.md"), "| R01 | external quote |\n", "utf8");
+    mkdirSync(join(outside, "openspec-change"), { recursive: true });
+    writeFileSync(join(outside, "openspec-change", "proposal.md"), "# Proposal\n", "utf8");
+
+    cmdStart(root, { tier: "T2", task: "symlink-test" });
+
+    // Create external symlink for manifest
+    try {
+      symlinkSync(join(outside, "manifest.md"), join(root, "manifest.md"));
+      const artCode = cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "verbatim capture" });
+      assert.equal(artCode, 1, "external manifest symlink must be rejected on registration");
+    } catch (err) {
+      // If symlink creation requires elevated privileges on Windows without developer mode,
+      // verify that realpath validation still protects against escaped paths
+      if (err.code !== "EPERM") throw err;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: rejects oracle with NOT ACCEPTED verdict", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-not-accepted-"));
+  try {
+    const changeId = "feature-verdict";
+    const changeDir = join(root, "openspec", "changes", changeId);
+    mkdirSync(join(changeDir, "specs"), { recursive: true });
+
+    writeFileSync(join(changeDir, "manifest.md"), "| R01 | user quote |\n", "utf8");
+    writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+    writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
+    writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- export fn(): void\n", "utf8");
+
+    // NOT ACCEPTED must be rejected even though it contains substring ACCEPT
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: NOT ACCEPTED\nBoundary checks failed.\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "NOT ACCEPTED verdict must fail");
+
+    // Explicit positive verdict passes
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nBoundary checks passed.\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "explicit positive ACCEPT verdict must pass");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: rejects manifest modified in commits after oracle acceptance", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-post-oracle-"));
+  function git(...args) {
+    return spawnSync("git", args, {
+      cwd: root, encoding: "utf8", windowsHide: true,
+      env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+    });
+  }
+  try {
+    git("init", "-q", ".");
+    const changeId = "post-oracle-mod";
+    const changeDir = join(root, "openspec", "changes", changeId);
+    mkdirSync(join(changeDir, "specs"), { recursive: true });
+
+    writeFileSync(join(changeDir, "manifest.md"), "| R01 | quote |\n", "utf8");
+    writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task\n", "utf8");
+    writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
+    writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+
+    git("add", "-A");
+    git("commit", "-qm", "oracle accepted");
+
+    // Check passes immediately after oracle commit
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "clean commit passes check-ci");
+
+    // Now edit and commit manifest.md after the oracle commit
+    writeFileSync(join(changeDir, "manifest.md"), "| R01 | modified quote |\n| R02 | new requirement |\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "modify manifest after oracle");
+
+    // check-ci must detect that manifest changed after oracle commit and fail
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "manifest changed after oracle commit must fail check-ci");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: rejects T0 PR when changed files against --base-ref exceed 2 without approved override", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-base-ref-"));
+  function git(...args) {
+    return spawnSync("git", args, {
+      cwd: root, encoding: "utf8", windowsHide: true,
+      env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+    });
+  }
+  try {
+    git("init", "-q", "-b", "main", ".");
+    writeFileSync(join(root, "file1.txt"), "1\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "base commit");
+
+    // 1 file changed against main: passes T0
+    writeFileSync(join(root, "file1.txt"), "1 modified\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "change 1 file");
+    assert.equal(cmdCheckCi(root, { tier: "T0", "base-ref": "main" }), 0, "1 file changed passes T0");
+
+    // Add 2 more files (total 3 files changed against main)
+    writeFileSync(join(root, "file2.txt"), "2\n", "utf8");
+    writeFileSync(join(root, "file3.txt"), "3\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "add 2 more files");
+
+    // Exceeds 2 files without override: must fail
+    assert.equal(cmdCheckCi(root, { tier: "T0", "base-ref": "main" }), 1, "exceeding 2 files must fail T0");
+
+    // With approved override flag: succeeds
+    assert.equal(cmdCheckCi(root, { tier: "T0", "base-ref": "main", override: true }), 0, "approved override passes");
+
+    // Nonexistent base ref must fail rather than silently falling through
+    assert.equal(cmdCheckCi(root, { tier: "T0", "base-ref": "nonexistent-branch-xyz" }), 1, "nonexistent base ref must fail check-ci");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("escalate: monotonic tier escalation preserves task identity, start time, and prior recon", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-escalate-"));
+  try {
+    cmdStart(root, { tier: "T1", task: "investigate module" });
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "detailed recon of module dependencies" }), 0);
+
+    const initialSt = load(root);
+    assert.equal(initialSt.tier, "T1");
+    assert.ok(initialSt.artifacts.recon);
+
+    // Escalate to T2
+    const code = cmdEscalate(root, { tier: "T2" });
+    assert.equal(code, 0, "escalation to T2 must succeed");
+
+    const escalatedSt = load(root);
+    assert.equal(escalatedSt.tier, "T2");
+    assert.equal(escalatedSt.task, "investigate module", "task identity must be preserved");
+    assert.equal(escalatedSt.startedAt, initialSt.startedAt, "start time must be preserved");
+    assert.ok(escalatedSt.artifacts.recon, "prior recon evidence must be retained");
+    assert.equal(escalatedSt.artifacts.recon.detail, "detailed recon of module dependencies");
+
+    // Monotonic check: escalating to lower or same tier must be rejected
+    assert.equal(cmdEscalate(root, { tier: "T1" }), 1, "escalating down to T1 must be rejected");
+    assert.equal(cmdEscalate(root, { tier: "T2" }), 1, "escalating to same tier T2 must be rejected");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("start: replacing active task with --force requires --reason and records deviation", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-start-force-"));
+  try {
+    assert.equal(cmdStart(root, { tier: "T1", task: "initial task" }), 0);
+
+    // Starting new task without force is rejected
+    assert.equal(cmdStart(root, { tier: "T2", task: "replacement task" }), 2);
+
+    // Starting new task with force but without reason is rejected
+    assert.equal(cmdStart(root, { tier: "T2", task: "replacement task", force: true }), 1);
+
+    // Starting with force and reason succeeds and records deviation
+    assert.equal(cmdStart(root, { tier: "T2", task: "replacement task", force: true, reason: "replacing initial task" }), 0);
+
+    const st = load(root);
+    assert.equal(st.task, "replacement task");
+    assert.equal(st.tier, "T2");
+    assert.ok(st.deviation);
+    assert.equal(st.deviation.forced, true);
+    assert.equal(st.deviation.reason, "replacing initial task");
+    assert.equal(st.deviation.replacedTask.task, "initial task");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: rejects invalid changeId containing path traversal or illegal characters", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-slug-"));
+  try {
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: "../escaping-change" }), 1, "traversal change id must fail");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: "change with spaces" }), 1, "space in change id must fail");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

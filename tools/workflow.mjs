@@ -30,7 +30,7 @@
  * Budgets: .workflow/budgets.json (optional, defaults {T0:10, T1:25, T2:45, T3:45}).
  * Zero dependencies. Node 18+ / Bun.
  */
-import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawn, execFileSync } from "node:child_process";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
@@ -133,7 +133,7 @@ function appendMetric(root, record) {
   appendFileSync(p, line, "utf8");
 }
 
-function loadMetrics(root) {
+function readMetricsRaw(root) {
   const p = join(root, DIR, METRICS_FILE);
   if (!existsSync(p)) return [];
   const content = readFileSync(p, "utf8");
@@ -149,6 +149,148 @@ function loadMetrics(root) {
     }
   }
   return out;
+}
+
+function buildMetricRecord(st) {
+  const closedMs = new Date(st.closedAt || new Date().toISOString()).getTime();
+  const startedMsRaw = st.startedAt ? new Date(st.startedAt).getTime() : NaN;
+  const startedMs = Number.isNaN(startedMsRaw) ? closedMs : startedMsRaw;
+  const durationMs = Math.max(0, closedMs - startedMs);
+  const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
+  const isForced = Boolean(st.deviation?.forced);
+  return {
+    task: st.task || "(untitled)",
+    tier: st.tier,
+    startedAt: st.startedAt || st.closedAt,
+    closedAt: st.closedAt,
+    durationMs,
+    forced: isForced,
+    auto: st.auto ?? null,
+    artifactsCount,
+  };
+}
+
+function reconcileMetrics(root, { lockHeld = false } = {}) {
+  const doReconcile = () => {
+    const st = load(root);
+    if (!st || st.status !== "closed") return null;
+
+    const records = readMetricsRaw(root);
+    const alreadyRecorded = records.some((m) =>
+      m.task === st.task &&
+      m.startedAt === (st.startedAt || st.closedAt) &&
+      m.closedAt === st.closedAt
+    );
+
+    if (!alreadyRecorded) {
+      const metricRecord = st.metric || buildMetricRecord(st);
+      appendMetric(root, metricRecord);
+      return metricRecord;
+    }
+    return null;
+  };
+
+  if (lockHeld) {
+    return doReconcile();
+  }
+  return withStateLock(root, doReconcile);
+}
+
+function loadMetrics(root) {
+  reconcileMetrics(root);
+  return readMetricsRaw(root);
+}
+
+function sleepSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {}
+  }
+}
+
+function acquireLock(root, timeoutMs = 5000) {
+  const dir = join(root, DIR);
+  if (!existsSync(dir)) {
+    try { mkdirSync(dir, { recursive: true }); } catch {}
+  }
+  const lockFile = join(dir, "state.lock");
+  const deadline = Date.now() + timeoutMs;
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  while (true) {
+    try {
+      const payload = JSON.stringify({ pid: process.pid, token, createdAt: Date.now() });
+      writeFileSync(lockFile, payload, { flag: "wx" });
+      return () => {
+        try {
+          if (existsSync(lockFile)) {
+            try {
+              const data = JSON.parse(readFileSync(lockFile, "utf8"));
+              if (data.token === token) {
+                rmSync(lockFile, { force: true });
+              }
+            } catch {}
+          }
+        } catch {}
+      };
+    } catch (err) {
+      if (err.code !== "EEXIST") {
+        throw err;
+      }
+      try {
+        if (existsSync(lockFile)) {
+          let info = null;
+          try {
+            const content = readFileSync(lockFile, "utf8");
+            info = JSON.parse(content);
+          } catch {
+            // Bounded wait on unparsable lock: only clean up if older than 1000ms
+            try {
+              const s = statSync(lockFile);
+              if (Date.now() - s.mtimeMs > 1000) {
+                rmSync(lockFile, { force: true });
+                continue;
+              }
+            } catch {}
+          }
+
+          if (info && info.pid && typeof info.pid === "number") {
+            let isDead = false;
+            try {
+              process.kill(info.pid, 0);
+            } catch (kErr) {
+              if (kErr.code === "ESRCH") isDead = true;
+            }
+            // NEVER steal from a live PID, only verified dead PID
+            if (isDead) {
+              try { rmSync(lockFile, { force: true }); } catch {}
+              continue;
+            }
+          }
+        }
+      } catch {}
+
+      if (Date.now() >= deadline) {
+        return null;
+      }
+      sleepSync(25);
+    }
+  }
+}
+
+function withStateLock(root, fn, options = {}) {
+  const release = acquireLock(root, options.timeoutMs, options.staleMs);
+  if (!release) {
+    console.error("workflow: could not acquire state lock; timed out waiting for concurrent operation.");
+    return 1;
+  }
+  try {
+    return fn();
+  } finally {
+    release();
+  }
 }
 
 function cmdMetrics(root) {
@@ -384,98 +526,121 @@ function logEvent(root, kind, text, extra = {}) {
 }
 
 function cmdStart(root, flags) {
-  const tier = String(flags.tier || "").toUpperCase();
-  if (!LADDER.includes(tier)) {
-    console.error(`workflow: --tier must be one of ${LADDER.join(', ')} (got '${flags.tier || ''}')`);
-    return 2;
-  }
+  return withStateLock(root, () => {
+    reconcileMetrics(root, { lockHeld: true });
+    const tier = String(flags.tier || "").toUpperCase();
+    if (!LADDER.includes(tier)) {
+      console.error(`workflow: --tier must be one of ${LADDER.join(', ')} (got '${flags.tier || ''}')`);
+      return 2;
+    }
 
-  const isAuto = Boolean(flags.auto);
-  let autoConfig = null;
-  if (isAuto) {
-    // Guarded auto validation: tier must be T0; refuse T1+
-    if (tier !== "T0") {
-      const refusal = {
-        at: new Date().toISOString(),
-        tier,
-        reason: `Guarded auto-mode refused: tier ${tier} exceeds maximum allowable tier T0`,
-      };
-      let st = load(root);
-      if (!st) {
-        st = {
-          version: 1,
+    const isAuto = Boolean(flags.auto);
+    let autoConfig = null;
+    if (isAuto) {
+      // Guarded auto validation: tier must be T0; refuse T1+
+      if (tier !== "T0") {
+        const refusal = {
+          at: new Date().toISOString(),
           tier,
-          task: String(flags.task || "(untitled)"),
-          startedAt: new Date().toISOString(),
-          status: "refused",
-          artifacts: {},
+          reason: `Guarded auto-mode refused: tier ${tier} exceeds maximum allowable tier T0`,
         };
+        let st = load(root);
+        if (!st) {
+          st = {
+            version: 1,
+            tier,
+            task: String(flags.task || "(untitled)"),
+            startedAt: new Date().toISOString(),
+            status: "refused",
+            artifacts: {},
+          };
+        }
+        st.autoRefusal = refusal;
+        save(root, st);
+        console.error(`workflow: guarded auto mode refused for ${tier} (only T0 allowed)`);
+        return 1;
       }
-      st.autoRefusal = refusal;
-      save(root, st);
-      console.error(`workflow: guarded auto mode refused for ${tier} (only T0 allowed)`);
-      return 1;
+
+      if (!flags.allow || typeof flags.allow !== "string" || !flags.allow.trim()) {
+        console.error("workflow: --auto requires --allow \"<pattern>\" (e.g. --allow \"src/**\")");
+        return 1;
+      }
+
+      const maxDiffNum = flags["max-diff"] !== undefined ? Number(flags["max-diff"]) : NaN;
+      if (Number.isNaN(maxDiffNum) || maxDiffNum < 1 || maxDiffNum > 20) {
+        console.error("workflow: --auto requires --max-diff <N> where 1 <= N <= 20");
+        return 1;
+      }
+
+      autoConfig = {
+        allow: String(flags.allow).trim(),
+        maxDiff: maxDiffNum,
+      };
     }
 
-    if (!flags.allow || typeof flags.allow !== "string" || !flags.allow.trim()) {
-      console.error("workflow: --auto requires --allow \"<pattern>\" (e.g. --allow \"src/**\")");
-      return 1;
+    const prev = load(root);
+    if (prev && prev.status === "open") {
+      if (!flags.force) {
+        console.error(`workflow: task '${prev.task}' is already open at ${prev.tier}.`);
+        const mine = process.env.PASEO_AGENT_ID
+          ? `paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`
+          : "local";
+        if (prev.session && prev.session !== mine) {
+          console.error(`  opened by another session (${prev.session}); two agents in one project share the lane gate.`);
+        }
+        console.error(`  close it first, escalate it with 'escalate', or pass --force --reason "<why>" to replace it.`);
+        return 2;
+      }
+      if (!flags.reason) {
+        console.error(`workflow: --force replacement requires --reason "<why the active task is abandoned/replaced>"`);
+        return 1;
+      }
     }
 
-    const maxDiffNum = flags["max-diff"] !== undefined ? Number(flags["max-diff"]) : NaN;
-    if (Number.isNaN(maxDiffNum) || maxDiffNum < 1 || maxDiffNum > 20) {
-      console.error("workflow: --auto requires --max-diff <N> where 1 <= N <= 20");
-      return 1;
-    }
+    const budgets = loadBudgets(root);
+    const tierBudget = budgets[tier] ?? DEFAULT_BUDGETS[tier] ?? 45;
 
-    autoConfig = {
-      allow: String(flags.allow).trim(),
-      maxDiff: maxDiffNum,
+    const st = {
+      version: 1,
+      tier,
+      task: String(flags.task || "(untitled)"),
+      startedAt: new Date().toISOString(),
+      status: "open",
+      session: process.env.PASEO_AGENT_ID
+        ? `paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`
+        : process.env.OMP_SESSION_ID
+          ? `omp-${String(process.env.OMP_SESSION_ID).slice(0, 8)}`
+          : "local",
+      artifacts: { lane: { at: new Date().toISOString(), path: null, detail: tier } },
     };
-  }
-
-  const prev = load(root);
-  if (prev && prev.status === "open" && !flags.force) {
-    console.error(`workflow: task '${prev.task}' is already open at ${prev.tier}.`);
-    const mine = process.env.PASEO_AGENT_ID
-      ? `paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`
-      : "local";
-    if (prev.session && prev.session !== mine) {
-      console.error(`  opened by another session (${prev.session}); two agents in one project share the lane gate.`);
+    if (autoConfig) {
+      st.auto = autoConfig;
     }
-    console.error(`  close it first, or pass --force to replace it.`);
-    return 2;
-  }
-
-  const budgets = loadBudgets(root);
-  const tierBudget = budgets[tier] ?? DEFAULT_BUDGETS[tier] ?? 45;
-
-  const st = {
-    version: 1,
-    tier,
-    task: String(flags.task || "(untitled)"),
-    startedAt: new Date().toISOString(),
-    status: "open",
-    // Сессия-владелец: дашборд привязан к ней, а параллельные агенты видят, чья задача.
-    session: process.env.PASEO_AGENT_ID
-      ? `paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`
-      : process.env.OMP_SESSION_ID
-        ? `omp-${String(process.env.OMP_SESSION_ID).slice(0, 8)}`
-        : "local",
-    // Declaring a lane IS the lane artifact — `start --tier T2` is the act of
-    // classifying. Requiring a second command for it would be ceremony.
-    artifacts: { lane: { at: new Date().toISOString(), path: null, detail: tier } },
-  };
-  if (autoConfig) {
-    st.auto = autoConfig;
-  }
-  save(root, st);
-  logEvent(root, "start", `${tier} — ${st.task}`);
-  console.log(`workflow: ${tier} task opened — ${st.task}`);
-  console.log(`  budget: ${tierBudget} tool calls for ${tier}`);
-  if (autoConfig) {
-    console.log(`  auto: guarded autonomous mode enabled (allow: "${autoConfig.allow}", max-diff: ${autoConfig.maxDiff})`);
-  }
+    if (prev && prev.status === "open" && flags.force) {
+      st.deviation = {
+        forced: true,
+        reason: String(flags.reason),
+        replacedTask: {
+          task: prev.task,
+          tier: prev.tier,
+          startedAt: prev.startedAt,
+        },
+      };
+      logEvent(root, "replace", `${tier} — ${st.task} (replaced '${prev.task}': ${flags.reason})`);
+      console.log(`workflow: replaced active task '${prev.task}' with DEVIATION (${flags.reason})`);
+    }
+    save(root, st);
+    logEvent(root, "start", `${tier} — ${st.task}`);
+    console.log(`workflow: ${tier} task opened — ${st.task}`);
+    console.log(`  budget: ${tierBudget} tool calls for ${tier}`);
+    if (autoConfig) {
+      console.log(`  auto: guarded autonomous mode enabled (allow: "${autoConfig.allow}", max-diff: ${autoConfig.maxDiff})`);
+    }
+    printRemainingArtifacts(tier, st);
+    return 0;
+  });
+}
+function printRemainingArtifacts(tier, st) {
   const reqs = requiredFor(tier).filter((r) => !st.artifacts[r.kind]);
   if (reqs.length) {
     console.log(`  this tier further requires ${reqs.length} artifact(s):`);
@@ -483,7 +648,6 @@ function cmdStart(root, flags) {
   } else {
     console.log(`  no further artifacts required at this tier.`);
   }
-  return 0;
 }
 
 
@@ -502,6 +666,19 @@ function isPathInsideRoot(root, userPath) {
   const absTarget = resolve(root, userPath);
   const rel = relative(absRoot, absTarget);
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+function isRealPathInsideRoot(root, userPath) {
+  if (!userPath || typeof userPath !== "string") return false;
+  if (!isPathInsideRoot(root, userPath)) return false;
+  const fullPath = resolve(root, userPath);
+  try {
+    const realRoot = realpathSync(root);
+    const realTarget = realpathSync(fullPath);
+    const rel = relative(realRoot, realTarget);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  } catch {
+    return false;
+  }
 }
 const GENERATED_DIRS = new Set([".tmp", ".archmap", ".codemap", ".opencode"]);
 function isExcludedFromSnapshot(relPath) {
@@ -561,6 +738,7 @@ function scanWorktree(root) {
       const map = {};
       for (const rel of output.split("\0")) {
         if (!rel || isExcludedFromSnapshot(rel)) continue;
+        if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
         const full = join(root, rel);
         const hash = hashFile(full);
         if (hash !== null) {
@@ -585,8 +763,10 @@ function scanWorktree(root) {
         if (isExcludedFromSnapshot(rel)) continue;
         const full = join(dir, entry.name);
         if (entry.isDirectory()) {
+          if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
           walk(full, rel);
         } else if (entry.isFile()) {
+          if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
           const hash = hashFile(full);
           if (hash !== null) {
             try {
@@ -628,6 +808,10 @@ function validateArtifacts(root, st) {
         invalid.push(`${r.kind}: path '${a.path}' does not exist on disk`);
         continue;
       }
+      if (!isRealPathInsideRoot(root, a.path)) {
+        invalid.push(`${r.kind}: path '${a.path}' real path must stay inside project root`);
+        continue;
+      }
       const s = statSync(fullPath);
       if (r.kind === "openspec") {
         if (!s.isDirectory()) {
@@ -640,6 +824,16 @@ function validateArtifacts(root, st) {
           invalid.push(`${r.kind}: directory '${a.path}' is empty`);
           continue;
         }
+        let hasExternalEntry = false;
+        for (const entry of entries) {
+          const entryPath = join(a.path, entry);
+          if (!isRealPathInsideRoot(root, entryPath)) {
+            invalid.push(`${r.kind}: entry '${entryPath}' real path must stay inside project root`);
+            hasExternalEntry = true;
+            break;
+          }
+        }
+        if (hasExternalEntry) continue;
       } else {
         if (!s.isFile()) {
           invalid.push(`${r.kind}: path '${a.path}' must be a file`);
@@ -664,7 +858,9 @@ function validateArtifacts(root, st) {
 
     if (r.kind === "oracle") {
       const detail = a.detail || "";
-      if (/\bREJECT\b/i.test(detail) || !/\bACCEPT\b/i.test(detail)) {
+      const isNegated = /\b(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?\b/i.test(detail) || /\bREJECT(?:ED)?\b/i.test(detail);
+      const isPositive = /(?:^|\n)\s*(?:#+\s*)?(?:Verdict:\s*)?ACCEPT(?::|\s|$)/i.test(detail) || /(?:^|\n)\s*\|\s*Verdict\s*\|\s*ACCEPT\b/i.test(detail);
+      if (isNegated || !isPositive) {
         invalid.push("oracle: verdict is REJECT (must be ACCEPT)");
       }
       if (a.path) {
@@ -672,7 +868,9 @@ function validateArtifacts(root, st) {
         if (existsSync(fullPath)) {
           let body = "";
           try { body = readFileSync(fullPath, "utf8"); } catch {}
-          if (/\bREJECT\b/i.test(body) || !/\bACCEPT\b/i.test(body)) {
+          const bodyNegated = /\b(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?\b/i.test(body) || /\bREJECT(?:ED)?\b/i.test(body);
+          const bodyPositive = /(?:^|\n)\s*(?:#+\s*)?(?:Verdict:\s*)?ACCEPT(?::|\s|$)/im.test(body) || /(?:^|\n)\s*\|\s*Verdict\s*\|\s*ACCEPT\b/i.test(body);
+          if (bodyNegated || !bodyPositive) {
             invalid.push(`oracle: verdict in '${a.path}' is REJECT`);
           }
         }
@@ -684,89 +882,154 @@ function validateArtifacts(root, st) {
 }
 
 function cmdArtifact(root, flags) {
-  const st = load(root);
-  if (!st || st.status !== "open") { console.error("workflow: no open task. Run `start` first."); return 2; }
-  const kind = String(flags.kind || "");
-  const reqs = requiredFor(st.tier);
-  const req = reqs.find((r) => r.kind === kind);
-  if (!req) {
-    console.error(`workflow: '${kind}' is not required by ${st.tier}.`);
-    console.error(`  required: ${reqs.map((r) => r.kind).join(', ')}`);
-    return 2;
-  }
-  const path = flags.path ? String(flags.path).trim() : null;
-  if (req.requiresPath && !path) {
-    console.error(`workflow: ${kind} requires a file path (--path <file>).`);
-    return 1;
-  }
-
-  if (path) {
-    if (!isPathInsideRoot(root, path)) {
-      console.error(`workflow: ${kind} -> '${path}' must be a relative path inside project root.`);
+  return withStateLock(root, () => {
+    const st = load(root);
+    if (!st || st.status !== "open") { console.error("workflow: no open task. Run `start` first."); return 2; }
+    const kind = String(flags.kind || "");
+    const reqs = requiredFor(st.tier);
+    const req = reqs.find((r) => r.kind === kind);
+    if (!req) {
+      console.error(`workflow: '${kind}' is not required by ${st.tier}.`);
+      console.error(`  required: ${reqs.map((r) => r.kind).join(', ')}`);
+      return 2;
+    }
+    const path = flags.path ? String(flags.path).trim() : null;
+    if (req.requiresPath && !path) {
+      console.error(`workflow: ${kind} requires a file path (--path <file>).`);
       return 1;
     }
-    const fullPath = join(root, path);
-    if (!existsSync(fullPath)) {
-      console.error(`workflow: ${kind} -> '${path}' does not exist on disk.`);
-      if (kind === "openspec") console.error(`  create it: openspec new change <name>   then  openspec validate <name>`);
+
+    if (path) {
+      if (!isPathInsideRoot(root, path)) {
+        console.error(`workflow: ${kind} -> '${path}' must be a relative path inside project root.`);
+        return 1;
+      }
+      const fullPath = join(root, path);
+      if (!existsSync(fullPath)) {
+        console.error(`workflow: ${kind} -> '${path}' does not exist on disk.`);
+        if (kind === "openspec") console.error(`  create it: openspec new change <name>   then  openspec validate <name>`);
+        return 1;
+      }
+      if (!isRealPathInsideRoot(root, path)) {
+        console.error(`workflow: ${kind} -> '${path}' real path must stay inside project root.`);
+        return 1;
+      }
+      const stFile = statSync(fullPath);
+      if (kind === "openspec") {
+        if (!stFile.isDirectory()) {
+          console.error(`workflow: ${kind} -> '${path}' must be a directory.`);
+          return 1;
+        }
+        const entries = readdirSync(fullPath);
+        if (entries.length === 0) {
+          console.error(`workflow: ${kind} -> directory '${path}' is empty.`);
+          return 1;
+        }
+        for (const entry of entries) {
+          const entryPath = join(path, entry);
+          if (!isRealPathInsideRoot(root, entryPath)) {
+            console.error(`workflow: ${kind} -> entry '${entryPath}' real path must stay inside project root.`);
+            return 1;
+          }
+        }
+      } else {
+        if (!stFile.isFile()) {
+          console.error(`workflow: ${kind} -> '${path}' must be a file.`);
+          return 1;
+        }
+        const body = readFileSync(fullPath, "utf8");
+        if (body.trim().length === 0) {
+          console.error(`workflow: ${kind} -> '${path}' is empty.`);
+          return 1;
+        }
+        if (req.mustContain && !req.mustContain.test(body)) {
+          console.error(`workflow: ${path} does not contain requirement rows (expected ${req.mustContain}).`);
+          console.error(`  a manifest lists R01..Rnn, each with the verbatim quote it came from.`);
+          return 1;
+        }
+        if (kind === "interfaces" && body.trim().length < 10) {
+          console.error(`workflow: ${kind} -> '${path}' is too short to be a valid interfaces specification.`);
+          return 1;
+        }
+      }
+    }
+    const detail = flags.detail ? String(flags.detail) : null;
+
+    if (req.minDetail && (!detail || detail.trim().length < req.minDetail)) {
+      console.error(`workflow: ${kind} needs a real description (>= ${req.minDetail} chars).`);
+      console.error(`  got: ${detail ? JSON.stringify(detail) : "(nothing)"}`);
+      console.error(`  record it: --detail "<what you actually did/verified>"`);
       return 1;
     }
-    const stFile = statSync(fullPath);
-    if (kind === "openspec") {
-      if (!stFile.isDirectory()) {
-        console.error(`workflow: ${kind} -> '${path}' must be a directory.`);
-        return 1;
-      }
-      const entries = readdirSync(fullPath);
-      if (entries.length === 0) {
-        console.error(`workflow: ${kind} -> directory '${path}' is empty.`);
-        return 1;
-      }
-    } else {
-      if (!stFile.isFile()) {
-        console.error(`workflow: ${kind} -> '${path}' must be a file.`);
-        return 1;
-      }
-      const body = readFileSync(fullPath, "utf8");
-      if (body.trim().length === 0) {
-        console.error(`workflow: ${kind} -> '${path}' is empty.`);
-        return 1;
-      }
-      if (req.mustContain && !req.mustContain.test(body)) {
-        console.error(`workflow: ${path} does not contain requirement rows (expected ${req.mustContain}).`);
-        console.error(`  a manifest lists R01..Rnn, each with the verbatim quote it came from.`);
-        return 1;
-      }
-      if (kind === "interfaces" && body.trim().length < 10) {
-        console.error(`workflow: ${kind} -> '${path}' is too short to be a valid interfaces specification.`);
-        return 1;
-      }
+    if (req.mustContain && detail && !req.mustContain.test(detail)) {
+      console.error(`workflow: ${kind} must state the outcome — expected ${req.mustContain}.`);
+      console.error(`  e.g. --detail "ACCEPT: verified X and Y, no gaps"`);
+      return 1;
     }
-  }
-  const detail = flags.detail ? String(flags.detail) : null;
 
-  if (req.minDetail && (!detail || detail.trim().length < req.minDetail)) {
-    console.error(`workflow: ${kind} needs a real description (>= ${req.minDetail} chars).`);
-    console.error(`  got: ${detail ? JSON.stringify(detail) : "(nothing)"}`);
-    console.error(`  record it: --detail "<what you actually did/verified>"`);
-    return 1;
-  }
-  if (req.mustContain && detail && !req.mustContain.test(detail)) {
-    console.error(`workflow: ${kind} must state the outcome — expected ${req.mustContain}.`);
-    console.error(`  e.g. --detail "ACCEPT: verified X and Y, no gaps"`);
-    return 1;
-  }
+    const record = { at: new Date().toISOString(), path, detail };
+    if (kind === "oracle") {
+      record.snapshot = scanWorktree(root);
+    }
+    st.artifacts[kind] = record;
+    save(root, st);
+    const done = Object.keys(st.artifacts).length;
+    logEvent(root, "artifact", `${kind}${flags.detail ? ": " + String(flags.detail).slice(0, 120) : ""}`);
+    console.log(`workflow: ${kind} recorded${path ? ` (${path})` : ""} — ${done}/${reqs.length} for ${st.tier}`);
+    return 0;
+  });
+}
 
-  const record = { at: new Date().toISOString(), path, detail };
-  if (kind === "oracle") {
-    record.snapshot = scanWorktree(root);
-  }
-  st.artifacts[kind] = record;
-  save(root, st);
-  const done = Object.keys(st.artifacts).length;
-  logEvent(root, "artifact", `${kind}${flags.detail ? ": " + String(flags.detail).slice(0, 120) : ""}`);
-  console.log(`workflow: ${kind} recorded${path ? ` (${path})` : ""} — ${done}/${reqs.length} for ${st.tier}`);
-  return 0;
+function cmdEscalate(root, flags) {
+  return withStateLock(root, () => {
+    const st = load(root);
+    if (!st || st.status !== "open") {
+      console.error("workflow: no open task to escalate. Run `start` first.");
+      return 2;
+    }
+
+    const targetTier = String(flags.tier || "").toUpperCase();
+    if (!LADDER.includes(targetTier)) {
+      console.error(`workflow: --tier must be one of ${LADDER.join(", ")} (got '${flags.tier || ""}')`);
+      return 2;
+    }
+
+    const currentIdx = LADDER.indexOf(st.tier);
+    const targetIdx = LADDER.indexOf(targetTier);
+
+    if (targetIdx <= currentIdx) {
+      console.error(`workflow: escalation must be monotonic (cannot escalate from ${st.tier} to ${targetTier}).`);
+      return 1;
+    }
+
+    const prevTier = st.tier;
+    st.tier = targetTier;
+    if (!st.artifacts) {
+      st.artifacts = {};
+    }
+    st.artifacts.lane = {
+      at: new Date().toISOString(),
+      path: null,
+      detail: `${targetTier} (escalated from ${prevTier})`,
+    };
+
+    st.escalatedAt = new Date().toISOString();
+    st.escalations = [
+      ...(st.escalations || []),
+      { from: prevTier, to: targetTier, at: st.escalatedAt }
+    ];
+
+    const budgets = loadBudgets(root);
+    const tierBudget = budgets[targetTier] ?? DEFAULT_BUDGETS[targetTier] ?? 45;
+
+    save(root, st);
+    logEvent(root, "escalate", `${prevTier} -> ${targetTier} — ${st.task}`);
+    console.log(`workflow: task '${st.task}' escalated from ${prevTier} to ${targetTier}`);
+    console.log(`  budget: ${tierBudget} tool calls for ${targetTier}`);
+
+    printRemainingArtifacts(targetTier, st);
+    return 0;
+  });
 }
 
 function cmdCheck(root) {
@@ -847,13 +1110,13 @@ function findAcceptanceStaleness(root, st) {
     for (const [rel, meta] of Object.entries(current.tracked)) {
       const snap = snapshot?.tracked?.[rel];
       if (snap) {
-        if (meta.hash !== snap.hash || meta.mtimeMs > acceptedMs) {
+        if (meta.hash !== snap.hash) {
           newer.push(rel);
         }
       } else {
         const untrackedSnap = snapshot?.untracked?.[rel];
         if (untrackedSnap) {
-          if (meta.hash !== untrackedSnap.hash || meta.mtimeMs > acceptedMs) {
+          if (meta.hash !== untrackedSnap.hash) {
             newer.push(rel);
           }
         } else {
@@ -882,7 +1145,7 @@ function findAcceptanceStaleness(root, st) {
       const snap = snapshot?.untracked?.[rel];
       if (!snap) {
         untrackedAdded.push(rel);
-      } else if (meta.hash !== snap.hash || meta.mtimeMs > acceptedMs) {
+      } else if (meta.hash !== snap.hash) {
         newer.push(rel);
       }
     }
@@ -917,7 +1180,7 @@ function findAcceptanceStaleness(root, st) {
   for (const [rel, snap] of Object.entries(snapshot.files)) {
     if (!(rel in current.files)) {
       deleted.push(rel);
-    } else if (current.files[rel].hash !== snap.hash || current.files[rel].mtimeMs > acceptedMs) {
+    } else if (current.files[rel].hash !== snap.hash) {
       newer.push(rel);
     }
   }
@@ -941,17 +1204,24 @@ function findAcceptanceStaleness(root, st) {
 
   return reasons.length > 0 ? reasons.join("; ") : null;
 }
-
 function cmdClose(root, flags) {
-  const st = load(root);
-  if (!st) { console.error("workflow: no task state."); return 2; }
+  return withStateLock(root, () => {
+    const st = load(root);
+    if (!st) { console.error("workflow: no task state."); return 2; }
 
-  // Closing twice appends a second metric for the same task: `metrics` then counts
-  // one task as two and invents a duration between the two closes.
-  if (st.status !== "open") {
-    console.error(`workflow: task '${st.task}' is '${st.status}' — nothing to close. Run \`start\` for a new task.`);
-    return 2;
-  }
+    // Closing twice appends a second metric for the same task: `metrics` then counts
+    // one task as two and invents a duration between the two closes.
+    if (st.status !== "open") {
+      if (st.status === "closed") {
+        const restored = reconcileMetrics(root, { lockHeld: true });
+        if (restored) {
+          console.log(`workflow: task '${st.task}' was closed; recovered missing terminal metric.`);
+          return 0;
+        }
+      }
+      console.error(`workflow: task '${st.task}' is '${st.status}' — nothing to close. Run \`start\` for a new task.`);
+      return 2;
+    }
 
   if (flags.auto || st.auto) {
     if (flags["diff-lines"] !== undefined) {
@@ -1034,25 +1304,12 @@ function cmdClose(root, flags) {
     logEvent(root, "close", `${st.tier} — ${st.task}`);
     console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
   }
+  const metricRecord = buildMetricRecord(st);
+  st.metric = metricRecord;
   save(root, st);
-  const closedMs = new Date(st.closedAt).getTime();
-  const startedMsRaw = st.startedAt ? new Date(st.startedAt).getTime() : NaN;
-  const startedMs = Number.isNaN(startedMsRaw) ? closedMs : startedMsRaw;
-  const durationMs = Math.max(0, closedMs - startedMs);
-  const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
-  const isForced = Boolean(deviation.forced);
-  const metricRecord = {
-    task: st.task || "(untitled)",
-    tier: st.tier,
-    startedAt: st.startedAt || st.closedAt,
-    closedAt: st.closedAt,
-    durationMs,
-    forced: isForced,
-    auto: st.auto ?? null,
-    artifactsCount,
-  };
   appendMetric(root, metricRecord);
   return 0;
+  });
 }
 function cmdCheckCi(root, flags) {
   let tier = null;
@@ -1084,9 +1341,44 @@ function cmdCheckCi(root, flags) {
     return 1;
   }
 
-  // T0 and T1 stay lean
-  if (tier === "T0" || tier === "T1") {
-    console.log(`workflow check-ci: tier ${tier} passed (lean tier).`);
+  const baseRef = flags["base-ref"] || flags.baseRef || flags["base_ref"] || null;
+
+  if (tier === "T0") {
+    if (baseRef) {
+      let changedFiles = null;
+      try {
+        let diffOut = "";
+        try {
+          diffOut = execFileSync("git", ["diff", "--name-only", `${baseRef}...HEAD`], {
+            cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
+          });
+        } catch {
+          diffOut = execFileSync("git", ["diff", "--name-only", `${baseRef}..HEAD`], {
+            cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
+          });
+        }
+        changedFiles = diffOut.split("\n")
+          .map((f) => f.trim())
+          .filter((f) => f && !isExcludedFromSnapshot(f));
+      } catch (err) {
+        console.error(`workflow check-ci: failed to resolve or diff against base ref '${baseRef}': ${err.message}`);
+        return 1;
+      }
+
+      if (changedFiles.length > 2) {
+        const hasApprovedOverride = Boolean(flags.override || (flags.force && flags.reason));
+        if (!hasApprovedOverride) {
+          console.error(`workflow check-ci: T0 PR exceeds 1-2 file limit (${changedFiles.length} files changed against ${baseRef}) without approved override:\n  ${changedFiles.slice(0, 5).join("\n  ")}`);
+          return 1;
+        }
+      }
+    }
+    console.log(`workflow check-ci: tier T0 passed (lean tier).`);
+    return 0;
+  }
+
+  if (tier === "T1") {
+    console.log(`workflow check-ci: tier T1 passed (lean tier).`);
     return 0;
   }
 
@@ -1094,6 +1386,11 @@ function cmdCheckCi(root, flags) {
   const changeId = flags.change ? String(flags.change).trim() : null;
   if (!changeId) {
     console.error(`workflow check-ci: --change <id> is required for ${tier}.`);
+    return 1;
+  }
+
+  if (!/^[A-Za-z0-9_-]+$/.test(changeId)) {
+    console.error(`workflow check-ci: invalid change id '${changeId}' (must be alphanumeric slug).`);
     return 1;
   }
 
@@ -1168,12 +1465,10 @@ function cmdCheckCi(root, flags) {
   }
 
   const oracleBody = readFileSync(oraclePath, "utf8");
-  if (!/ACCEPT/i.test(oracleBody)) {
-    console.error(`workflow check-ci: oracle evidence in '${oraclePath}' must state ACCEPT verdict.`);
-    return 1;
-  }
-  if (/\bREJECT\b/i.test(oracleBody)) {
-    console.error(`workflow check-ci: oracle evidence in '${oraclePath}' has REJECT verdict.`);
+  const isNegated = /\b(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?\b/i.test(oracleBody) || /\bREJECT(?:ED)?\b/i.test(oracleBody);
+  const hasAnchoredPositive = /(?:^|\n)\s*(?:#+\s*)?(?:Verdict:\s*)?ACCEPT(?::|\s|$)/im.test(oracleBody) || /(?:^|\n)\s*\|\s*Verdict\s*\|\s*ACCEPT\b/i.test(oracleBody);
+  if (isNegated || !hasAnchoredPositive) {
+    console.error(`workflow check-ci: oracle evidence in '${oraclePath}' must state an explicit anchored positive ACCEPT verdict.`);
     return 1;
   }
 
@@ -1205,7 +1500,7 @@ function cmdCheckCi(root, flags) {
       if (postOracleDiff) {
         const changedFiles = postOracleDiff.split("\n")
           .map((f) => f.trim())
-          .filter((f) => f && !f.startsWith("openspec/") && !f.startsWith(".workflow/"));
+          .filter((f) => f && !f.startsWith(".workflow/"));
         if (changedFiles.length > 0) {
           console.error(`workflow check-ci: files modified in commits after oracle acceptance (${oracleCommit.slice(0, 8)}):\n  ${changedFiles.slice(0, 5).join("\n  ")}`);
           return 1;
@@ -1224,7 +1519,7 @@ function cmdCheckCi(root, flags) {
 
 /* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdClose, cmdMetrics, loadMetrics, appendMetric, load, save, parse, cmdCheckCi };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, withStateLock, load, save, parse, cmdCheckCi };
 
 import { fileURLToPath } from "node:url";
 
@@ -1245,6 +1540,7 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
     case "check":    code = cmdCheck(root); break;
     case "status":   code = cmdStatus(root); break;
     case "close":    code = cmdClose(root, args.flags); break;
+    case "escalate": code = cmdEscalate(root, args.flags); break;
     case "metrics":  code = cmdMetrics(root); break;
     case "check-ci": code = cmdCheckCi(root, args.flags); break;
     default:
@@ -1255,6 +1551,7 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
       console.log("  node workflow.mjs artifact --kind manifest --path openspec/changes/x/manifest.md");
       console.log("  node workflow.mjs check      # exit 1 if the tier's artifacts are missing");
       console.log("  node workflow.mjs status");
+      console.log("  node workflow.mjs escalate --tier T2");
       console.log("  node workflow.mjs close [--force --reason \"...\"] [--auto] [--diff-lines N]");
       console.log("  node workflow.mjs metrics [--root .]");
       console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
