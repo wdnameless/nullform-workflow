@@ -8,7 +8,7 @@ Two independent read-only passes, `Wf2BlindOracleA` and `Wf2BlindOracleB`, each 
 |---|---|
 | R01 Legacy dashboard | `isCompatibleDashboard` validates protocol/build/project; old PID 7688 was verified by command line and stopped; live health returns v2 identity. |
 | R02 CI directory validation | Deleted change, whitespace name and zero-validated runs now fail instead of skipping; covered by CI behavior tests. |
-| R03 Verdict and freshness | Only an anchored positive verdict passes; `NOT ACCEPTED` and post-acceptance requirement edits fail. |
+| R03 Verdict and freshness | Only an anchored positive verdict passes; a negated verdict text and post-acceptance requirement edits both fail. |
 | R04 Source-bound artifacts | External symlink artifacts are rejected; snapshot scanning skips out-of-root links before hashing. |
 | R05 Tier escalation | `escalate` preserves task identity, start time and earlier evidence; replacement requires an explicit reason. |
 | R06 Concurrent state | `state.lock` with dead-PID and stale fallback; two-process artifact writes keep both records. |
