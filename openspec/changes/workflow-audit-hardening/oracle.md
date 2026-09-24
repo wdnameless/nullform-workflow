@@ -15,4 +15,8 @@ Two independent read-only passes, `BlindOracleA` and `BlindOracleB`, each return
 | R08 | Fresh sandbox installation without a model warns and skips optional Paseo setup; profile path expansion and existing model preservation passed. |
 | R09 | Exact versions for 14 installed plugins; required missing/version-mismatch paths fail, optional paths warn, explicit offline skip is surfaced. |
 
-Deterministic checks: `node --test tools/tests/*.test.mjs` — 317 tests, 317 pass, 0 fail, exit 0. `openspec validate workflow-audit-hardening --strict` — valid. `prompt-lint check` — 78 prompt surfaces match. Remote GitHub PR/CI was not run because this branch has not been pushed; CI evidence is locally exercised, not claimed as a remote result. Credential rotation was excluded by user request, and no credential file was edited.
+Deterministic checks: `node --test tools/tests/*.test.mjs` — 366 tests, 366 pass, 0 fail, exit 0 (current tree). `openspec validate workflow-audit-hardening --strict` — valid. `prompt-lint check` — 78 prompt surfaces match. Remote GitHub PR/CI was not run because this branch has not been pushed; CI evidence is locally exercised, not claimed as a remote result. Credential rotation was excluded by user request, and no credential file was edited.
+
+## Refresh on the current tree
+
+The two independent passes `Wf2FinalOracleA` and `Wf2FinalOracleB` re-verified R02–R09 on the final tree of `fix/workflow-audit-round2` and each returned ACCEPT: artifact/evidence gates (R02), staleness across commits and untracked changes (R03), CI PR validation (R04), sanitized dashboard (R05), clean prompt surfaces (R06), conditional Wave 0 (R07), graceful Paseo setup without a model (R08), and pinned plugin fail-closed behavior (R09) all still hold. The suite grew from 317 to 366 tests since the original acceptance; the increase is new regression coverage, all passing.
