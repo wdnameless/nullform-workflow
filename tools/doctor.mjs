@@ -324,7 +324,7 @@ function installedPlugins(stdout) {
       if (p && typeof p.name === "string" && p.name) {
         map.set(p.name, {
           name: p.name,
-          version: typeof p.version === "string" ? p.version : null,
+          version: typeof p.version === "string" && p.version.trim() ? p.version.trim() : null,
         });
       }
     }
@@ -333,7 +333,7 @@ function installedPlugins(stdout) {
     for (const p of parsed.marketplace) {
       if (p) {
         let name = typeof p.name === "string" ? p.name : null;
-        let version = typeof p.version === "string" ? p.version : null;
+        let version = typeof p.version === "string" && p.version.trim() ? p.version.trim() : null;
         if (!name && typeof p.id === "string") {
           const lastAt = p.id.lastIndexOf("@");
           if (lastAt > 0) {
@@ -1066,14 +1066,17 @@ export function runDoctor(options) {
             if (installed.has(p.name)) {
               const inst = installed.get(p.name);
               const exp = expectedVersionOf(p);
-              if (exp && inst.version && inst.version !== exp) {
-                versionMismatches.push({
-                  name: p.name,
-                  expected: exp,
-                  installed: inst.version,
-                  required: p.required,
-                  spec: p.spec,
-                });
+              if (exp) {
+                const instVersion = inst?.version || null;
+                if (!instVersion || instVersion !== exp) {
+                  versionMismatches.push({
+                    name: p.name,
+                    expected: exp,
+                    installed: instVersion || "неизвестно",
+                    required: p.required,
+                    spec: p.spec,
+                  });
+                }
               }
             }
           }

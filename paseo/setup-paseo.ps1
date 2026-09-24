@@ -76,7 +76,8 @@ if (-not (Test-Path $PaseoConfigDir)) {
     New-Item -ItemType Directory -Path $PaseoConfigDir -Force | Out-Null
 }
 
-$PaseoConfigFile = Join-Path $PaseoConfigDir "config.json"
+$PaseoConfigDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PaseoConfigDir)
+$PaseoConfigFile = [System.IO.Path]::Combine($PaseoConfigDir, "config.json")
 
 # JSON must be written without a BOM: .NET Framework's Encoding::UTF8 emits EF BB BF,
 # which strict JSON parsers (including some Paseo/Node readers) reject.
@@ -211,7 +212,27 @@ foreach ($sp in $sourceProfiles) {
 $existingConfig.daemon | Add-Member -NotePropertyName agentProfiles -NotePropertyValue $retainedProfiles -Force
 
 $newJson = $existingConfig | ConvertTo-Json -Depth 30
-[System.IO.File]::WriteAllText($PaseoConfigFile, $newJson, $Utf8NoBom)
+$tempFile = [System.IO.Path]::Combine($PaseoConfigDir, ("config.json.tmp." + [System.Guid]::NewGuid().ToString("N")))
+try {
+    [System.IO.File]::WriteAllText($tempFile, $newJson, $Utf8NoBom)
+
+    if ($env:PASEO_SETUP_FAILPOINT -eq "before-replace" -or $env:PASEO_SETUP_FAILPOINT -eq "fail") {
+        throw "Simulated failure at failpoint: $env:PASEO_SETUP_FAILPOINT"
+    }
+
+    if (Test-Path -LiteralPath $PaseoConfigFile) {
+        [System.IO.File]::Replace($tempFile, $PaseoConfigFile, $null, $true)
+    } else {
+        [System.IO.File]::Move($tempFile, $PaseoConfigFile)
+    }
+} catch {
+    Write-Error "Failed to update Paseo configuration file $PaseoConfigFile. Original configuration was left untouched: $_"
+    throw
+} finally {
+    if (Test-Path -LiteralPath $tempFile) {
+        Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Host "[OK] Paseo configuration updated successfully at: $PaseoConfigFile"
 Write-Host "     daemon.agentProfiles updated idempotently. Unrelated profiles and chosen model preserved."

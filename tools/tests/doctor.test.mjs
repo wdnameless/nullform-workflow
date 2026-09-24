@@ -1014,7 +1014,11 @@ function fakeOmp({ installed = [], listStdout = null, listStatus = 0, listStderr
       const stdout = listStdout ?? JSON.stringify({
         npm: installed.map((item) => {
           if (typeof item === "object" && item !== null) {
-            return { name: item.name, version: item.version ?? "1.0.0", enabled: true };
+            return {
+              name: item.name,
+              version: "version" in item ? item.version : null,
+              enabled: true,
+            };
           }
           if (typeof item === "string") {
             const lastAt = item.lastIndexOf("@");
@@ -1285,6 +1289,58 @@ test("plugins: опциональный плагин с неверной вер�
     assert.equal(check.status, "warn");
     assert.match(check.detail, /Несоответствие версии опциональных плагинов/);
     assert.match(check.detail, /0\.1\.10 != 0\.1\.17/);
+    assert.equal(result.summary.fail, 0);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: обязательный плагин без версии (name-only) → FAIL (ok: false)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-req-no-ver-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: null }] }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /Несоответствие версии обязательных плагинов/);
+    assert.match(check.detail, /pi-lens/);
+    assert.equal(result.summary.fail, 1);
+    assert.equal(result.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: опциональный плагин без версии (name-only) → WARN (ok: true)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-opt-no-ver-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+      { name: "pi-qq", spec: "pi-qq@0.1.17", required: false },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({
+        installed: [
+          { name: "pi-lens", version: "4.2.1" },
+          { name: "pi-qq", version: null },
+        ],
+      }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "warn");
+    assert.match(check.detail, /Несоответствие версии опциональных плагинов/);
+    assert.match(check.detail, /pi-qq/);
     assert.equal(result.summary.fail, 0);
     assert.equal(result.ok, true);
   } finally {

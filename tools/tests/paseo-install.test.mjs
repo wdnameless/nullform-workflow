@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -146,6 +146,126 @@ test("setup-paseo.ps1: preserves existing model when called without -Model and e
 
     const unrelated = cfg.daemon.agentProfiles.find((p) => p.id === "unrelated_profile");
     assert.ok(unrelated, "Unrelated profile must be untouched");
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test("setup-paseo.ps1: synthetic config remains valid and untouched after injected failure (R07 atomic replacement)", () => {
+  const tmpHome = mkdtempSync(join(tmpdir(), "paseo-atomic-fail-"));
+  try {
+    const paseoDir = join(tmpHome, ".paseo");
+    mkdirSync(paseoDir, { recursive: true });
+
+    const initialConfig = {
+      theme: "custom-dark",
+      telemetry: false,
+      unrelatedSection: { foo: "bar", list: [1, 2, 3] },
+      daemon: {
+        port: 8080,
+        agentProfiles: [
+          {
+            id: "agent_profile_orchestrator",
+            name: "Orchestrator",
+            provider: "omp",
+            model: "original-provider/original-model",
+            notes: "Original notes <HarnessRoot>",
+          },
+          {
+            id: "unrelated_profile",
+            name: "Other",
+            provider: "custom",
+            model: "other/model",
+          },
+        ],
+      },
+    };
+    const cfgPath = join(paseoDir, "config.json");
+    const originalJson = JSON.stringify(initialConfig, null, 2);
+    writeFileSync(cfgPath, originalJson, "utf8");
+
+    const res = spawnSync(POWERSHELL_PATH, [
+      "-ExecutionPolicy", "Bypass",
+      "-File", SETUP_PASEO_PATH,
+      "-UserProfileDir", tmpHome,
+      "-Model", "new-provider/new-model",
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, PASEO_SETUP_FAILPOINT: "before-replace" },
+    });
+
+    assert.notEqual(res.status, 0, "Execution must fail when failpoint is triggered");
+
+    // Config file must still exist and be completely intact and valid
+    assert.ok(existsSync(cfgPath), "Config file must still exist");
+    const currentRaw = readFileSync(cfgPath, "utf8");
+    assert.equal(currentRaw, originalJson, "Original config content must be unchanged byte-for-byte");
+    const parsed = JSON.parse(currentRaw);
+    assert.equal(parsed.theme, "custom-dark");
+    assert.equal(parsed.unrelatedSection.foo, "bar");
+    assert.equal(parsed.daemon.port, 8080);
+    assert.equal(parsed.daemon.agentProfiles[0].model, "original-provider/original-model");
+
+    // No leftover temporary files in .paseo directory
+    const leftovers = readdirSync(paseoDir).filter((f) => f.includes("tmp"));
+    assert.equal(leftovers.length, 0, `No temporary files must remain, found: ${leftovers.join(", ")}`);
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test("setup-paseo.ps1: atomic replacement preserves unrelated fields and writes without BOM", () => {
+  const tmpHome = mkdtempSync(join(tmpdir(), "paseo-atomic-success-"));
+  try {
+    const paseoDir = join(tmpHome, ".paseo");
+    mkdirSync(paseoDir, { recursive: true });
+
+    const initialConfig = {
+      theme: "custom-theme",
+      customKey: "preserved",
+      daemon: {
+        port: 1234,
+        agentProfiles: [
+          {
+            id: "unrelated_existing",
+            name: "Unrelated",
+            provider: "test",
+            model: "test/model",
+          },
+        ],
+      },
+    };
+    const cfgPath = join(paseoDir, "config.json");
+    writeFileSync(cfgPath, JSON.stringify(initialConfig, null, 2), "utf8");
+
+    const res = spawnSync(POWERSHELL_PATH, [
+      "-ExecutionPolicy", "Bypass",
+      "-File", SETUP_PASEO_PATH,
+      "-UserProfileDir", tmpHome,
+      "-Model", "test-provider/test-model",
+      "-HarnessRoot", "C:/harness",
+    ], { encoding: "utf8" });
+
+    assert.equal(res.status, 0, `Expected success, got: ${res.stderr}\n${res.stdout}`);
+
+    // Verify BOM: file must NOT start with UTF-8 BOM (0xEF, 0xBB, 0xBF)
+    const rawBuffer = readFileSync(cfgPath);
+    assert.ok(
+       !(rawBuffer[0] === 0xef && rawBuffer[1] === 0xbb && rawBuffer[2] === 0xbf),
+      "File must not have UTF-8 BOM"
+    );
+
+    // Verify unrelated fields preserved
+    const cfg = JSON.parse(rawBuffer.toString("utf8"));
+    assert.equal(cfg.theme, "custom-theme");
+    assert.equal(cfg.customKey, "preserved");
+    assert.equal(cfg.daemon.port, 1234);
+    assert.ok(cfg.daemon.agentProfiles.some((p) => p.id === "unrelated_existing"));
+    assert.ok(cfg.daemon.agentProfiles.some((p) => p.id === "agent_profile_orchestrator"));
+
+    // No leftover temporary files
+    const leftovers = readdirSync(paseoDir).filter((f) => f.includes("tmp"));
+    assert.equal(leftovers.length, 0, "No temporary files must remain");
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }
