@@ -77,11 +77,23 @@ export function validateReturnContract(rawText) {
     // Actual task results often wrapper { status: 'success'|'partial'|'failed', summary: 'STATUS: DONE ...', tests_passed: boolean }
     const summary = typeof parsedJson.summary === "string" ? parsedJson.summary : "";
     const testsPassed = parsedJson.tests_passed;
+    const rawOuterStatus = typeof parsedJson.status === "string" ? parsedJson.status.trim().toLowerCase() : "";
 
     // Check if summary itself contains the structured contract (common wrapper)
     const hasStatusInSummary = /(?:^|[·\n])\s*STATUS\b/i.test(summary);
     if (hasStatusInSummary) {
       normalized = summary.replace(/\r\n/g, "\n");
+      // Check for contradictory wrapper status vs inner contract
+      // E.g. outer status is failed or partial, but inner contract claims DONE
+      if (rawOuterStatus === "failed") {
+        errors.push(`Противоречивый статус: внешняя обёртка сообщает status: 'failed', но внутренний контракт содержит статус завершения. Задача считается заблокированной.`);
+      } else if (rawOuterStatus === "partial") {
+        // If outer is partial, inner cannot be pure DONE without concerns
+        const innerIsDone = /(?:^|[·\n])\s*STATUS\s*[:\-\(]?\s*DONE\b(?!\s*[_A-Z])/i.test(normalized);
+        if (innerIsDone) {
+          errors.push(`Противоречивый статус: внешняя обёртка сообщает status: 'partial', что несовместимо со статусом DONE без оговорок (ожидается DONE_WITH_CONCERNS).`);
+        }
+      }
     } else {
       // Build normalized string from JSON fields
       let status = (parsedJson.status || "").toUpperCase();
@@ -107,7 +119,6 @@ export function validateReturnContract(rawText) {
       ];
       normalized = lines.join("\n");
     }
-
     // Rule: tests_passed: true with 'not-run(parent-owned)' must NEVER count as executed test evidence
     // And bare tests_passed: true without command/count evidence is not allowed
     if (testsPassed === true) {

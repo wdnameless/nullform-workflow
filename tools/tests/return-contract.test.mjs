@@ -166,3 +166,36 @@ test("rejects tests_passed: true when combined with not-run(parent-owned)", () =
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((e) => e.includes("not-run(parent-owned)")));
 });
+
+test("rejects wrapper with outer status: 'failed' even if summary claims STATUS: DONE", () => {
+  const wrapperPayload = {
+    status: "failed",
+    tests_passed: false,
+    summary: "STATUS: DONE · FILES: tools/a.mjs · TESTS: not-run(parent-owned) · INTERFACES: none · REQUIREMENTS: R11 · CONCERNS: none",
+  };
+  const result = validateReturnContract(wrapperPayload);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes("failed")));
+});
+
+test("rejects wrapper with outer status: 'partial' if summary claims pure STATUS: DONE without concerns", () => {
+  const wrapperPayload = {
+    status: "partial",
+    tests_passed: false,
+    summary: "STATUS: DONE · FILES: tools/a.mjs · TESTS: not-run(parent-owned) · INTERFACES: none · REQUIREMENTS: R11 · CONCERNS: none",
+  };
+  const result = validateReturnContract(wrapperPayload);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes("partial")));
+});
+
+test("accepts wrapper with outer status: 'partial' when summary specifies DONE_WITH_CONCERNS", () => {
+  const wrapperPayload = {
+    status: "partial",
+    tests_passed: false,
+    summary: "STATUS: DONE_WITH_CONCERNS · FILES: tools/a.mjs · TESTS: not-run(parent-owned) · INTERFACES: none · REQUIREMENTS: R11 · CONCERNS: minor debt",
+  };
+  const result = validateReturnContract(wrapperPayload);
+  assert.equal(result.valid, true);
+  assert.equal(result.status, "DONE_WITH_CONCERNS");
+});
