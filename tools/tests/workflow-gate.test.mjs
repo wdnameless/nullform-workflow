@@ -337,16 +337,21 @@ test("check-ci: rejects manifest modified in commits after oracle acceptance", (
 test("check-ci: rejects T0 PR when changed files against --base-ref exceed 2 without approved override", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-gate-base-ref-"));
   function git(...args) {
-    return spawnSync("git", args, {
+    const res = spawnSync("git", args, {
       cwd: root, encoding: "utf8", windowsHide: true,
       env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
     });
+    assert.equal(res.status, 0, `git ${args.join(" ")} failed: ${res.stderr}`);
+    return res;
   }
   try {
     git("init", "-q", "-b", "main", ".");
     writeFileSync(join(root, "file1.txt"), "1\n", "utf8");
     git("add", "-A");
     git("commit", "-qm", "base commit");
+
+    // Switch to feature branch so main remains at the base commit
+    git("checkout", "-qb", "feature");
 
     // 1 file changed against main: passes T0
     writeFileSync(join(root, "file1.txt"), "1 modified\n", "utf8");
