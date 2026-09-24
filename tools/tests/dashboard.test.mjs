@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -725,6 +725,26 @@ test("R05: HTTP-границы (/, /api/state, /api/diff) не отдают чу
 });
 
 /* ---------------------------------------------- R01, R15 regressions */
+function requestWithHost(port, path, hostHeader) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method: "GET",
+        headers: { Host: hostHeader },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => resolve({ status: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, data }));
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 test("R15: HTTP-маршруты отклоняют не-loopback Host (включая DNS-rebind) и принимают localhost/127.0.0.1", async () => {
   const tmp = createTempDir();
@@ -761,22 +781,16 @@ test("R15: HTTP-маршруты отклоняют не-loopback Host (вклю
 
     for (const route of routes) {
       for (const hostile of hostileHosts) {
-        const res = await fetch(`http://127.0.0.1:${port}${route}`, {
-          headers: { Host: hostile },
-        });
+        const res = await requestWithHost(port, route, hostile);
         assert.equal(res.status, 403, `маршрут ${route} с Host: ${hostile} должен возвращать 403`);
         assert.equal(res.ok, false);
       }
 
       // Легитимный localhost / 127.0.0.1
-      const resLocalhost = await fetch(`http://127.0.0.1:${port}${route}`, {
-        headers: { Host: `localhost:${port}` },
-      });
+      const resLocalhost = await requestWithHost(port, route, `localhost:${port}`);
       assert.equal(resLocalhost.status, 200, `маршрут ${route} с Host: localhost:${port} должен быть успешен`);
 
-      const resLoopback = await fetch(`http://127.0.0.1:${port}${route}`, {
-        headers: { Host: `127.0.0.1:${port}` },
-      });
+      const resLoopback = await requestWithHost(port, route, `127.0.0.1:${port}`);
       assert.equal(resLoopback.status, 200, `маршрут ${route} с Host: 127.0.0.1:${port} должен быть успешен`);
     }
   } finally {
@@ -856,17 +870,16 @@ test("R01: устаревший протокол здоровья ({ok, pid, roo
 
     // Вызов ensureDashboard при наличии несовместимого рантайма:
     // должен отказать в fast path и усыновить совместимый orphan сервер boundCurrent на validPort
-    const info = await ensureDashboard(tmp, { open: false, port: legacyPort });
+    const info = await ensureDashboard(tmp, { open: false, port: legacyPort, session: "local" });
     assert.equal(info.port, boundCurrent.port, "переиспользован совместимый порт, а не старый");
     assert.notEqual(info.port, legacyPort, "legacyPort не был переиспользован");
-
     // Проверяем, что не верифицированный legacyServer не был убит и продолжает слушать
     assert.equal(legacyServer.listening, true, "старый сервер не завершён");
     const checkLegacy = await probeDashboard(legacyPort);
     assert.equal(checkLegacy?.pid, 7688, "старый процесс по-прежнему отвечает");
 
     // Маркер в рантайме обновлен на порт актуального сервера
-    const marker = readRuntime(tmp);
+    const marker = readRuntime(tmp, "local");
     assert.equal(marker.port, boundCurrent.port, "маркер обновлен на порт актуального сервера");
 
     // 3. Orphan scan: удаляем рантайм, сканируем диапазон, начинающийся с legacyPort
@@ -874,7 +887,7 @@ test("R01: устаревший протокол здоровья ({ok, pid, roo
     rmSync(runtimePath(tmp), { force: true });
     assert.equal(readRuntime(tmp), null);
 
-    const orphanInfo = await ensureDashboard(tmp, { open: false, port: legacyPort });
+    const orphanInfo = await ensureDashboard(tmp, { open: false, port: legacyPort, session: "local" });
     assert.equal(orphanInfo.port, boundCurrent.port, "сирота усыновлена только с валидного порта");
     assert.equal(orphanInfo.adopted, true);
     assert.equal(legacyServer.listening, true, "legacyServer жив после orphan scan");
@@ -958,7 +971,7 @@ test("R01: сервер с отличающимся build ID отвергает�
     assert.equal(isCompatibleDashboard(probedCurrent, tmp), true);
 
     // ensureDashboard отказывается переиспользовать stalePort с иным build ID
-    const info = await ensureDashboard(tmp, { open: false, port: stalePort });
+    const info = await ensureDashboard(tmp, { open: false, port: stalePort, session: "local" });
     assert.equal(info.port, boundCurrent.port, "переиспользован актуальный build, а не устаревший");
     assert.notEqual(info.port, stalePort);
     assert.equal(staleBuildServer.listening, true, "процесс со старым build ID не был убит");
@@ -967,7 +980,7 @@ test("R01: сервер с отличающимся build ID отвергает�
     rmSync(runtimePath(tmp, "local"), { force: true });
     rmSync(runtimePath(tmp), { force: true });
 
-    const orphanInfo = await ensureDashboard(tmp, { open: false, port: stalePort });
+    const orphanInfo = await ensureDashboard(tmp, { open: false, port: stalePort, session: "local" });
     assert.equal(orphanInfo.port, boundCurrent.port, "orphan scan усыновил только сервер с текущим build ID");
     assert.equal(orphanInfo.adopted, true);
     assert.equal(staleBuildServer.listening, true);
