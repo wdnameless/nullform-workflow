@@ -24,3 +24,8 @@ Two independent read-only passes, `Wf2BlindOracleA` and `Wf2BlindOracleB`, each 
 | R16 Plugin verification | Required pinned plugin with unknown version fails; optional warns; explicit opt-out is visible. |
 
 Deterministic checks: `node --test` 365/365; portability sandbox 11/11; sync guard 8/8; live harness audit 14/14 clean; install verification 29/29; source-to-live sync clean with skill parity verified. Remote GitHub CI was not pushed or executed, and credential rotation remains deferred by explicit user decision.
+
+## Re-acceptance: narrowed verdict predicate
+
+After the acceptance above, the verdict predicate was narrowed so that ordinary prose containing the word "rejected" no longer fails a document that states an anchored positive verdict. Two further independent passes, `Wf2VerdictOracleA` and `Wf2VerdictOracleB`, each returned ACCEPT for R03 on the changed code: anchored positive verdicts pass, negated or contradictory anchored verdicts fail, the local close path and the CI path share one helper, and no new bypass was found. Post-fix suite: 365/365.
+
