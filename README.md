@@ -10,7 +10,7 @@
 |---|---|
 | **29** проверок установки · **14** проверок аудита | один раннер `tools/verify.mjs`, обёртки под каждую ОС |
 | **69** навыков · **8** ролей · **31** инструмент | без единой внешней npm-зависимости |
-| **317** юнит-тестов | `node --test tools/tests/*.test.mjs` |
+| **Юнит-тесты** | `node --test tools/tests/*.test.mjs` |
 | **0** внешних npm-пакетов | только стандартная библиотека Node.js 18+ |
 
 ![Дашборд: граф зависимостей проекта](docs/assets/dashboard-graph.jpg)
@@ -506,7 +506,7 @@ node tools/auto-review.mjs --root .
 ## Разработка
 
 ```bash
-node --test tools/tests/*.test.mjs    # 317 юнит-тестов
+node --test tools/tests/*.test.mjs    # юнит-тесты
 node tools/verify.mjs --profile audit # аудит репозитория
 node tools/auto-review.mjs --root .   # архитектурный гейт
 ```
