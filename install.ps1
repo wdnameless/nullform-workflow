@@ -272,11 +272,11 @@ Ok "rules -> $agentDir\rules (and ~/.agents\rules)"
 
 # ---------- 4. Provider + model routing ----------
 if ($providerBase) {
-  WriteText "$agentDir\models.yml" (Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw -Encoding UTF8))
-  Ok "models.yml -> $agentDir\models.yml (provider: my-provider)"
+  WriteText "$agentDir/models.yml" (Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw -Encoding UTF8))
+  Ok "models.yml -> $agentDir/models.yml (provider: my-provider)"
 
-  if (-not (Test-Path "$agentDir\config.yml")) {
-    WriteText "$agentDir\config.yml" (Patch (Get-Content "$PSScriptRoot\agent\config.yml.example" -Raw -Encoding UTF8))
+  if (-not (Test-Path "$agentDir/config.yml")) {
+    WriteText "$agentDir/config.yml" (Patch (Get-Content "$PSScriptRoot\agent\config.yml.example" -Raw -Encoding UTF8))
     Ok "config.yml installed (roles -> my-provider/$modelId)"
   } else {
     Warn "config.yml already exists -> left untouched. Update its modelRoles to 'my-provider/$modelId' by hand."
@@ -286,7 +286,7 @@ if ($providerBase) {
   try {
     $oracleScript = Join-Path $HarnessRoot 'tools\oracle-model.mjs'
     if (Test-Path $oracleScript) {
-      & node $oracleScript ensure --probe --config "$agentDir\config.yml" --models "$agentDir\models.yml" 2>$null
+      & node $oracleScript ensure --probe --config "$agentDir/config.yml" --models "$agentDir/models.yml" 2>$null
       if ($LASTEXITCODE -eq 0) {
         Ok "oracle model role verified"
       } else {
@@ -420,7 +420,7 @@ if ($SetupPaseo) {
 # ---------- 8. Baseline the prompt surfaces ----------
 # Records a hash per prompt surface so a later edit is visible as a cache-prefix
 # change rather than a silent full-price re-bill.
-if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
+if (Test-Path "$HarnessRoot/tools/prompt-lint.mjs") {
   # prompt-lint also scans ~/.agents. During a sandbox/custom -UserHome install,
   # Node must resolve the same home we just populated — otherwise the baseline
   # records the operator's real machine and the first installed audit reports
@@ -430,7 +430,7 @@ if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
   try {
     $env:HOME = $UserHome
     $env:USERPROFILE = $UserHome
-    & node "$HarnessRoot\tools\prompt-lint.mjs" baseline --root $HarnessRoot | Out-Null
+    & node "$HarnessRoot/tools/prompt-lint.mjs" baseline --root $HarnessRoot | Out-Null
   } finally {
     $env:HOME = $oldHome
     $env:USERPROFILE = $oldUserProfile
@@ -537,8 +537,8 @@ if ($IsWindows -or $env:OS -eq 'Windows_NT') {
 }
 
 # ---------- 10. Run install doctor ----------
-if (Test-Path "$HarnessRoot\tools\doctor.mjs") {
-  $doctorArgs = @("$HarnessRoot\tools\doctor.mjs", "--harness", "$HarnessRoot", "--agent-dir", "$agentDir", "--agents-home", "$agentsHome")
+if (Test-Path "$HarnessRoot/tools/doctor.mjs") {
+  $doctorArgs = @("$HarnessRoot/tools/doctor.mjs", "--harness", "$HarnessRoot", "--agent-dir", "$agentDir", "--agents-home", "$agentsHome")
   if ($SkipPlugins) {
     $doctorArgs += "--skip-plugin-check"
   }
