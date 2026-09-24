@@ -212,9 +212,67 @@ foreach ($entry in $Manifest) {
   }
 }
 
+$repoSkills = Join-Path $RepoRoot 'skills'
+$installedSkills = Join-Path $AgentsRoot 'skills'
+$doctorScript = Join-Path $PSScriptRoot 'skills-doctor.mjs'
+if (-not (Test-Path $doctorScript)) {
+  $doctorScript = Join-Path $RepoRoot 'tools\skills-doctor.mjs'
+}
+
+$skillsApplicable = (-not $Only) -or ('skills' -like "*$Only*")
+$skillsStatusText = ""
+$skillsParityStatus = "NOT_CHECKED"
+$skillsDoctorOk = $false
+
+if ($skillsApplicable) {
+  if (Test-Path $doctorScript) {
+    $docOut = & node $doctorScript --installed $installedSkills --repo $repoSkills --agents-home $AgentsRoot --json 2>&1
+    $docExit = $LASTEXITCODE
+    try {
+      $parsed = $docOut | ConvertFrom-Json
+      $skillsParityStatus = if ($parsed.parityStatus) { $parsed.parityStatus } else { "UNVERIFIED" }
+      $skillsDoctorOk = ($docExit -eq 0) -and ($parsed.ok -eq $true) -and ($skillsParityStatus -eq 'VERIFIED')
+      $disText = if ($parsed.disabledCount) { ", $($parsed.disabledCount) disabled by operator" } else { "" }
+      $skillsStatusText = "skills: parity $skillsParityStatus ($($parsed.installedCount) installed, $($parsed.repoCount) in repo$disText)"
+      if (-not $skillsDoctorOk -and (-not $Deploy) -and (-not $Promote)) {
+        if ($parsed.problems -and $parsed.problems.Count) {
+          foreach ($p in $parsed.problems) {
+            $pSkill = if ($p.skill -eq '(repo)') { 'skills' } else { "skills\$($p.skill)" }
+            if (-not $Quiet) { Write-Host "  [XX] DRIFT   $pSkill ($($p.kind): $($p.detail))" -ForegroundColor Red }
+            $drift += $pSkill
+          }
+        } else {
+          $drift += "skills"
+          if (-not $Quiet) { Write-Host "  [XX] DRIFT   skills (parity $skillsParityStatus)" -ForegroundColor Red }
+        }
+      }
+    } catch {
+      $skillsParityStatus = "UNVERIFIED"
+      $skillsDoctorOk = $false
+      $skillsStatusText = "skills: parity UNVERIFIED (failed to parse skills-doctor output)"
+      if ((-not $Deploy) -and (-not $Promote)) {
+        $drift += "skills"
+        if (-not $Quiet) { Write-Host "  [XX] DRIFT   skills (doctor parse error / exit $docExit)" -ForegroundColor Red }
+      }
+    }
+  } else {
+    $skillsParityStatus = "UNVERIFIED"
+    $skillsDoctorOk = $false
+    $skillsStatusText = "skills: parity UNVERIFIED (skills-doctor.mjs not found)"
+    if ((-not $Deploy) -and (-not $Promote)) {
+      $drift += "skills"
+      if (-not $Quiet) { Write-Host "  [XX] DRIFT   skills (parity UNVERIFIED - doctor script not found)" -ForegroundColor Red }
+    }
+  }
+}
+
 Write-Host ""
 if ($drift.Count -eq 0) {
-  Write-Host "sync: clean ($checked files checked)" -ForegroundColor Green
+  if ($skillsStatusText -and -not $Quiet) {
+    $color = if ($skillsParityStatus -eq 'VERIFIED') { 'Green' } else { 'Yellow' }
+    Write-Host $skillsStatusText -ForegroundColor $color
+  }
+  Write-Host "sync: clean ($checked files checked$(if ($skillsApplicable -and $skillsDoctorOk) { ', skills parity verified' }))" -ForegroundColor Green
   exit 0
 }
 
@@ -234,9 +292,18 @@ if ($Promote -and $suspect.Count) {
 }
 
 if ($Promote -or $Deploy) {
-  Write-Host "sync: $($drift.Count)/$checked files $(if ($Promote) {'promoted to repo'} else {'deployed to harness'})" -ForegroundColor Green
+  $action = if ($Promote) {'promoted to repo'} else {'deployed to harness'}
+  Write-Host "sync: $($drift.Count)/$checked files $action" -ForegroundColor Green
+  if ($Deploy -and $skillsApplicable -and $skillsStatusText) {
+    $color = if ($skillsParityStatus -eq 'VERIFIED') { 'Green' } else { 'Yellow' }
+    Write-Host $skillsStatusText -ForegroundColor $color
+  }
   exit 0
 }
 
-Write-Host "sync: $($drift.Count)/$checked files drifted. Run -Promote or -Deploy." -ForegroundColor Yellow
+if ($skillsStatusText -and -not $Quiet) {
+  $color = if ($skillsParityStatus -eq 'VERIFIED') { 'Green' } else { 'Red' }
+  Write-Host $skillsStatusText -ForegroundColor $color
+}
+Write-Host "sync: $($drift.Count)/$checked items drifted. Run -Promote or -Deploy." -ForegroundColor Yellow
 exit 1

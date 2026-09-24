@@ -74,7 +74,62 @@ try {
     Assert (Test-Path (Join-Path $live 'tools\node_modules\pkg\old.js')) "node_modules must never be pruned"
     Assert (Test-Path (Join-Path $live 'tools\local.json')) "config json must never be pruned"
 
-    Write-Host "sync-guard: 4/4 checks passed (refusal + force override + prune dry run + confirmed prune)."
+    # 5. Check mode: absent repo skills reports parity UNVERIFIED and exits 1 (cannot produce green).
+    Copy-Item (Join-Path $PSScriptRoot '..\tools\skills-doctor.mjs') (Join-Path $repo 'tools\skills-doctor.mjs')
+    Set-Content -Path (Join-Path $repo 'CONTEXT.md') -Value 'live version' -Encoding UTF8
+    $checkAbsentOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sync -HarnessRoot $live -AgentsRoot $fakeAgents 2>&1
+    $checkAbsentExit = $LASTEXITCODE
+    $checkAbsentText = ($checkAbsentOut | Out-String)
+    Assert ($checkAbsentExit -eq 1) "Check with absent repo skills must exit 1, got $checkAbsentExit"
+    Assert ($checkAbsentText -match 'parity UNVERIFIED') "Check with absent repo skills must report parity UNVERIFIED, got: $checkAbsentText"
+
+    # 6. Check mode: installed skill drift reports drift and exits 1.
+    $skillFixture = @"
+---
+name: test-skill
+description: "Test skill"
+---
+Body
+"@
+    New-Item -ItemType Directory -Force -Path (Join-Path $repo 'skills\test-skill'), (Join-Path $fakeAgents 'skills\test-skill') | Out-Null
+    Set-Content -Path (Join-Path $repo 'skills\test-skill\SKILL.md') -Value $skillFixture -Encoding UTF8
+    Set-Content -Path (Join-Path $fakeAgents 'skills\test-skill\SKILL.md') -Value ($skillFixture + "`n# Drifted modification`n") -Encoding UTF8
+
+    $checkDriftOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sync -HarnessRoot $live -AgentsRoot $fakeAgents 2>&1
+    $checkDriftExit = $LASTEXITCODE
+    $checkDriftText = ($checkDriftOut | Out-String)
+    Assert ($checkDriftExit -eq 1) "Check with drifted skill must exit 1, got $checkDriftExit"
+    Assert ($checkDriftText -match 'skills[\\/]test-skill') "Check output must name drifted skill, got: $checkDriftText"
+    Assert ($checkDriftText -match 'DRIFT') "Check output must report DRIFT, got: $checkDriftText"
+
+    # 7. Deploy mode: reports explicit parity without auto-copying skills or resurrecting disabled skills.
+    $disabledSkillFixture = @"
+---
+name: disabled-skill
+description: "Disabled skill"
+---
+Body
+"@
+    New-Item -ItemType Directory -Force -Path (Join-Path $repo 'skills\disabled-skill') | Out-Null
+    Set-Content -Path (Join-Path $repo 'skills\disabled-skill\SKILL.md') -Value $disabledSkillFixture -Encoding UTF8
+    Set-Content -Path (Join-Path $fakeAgents '.skills-disabled.json') -Value '{"version": 1, "disabled": ["disabled-skill"]}' -Encoding UTF8
+
+    $deployOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sync -HarnessRoot $live -AgentsRoot $fakeAgents -Deploy 2>&1
+    $deployExit = $LASTEXITCODE
+    $deployText = ($deployOut | Out-String)
+    Assert ($deployExit -eq 0) "Deploy must exit 0, got $deployExit"
+    Assert (-not (Test-Path (Join-Path $fakeAgents 'skills\disabled-skill'))) "Deploy must not create disabled skill on disk"
+    Assert ($deployText -match 'skills: parity (DRIFT|VERIFIED|UNVERIFIED)') "Deploy report must include explicit skills parity status, got: $deployText"
+
+    # Align installed skill to repo to verify parity VERIFIED report on clean deploy
+    Set-Content -Path (Join-Path $fakeAgents 'skills\test-skill\SKILL.md') -Value $skillFixture -Encoding UTF8
+    $deployCleanOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sync -HarnessRoot $live -AgentsRoot $fakeAgents -Deploy 2>&1
+    $deployCleanExit = $LASTEXITCODE
+    $deployCleanText = ($deployCleanOut | Out-String)
+    Assert ($deployCleanExit -eq 0) "Deploy must exit 0, got $deployCleanExit"
+    Assert ($deployCleanText -match 'skills: parity VERIFIED') "Deploy report must report parity VERIFIED when clean, got: $deployCleanText"
+
+    Write-Host "sync-guard: 7/7 checks passed (refusal + force override + prune dry run + confirmed prune + absent repo + installed drift + deploy parity)."
 } finally {
     Remove-Item -Recurse -Force $Sandbox -ErrorAction SilentlyContinue
 }
