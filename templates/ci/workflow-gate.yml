@@ -36,15 +36,36 @@ jobs:
         run: |
           BASE='${{ github.base_ref
             || github.event.repository.default_branch }}'
-          CHANGED_SPECS=$(
-            git diff --name-only "origin/$BASE"...HEAD \
-              -- 'openspec/changes/*' 2>/dev/null \
-              | cut -d/ -f1-3 | sort -u || true
-          )
-          if [ -z "$CHANGED_SPECS" ]; then
+          TMP_DIFF=$(mktemp)
+          trap 'rm -f "$TMP_DIFF"' EXIT
+          git diff -z --name-only "origin/$BASE"...HEAD \
+            -- 'openspec/changes/*' > "$TMP_DIFF"
+
+          SPEC_DIRS=()
+          while IFS= read -r -d '' file_path; do
+            [ -z "$file_path" ] && continue
+            rel="${file_path#openspec/changes/}"
+            change_id="${rel%%/*}"
+            [ -z "$change_id" ] && continue
+            spec_dir="openspec/changes/$change_id"
+            already=0
+            for s in "${SPEC_DIRS[@]}"; do
+              if [ "$s" = "$spec_dir" ]; then
+                already=1
+                break
+              fi
+            done
+            if [ "$already" -eq 0 ]; then
+              SPEC_DIRS+=("$spec_dir")
+            fi
+          done < "$TMP_DIFF"
+          rm -f "$TMP_DIFF"
+          trap - EXIT
+
+          if [ "${#SPEC_DIRS[@]}" -eq 0 ]; then
             echo "No openspec/changes modified. Skipping."
           else
-            for spec_dir in $CHANGED_SPECS; do
+            for spec_dir in "${SPEC_DIRS[@]}"; do
               if [ -d "$spec_dir" ]; then
                 echo "Validating $spec_dir..."
                 CHANGE_ID="${spec_dir##*/}"
@@ -93,26 +114,64 @@ jobs:
           echo "PR declared workflow tier: $TIER"
 
           if [ "$TIER" = "T2" ] || [ "$TIER" = "T3" ]; then
-            CHANGED_SPECS=$(
-              git diff --name-only "origin/$BASE_REF"...HEAD \
-                -- 'openspec/changes/*' 2>/dev/null \
-                | cut -d/ -f1-3 | sort -u || true
-            )
-            if [ -z "$CHANGED_SPECS" ]; then
+            TMP_DIFF=$(mktemp)
+            trap 'rm -f "$TMP_DIFF"' EXIT
+            git diff -z --name-only "origin/$BASE_REF"...HEAD \
+              -- 'openspec/changes/*' > "$TMP_DIFF"
+
+            SPEC_DIRS=()
+            while IFS= read -r -d '' file_path; do
+              [ -z "$file_path" ] && continue
+              rel="${file_path#openspec/changes/}"
+              change_id="${rel%%/*}"
+              [ -z "$change_id" ] && continue
+              spec_dir="openspec/changes/$change_id"
+              already=0
+              for s in "${SPEC_DIRS[@]}"; do
+                if [ "$s" = "$spec_dir" ]; then
+                  already=1
+                  break
+                fi
+              done
+              if [ "$already" -eq 0 ]; then
+                SPEC_DIRS+=("$spec_dir")
+              fi
+            done < "$TMP_DIFF"
+            rm -f "$TMP_DIFF"
+            trap - EXIT
+
+            if [ "${#SPEC_DIRS[@]}" -eq 0 ]; then
               echo "::error::Tier $TIER PR needs openspec/changes/<id>."
               exit 1
             fi
-            for spec_dir in $CHANGED_SPECS; do
-              if [ -d "$spec_dir" ]; then
-                CHANGE_ID="${spec_dir##*/}"
-                echo "Validating workflow CI evidence for $CHANGE_ID ($TIER)..."
-                node tools/workflow.mjs check-ci \
-                  --tier "$TIER" --change "$CHANGE_ID"
+
+            VALIDATED_COUNT=0
+            for spec_dir in "${SPEC_DIRS[@]}"; do
+              if [ ! -d "$spec_dir" ]; then
+                echo "::error::OpenSpec change '$spec_dir' missing/deleted."
+                exit 1
               fi
+              CHANGE_ID="${spec_dir##*/}"
+              if [[ "$CHANGE_ID" =~ [[:space:]] ]] || \
+                 ! [[ "$CHANGE_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                echo "::error::Change '$CHANGE_ID' is invalid/has whitespace."
+                exit 1
+              fi
+              echo "Validating workflow CI evidence for $CHANGE_ID ($TIER)..."
+              node tools/workflow.mjs check-ci \
+                --tier "$TIER" --change "$CHANGE_ID" \
+                --base-ref "origin/$BASE_REF"
+              VALIDATED_COUNT=$((VALIDATED_COUNT + 1))
             done
+
+            if [ "$VALIDATED_COUNT" -eq 0 ]; then
+              echo "::error::No OpenSpec change validated for tier $TIER."
+              exit 1
+            fi
           else
             echo "Validating lean workflow tier $TIER..."
-            node tools/workflow.mjs check-ci --tier "$TIER"
+            node tools/workflow.mjs check-ci \
+              --tier "$TIER" --base-ref "origin/$BASE_REF"
           fi
 
       - name: Post PR Comment with Auto-Review Summary
