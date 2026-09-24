@@ -267,37 +267,41 @@ if ($skillsApplicable) {
 }
 
 Write-Host ""
+if ($Promote -or $Deploy) {
+  if ($Promote -and $suspect.Count) {
+    if (-not $Force) {
+      Write-Host "sync: REFUSED - $($suspect.Count) repo file(s) are NEWER than the live tree:" -ForegroundColor Red
+      foreach ($x in $suspect) { Write-Host "  $x" -ForegroundColor Red }
+      Write-Host ""
+      Write-Host "Promoting would overwrite that work with a stale harness. Either:" -ForegroundColor Yellow
+      Write-Host "  -Deploy      push the repo (newer) INTO the live tree, or" -ForegroundColor Yellow
+      Write-Host "  -Promote -Force   if the live tree really is the intended source" -ForegroundColor Yellow
+      exit 2
+    } else {
+      Write-Host "sync: FORCED - overwrote $($suspect.Count) newer repo file(s) with the live tree:" -ForegroundColor Yellow
+      foreach ($x in $suspect) { Write-Host "  $x" -ForegroundColor Yellow }
+    }
+  }
+
+  $action = if ($Promote) {'promoted to repo'} else {'deployed to harness'}
+  if ($Deploy -and $skillsApplicable -and $skillsStatusText) {
+    $color = if ($skillsParityStatus -eq 'VERIFIED') { 'Green' } else { 'Yellow' }
+    Write-Host $skillsStatusText -ForegroundColor $color
+    if ($skillsParityStatus -ne 'VERIFIED') {
+      Write-Host "sync: file deployment complete; skill parity $skillsParityStatus ($($drift.Count)/$checked files $action)" -ForegroundColor Yellow
+      exit 0
+    }
+  }
+  Write-Host "sync: $($drift.Count)/$checked files $action" -ForegroundColor Green
+  exit 0
+}
+
 if ($drift.Count -eq 0) {
   if ($skillsStatusText -and -not $Quiet) {
     $color = if ($skillsParityStatus -eq 'VERIFIED') { 'Green' } else { 'Yellow' }
     Write-Host $skillsStatusText -ForegroundColor $color
   }
   Write-Host "sync: clean ($checked files checked$(if ($skillsApplicable -and $skillsDoctorOk) { ', skills parity verified' }))" -ForegroundColor Green
-  exit 0
-}
-
-if ($Promote -and $suspect.Count) {
-  if (-not $Force) {
-    Write-Host "sync: REFUSED - $($suspect.Count) repo file(s) are NEWER than the live tree:" -ForegroundColor Red
-    foreach ($x in $suspect) { Write-Host "  $x" -ForegroundColor Red }
-    Write-Host ""
-    Write-Host "Promoting would overwrite that work with a stale harness. Either:" -ForegroundColor Yellow
-    Write-Host "  -Deploy      push the repo (newer) INTO the live tree, or" -ForegroundColor Yellow
-    Write-Host "  -Promote -Force   if the live tree really is the intended source" -ForegroundColor Yellow
-    exit 2
-  } else {
-    Write-Host "sync: FORCED - overwrote $($suspect.Count) newer repo file(s) with the live tree:" -ForegroundColor Yellow
-    foreach ($x in $suspect) { Write-Host "  $x" -ForegroundColor Yellow }
-  }
-}
-
-if ($Promote -or $Deploy) {
-  $action = if ($Promote) {'promoted to repo'} else {'deployed to harness'}
-  Write-Host "sync: $($drift.Count)/$checked files $action" -ForegroundColor Green
-  if ($Deploy -and $skillsApplicable -and $skillsStatusText) {
-    $color = if ($skillsParityStatus -eq 'VERIFIED') { 'Green' } else { 'Yellow' }
-    Write-Host $skillsStatusText -ForegroundColor $color
-  }
   exit 0
 }
 

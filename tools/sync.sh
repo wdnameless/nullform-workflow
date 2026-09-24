@@ -366,6 +366,35 @@ fi
 
 [ "$QUIET" != "1" ] && echo ""
 
+if [ "$MODE" = "promote" ] || [ "$MODE" = "deploy" ]; then
+  if [ "$MODE" = "promote" ] && [ ${#suspect[@]} -gt 0 ]; then
+    if [ "$FORCE" != "1" ]; then
+      echo "sync: REFUSED - ${#suspect[@]} repo file(s) are NEWER than the live tree:" >&2
+      for x in "${suspect[@]}"; do echo "  $x" >&2; done
+      echo "" >&2
+      echo "Promoting would overwrite that work with a stale harness. Either:" >&2
+      echo "  --deploy      push the repo (newer) INTO the live tree, or" >&2
+      echo "  --promote --force   if the live tree really is the intended source" >&2
+      exit 2
+    else
+      echo "sync: FORCED - overwrote ${#suspect[@]} newer repo file(s) with the live tree:"
+      for x in "${suspect[@]}"; do echo "  $x"; done
+    fi
+  fi
+
+  target_name="deployed to harness"
+  [ "$MODE" = "promote" ] && target_name="promoted to repo"
+  if [ "$MODE" = "deploy" ] && [ "$skills_applicable" -eq 1 ] && [ -n "$skills_status_text" ]; then
+    [ "$QUIET" != "1" ] && echo "$skills_status_text"
+    if [ "$skills_doctor_ok" -ne 1 ]; then
+      [ "$QUIET" != "1" ] && echo "sync: file deployment complete; skill parity ${_skills_parity_status} (${#drift[@]}/$checked files $target_name)"
+      exit 0
+    fi
+  fi
+  [ "$QUIET" != "1" ] && echo "sync: ${#drift[@]}/$checked files $target_name"
+  exit 0
+fi
+
 if [ ${#drift[@]} -eq 0 ]; then
   if [ "$QUIET" != "1" ] && [ -n "$skills_status_text" ]; then
     echo "$skills_status_text"
@@ -375,31 +404,6 @@ if [ ${#drift[@]} -eq 0 ]; then
     extra_clean=", skills parity verified"
   fi
   [ "$QUIET" != "1" ] && echo "sync: clean ($checked files checked$extra_clean)"
-  exit 0
-fi
-
-if [ "$MODE" = "promote" ] && [ ${#suspect[@]} -gt 0 ]; then
-  if [ "$FORCE" != "1" ]; then
-    echo "sync: REFUSED - ${#suspect[@]} repo file(s) are NEWER than the live tree:" >&2
-    for x in "${suspect[@]}"; do echo "  $x" >&2; done
-    echo "" >&2
-    echo "Promoting would overwrite that work with a stale harness. Either:" >&2
-    echo "  --deploy      push the repo (newer) INTO the live tree, or" >&2
-    echo "  --promote --force   if the live tree really is the intended source" >&2
-    exit 2
-  else
-    echo "sync: FORCED - overwrote ${#suspect[@]} newer repo file(s) with the live tree:"
-    for x in "${suspect[@]}"; do echo "  $x"; done
-  fi
-fi
-
-if [ "$MODE" = "promote" ] || [ "$MODE" = "deploy" ]; then
-  target_name="deployed to harness"
-  [ "$MODE" = "promote" ] && target_name="promoted to repo"
-  [ "$QUIET" != "1" ] && echo "sync: ${#drift[@]}/$checked files $target_name"
-  if [ "$MODE" = "deploy" ] && [ "$skills_applicable" -eq 1 ] && [ -n "$skills_status_text" ]; then
-    [ "$QUIET" != "1" ] && echo "$skills_status_text"
-  fi
   exit 0
 fi
 

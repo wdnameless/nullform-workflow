@@ -119,16 +119,19 @@ Body
     $deployText = ($deployOut | Out-String)
     Assert ($deployExit -eq 0) "Deploy must exit 0, got $deployExit"
     Assert (-not (Test-Path (Join-Path $fakeAgents 'skills\disabled-skill'))) "Deploy must not create disabled skill on disk"
-    Assert ($deployText -match 'skills: parity (DRIFT|VERIFIED|UNVERIFIED)') "Deploy report must include explicit skills parity status, got: $deployText"
+    Assert ($deployText -match 'skills: parity DRIFT') "Deploy report must visibly report DRIFT when skills drift, got: $deployText"
+    Assert ($deployText -match 'file deployment complete; skill parity DRIFT') "Deploy report must state file deployment complete rather than false green, got: $deployText"
 
-    # Align installed skill to repo to verify parity VERIFIED report on clean deploy
+    # Installer-owned fixture step: installer aligns skills into ~/.agents/skills
     Set-Content -Path (Join-Path $fakeAgents 'skills\test-skill\SKILL.md') -Value $skillFixture -Encoding UTF8
-    $deployCleanOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sync -HarnessRoot $live -AgentsRoot $fakeAgents -Deploy 2>&1
-    $deployCleanExit = $LASTEXITCODE
-    $deployCleanText = ($deployCleanOut | Out-String)
-    Assert ($deployCleanExit -eq 0) "Deploy must exit 0, got $deployCleanExit"
-    Assert ($deployCleanText -match 'skills: parity VERIFIED') "Deploy report must report parity VERIFIED when clean, got: $deployCleanText"
 
+    # Assert -Check VERIFIED/exit0 once installer has aligned skills
+    $checkCleanOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sync -HarnessRoot $live -AgentsRoot $fakeAgents 2>&1
+    $checkCleanExit = $LASTEXITCODE
+    $checkCleanText = ($checkCleanOut | Out-String)
+    Assert ($checkCleanExit -eq 0) "Check after installer sync must exit 0, got: $checkCleanExit"
+    Assert ($checkCleanText -match 'skills: parity VERIFIED') "Check must report parity VERIFIED, got: $checkCleanText"
+    Assert ($checkCleanText -match 'sync: clean') "Check must report sync: clean, got: $checkCleanText"
     Write-Host "sync-guard: 7/7 checks passed (refusal + force override + prune dry run + confirmed prune + absent repo + installed drift + deploy parity)."
 } finally {
     Remove-Item -Recurse -Force $Sandbox -ErrorAction SilentlyContinue
