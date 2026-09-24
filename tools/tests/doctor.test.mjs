@@ -443,6 +443,40 @@ test("skills check fixture: orphan in repo produces fail and exit 1 (ok: false)"
   }
 });
 
+test("skills check fixture: installed mode without repo clone reports warn (parity не проверялась)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-skills-norepo-"));
+  try {
+    const harness = createMockHarness(tmp);
+    // Remove repo markers so harness is recognized as pure installed harness, not repo tree
+    rmSync(join(harness, "agent", "models.yml.example"), { force: true });
+    rmSync(join(harness, "skills"), { recursive: true, force: true });
+
+    const agentsHome = join(tmp, "agents-home");
+    mkdirSync(join(agentsHome, "skills"), { recursive: true });
+
+    const res = spawnSync(
+      process.execPath,
+      [
+        DOCTOR_PATH,
+        "--harness", harness,
+        "--agent-dir", join(tmp, "agent-dir"),
+        "--agents-home", agentsHome,
+        "--mode", "installed",
+        "--json"
+      ],
+      { encoding: "utf8" }
+    );
+
+    const json = JSON.parse(res.stdout);
+    const skillsCheck = json.checks.find(c => c.id === "skills");
+    assert.ok(skillsCheck, "skills check exists");
+    assert.equal(skillsCheck.status, "warn");
+    assert.match(skillsCheck.detail, /parity не проверялась: нет копии репозитория/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("configs check handles UTF-8 BOM in mcp.json and flags invalid JSON", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-bom-"));
   try {

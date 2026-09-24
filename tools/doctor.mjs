@@ -806,11 +806,13 @@ export function runDoctor(options) {
     const id = "skills";
     const skillsDoctorPath = join(harness, "tools", "skills-doctor.mjs");
     const installedSkills = join(agentsHome, "skills");
-    const candidateRepoSkills = [
-      join(harness, "workflow-repo", "skills"),
-      join(harness, "skills"),
-    ];
-    const repoSkills = candidateRepoSkills.find((p) => existsSync(p)) || join(harness, "skills");
+    let repoSkills = null;
+    const repoClone = discoverRepoClone(harness);
+    if (repoClone && existsSync(join(repoClone, "skills"))) {
+      repoSkills = join(repoClone, "skills");
+    } else if ((mode === "repo" || isRepoTree(harness)) && existsSync(join(harness, "skills"))) {
+      repoSkills = join(harness, "skills");
+    }
 
     if (!existsSync(skillsDoctorPath)) {
       checks.push({
@@ -832,6 +834,12 @@ export function runDoctor(options) {
           detail: `Установленная папка навыков не найдена (${installedSkills})`,
         });
       }
+    } else if (!repoSkills) {
+      checks.push({
+        id,
+        status: "warn",
+        detail: "parity не проверялась: нет копии репозитория",
+      });
     } else {
       const res = spawnSync(
         process.execPath,
