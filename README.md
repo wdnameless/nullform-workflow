@@ -10,7 +10,7 @@
 |---|---|
 | **29** проверок установки · **14** проверок аудита | один раннер `tools/verify.mjs`, обёртки под каждую ОС |
 | **69** навыков · **8** ролей · **31** инструмент | без единой внешней npm-зависимости |
-| **280** юнит-тестов | `node --test tools/tests/*.test.mjs` |
+| **317** юнит-тестов | `node --test tools/tests/*.test.mjs` |
 | **0** внешних npm-пакетов | только стандартная библиотека Node.js 18+ |
 
 ![Дашборд: граф зависимостей проекта](docs/assets/dashboard-graph.jpg)
@@ -111,14 +111,16 @@ https://github.com/wdnameless/omp-paseo-nullform-workflow в текущее ок
 
 ### Адаптеры харнессов
 
-| Харнесс | Файл инструкций |
-|---|---|
-| OMP | `~/.omp/agent/AGENTS.md` |
-| Claude Code | `CLAUDE.md` |
-| Codex | `AGENTS.md` |
-| OpenCode | `AGENTS.md` + `opencode.json` |
-| Cursor | `.cursor/rules/00-workflow.mdc` |
+Полностью поставляется и верифицирован адаптер для Oh My Pi (OMP) и профили Paseo. Для остальных сред генератор адаптеров формирует базовые файлы инструкций вызова инструментов (без глубокой интеграции специфичного жизненного цикла):
 
+| Харнесс | Файл инструкций | Статус |
+|---|---|---|
+| OMP | `~/.omp/agent/AGENTS.md` | Проверен и поставляется |
+| Paseo | `paseo/profiles.json` | Проверен и поставляется |
+| Claude Code | `CLAUDE.md` | Базовый шаблон инструкций |
+| Codex | `AGENTS.md` | Базовый шаблон инструкций |
+| OpenCode | `AGENTS.md` + `opencode.json` | Базовый шаблон инструкций |
+| Cursor | `.cursor/rules/00-workflow.mdc` | Базовый шаблон инструкций |
 ### Куда что ставится
 
 ```text
@@ -139,10 +141,10 @@ https://github.com/wdnameless/omp-paseo-nullform-workflow в текущее ок
 ```bash
 node tools/doctor.mjs --harness .          # окружение: инструменты, роли, плагины, конфиги
 node tools/workflow.mjs start --tier T1 --task "проба"   # гейт ярусов + автозапуск дашборда
+node tools/workflow.mjs artifact --kind recon --detail "быстрая проверка установки и доступности инструментов"
 node tools/workflow.mjs close
 node tools/dashboard.mjs --url             # адрес живого дашборда
 ```
-
 Полная верификация — тот же раннер, что гоняет CI:
 
 ```bash
@@ -504,7 +506,7 @@ node tools/auto-review.mjs --root .
 ## Разработка
 
 ```bash
-node --test tools/tests/*.test.mjs    # 280 юнит-тестов
+node --test tools/tests/*.test.mjs    # 317 юнит-тестов
 node tools/verify.mjs --profile audit # аудит репозитория
 node tools/auto-review.mjs --root .   # архитектурный гейт
 ```

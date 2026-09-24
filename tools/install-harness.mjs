@@ -107,8 +107,9 @@ export function getMarkdownAdapter(slashRoot, title = "Workflow & Orchestration 
     "",
     "## 2. Фиксация артефактов",
     `- Манифест требований: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind manifest --path openspec/changes/<id>/manifest.md\``,
-    `- Верификация/тесты: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind verification --path ...\``,
-    "",
+    `- Спецификация/OpenSpec: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind openspec --path openspec/changes/<id>\``,
+    `- Границы и интерфейсы: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind interfaces --path openspec/changes/<id>/interfaces.md\``,
+    `- Вердикт оракула: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind oracle --detail "ACCEPT: <причина>"\``,
     "## 3. Дашборд наблюдаемости",
     "При `workflow.mjs start` автоматически запускается фоновый дашборд.",
     "- URL хранится в `.workflow/dashboard.json`",
@@ -481,15 +482,17 @@ export function installHarness(options = {}) {
           // one that fails to connect on every session boot.
           const mcpTarget = join(homeAgentDir, "mcp.json");
           if (!existsSync(mcpTarget)) {
-            const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
-            // Drop any server still carrying an unsubstituted placeholder: there is
-            // no secrets.env on this path, so a kept entry would ship a literal
-            // `__X__` into mcp.json (which verification then flags) and fail to
-            // connect on every session boot.
-            for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
-              if (JSON.stringify(entry).includes("__")) delete cfg.mcpServers[name];
-            }
-            writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
+            try {
+              const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
+              // Drop any server still carrying an unsubstituted placeholder: there is
+              // no secrets.env on this path, so a kept entry would ship a literal
+              // `__X__` into mcp.json (which verification then flags) and fail to
+              // connect on every session boot.
+              for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
+                if (JSON.stringify(entry).includes("__")) delete cfg.mcpServers[name];
+              }
+              writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
+            } catch {}
           }
           // Without these the installed harness has no roles, no skills and no
           // rules: OMP cannot start the orchestrator at all.

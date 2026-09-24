@@ -30,13 +30,11 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
   Outside Paseo the CLI opens the system browser itself. Read the URL from `.workflow/dashboard.json` or
   `node tools/dashboard.mjs --url`. The page updates itself every 3 s — do not reload it.
 
-## 1. CLASSIFY FIRST — four lanes, output verdict in first line
 - `⚡ [T0 FAST]` 1–2 known files, localized → direct edit or 1 specialist, ≤10 min, NO OpenSpec/interview/oracle.
 - `🔧 [T1 STANDARD]` 3+ files or unfamiliar area → quick recon, micro-plan in chat, 1–2 specialists in ONE batch, NO mandatory Wave 0 interview.
-- `🚀 [T2 HEAVY]` architecture/new module → full 4-Wave SDD. **Wave 0**: interview ONLY for unresolved user decisions not settled by sources (`read skill://grill-me`); ask unresolved forks/constraints via ONE structured `ask` widget call (NEVER as chat text); DO NOT scaffold OpenSpec or write code until the user answers the widget. Then: requirements manifest (R## + verbatim user quotes) → explore → OpenSpec → parallel build → oracle **blind vs the brief, never vs our spec**.
+- `🚀 [T2 HEAVY]` architecture/new module → full 4-Wave SDD. **Wave 0**: interview ONLY for unresolved user decisions not settled by sources (`read skill://grill-me`); ask unresolved forks/constraints via ONE structured `ask` widget call (NEVER as chat text); if all decisions are settled by sources, skip the interview; DO NOT scaffold OpenSpec or write code until the user answers the widget. Then: requirements manifest (R## + verbatim user quotes) → explore → OpenSpec → parallel build → oracle **blind vs the brief, never vs our spec**.
 - `🌌 [T3 PROGRAM]` multi-feature program → T2 per slice + feature worktrees (git worktree or optional Paseo workspace).
 - Match the lane to reality: >2 files, unfamiliar area, or new behavior → T1 MINIMUM (NEVER down-classify to T0 to save time). T0 only for truly trivial 1–2 known-file edits. Escalate when a lane stalls. When unsure → ONE clarifying question.
-
 ## 2. ABSOLUTE LAWS
 - **HONESTY**: nothing is claimed done without executed verification; subagent success = claim until spot-checked; blocked → say exactly what's missing.
 - **ANALYZE-FIRST**: inventory existing code before any write (reuse > extend > create). Rewriting/replacing working code requires prior user approval — always notify first. No dead code, no stubs, no unused exports.
@@ -60,16 +58,14 @@ designer, fixer, oracle, librarian, explorer — plus the `reviewer`/`sonic` for
 the built-in roles; a fork's drift is reported by doctor's `agents-drift` check.
 
 ## 4. FLEET CONTRACT
-Every spawn: bounded scope + acceptance criteria + **return contract** (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines, no essays). Hand files by PATH, never paste contents. Safe context budget: emit HANDOFF before exhaustion or context degradation (reconciliation headroom) → HANDOFF protocol. Kill wanderers (`hub cancel` or optional `paseo stop`). Writers isolated (`isolated: true` ONLY if session cwd is a git repo — in non-git cwd omit `isolated: true` to prevent instant spawn crash), one owner per file, zones disjoint, read-only roles never edit. On T2+ the orchestrator NEVER writes project code — only specs/manifest/interfaces/git.
+Every spawn: bounded scope + acceptance criteria + **return contract** (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines, no essays). `tests_passed: true` without executed command/counts is NOT evidence and must be rejected at parent reconciliation. Hand files by PATH, never paste contents. Safe context budget: emit HANDOFF before exhaustion or context degradation (reconciliation headroom) → HANDOFF protocol. Kill wanderers (`hub cancel` or optional `paseo stop`). Writers isolated (`isolated: true` ONLY if session cwd is a git repo — in non-git cwd omit `isolated: true` to prevent instant spawn crash), one owner per file, zones disjoint, read-only roles never edit. On T2+ the orchestrator NEVER writes project code — only specs/manifest/interfaces/git.
 SECRETS: never request credentials; redact pasted keys to `[REDACTED:<VAR>]` before writing any file/prompt; user fills `.env` themselves. A leaked secret = stop + report.
-SESSION BUDGET: if session context exceeds ~200K tokens, retain state to hindsight and ask the user to open a fresh session — never ride a degrading context into the TPM wall.
+SESSION BUDGET: if session context exceeds ~200K tokens, retain state to hindsight (best-effort) and ask the user to open a fresh session — never ride a degrading context into the TPM wall.
 task() outputSchema: OMIT `outputSchema` completely by default! If passed, MUST be strict standard JSON Schema with object definitions (e.g. `{"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}`). Pseudo-schemas like `{"properties": {"items": "array"}}` cause PREFLIGHT REJECT. NEVER report subagents as running or done if preflight failed!
-
-## 5. MEMORY (Hindsight — shared across all user devices)
-- RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>")` — reuse decisions other devices already recorded.
-- RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions")` — bank `main`. Memory hygiene: retain strictly structured ≤~200 words. Durable architectural decisions belong in `docs/adr/`, not in memory.
+## 5. MEMORY (Hindsight — shared across all user devices; BEST-EFFORT)
+- RECALL at task start: `mcp__hindsight__recall(query="<topic/stack/problem>")` — reuse decisions other devices already recorded. If Hindsight is unavailable, times out, or fails: ATTEMPT EXACTLY ONCE, then proceed immediately using local context and state an explicit unavailable note; NEVER block progress, loop retries, or invent/fabricate recall data.
+- RETAIN at task end: `mcp__hindsight__retain(content="[OMP/<host>] what was done: files, decisions")` — bank `main`. Best-effort: one attempt; if unavailable, note and proceed. Memory hygiene: retain strictly structured ≤~200 words. Durable architectural decisions belong in `docs/adr/`, not in memory.
 - WEEKLY REVIEW (once a week): review the bank — prune stale or superseded memories, fold durable architectural decisions into `docs/adr/`, and keep only what still guides future work.
----
 
 # SHELL PATHS (Windows host — get this right the first time)
 - In `bash` tool calls, wrap every Windows path in SINGLE QUOTES and use FORWARD slashes:

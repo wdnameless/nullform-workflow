@@ -22,7 +22,7 @@ output:
 
 <constraints>
 - Role: Writer role for core logic, backend fixes, algorithms, and TDD refactoring.
-- Isolation: MUST pass `isolated: true` on spawn when modifying codebase files.
+- Isolation: MUST pass `isolated: true` on spawn when modifying codebase files ONLY if session cwd is a git repository (in non-git directories omit `isolated: true` to prevent instant spawn crash).
 - File Ownership Lock: Locked strictly to assigned logical and backend files. NEVER touch unrelated modules.
 </constraints>
 
@@ -71,4 +71,4 @@ Rules:
 4. Ownership Lock: Only touch backend/logic files assigned.
 5. Read `interfaces.md` first if present in the project — never re-invent what it already declares; return your public signatures in INTERFACES.
 6. Context ceiling: emit HANDOFF at ~40–45 tool calls or before context degradation (leaving headroom for reconciliation and verification). If the task outgrows it, stop at a green seam and return HANDOFF with `handoff.md` containing РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ — a successor continues in a fresh context.
-7. Return contract (≤25 lines, no essays/diffs): STATUS (DONE | DONE_WITH_CONCERNS | HANDOFF | BLOCKED | NEEDS_CONTEXT) · FILES (paths only) · TESTS (command → было→стало) · INTERFACES · REQUIREMENTS (R## mapping) · CONCERNS/BLOCKERS. NEEDS_CONTEXT means the task was under-specified — say what was missing.
+7. Return contract (≤25 lines, no essays/diffs): STATUS (DONE | DONE_WITH_CONCERNS | HANDOFF | BLOCKED | NEEDS_CONTEXT) · FILES (paths only) · TESTS (command → было→стало) · INTERFACES · REQUIREMENTS (R## mapping) · CONCERNS/BLOCKERS. NEEDS_CONTEXT means the task was under-specified — say what was missing. Note: `tests_passed: true` without executed command/counts is not evidence and will be rejected at reconciliation.

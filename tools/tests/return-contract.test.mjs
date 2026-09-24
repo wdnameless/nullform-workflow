@@ -99,3 +99,46 @@ test("rejects contract missing a required section", () => {
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((e) => e.includes("REQUIREMENTS")));
 });
+
+test("validates structured JSON worker output with tests transition", () => {
+  const payload = {
+    status: "DONE",
+    files_modified: ["tools/a.mjs", "tools/b.mjs"],
+    tests: "node --test tools/tests/a.test.mjs -> было 0 -> стало 3",
+    interfaces: ["foo", "bar"],
+    requirements: ["R11"],
+    concerns: "none",
+  };
+  const result = validateReturnContract(payload);
+  assert.equal(result.valid, true);
+  assert.equal(result.status, "DONE");
+  assert.equal(result.errors.length, 0);
+});
+
+test("rejects bare tests_passed: true without executed command or count evidence", () => {
+  const payload = {
+    status: "DONE",
+    files_modified: ["tools/a.mjs"],
+    tests_passed: true,
+    interfaces: ["foo"],
+    requirements: ["R11"],
+    summary: "all changes done cleanly",
+  };
+  const result = validateReturnContract(payload);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes("tests_passed: true")));
+});
+
+test("accepts tests_passed: true when summary contains numeric count transition", () => {
+  const payload = {
+    status: "DONE",
+    files_modified: ["tools/a.mjs"],
+    tests_passed: true,
+    interfaces: ["foo"],
+    requirements: ["R11"],
+    summary: "ran test suite: было 10 -> стало 12 pass",
+  };
+  const result = validateReturnContract(payload);
+  assert.equal(result.valid, true);
+  assert.equal(result.status, "DONE");
+});

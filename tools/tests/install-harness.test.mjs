@@ -292,3 +292,37 @@ test("install.sh without node in PATH gives instruction without stack trace", ()
   assert.match(res.stderr, /node.*not found|requires node/i);
   assert.doesNotMatch(res.stderr, /at Module\._resolveFilename/i, "Must not dump a Node/JS stack trace");
 });
+
+test("generated markdown adapter does not reference unsupported verification artifact kind", () => {
+  const tempRoot = createTempDir("harness-adapter-check-");
+  try {
+    const res = spawnSync(process.execPath, [
+      SCRIPT_PATH,
+      "--harness",
+      "claude",
+      "--root",
+      tempRoot,
+    ], {
+      encoding: "utf8",
+    });
+    assert.equal(res.status, 0);
+    const claudeMdPath = join(tempRoot, "CLAUDE.md");
+    const content = readFileSync(claudeMdPath, "utf8");
+
+    assert.equal(
+      content.includes("--kind verification"),
+      false,
+      "Adapter must not instruct user to record non-existent '--kind verification' artifact"
+    );
+    assert.ok(
+      content.includes("--kind manifest"),
+      "Adapter must reference valid artifact kinds like manifest"
+    );
+    assert.ok(
+      content.includes("--kind oracle"),
+      "Adapter must reference valid artifact kinds like oracle"
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
