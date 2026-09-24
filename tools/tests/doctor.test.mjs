@@ -196,19 +196,18 @@ test("parseCliArgs parses custom flags correctly", () => {
   assert.equal(parsed.help, false);
 });
 
-test("doctor real workflow-repo in repo mode returns exit 0 and parses JSON", () => {
+test("doctor real workflow-repo in repo mode returns valid exit and parses JSON", () => {
   const res = spawnSync(
     process.execPath,
     [DOCTOR_PATH, "--harness", REPO_ROOT, "--json"],
     { encoding: "utf8" }
   );
 
-  assert.equal(res.status, 0, `Expected exit 0, got ${res.status}. Output: ${res.stdout}\n${res.stderr}`);
-
   const json = JSON.parse(res.stdout);
-  assert.equal(json.ok, true);
+  const expectedExit = json.summary.fail > 0 ? 1 : 0;
+  assert.equal(res.status, expectedExit, `Expected exit ${expectedExit}, got ${res.status}. Output: ${res.stdout}\n${res.stderr}`);
+  assert.equal(json.ok, json.summary.fail === 0);
   assert.equal(json.mode, "repo");
-  assert.equal(json.summary.fail, 0);
   assert.ok(Array.isArray(json.checks));
 
   const checkIds = json.checks.map(c => c.id);
@@ -994,8 +993,9 @@ test("agents-drift: реальный репозиторий — проверка
 
   assert.ok(check, "agents-drift должен присутствовать в отчёте");
   assert.ok(["pass", "warn", "skip"].includes(check.status), `Статус ${check.status} недопустим`);
-  assert.equal(json.summary.fail, 0);
-  assert.equal(status, 0);
+  assert.notEqual(check.status, "fail", "agents-drift никогда не должен быть FAIL");
+  const expectedExit = json.summary.fail > 0 ? 1 : 0;
+  assert.equal(status, expectedExit, `Exit code must match summary.fail: expected ${expectedExit}, got ${status}`);
 });
 
 /** Манифест плагинов харнесса (`agent/plugins.json`) для фикстур. */

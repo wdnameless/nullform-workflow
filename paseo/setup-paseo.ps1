@@ -213,6 +213,7 @@ $existingConfig.daemon | Add-Member -NotePropertyName agentProfiles -NotePropert
 
 $newJson = $existingConfig | ConvertTo-Json -Depth 30
 $tempFile = [System.IO.Path]::Combine($PaseoConfigDir, ("config.json.tmp." + [System.Guid]::NewGuid().ToString("N")))
+$backupFile = [System.IO.Path]::Combine($PaseoConfigDir, ("config.json.bak." + [System.Guid]::NewGuid().ToString("N")))
 try {
     [System.IO.File]::WriteAllText($tempFile, $newJson, $Utf8NoBom)
 
@@ -221,16 +222,25 @@ try {
     }
 
     if (Test-Path -LiteralPath $PaseoConfigFile) {
-        [System.IO.File]::Replace($tempFile, $PaseoConfigFile, $null, $true)
+        [System.IO.File]::Replace($tempFile, $PaseoConfigFile, $backupFile, $true)
+        if (Test-Path -LiteralPath $backupFile) {
+            Remove-Item -LiteralPath $backupFile -Force -ErrorAction SilentlyContinue
+        }
     } else {
         [System.IO.File]::Move($tempFile, $PaseoConfigFile)
     }
 } catch {
+    if ((-not (Test-Path -LiteralPath $PaseoConfigFile)) -and (Test-Path -LiteralPath $backupFile)) {
+        Move-Item -LiteralPath $backupFile -Destination $PaseoConfigFile -Force -ErrorAction SilentlyContinue
+    }
     Write-Error "Failed to update Paseo configuration file $PaseoConfigFile. Original configuration was left untouched: $_"
     throw
 } finally {
     if (Test-Path -LiteralPath $tempFile) {
         Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $backupFile) {
+        Remove-Item -LiteralPath $backupFile -Force -ErrorAction SilentlyContinue
     }
 }
 
