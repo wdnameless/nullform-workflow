@@ -14,7 +14,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { testTierGate } from "../verify.mjs";
 import {
   cmdStart,
   cmdArtifact,
@@ -441,4 +442,10 @@ test("check-ci: rejects invalid changeId containing path traversal or illegal ch
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("verify: testTierGate passes probe with subprocess status assertions", () => {
+  const harnessRoot = resolve(import.meta.dirname, "../..");
+  const res = testTierGate(harnessRoot, true);
+  assert.equal(res, "T0 passes, T2 blocks, fake paths rejected, forced close recorded");
 });
