@@ -108,6 +108,20 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "tools\fix-plugin-windows.cjs")) "plugin-window patcher must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\oracle-priority.example.json")) "oracle priority example must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\plugins.json")) "plugin manifest must install with the harness (doctor reads it)"
+    $skippedPluginsMarker = Join-Path $installedHarness "agent\plugins.skipped"
+    Assert (Test-Path $skippedPluginsMarker) "plugins.skipped marker must be created when -SkipPlugins is passed"
+
+    # Verify fail-closed behavior: without the opt-out marker, doctor MUST fail on missing required plugins
+    Remove-Item $skippedPluginsMarker -Force
+    $doctorFailOutput = & node (Join-Path $installedHarness "tools\doctor.mjs") --harness $installedHarness --json 2>&1
+    $doctorFailExit = $LASTEXITCODE
+    Assert ($doctorFailExit -ne 0) "Doctor must fail closed when plugins.skipped marker is absent and required plugins are missing"
+    $failJson = ($doctorFailOutput | Out-String) | ConvertFrom-Json
+    $pluginsCheck = $failJson.checks | Where-Object { $_.id -eq "plugins" }
+    Assert ($pluginsCheck.status -eq "fail") "Plugins check must report fail without the opt-out marker"
+    # Restore marker for subsequent audit and portability tests
+    Set-Content -Path $skippedPluginsMarker -Value "plugins skipped during install (-SkipPlugins)" -Encoding UTF8
+
 
     $oldHome = $env:HOME
     $oldUserProfile = $env:USERPROFILE

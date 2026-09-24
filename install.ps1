@@ -439,9 +439,14 @@ if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
 # Missing manifest, unparseable manifest, missing omp, or failed required plugin
 # aborts the harness install unless -SkipPlugins is explicitly passed.
 # Optional plugins report warnings without failing the harness install.
+$skippedPluginsMarker = Join-Path $HarnessRoot "agent\plugins.skipped"
 if ($SkipPlugins) {
   Warn "plugins: skipped (-SkipPlugins)"
+  WriteText $skippedPluginsMarker "plugins skipped during install (-SkipPlugins)"
 } else {
+  if (Test-Path $skippedPluginsMarker) {
+    Remove-Item $skippedPluginsMarker -Force -ErrorAction SilentlyContinue
+  }
   $pluginsManifest = Join-Path $HarnessRoot "agent\plugins.json"
   if (-not (Test-Path $pluginsManifest)) {
     Die "plugins: manifest not found ($pluginsManifest). Pass -SkipPlugins to skip plugin installation."

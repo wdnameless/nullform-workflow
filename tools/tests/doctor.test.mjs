@@ -1200,6 +1200,30 @@ test("plugins: --skip-plugin-check пропускает проверку пла�
   }
 });
 
+
+test("plugins: маркер agent/plugins.skipped пропускает проверку плагинов (SKIP)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-marker-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+    writeFileSync(join(harness, "agent", "plugins.skipped"), "plugins skipped during install (-SkipPlugins)\n", "utf8");
+
+    // omp is not installed or returns empty, but marker exists -> skip
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: () => ({ status: 127, stdout: "", stderr: "omp not found", error: null }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "skip");
+    assert.match(check.detail, /плагины пропущены при установке \(-SkipPlugins\)/);
+    assert.equal(result.summary.fail, 0);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 test("plugins: всё установлено, лишние перечислены как info (PASS)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-extra-"));
   try {

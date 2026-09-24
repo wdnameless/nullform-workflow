@@ -332,6 +332,20 @@ test("install.ps1: succeeds without omp if -SkipPlugins is passed", () => {
     assert.equal(res.status, 0, `Installer must succeed with -SkipPlugins: ${res.stderr}\n${res.stdout}`);
     const output = (res.stdout || "") + (res.stderr || "");
     assert.match(output, /plugins: skipped \(-SkipPlugins\)/);
+
+    const markerPath = join(tmpHarness, "agent", "plugins.skipped");
+    assert.ok(existsSync(markerPath), "plugins.skipped marker must exist after install with -SkipPlugins");
+
+    const docRes = spawnSync(process.execPath, [
+      join(tmpHarness, "tools", "doctor.mjs"),
+      "--harness", tmpHarness,
+      "--json",
+    ], { encoding: "utf8" });
+    const docJson = JSON.parse(docRes.stdout);
+    const pCheck = docJson.checks.find((c) => c.id === "plugins");
+    assert.ok(pCheck, "plugins check must exist in doctor report");
+    assert.equal(pCheck.status, "skip");
+    assert.match(pCheck.detail, /плагины пропущены при установке \(-SkipPlugins\)/);
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }

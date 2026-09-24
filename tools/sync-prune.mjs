@@ -47,8 +47,7 @@ export const NEVER_DIRS = new Set([
   "custom-session-files",
 ]);
 
-/** Конфиги, секреты и сессионные данные — не кандидаты на удаление, даже если их нет в репо. */
-export const NEVER_SUFFIX = /\.(ya?ml|json|jsonl|db|db-wal|db-shm|key|env|log|bak|tmp|pem|crt|sqlite3?)$/i;
+export const NEVER_SUFFIX = /\.(ya?ml|json|jsonl|db|db-wal|db-shm|key|env|log|bak|tmp|pem|crt|sqlite3?|skipped)$/i;
 
 function toPosix(p) {
   return p.split(sep).join("/");

@@ -1001,11 +1001,18 @@ export function runDoctor(options) {
   // Опциональные плагины по умолчанию дают WARN, и только `--require-plugins` делает их FAIL.
   {
     const id = "plugins";
+    const skippedMarker = join(harness, "agent", "plugins.skipped");
     if (options.skipPluginCheck) {
       checks.push({
         id,
         status: "skip",
         detail: "Проверка плагинов пропущена (--skip-plugin-check)",
+      });
+    } else if (existsSync(skippedMarker)) {
+      checks.push({
+        id,
+        status: "skip",
+        detail: "плагины пропущены при установке (-SkipPlugins); установите и повторите",
       });
     } else {
       const manifestPath = join(harness, "agent", "plugins.json");
@@ -1166,11 +1173,10 @@ export function runDoctor(options) {
         let orphans = [];
         let readError = null;
         try {
-          orphans = findPruneCandidates({ harness, repo: repoClone });
+          orphans = findPruneCandidates({ harness, repo: repoClone }).filter((rel) => rel !== "agent/plugins.skipped");
         } catch (err) {
           readError = err.message;
         }
-
         if (readError) {
           checks.push({
             id,
