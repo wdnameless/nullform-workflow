@@ -309,6 +309,7 @@ test("sync.sh does not execute command substitution in skill name or detail", ()
       const harnessDir = join(tmp, "harness");
       const agentsDir = join(tmp, "agents");
       mkdirSync(join(repoDir, "tools"), { recursive: true });
+      mkdirSync(join(repoDir, "agent"), { recursive: true });
       mkdirSync(join(repoDir, "skills", "evil$(touch evil-executed.txt)"), { recursive: true });
       mkdirSync(join(harnessDir), { recursive: true });
       mkdirSync(join(agentsDir, "skills"), { recursive: true });
