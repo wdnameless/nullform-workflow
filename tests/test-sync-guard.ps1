@@ -132,7 +132,25 @@ Body
     Assert ($checkCleanExit -eq 0) "Check after installer sync must exit 0, got: $checkCleanExit"
     Assert ($checkCleanText -match 'skills: parity VERIFIED') "Check must report parity VERIFIED, got: $checkCleanText"
     Assert ($checkCleanText -match 'sync: clean') "Check must report sync: clean, got: $checkCleanText"
-    Write-Host "sync-guard: 7/7 checks passed (refusal + force override + prune dry run + confirmed prune + absent repo + installed drift + deploy parity)."
+
+    # 8. -Only skills/<skill> runs skill parity check rather than skipping it.
+    # Drift test-skill again so a run that executes the check will report drift and exit 1
+    Set-Content -Path (Join-Path $fakeAgents 'skills\test-skill\SKILL.md') -Value ($skillFixture + "`n# Drifted modification`n") -Encoding UTF8
+    $onlySpecificOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sync -HarnessRoot $live -AgentsRoot $fakeAgents -Only 'skills/test-skill' 2>&1
+    $onlySpecificExit = $LASTEXITCODE
+    $onlySpecificText = ($onlySpecificOut | Out-String)
+    Assert ($onlySpecificExit -eq 1) "-Only skills/test-skill must execute skills doctor and exit 1 on drift, got $onlySpecificExit"
+    Assert ($onlySpecificText -match 'skills[\\/]test-skill') "-Only skills/test-skill must name drifted skill, got: $onlySpecificText"
+
+    # Re-align and assert -Only skills/<skill> exits 0 and reports parity verified
+    Set-Content -Path (Join-Path $fakeAgents 'skills\test-skill\SKILL.md') -Value $skillFixture -Encoding UTF8
+    $onlyCleanOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sync -HarnessRoot $live -AgentsRoot $fakeAgents -Only 'skills/test-skill' 2>&1
+    $onlyCleanExit = $LASTEXITCODE
+    $onlyCleanText = ($onlyCleanOut | Out-String)
+    Assert ($onlyCleanExit -eq 0) "-Only skills/test-skill when clean must exit 0, got $onlyCleanExit"
+    Assert ($onlyCleanText -match 'skills: parity VERIFIED') "-Only skills/test-skill must report parity VERIFIED, got: $onlyCleanText"
+
+    Write-Host "sync-guard: 8/8 checks passed (refusal + force override + prune dry run + confirmed prune + absent repo + installed drift + deploy parity + -Only skills/<skill>)."
 } finally {
     Remove-Item -Recurse -Force $Sandbox -ErrorAction SilentlyContinue
 }

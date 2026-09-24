@@ -219,7 +219,7 @@ if (-not (Test-Path $doctorScript)) {
   $doctorScript = Join-Path $RepoRoot 'tools\skills-doctor.mjs'
 }
 
-$skillsApplicable = (-not $Only) -or ('skills' -like "*$Only*")
+$skillsApplicable = (-not $Only) -or ($Only -like "*skills*") -or ('skills' -like "*$Only*")
 $skillsStatusText = ""
 $skillsParityStatus = "NOT_CHECKED"
 $skillsDoctorOk = $false

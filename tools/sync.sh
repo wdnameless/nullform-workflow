@@ -290,7 +290,7 @@ DOCTOR_SCRIPT="$SCRIPT_DIR/skills-doctor.mjs"
 skills_applicable=1
 if [ -n "$ONLY" ]; then
   case "$ONLY" in
-    *skills*) skills_applicable=1 ;;
+    *skills*|*skill*) skills_applicable=1 ;;
     *) skills_applicable=0 ;;
   esac
 fi
