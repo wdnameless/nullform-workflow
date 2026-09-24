@@ -29,12 +29,13 @@
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 /* ----------------------------------------------------------------- utilities */
-
-const norm = (s) => s.replace(/\r\n/g, "\n");
+const stripBom = (s) => (typeof s === "string" && s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s);
+const norm = (s) => stripBom(s).replace(/\r\n/g, "\n");
 const sha = (s) => createHash("sha256").update(norm(s), "utf8").digest("hex").slice(0, 16);
 
 function parseFrontmatter(text) {
@@ -76,7 +77,7 @@ function readDisabled(agentsHome) {
 
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(stripBom(readFileSync(path, "utf8")));
   } catch (e) {
     return bad(`${path}: invalid JSON (${e.message}) -> disabled list treated as EMPTY`);
   }
@@ -85,6 +86,47 @@ function readDisabled(agentsHome) {
   }
   const disabled = [...new Set(parsed.disabled.filter((n) => typeof n === "string").map((n) => n.trim()).filter(Boolean))];
   return { disabled, notes: [] };
+}
+function isRepoRoot(dir) {
+  if (!dir || !existsSync(dir)) return false;
+  return existsSync(join(dir, "install.ps1")) && existsSync(join(dir, "agent", "models.yml.example"));
+}
+
+function resolveDefaultRepoRoot(scriptDir, agentsHome) {
+  const repoCandidates = [
+    // If running deployed in <harness>/tools, check sibling workflow-repo first
+    resolve(scriptDir, "..", "workflow-repo"),
+    // If running directly in <repo>/tools
+    resolve(scriptDir, ".."),
+  ];
+
+  if (process.env.REPO_ROOT) {
+    repoCandidates.push(process.env.REPO_ROOT);
+  }
+
+  const pointerPath = agentsHome
+    ? join(dirname(agentsHome), ".omp", "agent", ".harness-root")
+    : join(homedir(), ".omp", "agent", ".harness-root");
+  try {
+    const hRoot = readFileSync(pointerPath, "utf8").trim();
+    if (hRoot) {
+      repoCandidates.push(join(hRoot, "workflow-repo"));
+    }
+  } catch {}
+
+  if (process.env.HARNESS_ROOT) {
+    repoCandidates.push(join(process.env.HARNESS_ROOT, "workflow-repo"));
+  }
+
+  for (const cand of repoCandidates) {
+    if (cand && isRepoRoot(cand)) {
+      const skillsDir = join(cand, "skills");
+      if (existsSync(skillsDir) && listSkillDirs(skillsDir).length > 0) {
+        return skillsDir;
+      }
+    }
+  }
+  return null;
 }
 
 /* -------------------------------------------------------------------- checks */
@@ -97,9 +139,23 @@ function run(installedRoot, repoRoot, disabled = [], agentsHome = null) {
 
   const present = listSkillDirs(installedRoot);
   const installed = present.filter((n) => !disabledSet.has(n));
-  const repo = repoRoot && existsSync(repoRoot) ? listSkillDirs(repoRoot) : [];
+  const repoExists = Boolean(repoRoot && existsSync(repoRoot));
+  const repo = repoExists ? listSkillDirs(repoRoot) : [];
   const repoNames = new Set(repo);
 
+  if (!repoExists) {
+    problems.push({
+      skill: "(repo)",
+      kind: "parity",
+      detail: `comparison repo not found (${repoRoot || "none"}) -> parity UNVERIFIED`,
+    });
+  } else if (repo.length === 0) {
+    problems.push({
+      skill: "(repo)",
+      kind: "parity",
+      detail: `comparison repo has 0 skills (${repoRoot}) -> parity UNVERIFIED`,
+    });
+  }
   const infos = [...disabledSet].sort().map((skill) => ({
     skill,
     detail: present.includes(skill) ? "disabled by operator (still on disk - checks skipped)" : "disabled by operator",
@@ -184,40 +240,81 @@ function run(installedRoot, repoRoot, disabled = [], agentsHome = null) {
     }
   }
 
-  if (repoRoot) {
+  if (repoExists) {
     for (const n of repo) {
       if (installed.includes(n) || disabledSet.has(n)) continue;
       problems.push({ skill: n, kind: "orphan", detail: "in repo but NOT installed -> skill:// will not resolve" });
     }
   }
 
-  return { problems, notes, infos, installedCount: installed.length, repoCount: repo.length, disabledCount: infos.length };
+  const parityProblems = problems.filter((p) => ["parity", "truncation", "orphan"].includes(p.kind));
+  const parityStatus = (!repoExists || repo.length === 0)
+    ? "UNVERIFIED"
+    : (parityProblems.length === 0 ? "VERIFIED" : "DRIFT");
+
+  return {
+    problems,
+    notes,
+    infos,
+    installedCount: installed.length,
+    repoCount: repo.length,
+    disabledCount: infos.length,
+    parityStatus,
+  };
 }
+
+export { run, listSkillDirs, readDisabled, parseFrontmatter, resolveDefaultRepoRoot };
 
 /* ---------------------------------------------------------------------- main */
 
 const argv = process.argv.slice(2);
-let installedRoot = null, repoRoot = null, agentsHome = null;
+let installedRoot = null, repoRoot = null, agentsHome = null, json = false;
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--installed") installedRoot = argv[++i];
   else if (argv[i] === "--repo") repoRoot = argv[++i];
   else if (argv[i] === "--agents-home") agentsHome = argv[++i];
+  else if (argv[i] === "--json") json = true;
 }
 const home = process.env.USERPROFILE || process.env.HOME || "";
 installedRoot = installedRoot || join(home, ".agents", "skills");
-repoRoot = repoRoot || "<harness>/workflow-repo/skills";
 agentsHome = agentsHome || dirname(installedRoot);
 
+const scriptDir = typeof import.meta.dirname === "string"
+  ? import.meta.dirname
+  : dirname(fileURLToPath(import.meta.url));
+
+if (!repoRoot) {
+  repoRoot = resolveDefaultRepoRoot(scriptDir, agentsHome);
+}
+
 if (!existsSync(installedRoot)) {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, error: `installed root not found: ${installedRoot}` }));
+    process.exit(2);
+  }
   console.error(`skills-doctor: installed root not found: ${installedRoot}`);
   process.exit(2);
 }
 
 const disabledList = readDisabled(agentsHome);
-const { problems, notes, infos, installedCount, repoCount, disabledCount } = run(installedRoot, repoRoot, disabledList.disabled, agentsHome);
+const { problems, notes, infos, installedCount, repoCount, disabledCount, parityStatus } = run(installedRoot, repoRoot, disabledList.disabled, agentsHome);
 notes.push(...disabledList.notes);
 
-console.log(`skills-doctor: ${installedCount} installed, ${repoCount} in repo${disabledCount ? `, ${disabledCount} disabled by operator` : ""}`);
+if (json) {
+  console.log(JSON.stringify({
+    ok: problems.length === 0,
+    parityStatus,
+    installedCount,
+    repoCount,
+    disabledCount,
+    problems,
+    notes,
+    infos,
+  }, null, 2));
+  process.exit(problems.length === 0 ? 0 : 1);
+}
+
+console.log(`skills-doctor: ${installedCount} installed, ${repoCount} in repo${disabledCount ? `, ${disabledCount} disabled by operator` : ""}${parityStatus === "UNVERIFIED" ? " [parity UNVERIFIED]" : ""}`);
 
 if (infos.length) {
   console.log("\n  info");

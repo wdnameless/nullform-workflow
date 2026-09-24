@@ -65,6 +65,7 @@ const HARNESS_ONLY = [
   "agent/config.yml",
   "agent/models.yml",
   "agent/mcp.json",
+  "agent/plugins.skipped",
   "agent/models.db",
   "agent/api.key",
   "secrets.env" /* нет: вне каталогов манифеста */,

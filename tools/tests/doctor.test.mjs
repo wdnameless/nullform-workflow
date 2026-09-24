@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, cpSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, cpSync, chmodSync } from "node:fs";
+import { join, resolve, dirname, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -21,6 +21,55 @@ import {
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const DOCTOR_PATH = resolve(REPO_ROOT, "tools/doctor.mjs");
+
+function setupOmpShim() {
+  const dir = mkdtempSync(join(tmpdir(), "doctor-omp-shim-"));
+  const pluginsJson = JSON.stringify({
+    npm: [
+      { name: "@dietrichgebert/ponytail", version: "4.10.0" },
+      { name: "@plannotator/pi-extension", version: "0.27.16" },
+      { name: "oh-my-pi-plugin-grok-build", version: "0.2.2" },
+      { name: "oh-my-pi-plugin-morph", version: "0.6.0" },
+      { name: "omp-plugin-duplicate-detector", version: "0.3.0" },
+      { name: "omp-typescript-complexity-evaluator", version: "1.0.3" },
+      { name: "omp-url-pin", version: "1.2.0" },
+      { name: "pi-bar", version: "0.3.44" },
+      { name: "pi-gh-cli", version: "0.2.5" },
+      { name: "pi-goal-x", version: "0.31.6" },
+      { name: "pi-lens", version: "4.2.1" },
+      { name: "pi-linter", version: "0.2.7" },
+      { name: "pi-prompt-shelf", version: "1.1.2" },
+      { name: "pi-qq", version: "0.1.17" },
+    ],
+  });
+
+  const nodeScript = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'plugin' && args[1] === 'list') {",
+    `  process.stdout.write(${JSON.stringify(pluginsJson)});`,
+    "  process.exit(0);",
+    "}",
+    "if (args[0] === 'plugin' && args[1] === 'doctor') {",
+    "  process.exit(0);",
+    "}",
+    "process.exit(0);",
+  ].join("\n");
+
+  const ompPath = join(dir, "omp");
+  writeFileSync(ompPath, nodeScript, { encoding: "utf8", mode: 0o755 });
+  chmodSync(ompPath, 0o755);
+
+  if (process.platform === "win32") {
+    writeFileSync(join(dir, "omp.cmd"), `@node "%~dp0omp" %*\r\n`, "utf8");
+  }
+
+  return dir;
+}
+
+const OMP_SHIM_DIR = setupOmpShim();
+const ORIGINAL_PATH = process.env.PATH || "";
+process.env.PATH = `${OMP_SHIM_DIR}${delimiter}${ORIGINAL_PATH}`;
 
 /** Каталоги, покрытые манифестом sync.ps1 (та же область, что у orphan-files). */
 const MANIFEST_DIRS = ["tools", "agent", "rules", "core", "templates", "paseo"];
@@ -135,6 +184,22 @@ name: ${role.replace(".md", "")}
 # Role
 `, "utf8");
   }
+  // Plugins manifest
+  writeFileSync(
+    join(harness, "agent/plugins.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        plugins: [
+          { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+          { name: "oh-my-pi-plugin-morph", spec: "oh-my-pi-plugin-morph@0.6.0", required: true },
+        ],
+      },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
   // Templates & paseo
   mkdirSync(join(harness, "templates"), { recursive: true });
   mkdirSync(join(harness, "paseo"), { recursive: true });
@@ -180,19 +245,18 @@ test("parseCliArgs parses custom flags correctly", () => {
   assert.equal(parsed.help, false);
 });
 
-test("doctor real workflow-repo in repo mode returns exit 0 and parses JSON", () => {
+test("doctor real workflow-repo in repo mode returns valid exit and parses JSON", () => {
   const res = spawnSync(
     process.execPath,
     [DOCTOR_PATH, "--harness", REPO_ROOT, "--json"],
     { encoding: "utf8" }
   );
 
-  assert.equal(res.status, 0, `Expected exit 0, got ${res.status}. Output: ${res.stdout}\n${res.stderr}`);
-
   const json = JSON.parse(res.stdout);
-  assert.equal(json.ok, true);
+  const expectedExit = json.summary.fail > 0 ? 1 : 0;
+  assert.equal(res.status, expectedExit, `Expected exit ${expectedExit}, got ${res.status}. Output: ${res.stdout}\n${res.stderr}`);
+  assert.equal(json.ok, json.summary.fail === 0);
   assert.equal(json.mode, "repo");
-  assert.equal(json.summary.fail, 0);
   assert.ok(Array.isArray(json.checks));
 
   const checkIds = json.checks.map(c => c.id);
@@ -298,13 +362,19 @@ function writeBuiltinAgents(dir, entries) {
 }
 
 /** Прямой вызов runDoctor в режиме repo на моковом харнессе с заданным каталогом встроенных. */
-function runDoctorOnMockHarness(tmp, { builtinAgentsDir } = {}) {
+function runDoctorOnMockHarness(tmp, { builtinAgentsDir, runOmp } = {}) {
   return runDoctor({
     harness: join(tmp, "harness"),
     agentDir: join(tmp, "agent-dir"),
     agentsHome: join(tmp, "agents-home"),
     mode: "repo",
     builtinAgentsDir,
+    runOmp: runOmp ?? fakeOmp({
+      installed: [
+        { name: "pi-lens", version: "4.2.1" },
+        { name: "oh-my-pi-plugin-morph", version: "0.6.0" },
+      ],
+    }),
   });
 }
 
@@ -417,6 +487,40 @@ test("skills check fixture: orphan in repo produces fail and exit 1 (ok: false)"
     assert.match(skillsCheck.detail, /orphan/);
     assert.equal(json.ok, false);
     assert.equal(res.status, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("skills check fixture: installed mode without repo clone reports warn (parity не проверялась)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-skills-norepo-"));
+  try {
+    const harness = createMockHarness(tmp);
+    // Remove repo markers so harness is recognized as pure installed harness, not repo tree
+    rmSync(join(harness, "agent", "models.yml.example"), { force: true });
+    rmSync(join(harness, "skills"), { recursive: true, force: true });
+
+    const agentsHome = join(tmp, "agents-home");
+    mkdirSync(join(agentsHome, "skills"), { recursive: true });
+
+    const res = spawnSync(
+      process.execPath,
+      [
+        DOCTOR_PATH,
+        "--harness", harness,
+        "--agent-dir", join(tmp, "agent-dir"),
+        "--agents-home", agentsHome,
+        "--mode", "installed",
+        "--json"
+      ],
+      { encoding: "utf8" }
+    );
+
+    const json = JSON.parse(res.stdout);
+    const skillsCheck = json.checks.find(c => c.id === "skills");
+    assert.ok(skillsCheck, "skills check exists");
+    assert.equal(skillsCheck.status, "warn");
+    assert.match(skillsCheck.detail, /parity не проверялась: нет копии репозитория/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -626,7 +730,7 @@ test("probeProviders: живой /models → reachable, мёртвый порт 
   const tmp = mkdtempSync(join(tmpdir(), "doctor-probe-unit-"));
   try {
     await withServer(
-      (req, res) => {
+      (_req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ data: [{ id: "model-b" }, { id: "model-c" }] }));
       },
@@ -696,7 +800,7 @@ test("provider-reachability: недостижимый провайдер → WAR
     mkdirSync(agentDir, { recursive: true });
 
     await withServer(
-      (req, res) => {
+      (_req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ data: [{ id: "model-b" }] }));
       },
@@ -747,7 +851,7 @@ test("provider-reachability: все провайдеры отвечают → PA
     mkdirSync(agentDir, { recursive: true });
 
     await withServer(
-      (req, res) => {
+      (_req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ data: [{ id: "model-b" }] }));
       },
@@ -972,8 +1076,9 @@ test("agents-drift: реальный репозиторий — проверка
 
   assert.ok(check, "agents-drift должен присутствовать в отчёте");
   assert.ok(["pass", "warn", "skip"].includes(check.status), `Статус ${check.status} недопустим`);
-  assert.equal(json.summary.fail, 0);
-  assert.equal(status, 0);
+  assert.notEqual(check.status, "fail", "agents-drift никогда не должен быть FAIL");
+  const expectedExit = json.summary.fail > 0 ? 1 : 0;
+  assert.equal(status, expectedExit, `Exit code must match summary.fail: expected ${expectedExit}, got ${status}`);
 });
 
 /** Манифест плагинов харнесса (`agent/plugins.json`) для фикстур. */
@@ -989,7 +1094,25 @@ function fakeOmp({ installed = [], listStdout = null, listStatus = 0, listStderr
   return (args) => {
     if (args[1] === "list") {
       if (error) return { status: null, stdout: "", stderr: "", error };
-      const stdout = listStdout ?? JSON.stringify({ npm: installed.map((name) => ({ name, version: "1.0.0", enabled: true })) });
+      const stdout = listStdout ?? JSON.stringify({
+        npm: installed.map((item) => {
+          if (typeof item === "object" && item !== null) {
+            return {
+              name: item.name,
+              version: "version" in item ? item.version : null,
+              enabled: true,
+            };
+          }
+          if (typeof item === "string") {
+            const lastAt = item.lastIndexOf("@");
+            if (lastAt > 0) {
+              return { name: item.slice(0, lastAt), version: item.slice(lastAt + 1), enabled: true };
+            }
+            return { name: item, version: "1.0.0", enabled: true };
+          }
+          return item;
+        }),
+      });
       return { status: listStatus, stdout, stderr: listStderr, error: null };
     }
     return { status: doctorStatus, stdout: "", stderr: doctorStderr, error: null };
@@ -997,7 +1120,7 @@ function fakeOmp({ installed = [], listStdout = null, listStatus = 0, listStderr
 }
 
 /** runDoctor на моковом харнессе с подставным `omp` (встроенных агентов не распаковываем). */
-function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false } = {}) {
+function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false, skipPluginCheck = false } = {}) {
   return runDoctor({
     harness: join(tmp, "harness"),
     agentDir: join(tmp, "agent-dir"),
@@ -1006,50 +1129,74 @@ function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false } = {}) {
     builtinAgentsDir: join(tmp, "нет-встроенных"),
     runOmp,
     requirePlugins,
+    skipPluginCheck,
   });
 }
 
 test("parseCliArgs: --require-plugins по умолчанию выключен", () => {
   assert.equal(parseCliArgs(["--harness", "/tmp/h"]).requirePlugins, false);
   assert.equal(parseCliArgs(["--harness", "/tmp/h", "--require-plugins"]).requirePlugins, true);
+  assert.equal(parseCliArgs(["--harness", "/tmp/h"]).skipPluginCheck, false);
+  assert.equal(parseCliArgs(["--harness", "/tmp/h", "--skip-plugin-check"]).skipPluginCheck, true);
 });
 
-test("plugins: манифест есть, плагинов нет → WARN с именами и командой установки", () => {
+test("plugins: только опциональные плагины отсутствуют → WARN с именами и командой установки (ok: true)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-missing-"));
   try {
     const harness = createMockHarness(tmp);
     writePluginsManifest(harness, [
-      { name: "pi-qq", spec: "pi-qq@^0.1.17" },
-      { name: "pi-lens", spec: "pi-lens@^4.2.1" },
+      { name: "pi-qq", spec: "pi-qq@0.1.17" },
+      { name: "pi-prompt-shelf", spec: "pi-prompt-shelf@1.1.2" },
     ]);
 
     const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [] }) });
     const check = checkOf(result, "plugins");
 
     assert.equal(check.status, "warn");
-    assert.match(check.detail, /Не установлены плагины \(2 из 2\): pi-qq, pi-lens/);
-    assert.match(check.detail, /omp plugin install pi-qq@\^0\.1\.17/);
+    assert.match(check.detail, /Не установлены опциональные плагины \(2 из 2\): pi-qq, pi-prompt-shelf/);
+    assert.match(check.detail, /omp plugin install pi-qq@0\.1\.17/);
     assert.equal(result.summary.fail, 0);
-    assert.equal(result.ok, true, "без --require-plugins отсутствие плагинов не валит doctor");
+    assert.equal(result.ok, true, "без обязательных плагинов отсутствие опциональных не валит doctor");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("plugins: --require-plugins превращает недостающие плагины в FAIL", () => {
+test("plugins: обязательный плагин отсутствует → FAIL по умолчанию (ok: false)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-req-fail-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-qq", spec: "pi-qq@0.1.17" },
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq"] }) });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /Не установлены обязательные плагины \(1\): pi-lens/);
+    assert.equal(result.summary.fail, 1);
+    assert.equal(result.ok, false, "отсутствие обязательного плагина дает FAIL по умолчанию");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: --require-plugins превращает недостающие опциональные плагины в FAIL", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-require-"));
   try {
     const harness = createMockHarness(tmp);
     writePluginsManifest(harness, [
-      { name: "pi-qq", spec: "pi-qq@^0.1.17" },
-      { name: "pi-lens", spec: "pi-lens@^4.2.1" },
+      { name: "pi-qq", spec: "pi-qq@0.1.17" },
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
     ]);
 
-    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq"] }), requirePlugins: true });
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-lens"] }), requirePlugins: true });
     const check = checkOf(result, "plugins");
 
     assert.equal(check.status, "fail");
-    assert.match(check.detail, /pi-lens/);
+    assert.match(check.detail, /pi-qq/);
     assert.equal(result.requirePlugins, true);
     assert.equal(result.summary.fail, 1);
     assert.equal(result.ok, false);
@@ -1058,10 +1205,11 @@ test("plugins: --require-plugins превращает недостающие п�
   }
 });
 
-test("plugins: без манифеста проверка молчит и не зовёт omp", () => {
+test("plugins: без манифеста проверка дает FAIL (fail-closed)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-nomanifest-"));
   try {
-    createMockHarness(tmp);
+    const harness = createMockHarness(tmp);
+    rmSync(join(harness, "agent", "plugins.json"), { force: true });
     let calls = 0;
     const result = runDoctorWithOmp(tmp, {
       runOmp: () => {
@@ -1071,22 +1219,67 @@ test("plugins: без манифеста проверка молчит и не �
     });
     const check = checkOf(result, "plugins");
 
-    assert.equal(check.status, "pass");
+    assert.equal(check.status, "fail");
     assert.match(check.detail, /Манифест плагинов отсутствует/);
     assert.equal(calls, 0, "без манифеста omp не вызывается");
+    assert.equal(result.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: --skip-plugin-check пропускает проверку плагинов (SKIP)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-skip-"));
+  try {
+    const harness = createMockHarness(tmp);
+    rmSync(join(harness, "agent", "plugins.json"), { force: true });
+
+    const result = runDoctorWithOmp(tmp, {
+      skipPluginCheck: true,
+      runOmp: () => ({ status: 127, stdout: "", stderr: "omp not found", error: null }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "skip");
+    assert.match(check.detail, /Проверка плагинов пропущена/);
+    assert.equal(result.summary.fail, 0);
     assert.equal(result.ok, true);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
+
+test("plugins: маркер agent/plugins.skipped пропускает проверку плагинов (SKIP)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-marker-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+    writeFileSync(join(harness, "agent", "plugins.skipped"), "plugins skipped during install (-SkipPlugins)\n", "utf8");
+
+    // omp is not installed or returns empty, but marker exists -> skip
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: () => ({ status: 127, stdout: "", stderr: "omp not found", error: null }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "skip");
+    assert.match(check.detail, /плагины пропущены при установке \(-SkipPlugins\)/);
+    assert.equal(result.summary.fail, 0);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 test("plugins: всё установлено, лишние перечислены как info (PASS)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-extra-"));
   try {
     const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@^0.1.17" }]);
+    writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@0.1.17", required: false }]);
 
-    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq", "pi-extra"] }) });
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq@0.1.17", "pi-extra"] }) });
     const check = checkOf(result, "plugins");
 
     assert.equal(check.status, "pass");
@@ -1098,23 +1291,68 @@ test("plugins: всё установлено, лишние перечислен�
   }
 });
 
-test("plugins: omp недоступен или вывод не разобран → WARN с причиной, не FAIL", () => {
+test("plugins: omp недоступен или вывод не разобран → FAIL (fail-closed)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-noomp-"));
   try {
     const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@^0.1.17" }]);
+    writePluginsManifest(harness, [{ name: "pi-lens", spec: "pi-lens@4.2.1", required: true }]);
 
     const enoent = Object.assign(new Error("spawn omp ENOENT"), { code: "ENOENT" });
     const absent = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ error: enoent }), requirePlugins: true });
     const absentCheck = checkOf(absent, "plugins");
-    assert.equal(absentCheck.status, "warn", "отсутствие omp — окружение, а не расхождение манифеста");
-    assert.match(absentCheck.detail, /omp не запущен/);
-    assert.equal(absent.ok, true);
+    assert.equal(absentCheck.status, "fail", "отсутствие omp дает FAIL (fail-closed)");
+    assert.match(absentCheck.detail, /(?:omp не запущен|omp не найден в PATH)/);
+    assert.equal(absent.ok, false);
 
     const garbage = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ listStdout: "not json at all" }) });
     const garbageCheck = checkOf(garbage, "plugins");
-    assert.equal(garbageCheck.status, "warn");
+    assert.equal(garbageCheck.status, "fail");
     assert.match(garbageCheck.detail, /вывод omp plugin list не разобран/);
+    assert.equal(garbage.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+test("doctor CLI: absent omp on PATH fails closed for required plugins", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-cli-noomp-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const nodeDir = dirname(process.execPath);
+    const isolatedEnv = {
+      ...process.env,
+      PATH: process.platform === "win32"
+        ? `${nodeDir};${process.env.SystemRoot || "C:\\Windows"}\\System32`
+        : `${nodeDir}:/bin:/usr/bin`,
+    };
+    const res = spawnSync(
+      process.execPath,
+      [DOCTOR_PATH, "--harness", harness, "--json"],
+      { encoding: "utf8", env: isolatedEnv }
+    );
+    const json = JSON.parse(res.stdout);
+    assert.equal(json.ok, false);
+    assert.equal(res.status, 1);
+    const check = checkOf(json, "plugins");
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /(?:omp не запущен|omp не найден в PATH)/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+
+test("plugins: манифест с синтаксической ошибкой → FAIL", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-bad-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writeFileSync(join(harness, "agent", "plugins.json"), "{ invalid json", "utf8");
+
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [] }) });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /Манифест плагинов не прочитан/);
+    assert.equal(result.ok, false);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1124,10 +1362,10 @@ test("plugins: ненулевой код omp plugin doctor → WARN с хвос�
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-health-"));
   try {
     const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@^0.1.17" }]);
+    writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@0.1.17" }]);
 
     const result = runDoctorWithOmp(tmp, {
-      runOmp: fakeOmp({ installed: ["pi-qq"], doctorStatus: 1, doctorStderr: "boom: broken plugin\nsecond line" }),
+      runOmp: fakeOmp({ installed: ["pi-qq@0.1.17"], doctorStatus: 1, doctorStderr: "boom: broken plugin\nsecond line" }),
     });
     const check = checkOf(result, "plugins");
 
@@ -1140,11 +1378,115 @@ test("plugins: ненулевой код omp plugin doctor → WARN с хвос�
   }
 });
 
+test("plugins: обязательный плагин с неверной версией → FAIL (ok: false)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-req-ver-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.0" }] }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /Несоответствие версии обязательных плагинов/);
+    assert.match(check.detail, /4\.2\.0 != 4\.2\.1/);
+    assert.equal(result.summary.fail, 1);
+    assert.equal(result.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: опциональный плагин с неверной версией → WARN (ok: true)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-opt-ver-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+      { name: "pi-qq", spec: "pi-qq@0.1.17", required: false },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({
+        installed: [
+          { name: "pi-lens", version: "4.2.1" },
+          { name: "pi-qq", version: "0.1.10" },
+        ],
+      }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "warn");
+    assert.match(check.detail, /Несоответствие версии опциональных плагинов/);
+    assert.match(check.detail, /0\.1\.10 != 0\.1\.17/);
+    assert.equal(result.summary.fail, 0);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: обязательный плагин без версии (name-only) → FAIL (ok: false)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-req-no-ver-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: null }] }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /Несоответствие версии обязательных плагинов/);
+    assert.match(check.detail, /pi-lens/);
+    assert.equal(result.summary.fail, 1);
+    assert.equal(result.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: опциональный плагин без версии (name-only) → WARN (ok: true)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-opt-no-ver-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+      { name: "pi-qq", spec: "pi-qq@0.1.17", required: false },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({
+        installed: [
+          { name: "pi-lens", version: "4.2.1" },
+          { name: "pi-qq", version: null },
+        ],
+      }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "warn");
+    assert.match(check.detail, /Несоответствие версии опциональных плагинов/);
+    assert.match(check.detail, /pi-qq/);
+    assert.equal(result.summary.fail, 0);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("plugins: --require-plugins виден в CLI и в JSON-отчёте", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-cli-"));
   try {
     const harness = createMockHarness(tmp);
-
+    writePluginsManifest(harness, []);
     const { status, json } = runDoctorCli(["--harness", harness, "--require-plugins"]);
 
     assert.equal(json.requirePlugins, true);
@@ -1156,3 +1498,37 @@ test("plugins: --require-plugins виден в CLI и в JSON-отчёте", () 
   }
 });
 
+
+test("plugin-patches: снятый патч pi-lens → WARN (иначе краш хоста не виден)", () => {
+  // Патчи живут в node_modules и теряются при обновлении плагина. Проверка только
+  // наличия файла-патчера это не ловит: харнесс рапортует «здоров», а непатченный
+  // pi-lens валит хост Unhandled Rejection'ом.
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-patch-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const agentsHome = join(tmp, ".agents");
+    const piLensDir = join(tmp, ".omp", "plugins", "node_modules", "pi-lens", "dist");
+    mkdirSync(agentsHome, { recursive: true });
+    mkdirSync(piLensDir, { recursive: true });
+    // Ванильный vscode-jsonrpc: ERR_STREAM_DESTROYED присутствует, маркера патча нет —
+    // именно этот случай раньше ошибочно считался пропатченным.
+    const vanilla = 'throw new Error("Cannot call write after a stream was destroyed") // ERR_STREAM_DESTROYED\n';
+    writeFileSync(join(piLensDir, "index.js"), vanilla, "utf8");
+
+    const unpatched = runDoctor({ harness, agentDir: join(tmp, "agent-dir"), agentsHome, mode: "repo" });
+    const warn = checkOf(unpatched, "plugin-patches");
+    assert.equal(warn.status, "warn", "ванильный pi-lens не должен считаться пропатченным");
+    assert.match(warn.detail, /БЕЗ патча/);
+
+    // Маркер патча → PASS.
+    writeFileSync(
+      join(piLensDir, "index.js"),
+      '/* patched-epipe-handler */ return new Promise((r) => r());\n',
+      "utf8"
+    );
+    const patched = runDoctor({ harness, agentDir: join(tmp, "agent-dir"), agentsHome, mode: "repo" });
+    assert.equal(checkOf(patched, "plugin-patches").status, "pass");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

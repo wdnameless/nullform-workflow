@@ -30,16 +30,18 @@ Match tool class to task stage — never bulk-dump everything:
 - **Verification**: deterministic first — `lsp diagnostics`, build, tests. LLM-judgment (@oracle) only for what tools can't decide.
 - **External truth**: `context7` (library docs) before guessing APIs; `web_search` for ecosystem questions.
 - Skip MCP calls whose answer won't change your decision.
-- **Observability dashboard**: `workflow.mjs start` launches it in the background and prints the URL.
-  In a Paseo workspace open that URL in the **Paseo browser** (`browser_new_tab`) — the dev environment
-  takes priority over the system browser (the CLI opens the system one only outside Paseo).
-  URL source: `.workflow/dashboard.json` or `node tools/dashboard.mjs --url`. The page self-updates every 3 s.
+- **Observability dashboard**: `workflow.mjs start` launches it in the background and prints the live URL (`--no-dashboard` or `NF_NO_DASHBOARD=1` permitted in read-only/security situations).
+  In a Paseo workspace (`PASEO_AGENT_ID`), unless `--no-dashboard` was specified, you MUST IMMEDIATELY open that URL in the **Paseo browser**
+  (`browser_new_tab`) — that is the development environment and it opens directly inside the IDE for the user.
+  Outside Paseo the CLI opens the system browser itself. The page self-updates every 3 s.
 
-### Wave 0 (T1–T3) MANDATORY INTERVIEW:
-- DO NOT manually grill.
+### Wave 0 (T2/T3 ONLY) INTERVIEW — unresolved decisions only:
+- T1 NEVER mandates a Wave 0 interview.
+- For T2/T3: interview ONLY for user decisions, forks, and constraints NOT settled by repo sources or the brief. If all decisions are settled by sources, skip the interview.
+- When unresolved decisions remain: DO NOT manually grill.
 - Run: `read skill://grill-me`.
 - Follow the instructions in `grill-me` implicitly, but DO NOT present questions as chat text.
-- FOR ALL questions to the user: Construct ONE structured `ask` call (widget) containing ALL forks, constraints, and decision points.
+- FOR ALL unresolved questions to the user: Construct ONE structured `ask` call (widget) containing ALL unresolved forks, constraints, and decision points.
 - DO NOT scaffold OpenSpec until the user answers via the widget.
 
 
@@ -77,12 +79,12 @@ T1 requires recon notes. T0 requires nothing beyond the lane.
 
 ### T1 — STANDARD LANE
 1. Quick recon: what exists (1 @scout or direct grep, ≤5 min).
-2. Micro-plan in chat (3–5 bullets, affected files, acceptance check) — NO openspec scaffolding unless user asks.
+2. Micro-plan in chat (3–5 bullets, affected files, acceptance check) — NO mandatory Wave 0 interview, NO openspec scaffolding unless user asks.
 3. Spawn 1–2 specialists in ONE task() batch. Verify. Report.
 
 ### T2 — HEAVY LANE (4-Wave SDD + traceability)
-- Wave 0: `grill-me` interview → forks, constraints, success criteria explicit.
-- Wave 1: Recon, Blast-Radius Map & Domain Terms (@explorer/@scout). Read `context/` inventory + open requests (`node tools/context-inbox.mjs list --json`) and run `node tools/domain-context.mjs --domain <x>` when the task names a domain. Assemble **CONTEXT PACK**: бриф дословно · транскрипт обсуждения · схема БД + 2-3 примерные строки · прод-логи/трейс · git-история затрагиваемых путей · ADR/решения. Noise rule: устаревшее/глобальное выкидывать, а не добирать объёмом; если источника нет → регистрировать запрос через context-inbox. Check if project root has `CONTEXT.md` (Ubiquitous Language); if missing on T2+, draft or update it with user terms. Memory hygiene: recall decisions at start, retain strictly structured ≤~200 words at end; durable architectural decisions belong in `docs/adr/`, not in memory. **Context Hygiene Rule**: Heavy exploratory reads MUST be scoped inside a `checkpoint` → `rewind` block (or subagent handoff) returning ≤30 lines of findings to prevent context rot.
+- Wave 0: interview ONLY for unresolved user decisions not settled by sources (`read skill://grill-me`) → forks, constraints, success criteria explicit.
+- Wave 1: Recon, Blast-Radius Map & Domain Terms (@explorer/@scout). Read `context/` inventory + open requests (`node tools/context-inbox.mjs list --json`) and run `node tools/domain-context.mjs --domain <x>` when the task names a domain. Assemble **CONTEXT PACK**: бриф дословно · транскрипт обсуждения · схема БД + 2-3 примерные строки · прод-логи/трейс · git-история затрагиваемых путей · ADR/решения. Noise rule: устаревшее/глобальное выкидывать, а не добирать объёмом; если источника нет → регистрировать запрос через context-inbox. Check if project root has `CONTEXT.md` (Ubiquitous Language); if missing on T2+, draft or update it with user terms. Memory hygiene (best-effort): recall decisions at start (single attempt; if unavailable, note and use local context without blocking or fabricating facts), retain strictly structured ≤~200 words at end; durable architectural decisions belong in `docs/adr/`, not in memory. **Context Hygiene Rule**: Heavy exploratory reads MUST be scoped inside a `checkpoint` → `rewind` block (or subagent handoff) returning ≤30 lines of findings to prevent context rot.
 - Wave 1.5 — **REQUIREMENTS MANIFEST** (`openspec/changes/<name>/manifest.md`): atomise the user's words into R01…Rnn, each row with the VERBATIM quote it came from + status (`open|in-spec|in-ticket|done|placeholder|deferred|dropped`). Rules: `dropped` only with the user's own quoted words (silence NEVER cancels); `deferred` rows go to the final report under «не вошло»; implicit requirements get `i`-suffix and go to the interview.
 - Wave 2: OpenSpec scaffold (`openspec new change <name>`; proposal/tasks/specs land on disk immediately). Validate: `openspec validate <name>`.
   - **Human-Plan Rule**: `proposal.md` stays human-readable without implementation details; technical details live in `interfaces.md` and `tasks.md`.
@@ -104,7 +106,7 @@ T1 requires recon notes. T0 requires nothing beyond the lane.
 - **After each task**: append its INTERFACES to `interfaces.md` (only you write it) → update manifest rows → send diff to review → run the FULL suite yourself (`<cmd> 2>&1 | tail -30`; read counts, not just colour — a green run with zero new tests is red) → only then commit (one commit per task = user's rollback point). Review runs while the crew flies, never blocking the next launch.
 - **A green suite is evidence only if tests could have been red.** Reviewer reads assertions, not pass counts.
 - **Session Reuse Over Respawn**: Before spawning a specialist, check `hub list` / `hub jobs` for a retained lane already holding the relevant context. Reuse saves tokens AND rate-limit quota. Spawn fresh ONLY when the new work is unrelated to retained context.
-- **Reconcile Before Re-dispatch**: A terminal subagent result is not consumed until you have READ it. Never re-issue an unchanged objective to the same specialist after a rejection — adjust scope or context first. A duplicate spawn against an unreconciled terminal job is refused by design.
+- **Reconcile Before Re-dispatch**: A terminal subagent result is not consumed until you have READ and VALIDATED it. Actual worker outputs must be checked at parent reconciliation via `validateReturnContract(result)` (or pipe JSON to `node tools/return-contract.mjs` via stdin / temp file; NEVER shell-interpolate untrusted summary text into command arguments): `tests_passed: true` without executed command/counts is rejected before marking the task verified, and outer `failed`/`partial` wrapper status cannot be masked by inner claims. Never re-issue an unchanged objective to the same specialist after a rejection — adjust scope or context first. A duplicate spawn against an unreconciled terminal job is refused by design.
 - **Todo Continuity**: When the user adds a task mid-flight, APPEND it. Never replace the list or reorder in-progress work unless explicitly asked.
 
 ### T3 — PROGRAM LANE
@@ -120,7 +122,7 @@ T2 protocol, plus: feature worktree per major slice (`git worktree` or optional 
   - When Paseo is not configured, all processes are run directly via OMP `hub` or terminal tools.
 
 ## FLEET CONTRACT
-- Every spawn: bounded scope + acceptance criteria + RETURN CONTRACT (EXECUTION RULES): STATUS/FILES/TESTS `было→стало`/INTERFACES/REQUIREMENTS/CONCERNS, ≤25 lines. `tests_passed: true` without counts is not evidence.
+- Every spawn: bounded scope + acceptance criteria + RETURN CONTRACT (EXECUTION RULES): STATUS/FILES/TESTS `было→стало`/INTERFACES/REQUIREMENTS/CONCERNS, ≤25 lines. `tests_passed: true` without executed command/counts is not evidence and must be rejected at parent reconciliation via `tools/return-contract.mjs`.
 - You are accountable: wandering/budget-breach → STOP it (via runtime-native cancellation `hub cancel`, or `paseo stop <id>` only when Paseo explicitly owns the run) and respawn tighter. A T0 running >10 min or >2 agents = YOUR failure. Kill, redo lean.
 - Writers isolated (`isolated: true` ONLY when session cwd is a git repository — in non-git directories omit `isolated: true` to prevent instant spawn crash); one owner per file; read-only roles (@scout/@reviewer/@oracle) never edit.
 - **Role provenance**: `scout`/`task`/`security-reviewer` are stock OMP roles — never ship or fork them (the harness installs and updates them, so they cannot drift from upstream). `agent/agents/*.md` carries only our own roles (orchestrator, designer, fixer, oracle, librarian, explorer) plus the `reviewer`/`sonic` forks; fork drift is reported by doctor's `agents-drift` check.

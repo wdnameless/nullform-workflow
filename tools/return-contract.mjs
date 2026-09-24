@@ -53,16 +53,92 @@ function parseArgs(argv) {
 export function validateReturnContract(rawText) {
   const errors = [];
   const warnings = [];
-  const normalized = (rawText || "").replace(/\r\n/g, "\n");
+
+  let normalized = "";
+
+  // Support structured JSON yield / tool result shape if passed
+  let parsedJson = null;
+  if (typeof rawText === "object" && rawText !== null) {
+    parsedJson = rawText;
+  } else if (typeof rawText === "string") {
+    normalized = rawText.replace(/\r\n/g, "\n");
+    const trimmed = normalized.trim();
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        parsedJson = JSON.parse(trimmed);
+      } catch {}
+    }
+  } else {
+    normalized = String(rawText || "");
+  }
+
+  if (parsedJson) {
+    // If JSON format is used, map standard fields or extract from wrapper
+    // Actual task results often wrapper { status: 'success'|'partial'|'failed', summary: 'STATUS: DONE ...', tests_passed: boolean }
+    const summary = typeof parsedJson.summary === "string" ? parsedJson.summary : "";
+    const testsPassed = parsedJson.tests_passed;
+    const rawOuterStatus = typeof parsedJson.status === "string" ? parsedJson.status.trim().toLowerCase() : "";
+
+    // Check if summary itself contains the structured contract (common wrapper)
+    const hasStatusInSummary = /(?:^|[·\n])\s*STATUS\b/i.test(summary);
+    if (hasStatusInSummary) {
+      normalized = summary.replace(/\r\n/g, "\n");
+      // Check for contradictory wrapper status vs inner contract
+      // E.g. outer status is failed or partial, but inner contract claims DONE
+      if (rawOuterStatus === "failed") {
+        errors.push(`Противоречивый статус: внешняя обёртка сообщает status: 'failed', но внутренний контракт содержит статус завершения. Задача считается заблокированной.`);
+      } else if (rawOuterStatus === "partial") {
+        // If outer is partial, inner cannot be pure DONE without concerns
+        const innerIsDone = /(?:^|[·\n])\s*STATUS\s*[:\-\(]?\s*DONE\b(?!\s*[_A-Z])/i.test(normalized);
+        if (innerIsDone) {
+          errors.push(`Противоречивый статус: внешняя обёртка сообщает status: 'partial', что несовместимо со статусом DONE без оговорок (ожидается DONE_WITH_CONCERNS).`);
+        }
+      }
+    } else {
+      // Build normalized string from JSON fields
+      let status = (parsedJson.status || "").toUpperCase();
+      // If wrapper uses status: "success", map to "DONE" unless specified
+      if (status === "SUCCESS") status = "DONE";
+      else if (status === "PARTIAL") status = "DONE_WITH_CONCERNS";
+      else if (status === "FAILED") status = "BLOCKED";
+
+      const files = parsedJson.files_modified || parsedJson.files;
+      const requirements = parsedJson.requirements || "";
+      const interfaces = parsedJson.interfaces || "";
+      const concerns = parsedJson.concerns || "";
+
+      const testsVal = parsedJson.tests || (testsPassed === false ? "failed" : summary);
+
+      const lines = [
+        `STATUS: ${status}`,
+        `FILES: ${Array.isArray(files) ? files.join(", ") : (files || "none")}`,
+        `TESTS: ${testsVal}`,
+        `INTERFACES: ${Array.isArray(interfaces) ? interfaces.join(", ") : (interfaces || "none")}`,
+        `REQUIREMENTS: ${Array.isArray(requirements) ? requirements.join(", ") : (requirements || "none")}`,
+        `CONCERNS: ${concerns || (summary && !hasStatusInSummary ? summary : "none")}`,
+      ];
+      normalized = lines.join("\n");
+    }
+    // Rule: tests_passed: true with 'not-run(parent-owned)' must NEVER count as executed test evidence
+    // And bare tests_passed: true without command/count evidence is not allowed
+    if (testsPassed === true) {
+      if (/not-run\(parent-owned\)/i.test(normalized)) {
+        errors.push(`tests_passed: true в сочетании с 'not-run(parent-owned)' недопустимо: флаг tests_passed не может быть true, если тесты не запускались.`);
+      } else {
+        const hasEvidence = /(?:было|before)\s*\:?\s*\d+\s*(?:→|->|to)\s*(?:стало|after)\s*\:?\s*\d+/i.test(normalized) ||
+                            /\b\d+\s*(?:→|->)\s*\d+\b/.test(normalized);
+        if (!hasEvidence) {
+          errors.push(`tests_passed: true без команды и численного перехода (было N → стало M) не является доказательством выполнения.`);
+        }
+      }
+    }
+  }
+
   const rawLines = normalized.split("\n");
-  
-  // Count non-trailing-empty lines or total lines
-  // The rule: max lines 25
   const lines = rawLines;
   if (lines.length > 25) {
     errors.push(`Превышен лимит строк: получено ${lines.length}, максимум 25.`);
   }
-
   // Parse sections. They can be delimited by " · " or newlines or labels like "STATUS: ..." or "STATUS (DONE)"
   // Let's inspect tokens/sections
   // Standard format in agent instructions:
@@ -166,6 +242,19 @@ export function validateReturnContract(rawText) {
   const hasNumericTransition = /(?:было|before)\s*\:?\s*\d+\s*(?:→|->|to)\s*(?:стало|after)\s*\:?\s*\d+/i.test(testsVal) ||
                                /\b\d+\s*(?:→|->)\s*\d+\b/.test(testsVal);
 
+  // Bare boolean or claim without command/count evidence is explicitly rejected
+  if (/tests_passed\s*:\s*true/i.test(testsVal) || /tests_passed\s*:\s*true/i.test(normalized)) {
+    if (/not-run\(parent-owned\)/i.test(normalized) || /not-run\(parent-owned\)/i.test(testsVal)) {
+      if (!errors.some((e) => e.includes("tests_passed"))) {
+        errors.push(`tests_passed: true в сочетании с 'not-run(parent-owned)' недопустимо: тесты не запускались.`);
+      }
+    } else if (!hasNumericTransition) {
+      if (!errors.some((e) => e.includes("tests_passed"))) {
+        errors.push(`tests_passed: true без указания команды выполнения и числового перехода (было N → стало M) не является доказательством выполнения.`);
+      }
+    }
+  }
+
   if (!isNotRunParent && !hasNumericTransition) {
     errors.push(`Секция TESTS должна содержать либо численный переход (например: "было N → стало M"), либо точное значение "not-run(parent-owned)".`);
   }
@@ -202,10 +291,9 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
 
   const args = parseArgs(argv);
   let content = "";
-
   if (args.text !== null) {
     content = args.text;
-  } else if (args._[0]) {
+  } else if (args._[0] && args._[0] !== "-") {
     const file = args._[0];
     if (!existsSync(file)) {
       if (args.json) {
@@ -217,12 +305,28 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
     }
     content = readFileSync(file, "utf8");
   } else {
-    console.log("return-contract.mjs — валидация контракта возврата субагента\n");
-    console.log("  node return-contract.mjs <file> [--json]");
-    console.log("  node return-contract.mjs --text \"<content>\" [--json]\n");
-    process.exit(0);
+    // Read from stdin (file descriptor 0 or "-" argument)
+    try {
+      content = readFileSync(0, "utf8");
+    } catch {
+      content = "";
+    }
+    if (!content.trim()) {
+      if (process.stdin.isTTY) {
+        console.log("return-contract.mjs — валидация контракта возврата субагента\n");
+        console.log("  node return-contract.mjs <file> [--json]");
+        console.log("  node return-contract.mjs --text \"<content>\" [--json]");
+        console.log("  echo \"<content>\" | node return-contract.mjs [--json]\n");
+        process.exit(1);
+      }
+      if (args.json) {
+        console.log(JSON.stringify({ valid: false, errors: ["Пустой ввод: контракт возврата не получен на stdin."] }, null, 2));
+      } else {
+        console.error("ОШИБКА: пустой ввод: контракт возврата не получен на stdin.");
+      }
+      process.exit(1);
+    }
   }
-
   const result = validateReturnContract(content);
 
   if (args.json) {

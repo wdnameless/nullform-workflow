@@ -108,6 +108,30 @@ try {
     Assert (Test-Path (Join-Path $installedHarness "tools\fix-plugin-windows.cjs")) "plugin-window patcher must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\oracle-priority.example.json")) "oracle priority example must install"
     Assert (Test-Path (Join-Path $installedHarness "agent\plugins.json")) "plugin manifest must install with the harness (doctor reads it)"
+    $skippedPluginsMarker = Join-Path $installedHarness "agent\plugins.skipped"
+    Assert (Test-Path $skippedPluginsMarker) "plugins.skipped marker must be created when -SkipPlugins is passed"
+
+    # (a) With marker => doctor 'plugins' check status is "skip"
+    $docWithMarkerOutput = & node (Join-Path $installedHarness "tools\doctor.mjs") --harness $installedHarness --json 2>&1
+    $docWithMarkerJson = ($docWithMarkerOutput | Out-String) | ConvertFrom-Json
+    $pluginCheckWithMarker = $docWithMarkerJson.checks | Where-Object { $_.id -eq "plugins" }
+    Assert ($pluginCheckWithMarker -and $pluginCheckWithMarker.status -eq "skip") "With plugins.skipped marker, plugins check must report status 'skip'"
+
+    # (b) Without marker => opt-out no longer masks the check (status is NOT 'skip') and exit matches summary.fail
+    Remove-Item $skippedPluginsMarker -Force
+    try {
+        $docNoMarkerOutput = & node (Join-Path $installedHarness "tools\doctor.mjs") --harness $installedHarness --json 2>&1
+        $docNoMarkerExit = $LASTEXITCODE
+        $docNoMarkerJson = ($docNoMarkerOutput | Out-String) | ConvertFrom-Json
+        $pluginCheckNoMarker = $docNoMarkerJson.checks | Where-Object { $_.id -eq "plugins" }
+        Assert ($pluginCheckNoMarker -and $pluginCheckNoMarker.status -ne "skip") "Without plugins.skipped marker, plugins check must not be 'skip'"
+        $expectedExit = if ($docNoMarkerJson.summary.fail -gt 0) { 1 } else { 0 }
+        Assert ($docNoMarkerExit -eq $expectedExit) "Doctor exit code ($docNoMarkerExit) must match summary.fail ($expectedExit)"
+    } finally {
+        # Restore marker for subsequent audit and portability tests
+        Set-Content -Path $skippedPluginsMarker -Value "plugins skipped during install (-SkipPlugins)" -Encoding UTF8
+    }
+
 
     $oldHome = $env:HOME
     $oldUserProfile = $env:USERPROFILE

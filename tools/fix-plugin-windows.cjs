@@ -142,7 +142,7 @@ for (const rel of TARGETS) {
   if (rel.endsWith(".js")) {
     const tmp = file + ".check.tmp.js";
     fs.writeFileSync(tmp, patched, "utf8");
-    const res = spawnSync(process.execPath, ["--check", tmp], { encoding: "utf8" });
+    const res = spawnSync(process.execPath, ["--check", tmp], { encoding: "utf8", windowsHide: true });
     fs.unlinkSync(tmp);
     if (res.status !== 0) { ok = false; reason = (res.stderr || "").split("\n").filter(Boolean).slice(-2).join(" "); }
   } else {
@@ -207,7 +207,7 @@ function patchPiLensEpipe(pluginsRoot) {
   // Проверка синтаксиса через node --check
   const tmp = file + ".check.tmp.js";
   fs.writeFileSync(tmp, patched, "utf8");
-  const res = spawnSync(process.execPath, ["--check", tmp], { encoding: "utf8" });
+  const res = spawnSync(process.execPath, ["--check", tmp], { encoding: "utf8", windowsHide: true });
   try { fs.unlinkSync(tmp); } catch {}
   if (res.status !== 0) {
     report.push(["ОТКЛОНЕНО (EPIPE): синтаксис", rel]);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, symlinkSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -16,17 +16,30 @@ function createTempDir(prefix = "harness-test-") {
 }
 
 function getBashPath() {
-  const candidates = [
-    "C:\\Program Files\\Git\\bin\\bash.exe",
-    "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
-    "bash",
-    "/bin/bash",
-    "/usr/bin/bash",
-  ];
+  const candidates = process.platform === "win32"
+    ? [
+        "C:\\Program Files\\Git\\bin\\bash.exe",
+        "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+        "bash.exe",
+        "bash",
+      ]
+    : [
+        "/bin/bash",
+        "/usr/bin/bash",
+        "/usr/local/bin/bash",
+        "bash",
+      ];
   for (const c of candidates) {
     try {
       const res = spawnSync(c, ["--version"], { encoding: "utf8" });
-      if (res.status === 0 && res.stdout.includes("bash")) {
+      if (res.status === 0 && (res.stdout || "").includes("bash")) {
+        if (c === "bash" || c === "bash.exe") {
+          const whichCmd = process.platform === "win32" ? "where" : "which";
+          const whichRes = spawnSync(whichCmd, [c], { encoding: "utf8" });
+          if (whichRes.status === 0 && whichRes.stdout.trim()) {
+            return whichRes.stdout.trim().split(/\r?\n/)[0];
+          }
+        }
         return c;
       }
     } catch {}
@@ -269,26 +282,78 @@ test("unknown --harness exits with code 2 and helpful message on stderr", () => 
   }
 });
 
-test("install.sh without node in PATH gives instruction without stack trace", () => {
+test("install.sh without node in PATH gives instruction without stack trace", (t) => {
   const bashBin = getBashPath();
   if (!bashBin) {
-    // Skip if bash is unavailable
+    t?.skip?.("bash is unavailable on this host");
     return;
   }
 
-  // Create an environment with PATH containing only bash's directory (no node)
-  const bashDir = resolve(bashBin, "..");
-  const isolatedPath = bashDir;
+  const realBashPath = resolve(bashBin);
+  const bashDir = dirname(realBashPath);
+  const isolatedDir = createTempDir("isolated-bash-");
+  try {
+    let isolatedPath;
+    if (process.platform === "win32") {
+      isolatedPath = bashDir;
+    } else {
+      const bashLink = join(isolatedDir, "bash");
+      try {
+        symlinkSync(realBashPath, bashLink);
+        isolatedPath = isolatedDir;
+      } catch {
+        isolatedPath = bashDir;
+      }
+    }
 
-  const res = spawnSync(bashBin, [SH_PATH, "--help"], {
-    encoding: "utf8",
-    env: {
-      PATH: isolatedPath,
-      SYSTEMROOT: process.env.SYSTEMROOT || "C:\\Windows",
-    },
-  });
+    const res = spawnSync(realBashPath, [SH_PATH, "--help"], {
+      encoding: "utf8",
+      env: {
+        PATH: isolatedPath,
+        SYSTEMROOT: process.env.SYSTEMROOT || "C:\\Windows",
+      },
+    });
 
-  assert.notEqual(res.status, 0, "Must exit with non-zero when node is absent");
-  assert.match(res.stderr, /node.*not found|requires node/i);
-  assert.doesNotMatch(res.stderr, /at Module\._resolveFilename/i, "Must not dump a Node/JS stack trace");
+    assert.equal(res.error, undefined, `Spawn failed: ${res.error?.message}`);
+    assert.notEqual(res.status, 0, "Must exit with non-zero when node is absent");
+    assert.ok(res.stderr, "stderr must be present");
+    assert.match(res.stderr, /node.*not found|requires node/i);
+    assert.doesNotMatch(res.stderr, /at Module\._resolveFilename/i, "Must not dump a Node/JS stack trace");
+  } finally {
+    rmSync(isolatedDir, { recursive: true, force: true });
+  }
+});
+
+test("generated markdown adapter does not reference unsupported verification artifact kind", () => {
+  const tempRoot = createTempDir("harness-adapter-check-");
+  try {
+    const res = spawnSync(process.execPath, [
+      SCRIPT_PATH,
+      "--harness",
+      "claude",
+      "--root",
+      tempRoot,
+    ], {
+      encoding: "utf8",
+    });
+    assert.equal(res.status, 0);
+    const claudeMdPath = join(tempRoot, "CLAUDE.md");
+    const content = readFileSync(claudeMdPath, "utf8");
+
+    assert.equal(
+      content.includes("--kind verification"),
+      false,
+      "Adapter must not instruct user to record non-existent '--kind verification' artifact"
+    );
+    assert.ok(
+      content.includes("--kind manifest"),
+      "Adapter must reference valid artifact kinds like manifest"
+    );
+    assert.ok(
+      content.includes("--kind oracle"),
+      "Adapter must reference valid artifact kinds like oracle"
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });

@@ -26,13 +26,70 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, openSync, readSync, closeSync } from "node:fs";
 import { resolve, join, dirname, relative } from "node:path";
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { scanRepo } from "./debt-ledger.mjs";
 
+export function projectToken(absPath) {
+  return createHash("sha256").update(resolve(absPath)).digest("hex").slice(0, 16);
+}
+function computeDashboardBuild() {
+  try {
+    const code = readFileSync(fileURLToPath(import.meta.url));
+    return createHash("sha256").update(code).digest("hex").slice(0, 16);
+  } catch {
+    return "unknown";
+  }
+}
+
+export const DASHBOARD_PROTOCOL = "nullform-dashboard/v2";
+export const DASHBOARD_PROTOCOL_VERSION = 2;
+export const DASHBOARD_BUILD = computeDashboardBuild();
+/**
+ * R15: Проверка заголовка Host.
+ * Разрешены только loopback-адреса (localhost, 127.0.0.1, [::1]) с опциональным портом.
+ * Любые внешние/враждебные хосты (включая DNS rebinding вроде attacker.example) отклоняются.
+ */
+export function isAllowedHost(hostHeader) {
+  if (!hostHeader || typeof hostHeader !== "string") return false;
+  const raw = hostHeader.trim().toLowerCase();
+  if (!raw) return false;
+
+  // IPv6: [::1] или [::1]:port или [0:0:0:0:0:0:0:1]
+  if (raw.startsWith("[")) {
+    const close = raw.indexOf("]");
+    if (close === -1) return false;
+    const ip = raw.slice(1, close);
+    const rest = raw.slice(close + 1);
+    if (rest && !/^:\d+$/.test(rest)) return false;
+    return ip === "::1" || ip === "0:0:0:0:0:0:0:1";
+  }
+
+  // IPv4 или имя хоста: localhost, 127.0.0.1 с опциональным :port
+  const parts = raw.split(":");
+  if (parts.length > 2) return false;
+  if (parts.length === 2 && !/^\d+$/.test(parts[1])) return false;
+  const host = parts[0];
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+/**
+ * R01: Проверка совместимости здоровья дашборда на порту.
+ * Сервер должен возвращать ok: true, правильный токен проекта, актуальный протокол и сборку.
+ * Устаревшие серверы (формат {ok, pid, root}), серверы других проектов или старых сборок не переиспользуются.
+ */
+export function isCompatibleDashboard(info, absRoot) {
+  if (!info || typeof info !== "object") return false;
+  if (info.ok !== true) return false;
+  if (!info.project || info.project !== projectToken(absRoot)) return false;
+  if (info.protocol !== DASHBOARD_PROTOCOL) return false;
+  if (info.protocolVersion !== DASHBOARD_PROTOCOL_VERSION) return false;
+  if (info.build !== DASHBOARD_BUILD) return false;
+  return true;
+}
 const CHECKS_CACHE = ".workflow/dashboard-checks.json";
-const MAX_DIFF_LINES = 500;
-
 /**
  * Обязательные артефакты по ярусам (совпадает с гейтом tools/workflow.mjs).
  * Всё, что не требуется ярусом, дашборд показывает как «не требуется», а не «не начато».
@@ -54,6 +111,15 @@ const STAGE_DEFS = [
   { id: "oracle", name: "Слепая приёмка Оракула", wave: 4 },
   { id: "closed", name: "Закрытие и архив", wave: 4 },
 ];
+
+export function buildWaves(stages, fleet) {
+  return [0, 1, 2, 3, 4].map((w) => ({
+    wave: w,
+    title: `ВОЛНА ${w}`,
+    stages: stages.filter((s) => s.wave === w),
+    agents: fleet.filter((f) => f.wave === w),
+  }));
+}
 
 /* ------------------------------------------------------------------ */
 /*  Data collection                                                    */
@@ -213,39 +279,49 @@ export function collectGitStats(absRoot) {
 }
 
 /** Технический долг: запуск debt-ledger (быстро) или чтение кэша. */
+function flattenDebtMarkers(parsed) {
+  const items = [];
+  for (const [file, markers] of Object.entries(parsed?.byFile || {})) {
+    for (const m of Array.isArray(markers) ? markers : []) {
+      items.push({
+        file: file.replace(/\\/g, "/"),
+        line: m.line || null,
+        what: m.what || "",
+        ceiling: m.ceiling || "",
+        upgrade: m.upgrade || "",
+        noTrigger: Boolean(m.noTrigger),
+      });
+    }
+  }
+  return items;
+}
+
 export function collectDebt(absRoot) {
   const script = join(absRoot, "tools", "debt-ledger.mjs");
   if (!existsSync(script)) return { total: 0, noTrigger: 0, items: [], note: "debt-ledger.mjs не найден" };
 
-  const res = spawnSync(process.execPath, [script, "--json", "--root", absRoot], {
-    cwd: absRoot,
-    encoding: "utf8",
-    timeout: 20000,
-    shell: false,
-  });
-
-  if (res.status !== 0) {
-    return { total: 0, noTrigger: 0, items: [], note: "debt-ledger завершился с ошибкой" };
-  }
-
+  // 1. Быстрый вызов в том же процессе без запуска дочерних процессов (0 окон node.exe)
   try {
-    const parsed = JSON.parse(res.stdout);
-    const items = [];
-    for (const [file, markers] of Object.entries(parsed.byFile || {})) {
-      for (const m of Array.isArray(markers) ? markers : []) {
-        items.push({
-          file: file.replace(/\\/g, "/"),
-          line: m.line || null,
-          what: m.what || "",
-          ceiling: m.ceiling || "",
-          upgrade: m.upgrade || "",
-          noTrigger: Boolean(m.noTrigger),
-        });
-      }
-    }
-    return { total: parsed.total || 0, noTrigger: parsed.noTrigger || 0, items: items.slice(0, 40) };
+    const parsed = scanRepo(absRoot);
+    return { total: parsed.total || 0, noTrigger: parsed.noTrigger || 0, items: flattenDebtMarkers(parsed).slice(0, 40) };
   } catch {
-    return { total: 0, noTrigger: 0, items: [], note: "debt-ledger JSON не разобран" };
+    // Резервный вызов через CLI с обязательным windowsHide: true
+    try {
+      const res = spawnSync(process.execPath, [script, "--json", "--root", absRoot], {
+        cwd: absRoot,
+        encoding: "utf8",
+        timeout: 20000,
+        shell: false,
+        windowsHide: true,
+      });
+      if (res.status !== 0) {
+        return { total: 0, noTrigger: 0, items: [], note: "debt-ledger завершился с ошибкой" };
+      }
+      const parsed = JSON.parse(res.stdout);
+      return { total: parsed.total || 0, noTrigger: parsed.noTrigger || 0, items: flattenDebtMarkers(parsed).slice(0, 40) };
+    } catch {
+      return { total: 0, noTrigger: 0, items: [], note: "debt-ledger JSON не разобран" };
+    }
   }
 }
 
@@ -416,6 +492,7 @@ export function runChecks(absRoot) {
       encoding: "utf8",
       timeout: 45000,
       shell: false,
+      windowsHide: true,
     });
     try {
       out.autoReview = JSON.parse(res.stdout);
@@ -431,6 +508,7 @@ export function runChecks(absRoot) {
       encoding: "utf8",
       timeout: 30000,
       shell: false,
+      windowsHide: true,
     });
     try {
       out.promptBudget = JSON.parse(res.stdout);
@@ -581,14 +659,41 @@ export function collectDashboardData(root = ".", options = {}) {
 
   const session = {
     key: sessionKey(options.session || null),
+    name: null,
     paseoAgentId: process.env.PASEO_AGENT_ID || null,
     transcript: null,
     usage: null,
   };
   session.usage = collectSessionUsage(absRoot, session.key);
+  if (session.usage && session.usage.name) {
+    session.name = session.usage.name;
+  }
   const sessionFile = newestSessionFile(absRoot);
-  if (sessionFile) session.transcript = sessionFile.name;
-
+  if (sessionFile) {
+    session.transcript = sessionFile.name;
+    if (!session.name) {
+      try {
+        const fd = openSync(sessionFile.path, "r");
+        const buf = Buffer.alloc(4096);
+        const readLen = readSync(fd, buf, 0, 4096, 0);
+        closeSync(fd);
+        const chunk = buf.toString("utf8", 0, readLen);
+        for (const line of chunk.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            const j = JSON.parse(line);
+            if (j.type === "title" && j.title) {
+              session.name = j.title;
+              break;
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+  }
+  if (!session.name && state && state.task) {
+    session.name = state.task;
+  }
   return {
     timestamp: new Date().toISOString(),
     root: absRoot,
@@ -633,12 +738,7 @@ export function collectDashboardData(root = ".", options = {}) {
       memory,
       checks: critique.checks,
     },
-    waves: [0, 1, 2, 3, 4].map((w) => ({
-      wave: w,
-      title: `ВОЛНА ${w}`,
-      stages: stages.filter((s) => s.wave === w),
-      agents: fleet.filter((f) => f.wave === w),
-    })),
+    waves: buildWaves(stages, fleet),
     git,
     modules,
     critique: critique.verdicts,
@@ -743,70 +843,129 @@ function tailBytes(path, bytes = 96 * 1024) {
  */
 export const USAGE_TTL_MS = 90 * 1000;
 
+/**
+ * Быстрое извлечение метаданных агента напрямую с диска Paseo (без дочерних процессов).
+ */
+export function readAgentFromDisk(agentId) {
+  if (!agentId) return null;
+  const base = join(homedir(), ".paseo", "agents");
+  if (!existsSync(base)) return null;
+  try {
+    for (const dir of readdirSync(base)) {
+      const fullDir = join(base, dir);
+      try {
+        if (!statSync(fullDir).isDirectory()) continue;
+      } catch { continue; }
+      const file = join(fullDir, `${agentId}.json`);
+      if (existsSync(file)) {
+        const json = JSON.parse(readFileSync(file, "utf8"));
+        return {
+          Name: json.title || json.name || null,
+          Provider: json.provider || null,
+          Model: json.config?.model || json.runtimeInfo?.model || null,
+          Status: json.lastStatus || json.status || null,
+          Cwd: json.cwd || null,
+          CreatedAt: json.createdAt || null,
+          UpdatedAt: json.updatedAt || null,
+          nativeHandle: json.persistence?.nativeHandle || null,
+        };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/** Подсчёт расхода токенов из транскрипта сессии (JSONL) без вызова дочерних процессов. */
+export function readSessionTokensFromTranscript(jsonlPath) {
+  if (!jsonlPath || !existsSync(jsonlPath)) return null;
+  try {
+    const content = tailBytes(jsonlPath, 1024 * 1024);
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cachedTokens = 0;
+    let costUsd = 0;
+    for (const line of content.split("\n")) {
+      if (!line.includes('"usage"') && !line.includes('"totalTokens"')) continue;
+      try {
+        const obj = JSON.parse(line);
+        const u = obj.message?.usage || obj.data?.usage || obj.usage;
+        if (u) {
+          if (typeof u.input === "number") inputTokens += u.input;
+          if (typeof u.output === "number") outputTokens += u.output;
+          if (typeof u.cacheRead === "number") cachedTokens += u.cacheRead;
+          if (typeof u.totalCost === "number") costUsd += u.totalCost;
+          else if (typeof u.cost?.total === "number") costUsd += u.cost.total;
+        }
+      } catch {}
+    }
+    return { inputTokens, outputTokens, cachedTokens, costUsd: Number(costUsd.toFixed(4)) };
+  } catch {
+    return null;
+  }
+}
+
 export function collectSessionUsage(absRoot, key) {
-  if (!process.env.PASEO_AGENT_ID) return null;
+  const agentId = process.env.PASEO_AGENT_ID;
+  if (!agentId) return null;
   const cachePath = join(absRoot, DASHBOARDS_DIR, key + ".usage.json");
 
-  let cached = null;
+  // 1. Прямое чтение с диска без запуска процессов (0 окон node.exe / cmd.exe)
+  const agent = readAgentFromDisk(agentId);
+  if (agent) {
+    let tokens = null;
+    if (agent.nativeHandle) {
+      tokens = readSessionTokensFromTranscript(agent.nativeHandle);
+    }
+    const data = {
+      at: Date.now(),
+      stale: false,
+      name: agent.Name,
+      provider: agent.Provider,
+      model: agent.Model,
+      status: agent.Status,
+      cwd: agent.Cwd,
+      createdAt: agent.CreatedAt,
+      updatedAt: agent.UpdatedAt,
+      inputTokens: tokens?.inputTokens || 0,
+      outputTokens: tokens?.outputTokens || 0,
+      cachedTokens: tokens?.cachedTokens || 0,
+      costUsd: tokens?.costUsd ?? null,
+    };
+    try {
+      const dir = dirname(cachePath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(cachePath, JSON.stringify({ at: Date.now(), data }), "utf8");
+    } catch {}
+    return data;
+  }
+
+  // 2. Фолбэк на кэш
   if (existsSync(cachePath)) {
     try {
-      cached = JSON.parse(readFileSync(cachePath, "utf8"));
+      const cached = JSON.parse(readFileSync(cachePath, "utf8"));
+      if (cached && cached.data) {
+        const u = cached.data;
+        const usage = u.LastUsage || {};
+        return {
+          at: cached.at,
+          stale: true,
+          name: u.Name || u.name || null,
+          provider: u.Provider || u.provider || null,
+          model: u.Model || u.model || null,
+          status: u.Status || u.status || null,
+          cwd: u.Cwd || u.cwd || null,
+          createdAt: u.CreatedAt || u.createdAt || null,
+          updatedAt: u.UpdatedAt || u.updatedAt || null,
+          inputTokens: u.inputTokens ?? usage.InputTokens ?? 0,
+          outputTokens: u.outputTokens ?? usage.OutputTokens ?? 0,
+          cachedTokens: u.cachedTokens ?? usage.CachedTokens ?? 0,
+          costUsd: u.costUsd ?? (typeof usage.CostUsd === "number" ? Number(usage.CostUsd.toFixed(4)) : null),
+        };
+      }
     } catch {}
   }
 
-  const fresh = cached && Date.now() - (cached.at || 0) < USAGE_TTL_MS;
-  if (!fresh) refreshUsageAsync(cachePath);
-
-  if (!cached || !cached.data) return null;
-  const u = cached.data || {};
-  const usage = u.LastUsage || {};
-  return {
-    at: cached.at,
-    stale: !fresh,
-    name: u.Name || null,
-    provider: u.Provider || null,
-    model: u.Model || null,
-    status: u.Status || null,
-    cwd: u.Cwd || null,
-    createdAt: u.CreatedAt || null,
-    updatedAt: u.UpdatedAt || null,
-    inputTokens: usage.InputTokens || 0,
-    outputTokens: usage.OutputTokens || 0,
-    cachedTokens: usage.CachedTokens || 0,
-    costUsd: typeof usage.CostUsd === "number" ? Number(usage.CostUsd.toFixed(4)) : null,
-  };
-}
-
-/** Фоновое обновление кэша расхода: отдельный процесс, не блокирует рендер. */
-function refreshUsageAsync(cachePath) {
-  const agentId = process.env.PASEO_AGENT_ID;
-  if (!agentId) return;
-  try {
-    const dir = dirname(cachePath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-    // Хелпер: опросить paseo и записать {at, data}. Отдельный процесс нужен,
-    // потому что paseo отвечает секундами, а страница опрашивается каждые 3 с.
-    const helper = [
-      'const { spawnSync } = require("node:child_process");',
-      'const { writeFileSync } = require("node:fs");',
-      "const id = process.argv[1], out = process.argv[2];",
-      'const bin = process.env.PASEO_CLI || "paseo";',
-      'const res = spawnSync(bin, ["inspect", id, "--json"], { encoding: "utf8", shell: true, windowsHide: true, timeout: 20000 });',
-      "let data = null;",
-      'try { data = JSON.parse(res.stdout); } catch {}',
-      'if (data) { try { writeFileSync(out, JSON.stringify({ at: Date.now(), data }), "utf8"); } catch {} }',
-    ].join(" ");
-
-    const child = spawn(process.execPath, ["-e", helper, agentId, cachePath], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-  } catch {
-    // расход — приятный бонус, не условие работы
-  }
+  return null;
 }
 
 /** События воркфлоу из .workflow/events.jsonl (последние N). */
@@ -815,10 +974,26 @@ export function collectEvents(absRoot, limit = 60) {
   if (!existsSync(path)) return [];
   const lines = tailBytes(path, 64 * 1024).split("\n").filter(Boolean);
   const out = [];
+  const allowedStages = new Set(["lane", "recon", "spec", "manifest", "interfaces", "tasks", "verification", "oracle", "closed"]);
   for (const line of lines) {
     try {
       const e = JSON.parse(line);
-      out.push(e);
+      let status = "ok";
+      if (e.kind === "start") {
+        status = "started";
+      } else if (e.kind === "close") {
+        status = "closed";
+      } else if (e.kind === "artifact") {
+        const firstWord = String(e.text || "").trim().split(/[\s:—]/)[0]?.toLowerCase();
+        status = allowedStages.has(firstWord) ? firstWord : (e.status || "recorded");
+      } else if (e.status) {
+        status = String(e.status).slice(0, 30);
+      }
+      out.push({
+        at: e.at || null,
+        kind: e.kind || "event",
+        status,
+      });
     } catch {}
   }
   return out.slice(-limit).reverse();
@@ -846,45 +1021,52 @@ export function collectSessionLog(absRoot, limit = 80) {
 
     if (e.type === "custom" && e.customType === "tool_execution_start") {
       const d = e.data || {};
-      const args = d.args || {};
-      const hint = args.command || args.path || args.file || args.query || args.pattern || args.i || "";
       entries.push({
         at: e.timestamp || null,
         kind: "tool",
         label: d.toolName || "tool",
-        text: String(hint).slice(0, 140),
+        status: "start",
       });
     } else if (e.type === "message") {
       const m = e.message || {};
-      const text = Array.isArray(m.content)
-        ? m.content.map((c) => (c && c.type === "text" ? c.text : "")).join(" ").trim()
-        : "";
-      if (!text) continue;
       const role = m.role || "?";
       if (role === "toolResult") {
-        const isError = /^(error|ошибка|failed|exception)/i.test(text) || /exit code [1-9]/.test(text);
+        const text = Array.isArray(m.content)
+          ? m.content.map((c) => (c && c.type === "text" ? c.text : "")).join(" ").trim()
+          : "";
+        const isError = /^(error|ошибка|failed|exception)/i.test(text) || /exit code [1-9]/.test(text) || Boolean(m.isError);
         entries.push({
           at: e.timestamp || null,
           kind: isError ? "error" : "result",
           label: m.toolName || "result",
-          text: text.slice(0, 160).replace(/\s+/g, " "),
+          status: isError ? "error" : "ok",
         });
       } else if (role === "assistant") {
-        entries.push({ at: e.timestamp || null, kind: "assistant", label: "assistant", text: text.slice(0, 200).replace(/\s+/g, " ") });
+        entries.push({
+          at: e.timestamp || null,
+          kind: "assistant",
+          label: "assistant",
+          status: "message",
+        });
       } else if (role === "user") {
-        entries.push({ at: e.timestamp || null, kind: "user", label: "user", text: text.slice(0, 200).replace(/\s+/g, " ") });
+        entries.push({
+          at: e.timestamp || null,
+          kind: "user",
+          label: "user",
+          status: "message",
+        });
       }
     } else if (e.type === "custom_message") {
       entries.push({
         at: e.timestamp || null,
         kind: "notice",
         label: e.customType || "notice",
-        text: String(e.content || "").slice(0, 200),
+        status: "notice",
       });
     }
   }
 
-  return { file: file.name, entries: entries.slice(-limit) };
+  return { file: "активна", entries: entries.slice(-limit) };
 }
 
 /**
@@ -1451,8 +1633,10 @@ export function generateDashboardHtml(data) {
     if (d.session.usage) {
       var u = d.session.usage;
       var cachePct = u.inputTokens + u.cachedTokens > 0 ? Math.round(u.cachedTokens / (u.inputTokens + u.cachedTokens) * 100) : 0;
+      var sessionTitle = d.session.name || (u && u.name) || d.session.key;
+      var sessionSub = esc(d.session.key) + (u.status ? " · " + esc(u.status) : "") + (u.stale ? " · " + t("updating") : "");
       sess = '<div class="grid4" style="margin-bottom:14px">' +
-        card(t("sessionCard"), esc(d.session.key), esc(u.status || "") + (u.stale ? " · " + t("updating") : "")) +
+        card(t("sessionCard"), esc(sessionTitle), sessionSub) +
         card(t("cost"), u.costUsd !== null ? "$" + u.costUsd : "—", t("byPaseo")) +
         card(t("tokens"), num(u.inputTokens) + " / " + num(u.outputTokens), t("cache") + " " + cachePct + "%") +
         card(t("model"), esc((u.model || "—").split("/").pop()), t("provider") + ": " + esc(u.provider || "—")) +
@@ -1731,19 +1915,22 @@ export function generateDashboardHtml(data) {
   /* -------------------------------- logs ------------------------------ */
   function renderLogs(d) {
     var ev = (d.events || []).map(function (e) {
+      var desc = e.status || e.text || "";
       return '<div class="ln"><span class="ts">' + esc(fmtTime(e.at)) + '</span><span class="k">' + esc(e.kind || "event") +
-        '</span><span class="tx">' + esc(e.text || "") + "</span></div>";
+        '</span><span class="tx">' + esc(desc) + "</span></div>";
     }).join("");
-    var sess = (d.log.entries || []).map(function (e) {
+    var sess = (d.log && d.log.entries || []).map(function (e) {
       var isErr = e.kind === "error";
-      return '<div class="ln"><span class="ts">' + esc(fmtTime(e.at)) + '</span><span class="k ' + esc(e.kind) + '">' + esc(e.label) +
-        '</span><span class="tx' + (isErr ? " err" : "") + '">' + esc(e.text) + "</span></div>";
+      var desc = e.status || e.text || "";
+      return '<div class="ln"><span class="ts">' + esc(fmtTime(e.at)) + '</span><span class="k ' + esc(e.kind) + '">' + esc(e.label || "") +
+        '</span><span class="tx' + (isErr ? " err" : "") + '">' + esc(desc) + "</span></div>";
     }).join("");
 
+    var sessTitle = d.log && d.log.file ? "Сессия агента · " + esc(d.log.file) : "Сессия агента";
     document.getElementById("tab-logs").innerHTML =
       '<div class="two"><div class="card"><div class="label">События воркфлоу (.workflow/events.jsonl)</div><div class="log">' +
       (ev || '<div class="empty">Событий пока нет — они появятся после start/artifact/close</div>') + "</div></div>" +
-      '<div class="card"><div class="label">Сессия агента · ' + esc(d.log.file || "транскрипт не найден") + '</div><div class="log">' +
+      '<div class="card"><div class="label">' + sessTitle + '</div><div class="log">' +
       (sess || '<div class="empty">Транскрипт сессии не найден</div>') + "</div></div></div>";
   }
 
@@ -1811,13 +1998,15 @@ export function generateDashboardHtml(data) {
   function renderHeader(d) {
     document.getElementById("h-project").textContent = d.project.name;
     var s = d.session;
-    var chip = s.key;
+    var sessionTitle = s.name || (s.usage && s.usage.name) || s.key;
+    var chip = sessionTitle;
     if (s.usage) {
       var st = s.usage.status === "running" ? "● running" : "○ " + (s.usage.status || "idle");
       var cost = s.usage.costUsd !== null ? " · $" + s.usage.costUsd : "";
-      chip = s.key + " · " + st + cost;
+      chip = sessionTitle + " · " + st + cost;
     }
     document.getElementById("h-session").textContent = chip;
+    document.getElementById("h-session").title = "ID: " + s.key + (s.paseoAgentId ? " (" + s.paseoAgentId + ")" : "");
     var mchip = document.getElementById("h-model");
     if (mchip) mchip.textContent = s.usage && s.usage.model ? s.usage.model : "—";
     document.getElementById("h-branch").textContent = d.project.branch || "—";
@@ -1957,8 +2146,8 @@ export function listDashboards(root) {
 }
 
 /** Прочитать рантайм-файл дашборда (или null). */
-export function readRuntime(root) {
-  const p = runtimePath(root);
+export function readRuntime(root, key = null) {
+  const p = runtimePath(root, key);
   if (!existsSync(p)) return null;
   try {
     const data = JSON.parse(readFileSync(p, "utf8"));
@@ -1983,8 +2172,11 @@ export function writeRuntime(root, info) {
 }
 
 /** Живой ли дашборд на порту (быстрый health-пинг). */
-export async function isServerAlive(port, timeoutMs = 900) {
-  return (await probeDashboard(port, timeoutMs)) !== null;
+export async function isServerAlive(port, timeoutMs = 900, absRoot = null) {
+  const probed = await probeDashboard(port, timeoutMs);
+  if (!probed) return false;
+  if (absRoot) return isCompatibleDashboard(probed, absRoot);
+  return probed.ok === true;
 }
 
 /**
@@ -2013,11 +2205,13 @@ export function isPaseoWorkspace() {
   return Boolean(process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI);
 }
 
-/** Открыть URL в браузере по умолчанию. */
+/** Открыть URL в браузере по умолчанию (вне Paseo IDE). */
 export function openInBrowser(url) {
+  // Внутри Paseo никогда не запускаем внешний браузер ОС: дашборд открывается только в IDE browser (browser_new_tab).
+  if (isPaseoWorkspace() && process.env.NF_FORCE_SYSTEM_BROWSER !== "1") return;
   const platform = process.platform;
   if (platform === "win32") {
-    spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+    spawn("cmd.exe", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
   } else if (platform === "darwin") {
     spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
   } else {
@@ -2035,43 +2229,435 @@ function tryListen(port, absRoot) {
   });
 }
 
+/**
+ * R05: Санитизация состояния для HTTP-ответов (/api/state, /, dashboard.html).
+ * Исключает чувствительные свободные данные (сообщения, аргументы вызовов,
+ * текст задач, произвольные детали оракула, патчи, пути файлов), сохраняя
+ * структурные ключи, статусы, тайминги и счётчики для рендера.
+ */
+export function sanitizeHttpState(data) {
+  if (!data) return data;
+
+  const ALLOWED_TIERS = new Set(["T0", "T1", "T2", "T3"]);
+  const tier = ALLOWED_TIERS.has(data.task?.tier) ? data.task.tier : "T1";
+
+  const ALLOWED_TASK_STATUSES = new Set(["idle", "open", "in_progress", "closed"]);
+  const taskStatus = ALLOWED_TASK_STATUSES.has(data.task?.status) ? data.task.status : "open";
+
+  const ALLOWED_KINDS = new Set(["start", "artifact", "check", "close", "tool", "error", "result", "assistant", "user", "notice", "event"]);
+  const ALLOWED_STAGES = new Set(["lane", "recon", "spec", "manifest", "interfaces", "tasks", "verification", "oracle", "closed"]);
+  const ALLOWED_STATUSES = new Set([
+    "started", "closed", "check", "recorded", "ok", "error", "pending", "in_progress", "done", "skipped", "missed", "ready", "active", "idle", "message", "start",
+    ...ALLOWED_STAGES,
+  ]);
+
+  const STAGE_NAMES = {
+    lane: "Ярус и постановка",
+    recon: "Разведка и контекст",
+    spec: "Спецификация OpenSpec",
+    manifest: "Манифест изменений",
+    interfaces: "Интерфейсы и TDD",
+    tasks: "Параллельные подзадачи",
+    verification: "Сводная верификация",
+    oracle: "Оракул и аудит",
+    closed: "Задача закрыта",
+  };
+
+  const STAGE_WAVES = {
+    lane: 0,
+    recon: 1,
+    spec: 2,
+    manifest: 2,
+    interfaces: 3,
+    tasks: 3,
+    verification: 4,
+    oracle: 4,
+    closed: 4,
+  };
+
+  const stages = (data.stages || []).map((s) => {
+    const id = ALLOWED_STAGES.has(s?.id) ? s.id : "lane";
+    const st = ALLOWED_STATUSES.has(s?.status) ? s.status : "pending";
+    const note = s?.note === "skipped" || s?.note === "missed" ? s.note : "";
+    return {
+      id,
+      name: STAGE_NAMES[id] || "Этап",
+      wave: STAGE_WAVES[id] ?? 0,
+      status: st,
+      detail: "",
+      note,
+      tier: s?.tier ? (ALLOWED_TIERS.has(s.tier) ? s.tier : tier) : undefined,
+      durationMs: typeof s?.durationMs === "number" ? Math.max(0, s.durationMs) : undefined,
+    };
+  });
+
+  const curId = ALLOWED_STAGES.has(data.currentStage?.id) ? data.currentStage.id : "lane";
+  const currentStage = {
+    id: curId,
+    name: STAGE_NAMES[curId] || "—",
+    wave: STAGE_WAVES[curId] ?? 0,
+    detail: "",
+  };
+
+  const fleet = [
+    { role: "@orchestrator", name: "Оркестратор", wave: 0, status: taskStatus === "closed" ? "idle" : "active" },
+    { role: "@explorer", name: "Разведчик AST", wave: 1, status: "ready" },
+    { role: "@librarian", name: "Библиотекарь", wave: 1, status: "ready" },
+    { role: "@designer", name: "Дизайнер UI/UX", wave: 3, status: "ready" },
+    { role: "@fixer", name: "Fixer (TDD)", wave: 3, status: "ready" },
+    { role: "@oracle", name: "Оракул (приёмка)", wave: 4, status: "ready" },
+  ];
+
+  const waves = buildWaves(stages, fleet);
+
+  const gitFiles = (data.git?.files || []).map((f) => ({
+    path: String(f?.path || "").replace(/\\/g, "/"),
+    added: Number(f?.added) || 0,
+    deleted: Number(f?.deleted) || 0,
+    status: f?.status === "untracked" ? "untracked" : "modified",
+  }));
+
+  const commitHash = typeof data.git?.commit?.hash === "string" ? data.git.commit.hash.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) : "";
+
+  const git = {
+    isRepo: Boolean(data.git?.isRepo),
+    branch: String(data.git?.branch || "main"),
+    commit: { hash: commitHash, when: "" },
+    files: gitFiles,
+    added: Number(data.git?.added) || 0,
+    deleted: Number(data.git?.deleted) || 0,
+    staged: Number(data.git?.staged) || 0,
+    unstaged: Number(data.git?.unstaged) || 0,
+    untracked: Number(data.git?.untracked) || 0,
+  };
+
+  const ALLOWED_REQ_STATUSES = new Set(["done", "in-spec", "implemented", "dropped", "pending", "open", "closed", "todo"]);
+  const reqItems = (data.metrics?.requirements?.items || []).map((r) => ({
+    id: typeof r?.id === "string" && /^R\d+[a-z]?$/i.test(r.id) ? r.id : "R00",
+    status: ALLOWED_REQ_STATUSES.has(r?.status) ? r.status : "in-spec",
+  }));
+
+  const reqByStatus = {};
+  for (const [k, v] of Object.entries(data.metrics?.requirements?.byStatus || {})) {
+    if (ALLOWED_REQ_STATUSES.has(k)) {
+      reqByStatus[k] = Number(v) || 0;
+    }
+  }
+
+  const debtItems = (data.metrics?.debt?.items || []).map((_, i) => ({
+    file: `marker #${i + 1}`,
+    line: 0,
+    what: "debt marker",
+    ceiling: "",
+    upgrade: "",
+  }));
+
+  const memStatus = data.metrics?.memory?.status === "fresh" || data.metrics?.memory?.status === "overdue"
+    ? data.metrics.memory.status
+    : "fresh";
+
+  const metrics = {
+    briefCoverage: Number(data.metrics?.briefCoverage) || 0,
+    requirements: {
+      total: Number(data.metrics?.requirements?.total) || reqItems.length,
+      byStatus: reqByStatus,
+      items: reqItems,
+      change: String(data.metrics?.requirements?.change || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50),
+    },
+    debt: {
+      total: Number(data.metrics?.debt?.total) || 0,
+      noTrigger: Number(data.metrics?.debt?.noTrigger) || 0,
+      items: debtItems,
+    },
+    memory: {
+      status: memStatus,
+      daysSince: typeof data.metrics?.memory?.daysSince === "number" ? data.metrics.memory.daysSince : null,
+    },
+    checks: null,
+  };
+
+  const critique = (data.critique || []).map((c) => {
+    const verdict = c?.verdict === "accept" || c?.verdict === "reject" || c?.verdict === "mixed" ? c.verdict : "unknown";
+    return {
+      change: String(c?.change || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50),
+      file: "oracle.md",
+      verdict,
+      concerns: Number(c?.concerns) || 0,
+      blockers: Number(c?.blockers) || 0,
+      size: Number(c?.size) || 0,
+    };
+  });
+
+  const recentHistory = (data.history?.recent || []).map((h) => ({
+    tier: ALLOWED_TIERS.has(h?.tier) ? h.tier : "T1",
+    task: `Задача ${ALLOWED_TIERS.has(h?.tier) ? h.tier : "T1"}`,
+    durationMs: Number(h?.durationMs) || 0,
+    forced: Boolean(h?.forced),
+  }));
+
+  const byTier = {};
+  for (const [k, v] of Object.entries(data.history?.byTier || {})) {
+    if (ALLOWED_TIERS.has(k)) byTier[k] = Number(v) || 0;
+  }
+
+  const history = {
+    total: Number(data.history?.total) || 0,
+    medianMs: Number(data.history?.medianMs) || 0,
+    byTier,
+    recent: recentHistory,
+  };
+
+  const events = (data.events || []).map((e) => {
+    const rawKind = String(e?.kind || "").toLowerCase();
+    const kind = ALLOWED_KINDS.has(rawKind) ? rawKind : "event";
+    const rawStatus = String(e?.status || "").toLowerCase();
+    const st = ALLOWED_STATUSES.has(rawStatus) ? rawStatus : "ok";
+    return {
+      at: e?.at || null,
+      kind,
+      status: st,
+    };
+  });
+
+  const ALLOWED_TOOLS = new Set(["read", "edit", "write", "bash", "glob", "grep", "lsp", "ast_grep", "hub", "yield", "fast_edit", "fastcompact", "tool"]);
+  const ALLOWED_ROLES = new Set(["assistant", "user", "notice", "result", "error"]);
+  const ALLOWED_LOG_KINDS = new Set(["tool", "error", "result", "assistant", "user", "notice"]);
+  const ALLOWED_LOG_STATUSES = new Set(["start", "ok", "error", "message", "notice"]);
+
+  const logEntries = (data.log?.entries || []).map((e) => {
+    const rawKind = String(e?.kind || "").toLowerCase();
+    const kind = ALLOWED_LOG_KINDS.has(rawKind) ? rawKind : "tool";
+    const rawLabel = String(e?.label || "").toLowerCase();
+    const label = ALLOWED_TOOLS.has(rawLabel) || ALLOWED_ROLES.has(rawLabel) ? rawLabel : (kind === "result" ? "result" : "tool");
+    const rawStatus = String(e?.status || "").toLowerCase();
+    const status = ALLOWED_LOG_STATUSES.has(rawStatus) ? rawStatus : (kind === "error" ? "error" : "ok");
+    return {
+      at: e?.timestamp || e?.at || null,
+      kind,
+      label,
+      status,
+    };
+  });
+
+  const ALLOWED_USAGE_STATUSES = new Set(["active", "idle", "busy", "running", "stopped", "done", "error"]);
+  const u = data.session?.usage;
+  const usage = u ? {
+    at: Number(u.at) || Date.now(),
+    stale: Boolean(u.stale),
+    name: null,
+    provider: String(u.provider || "provider").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 30),
+    model: String(u.model || "model").split("/").pop()?.replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 40) || "model",
+    status: ALLOWED_USAGE_STATUSES.has(String(u.status).toLowerCase()) ? String(u.status).toLowerCase() : "active",
+    cwd: null,
+    createdAt: null,
+    updatedAt: null,
+    inputTokens: Number(u.inputTokens) || 0,
+    outputTokens: Number(u.outputTokens) || 0,
+    cachedTokens: Number(u.cachedTokens) || 0,
+    costUsd: typeof u.costUsd === "number" ? u.costUsd : null,
+  } : null;
+
+  const session = {
+    key: "local",
+    name: "session",
+    paseoAgentId: null,
+    transcript: null,
+    usage,
+  };
+
+  const modules = (data.modules || []).map((m) => ({
+    name: String(m?.name || ""),
+    path: String(m?.path || ""),
+    fileCount: Number(m?.fileCount) || 0,
+    totalLines: Number(m?.totalLines) || 0,
+    files: (m?.files || []).map((f) => ({
+      name: String(f?.name || ""),
+      lines: Number(f?.lines) || 0,
+    })),
+  }));
+
+  function cleanArchNode(node) {
+    if (!node) return null;
+    const isFile = node.kind === "file";
+    const files = typeof node.files === "number" ? Math.max(0, node.files) : (Array.isArray(node.children) ? node.children.length : 0);
+    return {
+      name: String(node.name || ""),
+      kind: isFile ? "file" : (node.kind === "root" ? "root" : (node.kind || "dir")),
+      lines: Number(node.lines) || 0,
+      files: isFile ? undefined : files,
+      path: node.path ? String(node.path).replace(/\\/g, "/") : undefined,
+      children: Array.isArray(node.children) ? node.children.map(cleanArchNode).filter(Boolean) : undefined,
+    };
+  }
+  const arch = cleanArchNode(data.arch) || { name: "project", kind: "dir", lines: 0, files: 0, children: [] };
+
+  const archGraph = {
+    nodes: (data.archGraph?.nodes || []).map((n) => ({
+      id: String(n.id || ""),
+      files: Number(n.files) || 0,
+      lines: Number(n.lines) || 0,
+      external: Number(n.external) || 0,
+      topFiles: Array.isArray(n.topFiles) ? n.topFiles.map((tf) => String(tf).replace(/\\/g, "/")) : [],
+    })),
+    edges: (data.archGraph?.edges || []).map((e) => ({
+      from: String(e.from || ""),
+      to: String(e.to || ""),
+      weight: Number(e.weight) || 0,
+      kinds: Array.isArray(e.kinds) ? e.kinds.map(String) : [],
+    })),
+  };
+
+  return {
+    timestamp: data.timestamp || new Date().toISOString(),
+    root: "",
+    session,
+    events,
+    log: { file: data.log?.file ? "активна" : null, entries: logEntries },
+    arch,
+    archGraph,
+    project: {
+      name: String(data.project?.name || "project"),
+      branch: String(data.project?.branch || data.git?.branch || "main"),
+      commit: { hash: commitHash, when: "" },
+    },
+    task: {
+      title: `Задача ${tier}`,
+      tier,
+      status: taskStatus,
+      startedAt: data.task?.startedAt || null,
+      elapsedMs: Number(data.task?.elapsedMs) || 0,
+      budget: Number(data.task?.budget) || 25,
+    },
+    progress: {
+      percent: Number(data.progress?.percent) || 0,
+      stagesDone: Number(data.progress?.stagesDone) || 0,
+      stagesRequired: Number(data.progress?.stagesRequired) || 0,
+      stagesSkipped: Number(data.progress?.stagesSkipped) || 0,
+      artifactsDone: Number(data.progress?.artifactsDone) || 0,
+      artifactsTotal: Number(data.progress?.artifactsTotal) || 0,
+    },
+    stages,
+    currentStage,
+    timing: {
+      elapsedMs: Number(data.timing?.elapsedMs) || 0,
+      remainingMin: data.timing?.remainingMin ?? null,
+      remainingMax: data.timing?.remainingMax ?? null,
+      medianTaskMs: Number(data.timing?.medianTaskMs) || 0,
+    },
+    metrics,
+    waves,
+    git,
+    modules,
+    critique,
+    history,
+    fleet,
+  };
+}
+
 /** HTTP-обработчик: страница, /api/state, /api/diff, /api/health. */
 function handleRequest(req, res, absRoot) {
+  const host = req.headers.host;
+  if (!isAllowedHost(host)) {
+    res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Forbidden: invalid Host");
+    return;
+  }
+
   const url = new URL(req.url, "http://127.0.0.1");
 
   if (url.pathname === "/api/health") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, pid: process.pid, root: absRoot }));
+    res.end(JSON.stringify({
+      ok: true,
+      pid: process.pid,
+      project: projectToken(absRoot),
+      protocol: DASHBOARD_PROTOCOL,
+      protocolVersion: DASHBOARD_PROTOCOL_VERSION,
+      build: DASHBOARD_BUILD,
+    }));
     return;
   }
 
   if (url.pathname === "/api/state") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-    res.end(JSON.stringify(collectDashboardData(absRoot, { session: SERVER_SESSION })));
+    const raw = collectDashboardData(absRoot, { session: SERVER_SESSION });
+    res.end(JSON.stringify(sanitizeHttpState(raw)));
     return;
   }
 
   if (url.pathname === "/api/diff") {
     const file = url.searchParams.get("file") || "";
-    const safe = file.replace(/\.\./g, "");
-    const diff = spawnSync("git", ["diff", "HEAD", "--", safe], {
-      cwd: absRoot,
-      encoding: "utf8",
-      timeout: 15000,
-      shell: false,
-    });
-    const text = (diff.stdout || diff.stderr || "Нет изменений").split("\n").slice(0, MAX_DIFF_LINES).join("\n");
+    const safe = file.replace(/\.\./g, "").replace(/^[/\\]+/, "");
+    let added = 0;
+    let deleted = 0;
+    let found = false;
+
+    if (safe) {
+      const statRes = spawnSync("git", ["diff", "HEAD", "--numstat", "--", safe], {
+        cwd: absRoot,
+        encoding: "utf8",
+        timeout: 15000,
+        shell: false,
+        windowsHide: true,
+      });
+      const statLines = (statRes.stdout || "").trim().split("\n").filter(Boolean);
+      for (const line of statLines) {
+        const parts = line.split("\t");
+        if (parts.length >= 2) {
+          found = true;
+          added += parts[0] === "-" ? 0 : parseInt(parts[0], 10) || 0;
+          deleted += parts[1] === "-" ? 0 : parseInt(parts[1], 10) || 0;
+        }
+      }
+      if (!found) {
+        const statusRes = spawnSync("git", ["status", "--porcelain", "--", safe], {
+          cwd: absRoot,
+          encoding: "utf8",
+          timeout: 15000,
+          shell: false,
+          windowsHide: true,
+        });
+        const st = (statusRes.stdout || "").trim();
+        if (st.startsWith("??")) {
+          found = true;
+          try {
+            const content = readFileSync(join(absRoot, safe), "utf8");
+            added = content.split("\n").length;
+          } catch {
+            added = 0;
+          }
+        }
+      }
+    }
+
+    let responseText = "";
+    if (!found) {
+      responseText = [
+        "+ добавлено строк: 0",
+        "- удалено строк: 0",
+        "(Метаданные: изменений не обнаружено)",
+      ].join("\n");
+    } else {
+      responseText = [
+        `+ добавлено строк: ${added}`,
+        `- удалено строк: ${deleted}`,
+        `Сводка: ${added + deleted} изменённых строк`,
+        "(Метаданные: исходный патч скрыт политикой безопасности R05)",
+      ].join("\n");
+    }
+
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end(text);
+    res.end(responseText);
     return;
   }
 
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-  res.end(generateDashboardHtml(collectDashboardData(absRoot, { session: SERVER_SESSION })));
+  const raw = collectDashboardData(absRoot, { session: SERVER_SESSION });
+  res.end(generateDashboardHtml(sanitizeHttpState(raw)));
 }
 
 /** Запустить сервер дашборда на первом свободном порту. */
-export async function startLiveServer(root, port = 4200, { maxAttempts = 12 } = {}) {
+export async function startLiveServer(root, port = 4200, { maxAttempts = 64 } = {}) {
   const absRoot = resolve(root);
   for (let p = port; p < port + maxAttempts; p++) {
     const bound = await tryListen(p, absRoot);
@@ -2089,15 +2675,14 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   const absRoot = resolve(root);
   const key = sessionKey(session);
   const chosenPort = port || portForSession(key);
-  // В Paseo системный браузер не открываем: страницу показывает браузер IDE,
-  // и открывает её агент. Иначе получаем два окна и потерянный фокус.
-  const openSystem = open && !isPaseoWorkspace();
+  // В Paseo системный браузер не открываем: страницу показывает встроенный браузер IDE (browser_new_tab).
+  const openSystem = Boolean(open) && !isPaseoWorkspace() && process.env.NF_NO_OPEN !== "1";
 
   // 1. Рантайм-файл: быстрый путь.
   const existing = readRuntime(absRoot, key);
   if (existing) {
     const probed = await probeDashboard(existing.port);
-    if (probed) {
+    if (isCompatibleDashboard(probed, absRoot)) {
       const url = `http://localhost:${existing.port}`;
       if (openSystem) openInBrowser(url);
       return { url, port: existing.port, started: false };
@@ -2106,9 +2691,9 @@ export async function ensureDashboard(root, { open = true, port = null, session 
 
   // 2. Рантайм-файл потерян, а дашборд проекта жив (осиротевший демон):
   //    усыновляем его вместо запуска второго сервера на соседнем порту.
-  for (let p = chosenPort; p < chosenPort + 12; p++) {
+  for (let p = chosenPort; p < chosenPort + 64; p++) {
     const probed = await probeDashboard(p, 400);
-    if (probed && resolve(probed.root || "") === absRoot) {
+    if (isCompatibleDashboard(probed, absRoot)) {
       writeRuntime(absRoot, { key,
         pid: probed.pid,
         port: p,
@@ -2122,23 +2707,26 @@ export async function ensureDashboard(root, { open = true, port = null, session 
       return { url, port: p, started: false, adopted: true };
     }
   }
-
   const selfPath = fileURLToPath(import.meta.url);
   // cwd НЕ ставим в корень проекта: на Windows это блокирует удаление каталога,
   // пока жив демон. Абсолютный --root делает cwd ненужным.
   const child = spawn(process.execPath, [selfPath, "--serve", "--no-open", "--root", absRoot, "--port", String(chosenPort), "--session", key], {
     detached: true,
     stdio: "ignore",
+    windowsHide: true,
   });
   child.unref();
 
   for (let i = 0; i < 25; i++) {
     await new Promise((r) => setTimeout(r, 200));
     const info = readRuntime(absRoot, key);
-    if (info && (await isServerAlive(info.port))) {
-      const url = `http://localhost:${info.port}`;
-      if (openSystem) openInBrowser(url);
-      return { url, port: info.port, started: true };
+    if (info && (!existing || info.pid !== existing.pid || info.port !== existing.port)) {
+      const probed = await probeDashboard(info.port);
+      if (isCompatibleDashboard(probed, absRoot)) {
+        const url = `http://localhost:${info.port}`;
+        if (openSystem) openInBrowser(url);
+        return { url, port: info.port, started: true };
+      }
     }
   }
 
@@ -2152,7 +2740,8 @@ export function refreshDashboardFile(root) {
   try {
     const dir = dirname(outPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(outPath, generateDashboardHtml(collectDashboardData(absRoot)), "utf8");
+    const raw = collectDashboardData(absRoot);
+    writeFileSync(outPath, generateDashboardHtml(sanitizeHttpState(raw)), "utf8");
     return outPath;
   } catch {
     return null;
@@ -2255,7 +2844,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (opts.list) {
     const rows = listDashboards(absRoot);
     // Мёртвые записи (процесс упал, рантайм-файл остался) честно помечаем.
-    for (const r of rows) r.alive = r.port ? await isServerAlive(r.port) : false;
+    for (const r of rows) r.alive = r.port ? await isServerAlive(r.port, 900, absRoot) : false;
     if (opts.json) {
       process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
     } else if (!rows.length) {

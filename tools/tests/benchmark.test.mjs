@@ -399,7 +399,18 @@ function createMetricsRepo(taskId) {
     join(repoDir, TASKS_FILE),
     JSON.stringify({
       version: 1,
-      tasks: [{ id: taskId, title: "t", prompt: "p", setup: [], checks: [], timeoutSec: 60 }],
+      tasks: [{
+        id: taskId,
+        title: "t",
+        prompt: "p",
+        setup: [
+          "git config user.name BenchTester",
+          "git config user.email bench@test.local",
+          "git config commit.gpgsign false",
+        ],
+        checks: [],
+        timeoutSec: 60,
+      }],
     }, null, 2),
     "utf8"
   );
@@ -483,7 +494,7 @@ test("метрики: коммит агента не теряется (срав�
     const armCmd =
       `node -e "const fs=require('fs');` +
       `fs.appendFileSync('src/x.js','const y = 4;\\n');` +
-      `require('child_process').execSync('git add -A && git commit -m agent-work')"`;
+      `require('child_process').execSync('git add -A && git -c user.name=BenchTester -c user.email=bench@test.local -c commit.gpgsign=false commit -m agent-work', { env: { ...process.env, GIT_AUTHOR_NAME: 'BenchTester', GIT_AUTHOR_EMAIL: 'bench@test.local', GIT_COMMITTER_NAME: 'BenchTester', GIT_COMMITTER_EMAIL: 'bench@test.local' } })"`;
 
     const results = runBenchmark({
       root: repoDir,

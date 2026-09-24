@@ -15,8 +15,8 @@
 
   -SkipPlugins skips the plugin step. `agent\plugins.json` lists the OMP plugins
   this harness expects; each `omp plugin install <spec>` is idempotent, so the
-  step is safe to re-run. A missing `omp` or a single failed plugin is reported
-  as a warning - plugins are an add-on, never a precondition for the install.
+  step is safe to re-run. Required plugins (pi-lens, oh-my-pi-plugin-morph) fail
+  installation if absent; optional plugins report a warning.
 
   Where things land (all OMP-native paths):
     <HarnessRoot>\agent\           agent definitions + tools (the "live tree")
@@ -92,6 +92,9 @@ if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 function WriteText([string]$path, [string]$text) {
+  # .NET treats "\" as a literal char on Linux/macOS, not a separator; use "/"
+  # which .NET accepts on every OS so paths land in the right directory.
+  $path = $path.Replace([char]92, [char]47)
   $dir = Split-Path -Parent $path
   if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
   [System.IO.File]::WriteAllText($path, $text, $Utf8NoBom)   # a BOM makes the first YAML/JSON key unparsable
@@ -272,11 +275,11 @@ Ok "rules -> $agentDir\rules (and ~/.agents\rules)"
 
 # ---------- 4. Provider + model routing ----------
 if ($providerBase) {
-  WriteText "$agentDir\models.yml" (Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw -Encoding UTF8))
-  Ok "models.yml -> $agentDir\models.yml (provider: my-provider)"
+  WriteText "$agentDir/models.yml" (Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw -Encoding UTF8))
+  Ok "models.yml -> $agentDir/models.yml (provider: my-provider)"
 
-  if (-not (Test-Path "$agentDir\config.yml")) {
-    WriteText "$agentDir\config.yml" (Patch (Get-Content "$PSScriptRoot\agent\config.yml.example" -Raw -Encoding UTF8))
+  if (-not (Test-Path "$agentDir/config.yml")) {
+    WriteText "$agentDir/config.yml" (Patch (Get-Content "$PSScriptRoot\agent\config.yml.example" -Raw -Encoding UTF8))
     Ok "config.yml installed (roles -> my-provider/$modelId)"
   } else {
     Warn "config.yml already exists -> left untouched. Update its modelRoles to 'my-provider/$modelId' by hand."
@@ -286,7 +289,7 @@ if ($providerBase) {
   try {
     $oracleScript = Join-Path $HarnessRoot 'tools\oracle-model.mjs'
     if (Test-Path $oracleScript) {
-      & node $oracleScript ensure --probe --config "$agentDir\config.yml" --models "$agentDir\models.yml" 2>$null
+      & node $oracleScript ensure --probe --config "$agentDir/config.yml" --models "$agentDir/models.yml" 2>$null
       if ($LASTEXITCODE -eq 0) {
         Ok "oracle model role verified"
       } else {
@@ -338,25 +341,30 @@ if (-not $SkipMcp) {
   }
 } else { Warn "MCP step skipped (-SkipMcp)" }
 
-# ---------- 6. Agent-defs junction ----------
-$junction = "$agentDir\agents"
+# ---------- 6. Agent-defs link ----------
+# Windows uses a Junction (no admin/developer mode needed); Linux/macOS use a
+# symbolic link. Build paths with Join-Path so separators are correct per OS.
+$isWin = $IsWindows -or ($env:OS -eq 'Windows_NT')
+$linkKind = if ($isWin) { 'Junction' } else { 'SymbolicLink' }
+$linkTarget = Join-Path $HarnessRoot 'agent\agents'
+$junction = Join-Path $agentDir 'agents'
 if (Test-Path $junction) {
   $item = Get-Item $junction -Force
-  if ($item.LinkType -eq 'Junction') {
+  if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
     $target = ($item.Target | Select-Object -First 1)
-    if ($target -ne "$HarnessRoot\agent\agents") {
-      # Remove ONLY the junction reparse point: PS 5.1 Remove-Item -Recurse can
-      # traverse a junction and delete the TARGET directory's contents.
+    if ($target -ne $linkTarget) {
+      # Remove ONLY the link reparse point: Remove-Item -Recurse can traverse a
+      # link and delete the TARGET directory's contents.
       [System.IO.Directory]::Delete($junction, $false)
-      New-Item -ItemType Junction -Path $junction -Target "$HarnessRoot\agent\agents" | Out-Null
-      Ok "junction re-pointed -> $HarnessRoot\agent\agents"
-    } else { Ok "junction already correct" }
+      New-Item -ItemType $linkKind -Path $junction -Target $linkTarget | Out-Null
+      Ok "link re-pointed -> $linkTarget"
+    } else { Ok "link already correct" }
   } else {
-    Warn "$junction is a real directory -> agent defs there will shadow the harness. Move it aside to use the junction."
+    Warn "$junction is a real directory -> agent defs there will shadow the harness. Move it aside to use the link."
   }
 } else {
-  New-Item -ItemType Junction -Path $junction -Target "$HarnessRoot\agent\agents" | Out-Null
-  Ok "junction $junction -> $HarnessRoot\agent\agents"
+  New-Item -ItemType $linkKind -Path $junction -Target $linkTarget | Out-Null
+  Ok "link $junction -> $linkTarget"
 }
 
 # ---------- 7. Optional Paseo integration ----------
@@ -367,17 +375,47 @@ if ($SetupPaseo) {
   if (-not (Test-Path $setupScript)) {
     Die "setup-paseo.ps1 not found at $setupScript"
   }
-  $paseoArgs = @("-ExecutionPolicy", "Bypass", "-File", $setupScript, "-UserProfileDir", $UserHome)
-  # The collected inputs name it $modelId; $configuredModel never existed, so a
-  # clean -SetupPaseo install silently dropped -Model and setup-paseo.ps1 died.
-  if ($providerBase -and $modelId) {
-    $paseoArgs += @("-Model", "my-provider/$modelId")
+
+  $hasConfiguredModel = [bool]($providerBase -and $modelId)
+  $paseoConfigFile = Join-Path $UserHome ".paseo\config.json"
+  $hasExistingPaseoModel = $false
+  if (Test-Path $paseoConfigFile) {
+    try {
+      $paseoCfg = Get-Content -Raw -Encoding UTF8 $paseoConfigFile | ConvertFrom-Json
+      if ($paseoCfg.daemon -and $paseoCfg.daemon.agentProfiles) {
+        foreach ($p in $paseoCfg.daemon.agentProfiles) {
+          if ($p.id -eq "agent_profile_orchestrator" -or ($p.provider -eq "omp" -and $p.name -eq "Orchestrator")) {
+            if ($p.model -and -not [string]::IsNullOrWhiteSpace($p.model) -and $p.model -ne "my-provider/default") {
+              $hasExistingPaseoModel = $true
+              break
+            }
+          }
+        }
+      }
+    } catch {}
   }
-  & powershell @paseoArgs
-  if ($LASTEXITCODE -ne 0) {
-    Die "setup-paseo.ps1 failed with exit code $LASTEXITCODE. If configuring a brand-new profile, ensure an explicit model is available."
+
+  if (-not $hasConfiguredModel -and -not $hasExistingPaseoModel) {
+    Warn "Paseo setup skipped: no provider model configured. Run 'powershell -File paseo/setup-paseo.ps1 -Model <provider/model>' after configuring a model."
+  } else {
+    $paseoArgs = @("-ExecutionPolicy", "Bypass", "-File", $setupScript, "-UserProfileDir", $UserHome, "-HarnessRoot", $HarnessRoot)
+    if ($hasConfiguredModel) {
+      $paseoArgs += @("-Model", "my-provider/$modelId")
+    }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      & powershell @paseoArgs
+      $paseoExit = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $prevEap
+    }
+    if ($paseoExit -ne 0) {
+      Warn "setup-paseo.ps1 returned code $paseoExit. Paseo profile integration was skipped or incomplete."
+    } else {
+      Ok "Optional Paseo integration executed via setup-paseo.ps1"
+    }
   }
-  Ok "Optional Paseo integration executed via setup-paseo.ps1"
 } else {
   Ok "Base install leaves Paseo untouched. To configure Paseo profiles explicitly, run: powershell -File paseo/setup-paseo.ps1"
 }
@@ -385,7 +423,7 @@ if ($SetupPaseo) {
 # ---------- 8. Baseline the prompt surfaces ----------
 # Records a hash per prompt surface so a later edit is visible as a cache-prefix
 # change rather than a silent full-price re-bill.
-if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
+if (Test-Path "$HarnessRoot/tools/prompt-lint.mjs") {
   # prompt-lint also scans ~/.agents. During a sandbox/custom -UserHome install,
   # Node must resolve the same home we just populated — otherwise the baseline
   # records the operator's real machine and the first installed audit reports
@@ -395,7 +433,7 @@ if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
   try {
     $env:HOME = $UserHome
     $env:USERPROFILE = $UserHome
-    & node "$HarnessRoot\tools\prompt-lint.mjs" baseline --root $HarnessRoot | Out-Null
+    & node "$HarnessRoot/tools/prompt-lint.mjs" baseline --root $HarnessRoot | Out-Null
   } finally {
     $env:HOME = $oldHome
     $env:USERPROFILE = $oldUserProfile
@@ -405,32 +443,46 @@ if (Test-Path "$HarnessRoot\tools\prompt-lint.mjs") {
 
 # ---------- 9. OMP plugins ----------
 # Manifest-driven (`agent\plugins.json`): every `omp plugin install <spec>` is
-# idempotent, and a single failure is reported without failing the harness
-# install — a plugin is an add-on, not a precondition for the harness.
+# idempotent. Required plugins marked in the manifest must install successfully.
+# Missing manifest, unparseable manifest, missing omp, or failed required plugin
+# aborts the harness install unless -SkipPlugins is explicitly passed.
+# Optional plugins report warnings without failing the harness install.
+$skippedPluginsMarker = Join-Path $HarnessRoot "agent\plugins.skipped"
 if ($SkipPlugins) {
   Warn "plugins: skipped (-SkipPlugins)"
+  WriteText $skippedPluginsMarker "plugins skipped during install (-SkipPlugins)"
 } else {
+  if (Test-Path $skippedPluginsMarker) {
+    Remove-Item $skippedPluginsMarker -Force -ErrorAction SilentlyContinue
+  }
   $pluginsManifest = Join-Path $HarnessRoot "agent\plugins.json"
   if (-not (Test-Path $pluginsManifest)) {
-    Warn "plugins: manifest not found ($pluginsManifest)"
-  } elseif (-not (Get-Command omp -ErrorAction SilentlyContinue)) {
-    Warn "omp not found in PATH - plugins not installed. Run 'omp plugin install <spec>' for each entry of $pluginsManifest"
-  } else {
-    $plugins = $null
-    try {
-      $plugins = @((Get-Content $pluginsManifest -Raw -Encoding UTF8 | ConvertFrom-Json).plugins | Where-Object { $_.spec })
-    } catch {
-      Warn "plugins: manifest not parsed ($($_.Exception.Message))"
-    }
+    Die "plugins: manifest not found ($pluginsManifest). Pass -SkipPlugins to skip plugin installation."
+  }
+  if (-not (Get-Command omp -ErrorAction SilentlyContinue)) {
+    Die "omp not found in PATH - required plugins cannot be installed. Pass -SkipPlugins to skip plugin installation or install omp."
+  }
+  $plugins = $null
+  try {
+    $plugins = @((Get-Content $pluginsManifest -Raw -Encoding UTF8 | ConvertFrom-Json).plugins | Where-Object { $_.spec })
+  } catch {
+    Die "plugins: manifest not parsed ($($_.Exception.Message))"
+  }
 
-    if ($null -ne $plugins) {
-      $pluginsOk = 0
-      $pluginsFailed = @()
-      foreach ($plugin in $plugins) {
-        if ($plugin.name -eq 'cocoindex-code' -and -not (Get-Command ccc -ErrorAction SilentlyContinue)) {
+  if ($null -ne $plugins) {
+    $pluginsOk = 0
+    $requiredFailed = @()
+    $optionalFailed = @()
+    foreach ($plugin in $plugins) {
+      $isReq = ($plugin.required -eq $true)
+      if ($plugin.name -eq 'cocoindex-code' -and -not (Get-Command ccc -ErrorAction SilentlyContinue)) {
+        if ($isReq) {
+          $requiredFailed += $plugin.name
+        } else {
           Warn "plugin cocoindex-code skipped: 'ccc' binary not found on PATH. Run: uv tool install 'cocoindex-code[full]'"
-          continue
         }
+        continue
+      }
         # A native command that writes to stderr must not become a terminating
         # error here: one bad plugin may not abort the remaining installs.
         $prevEap = $ErrorActionPreference
@@ -444,17 +496,27 @@ if ($SkipPlugins) {
         } finally {
           $ErrorActionPreference = $prevEap
         }
-        if ($pluginExit -eq 0) { $pluginsOk++ } else { $pluginsFailed += $plugin.name }
+        if ($pluginExit -eq 0) {
+          $pluginsOk++
+        } else {
+          if ($isReq) {
+            $requiredFailed += $plugin.name
+          } else {
+            $optionalFailed += $plugin.name
+          }
+        }
       }
-      foreach ($name in $pluginsFailed) { Warn "plugin failed: $name" }
-      if ($pluginsFailed.Count -eq 0) {
-        Ok "plugins: $pluginsOk ok, 0 failed"
+      foreach ($name in $optionalFailed) { Warn "optional plugin failed: $name" }
+      foreach ($name in $requiredFailed) { Write-Host "  [XX] required plugin failed: $name" -ForegroundColor Red }
+      if ($requiredFailed.Count -gt 0) {
+        Die "Required plugin(s) failed to install: $($requiredFailed -join ', '). Mandated workflow depends on these plugins."
+      } elseif ($optionalFailed.Count -gt 0) {
+        Warn "plugins: $pluginsOk ok, $($optionalFailed.Count) optional failed"
       } else {
-        Warn "plugins: $pluginsOk ok, $($pluginsFailed.Count) failed"
+        Ok "plugins: $pluginsOk ok, 0 failed"
       }
     }
   }
-}
 
 # ---------- 9b. Plugin console windows (Windows only) ----------
 # Paseo (и любой GUI-хост) не имеет своей консоли: дочерний процесс плагина,
@@ -478,8 +540,12 @@ if ($IsWindows -or $env:OS -eq 'Windows_NT') {
 }
 
 # ---------- 10. Run install doctor ----------
-if (Test-Path "$HarnessRoot\tools\doctor.mjs") {
-  $doctorOut = & node "$HarnessRoot\tools\doctor.mjs" --harness "$HarnessRoot" --agent-dir "$agentDir" --agents-home "$agentsHome" 2>&1
+if (Test-Path "$HarnessRoot/tools/doctor.mjs") {
+  $doctorArgs = @("$HarnessRoot/tools/doctor.mjs", "--harness", "$HarnessRoot", "--agent-dir", "$agentDir", "--agents-home", "$agentsHome")
+  if ($SkipPlugins) {
+    $doctorArgs += "--skip-plugin-check"
+  }
+  $doctorOut = & node @doctorArgs 2>&1
   $doctorExit = $LASTEXITCODE
   if ($doctorExit -ne 0) {
     Write-Host ""

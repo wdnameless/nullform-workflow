@@ -272,11 +272,16 @@ export function testTierGate(harnessRoot, strict = true) {
   const tmp = mkdtempSync(join(tmpdir(), "wf-"));
   try {
     const env = { ...process.env, NF_NO_DASHBOARD: "1" };
-    runProc(process.execPath, [wf, "start", "--tier", "T0", "--task", "probe", "--root", tmp], { env });
+    const s0 = runProc(process.execPath, [wf, "start", "--tier", "T0", "--task", "probe", "--root", tmp], { env });
+    if (s0.status !== 0) throw new Error(`start T0 failed, got exit ${s0.status}`);
     const t0 = runProc(process.execPath, [wf, "check", "--root", tmp], { env });
     if (t0.status !== 0) throw new Error(`T0 should require no artifacts, got exit ${t0.status}`);
 
-    runProc(process.execPath, [wf, "start", "--tier", "T2", "--task", "probe2", "--force", "--root", tmp], { env });
+    const c0 = runProc(process.execPath, [wf, "close", "--root", tmp], { env });
+    if (c0.status !== 0) throw new Error(`close T0 failed, got exit ${c0.status}`);
+
+    const s2 = runProc(process.execPath, [wf, "start", "--tier", "T2", "--task", "probe2", "--root", tmp], { env });
+    if (s2.status !== 0) throw new Error(`start T2 failed, got exit ${s2.status}`);
     const t2 = runProc(process.execPath, [wf, "check", "--root", tmp], { env });
     if (t2.status === 0) throw new Error("T2 passed with no artifacts - the gate does not work");
 

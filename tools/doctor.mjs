@@ -280,7 +280,8 @@ export function runOmp(args, { timeout = 60000 } = {}) {
   };
 }
 
-/** Манифест плагинов `agent/plugins.json` → `[{name, spec}]`; без `spec` берётся имя. */
+
+/** Манифест плагинов `agent/plugins.json` → `[{name, spec, required}]`; без `spec` берётся имя. */
 function readPluginsManifest(path) {
   let parsed;
   try {
@@ -291,35 +292,67 @@ function readPluginsManifest(path) {
   const list = Array.isArray(parsed?.plugins) ? parsed.plugins : [];
   return list
     .filter((p) => p && typeof p.name === "string" && p.name)
-    .map((p) => ({ name: p.name, spec: typeof p.spec === "string" && p.spec ? p.spec : p.name }));
+    .map((p) => ({
+      name: p.name,
+      spec: typeof p.spec === "string" && p.spec ? p.spec : p.name,
+      required: p.required === true,
+    }));
 }
 
-/** Имена установленных плагинов из вывода `omp plugin list --json` (npm и marketplace). */
-function installedPluginNames(stdout) {
+/** Ожидаемая версия из spec вида 'package@1.2.3'; null если версия не указана. */
+function expectedVersionOf(plugin) {
+  if (!plugin || typeof plugin.spec !== "string") return null;
+  const spec = plugin.spec;
+  const lastAt = spec.lastIndexOf("@");
+  if (lastAt > 0) {
+    return spec.slice(lastAt + 1);
+  }
+  return null;
+}
+
+/** Установленные плагины из вывода `omp plugin list --json` → Map<name, {name, version}>. */
+function installedPlugins(stdout) {
   let parsed;
   try {
     parsed = JSON.parse(stdout);
   } catch (e) {
     throw new Error(`Ошибка разбора JSON: ${e.message}`);
   }
-  const names = new Set();
+  const map = new Map();
   if (Array.isArray(parsed?.npm)) {
     for (const p of parsed.npm) {
-      if (p && typeof p.name === "string" && p.name) names.add(p.name);
+      if (p && typeof p.name === "string" && p.name) {
+        map.set(p.name, {
+          name: p.name,
+          version: typeof p.version === "string" && p.version.trim() ? p.version.trim() : null,
+        });
+      }
     }
   }
   if (Array.isArray(parsed?.marketplace)) {
     for (const p of parsed.marketplace) {
-      if (p && typeof p.id === "string") {
-        const id = p.id.includes("@") ? p.id.split("@")[0] : p.id;
-        names.add(id);
+      if (p) {
+        let name = typeof p.name === "string" ? p.name : null;
+        let version = typeof p.version === "string" && p.version.trim() ? p.version.trim() : null;
+        if (!name && typeof p.id === "string") {
+          const lastAt = p.id.lastIndexOf("@");
+          if (lastAt > 0) {
+            name = p.id.slice(0, lastAt);
+            if (!version) version = p.id.slice(lastAt + 1);
+          } else {
+            name = p.id;
+          }
+        }
+        if (name) {
+          map.set(name, { name, version });
+        }
       }
     }
   }
-  if (names.size === 0 && !Array.isArray(parsed?.npm) && !Array.isArray(parsed?.marketplace)) {
+  if (map.size === 0 && !Array.isArray(parsed?.npm) && !Array.isArray(parsed?.marketplace)) {
     throw new Error("в выводе нет массива npm или marketplace");
   }
-  return [...names];
+  return map;
 }
 
 /** Причина WARN по результату `omp plugin doctor`; пустая строка — чисто. */
@@ -405,6 +438,7 @@ export function parseCliArgs(args) {
   let probe = false;
   let requirePlugins = false;
   let pruneLogs = false;
+  let skipPluginCheck = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--harness") {
@@ -425,7 +459,8 @@ export function parseCliArgs(args) {
       requirePlugins = true;
     } else if (arg === "--prune-logs") {
       pruneLogs = true;
-    } else if (arg === "-h" || arg === "--help") {
+    } else if (arg === "--skip-plugin-check") {
+      skipPluginCheck = true;
     }
   }
 
@@ -442,6 +477,7 @@ export function parseCliArgs(args) {
     quiet,
     probe,
     requirePlugins,
+    skipPluginCheck,
     pruneLogs,
     help: false,
   };
@@ -724,16 +760,59 @@ export function runDoctor(options) {
     }
   }
 
+  // 5b. check 'plugin-patches': the console-window / EPIPE patches live in
+  // node_modules and are LOST on every plugin upgrade. Verifying only that the
+  // patcher FILE exists cannot see that: the harness would report healthy while
+  // the unpatched plugin crashes the host with an unhandled rejection
+  // (OMP: "Cannot call write after a stream was destroyed" -> RPC exit 1).
+  {
+    const id = "plugin-patches";
+    // Derived from the resolved agents home, not homedir(): a sandbox install
+    // (`--user-home`) must inspect ITS plugins, and a hardcoded home made the
+    // check both wrong for sandboxes and impossible to test.
+    const plugRoot = join(dirname(agentsHome), ".omp", "plugins", "node_modules");
+    const piLens = join(plugRoot, "pi-lens", "dist", "index.js");
+    const fixer = join(harness, "tools", "fix-plugin-windows.cjs");
+
+    if (!existsSync(fixer)) {
+      checks.push({ id, status: "fail", detail: "tools/fix-plugin-windows.cjs не найден" });
+    } else if (!existsSync(piLens)) {
+      checks.push({ id, status: "pass", detail: "pi-lens не установлен: патчить нечего" });
+    } else {
+      const text = readFileSync(piLens, "utf8");
+      // Only the marker proves the patch: vanilla vscode-jsonrpc already contains
+      // ERR_STREAM_DESTROYED (5 occurrences), so matching that string would report
+      // an unpatched plugin as healthy.
+      const guarded = text.includes("patched-epipe-handler");
+      if (guarded) {
+        checks.push({
+          id,
+          status: "pass",
+          detail: "патчи плагинов применены (pi-lens: EPIPE-глушитель)",
+        });
+      } else {
+        checks.push({
+          id,
+          status: "warn",
+          detail:
+            "pi-lens БЕЗ патча: обновление плагина сняло правки — запустите `node tools/fix-plugin-windows.cjs`",
+        });
+      }
+    }
+  }
+
   // 6. check 'skills' (spawn skills-doctor.mjs)
   {
     const id = "skills";
     const skillsDoctorPath = join(harness, "tools", "skills-doctor.mjs");
     const installedSkills = join(agentsHome, "skills");
-    const candidateRepoSkills = [
-      join(harness, "workflow-repo", "skills"),
-      join(harness, "skills"),
-    ];
-    const repoSkills = candidateRepoSkills.find((p) => existsSync(p)) || join(harness, "skills");
+    let repoSkills = null;
+    const repoClone = discoverRepoClone(harness);
+    if (repoClone && existsSync(join(repoClone, "skills"))) {
+      repoSkills = join(repoClone, "skills");
+    } else if ((mode === "repo" || isRepoTree(harness)) && existsSync(join(harness, "skills"))) {
+      repoSkills = join(harness, "skills");
+    }
 
     if (!existsSync(skillsDoctorPath)) {
       checks.push({
@@ -755,6 +834,12 @@ export function runDoctor(options) {
           detail: `Установленная папка навыков не найдена (${installedSkills})`,
         });
       }
+    } else if (!repoSkills) {
+      checks.push({
+        id,
+        status: "warn",
+        detail: "parity не проверялась: нет копии репозитория",
+      });
     } else {
       const res = spawnSync(
         process.execPath,
@@ -912,23 +997,36 @@ export function runDoctor(options) {
   }
 
   // 9. check 'plugins': манифест `agent/plugins.json` против `omp plugin list --json`.
-  // Нет манифеста — плагины не заявлены, проверять нечего (pass). Нет `omp` или
-  // список не разобран — WARN с причиной: харнесс без плагинов остаётся рабочим.
-  // Недостающие плагины — тоже WARN, и только `--require-plugins` делает их FAIL.
+  // Обязательные плагины (pi-lens, oh-my-pi-plugin-morph) по умолчанию дают FAIL.
+  // Опциональные плагины по умолчанию дают WARN, и только `--require-plugins` делает их FAIL.
   {
     const id = "plugins";
-    const manifestPath = join(harness, "agent", "plugins.json");
-    const omp = options.runOmp || runOmp;
-
-    let declared = null;
-    let manifestError = null;
-    if (!existsSync(manifestPath)) {
+    const skippedMarker = join(harness, "agent", "plugins.skipped");
+    if (options.skipPluginCheck) {
       checks.push({
         id,
-        status: "pass",
-        detail: "Манифест плагинов отсутствует (agent/plugins.json): заявленных плагинов нет",
+        status: "skip",
+        detail: "Проверка плагинов пропущена (--skip-plugin-check)",
+      });
+    } else if (existsSync(skippedMarker)) {
+      checks.push({
+        id,
+        status: "skip",
+        detail: "плагины пропущены при установке (-SkipPlugins); установите и повторите",
       });
     } else {
+      const manifestPath = join(harness, "agent", "plugins.json");
+      const omp = options.runOmp || runOmp;
+
+      let declared = null;
+      let manifestError = null;
+      if (!existsSync(manifestPath)) {
+        checks.push({
+          id,
+          status: "fail",
+          detail: "Манифест плагинов отсутствует (agent/plugins.json): требуемые плагины не определены",
+        });
+      } else {
       try {
         declared = readPluginsManifest(manifestPath);
       } catch (err) {
@@ -938,7 +1036,7 @@ export function runDoctor(options) {
       if (manifestError) {
         checks.push({
           id,
-          status: "warn",
+          status: "fail",
           detail: `Манифест плагинов не прочитан (${manifestPath}): ${manifestError}`,
         });
       } else if (declared.length === 0) {
@@ -962,7 +1060,7 @@ export function runDoctor(options) {
             : `omp plugin list завершился с кодом ${listed.status}${tail ? `: ${tail}` : ""}`;
         } else {
           try {
-            installed = installedPluginNames(listed.stdout);
+            installed = installedPlugins(listed.stdout);
           } catch (err) {
             listError = `вывод omp plugin list не разобран: ${err.message}`;
           }
@@ -971,24 +1069,71 @@ export function runDoctor(options) {
         if (listError) {
           checks.push({
             id,
-            status: "warn",
-            detail: `Не удалось получить список установленных плагинов: ${listError}. Проверьте вручную: omp plugin list --json`,
+            status: "fail",
+            detail: `Не удалось проверить установку плагинов: ${listError}. Проверьте вручную: omp plugin list --json`,
           });
         } else {
-          const missing = declared.filter((p) => !installed.includes(p.name));
-          const extra = installed.filter((n) => !declared.some((p) => p.name === n));
+          const missing = declared.filter((p) => !installed.has(p.name));
+          const extra = [...installed.keys()].filter((n) => !declared.some((p) => p.name === n));
+
+          const versionMismatches = [];
+          for (const p of declared) {
+            if (installed.has(p.name)) {
+              const inst = installed.get(p.name);
+              const exp = expectedVersionOf(p);
+              if (exp) {
+                const instVersion = inst?.version || null;
+                if (!instVersion || instVersion !== exp) {
+                  versionMismatches.push({
+                    name: p.name,
+                    expected: exp,
+                    installed: instVersion || "неизвестно",
+                    required: p.required,
+                    spec: p.spec,
+                  });
+                }
+              }
+            }
+          }
+
+          const missingRequired = missing.filter((p) => p.required);
+          const missingOptional = missing.filter((p) => !p.required);
+          const mismatchedRequired = versionMismatches.filter((m) => m.required);
+          const mismatchedOptional = versionMismatches.filter((m) => !m.required);
 
           let status = "pass";
           let detail = `${declared.length}/${declared.length} плагинов установлено`;
-          if (missing.length > 0) {
+
+          const parts = [];
+          if (missingRequired.length > 0) {
+            const reqHints = summarizeList(missingRequired.map((p) => `omp plugin install ${p.spec}`));
+            parts.push(`Не установлены обязательные плагины (${missingRequired.length}): ${summarizeList(missingRequired.map((p) => p.name))}. Установить: ${reqHints}`);
+          }
+          if (mismatchedRequired.length > 0) {
+            const vHints = summarizeList(mismatchedRequired.map((m) => `${m.name} (${m.installed} != ${m.expected})`));
+            const installHints = summarizeList(mismatchedRequired.map((m) => `omp plugin install ${m.spec}`));
+            parts.push(`Несоответствие версии обязательных плагинов (${mismatchedRequired.length}): ${vHints}. Обновить: ${installHints}`);
+          }
+          if (missingOptional.length > 0) {
+            const optHints = summarizeList(missingOptional.map((p) => `omp plugin install ${p.spec}`));
+            parts.push(`Не установлены опциональные плагины (${missingOptional.length} из ${declared.length}): ${summarizeList(missingOptional.map((p) => p.name))}. Установить: ${optHints}`);
+          }
+          if (mismatchedOptional.length > 0) {
+            const optVHints = summarizeList(mismatchedOptional.map((m) => `${m.name} (${m.installed} != ${m.expected})`));
+            const installHints = summarizeList(mismatchedOptional.map((m) => `omp plugin install ${m.spec}`));
+            parts.push(`Несоответствие версии опциональных плагинов (${mismatchedOptional.length}): ${optVHints}. Обновить: ${installHints}`);
+          }
+
+          if (missingRequired.length > 0 || mismatchedRequired.length > 0) {
+            status = "fail";
+            detail = parts.join(". ");
+          } else if (missingOptional.length > 0 || mismatchedOptional.length > 0) {
             status = options.requirePlugins ? "fail" : "warn";
-            const hints = summarizeList(missing.map((p) => `omp plugin install ${p.spec}`));
-            detail = `Не установлены плагины (${missing.length} из ${declared.length}): ${summarizeList(missing.map((p) => p.name))}. Установить: ${hints}`;
+            detail = parts.join(". ");
           }
           if (extra.length > 0) {
             detail += ` Установлены сверх манифеста (${extra.length}): ${summarizeList(extra)}`;
           }
-
           // Необязательный health-чек самих плагинов: его ненулевой код — WARN
           // с хвостом вывода, но никогда не FAIL (и не запускается, если `omp`
           // уже не ответил выше — иначе одна причина дала бы два предупреждения).
@@ -1003,6 +1148,7 @@ export function runDoctor(options) {
       }
     }
   }
+}
 
   // 10. check 'orphan-files': файлы каталогов манифеста, которых нет в репозитории.
   // tools/ → FAIL (инструмент вне дистрибутива ломает установку у других),
@@ -1027,11 +1173,10 @@ export function runDoctor(options) {
         let orphans = [];
         let readError = null;
         try {
-          orphans = findPruneCandidates({ harness, repo: repoClone });
+          orphans = findPruneCandidates({ harness, repo: repoClone }).filter((rel) => rel !== "agent/plugins.skipped");
         } catch (err) {
           readError = err.message;
         }
-
         if (readError) {
           checks.push({
             id,
@@ -1286,8 +1431,8 @@ export async function main(argv = process.argv.slice(2)) {
 
   --probe  опросить провайдеров из models.yml (GET {baseUrl}/models) и сопоставить
            с ролями config.yml; недостижимые дают WARN. Требует сети.
-  --require-plugins  отсутствие плагинов из agent/plugins.json делает doctor
-           FAIL (по умолчанию это WARN: плагины — аддон, а не условие работы).
+  --require-plugins  отсутствие любых (включая опциональные) плагинов из agent/plugins.json
+           делает doctor FAIL (по умолчанию обязательные плагины дают FAIL, а опциональные — WARN).
   --json   машинный отчёт
   --quiet  только итоговая строка`);
     return 0;

@@ -7,6 +7,6 @@
     "model": "",
     "modeId": "full",
     "thinkingOptionId": "high",
-    "notes": "[LANE] (C) | 1. CLASS: T0 (local), T1 (standard), T2 (full SDD).\n2. ANALYZE-FIRST: grep/lsp/codebase-index before any write. Notify user on rewrite.\n3. MINIMALISM: No narrator filler, no preambles, no tool-call narration. Invoke tools direct.\n4. VERIFY: No \"Done\" without proof (test/screenshot/command log).\n5. SDD/OpenSpec: MANDATORY for T2. FORBIDDEN for T0.\n6. CONTRACT: All subagent yields carry STATUS/FILES/TESTS/INTERFACES/CONCERNS.\n\nSource: <HarnessRoot>/agent/agents/orchestrator.md"
+    "notes": "[LANE] (C) | 1. CLASS: T0 (local), T1 (standard, no mandatory interview), T2 (full SDD, conditional interview only for unresolved decisions).\n2. ANALYZE-FIRST: grep/lsp/codebase-index before any write. Notify user on rewrite.\n3. MINIMALISM: No narrator filler, no preambles, no tool-call narration. Invoke tools direct.\n4. VERIFY: No \"Done\" without proof (test/screenshot/command log). Subagent tests_passed:true without executed command/counts is rejected at reconciliation.\n5. SDD/OpenSpec: MANDATORY for T2. FORBIDDEN for T0.\n6. CONTRACT: All subagent yields carry STATUS/FILES/TESTS/INTERFACES/REQUIREMENTS/CONCERNS (<=25 lines). Writers isolated:true only in git repos.\n\nSource: <HarnessRoot>/agent/agents/orchestrator.md"
   }
 ]

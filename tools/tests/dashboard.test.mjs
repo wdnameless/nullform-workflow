@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -27,6 +28,13 @@ import {
   collectDashboardData,
   generateDashboardHtml,
   parseArgs,
+  DASHBOARD_PROTOCOL,
+  DASHBOARD_PROTOCOL_VERSION,
+  DASHBOARD_BUILD,
+  projectToken,
+  isAllowedHost,
+  isCompatibleDashboard,
+  probeDashboard,
 } from "../dashboard.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../dashboard.mjs", import.meta.url)));
@@ -371,7 +379,7 @@ test("live: сервер отвечает на /api/health и /api/state, зат
 
     const stateRes = await fetch(`http://127.0.0.1:${bound.port}/api/state`);
     const state = await stateRes.json();
-    assert.equal(state.task.title, "live test");
+    assert.equal(state.task.title, "Задача T1");
     assert.equal(state.task.tier, "T1");
 
     const htmlRes = await fetch(`http://127.0.0.1:${bound.port}/`);
@@ -572,6 +580,413 @@ test("CLI: неверный порт завершает процесс с код
     assert.equal(proc.status, 2, "код возврата main() должен доходить до process.exit");
     assert.ok(proc.stderr.includes("--port"), "пользователь видит причину");
   } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R05: HTTP-границы (/, /api/state, /api/diff) не отдают чувствительные свободные данные, сохраняя метаданные", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  try {
+    git(tmp, ["init", "-q"]);
+    git(tmp, ["config", "user.name", "Workflow Tester"]);
+    git(tmp, ["config", "user.email", "workflow@nullform.io"]);
+
+    const MARKER_TASK = "TASK_LEAK_SECRET_9911";
+    const MARKER_ORACLE = "ORACLE_DETAIL_SECRET_8822";
+    const MARKER_COMMIT = "COMMIT_SUBJECT_SECRET_7733";
+    const MARKER_EVENT = "EVENT_TEXT_SECRET_6644";
+    const MARKER_DIFF_PATCH = "PATCH_LINE_SECRET_4466";
+    const MARKER_DIFF_QUERY = "ARBITRARY_DIFF_QUERY_PARAM_3322";
+
+    const testFile = join(tmp, "service.js");
+    writeFileSync(testFile, "const initial = 1;\n", "utf8");
+    git(tmp, ["add", "service.js"]);
+    git(tmp, ["commit", "-q", "-m", `init ${MARKER_COMMIT}`]);
+
+    writeFileSync(testFile, `const initial = 1;\nconst secret = "${MARKER_DIFF_PATCH}";\n`, "utf8");
+
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "state.json"),
+      JSON.stringify({
+        tier: "T2",
+        task: `Secret Task: ${MARKER_TASK}`,
+        status: "open",
+        startedAt: new Date().toISOString(),
+        artifacts: {
+          lane: { at: new Date().toISOString(), detail: "T2" },
+          recon: { at: new Date().toISOString(), detail: `recon detail ${MARKER_ORACLE}` },
+        },
+      }),
+      "utf8"
+    );
+
+    // Создаём файл оракула с маркером
+    const oracleDir = join(tmp, "openspec", "changes", "feat-1");
+    mkdirSync(oracleDir, { recursive: true });
+    writeFileSync(
+      join(oracleDir, "oracle.md"),
+      `# Oracle Verdict\n\nACCEPT\n\nNotes with ${MARKER_ORACLE}\n`,
+      "utf8"
+    );
+
+    writeFileSync(
+      join(wfDir, "events.jsonl"),
+      JSON.stringify({
+        at: new Date().toISOString(),
+        kind: "artifact",
+        text: `recon: detail with ${MARKER_EVENT}`,
+      }) + "\n",
+      "utf8"
+    );
+
+    bound = await startLiveServer(tmp, 4520, { maxAttempts: 10 });
+    const port = bound.port;
+
+    // --- 0. /api/health ---
+    const healthRes = await fetch(`http://127.0.0.1:${port}/api/health`);
+    const healthRaw = await healthRes.text();
+    assert.ok(!healthRaw.includes(tmp), "api/health не должен раскрывать абсолютный путь root");
+    const health = JSON.parse(healthRaw);
+    assert.equal(health.ok, true);
+    assert.equal(health.root, undefined, "поле root удалено из ответа /api/health");
+    assert.ok(typeof health.project === "string" && health.project.length >= 8);
+
+    // --- 1. /api/state ---
+    const stateRes = await fetch(`http://127.0.0.1:${port}/api/state`);
+    const stateRaw = await stateRes.text();
+
+    assert.ok(!stateRaw.includes(MARKER_TASK), "api/state не должен содержать state.task");
+    assert.ok(!stateRaw.includes(MARKER_ORACLE), "api/state не должен содержать детали оракула / артефактов");
+    assert.ok(!stateRaw.includes(MARKER_COMMIT), "api/state не должен содержать тему коммита");
+    assert.ok(!stateRaw.includes(MARKER_EVENT), "api/state не должен содержать свободный текст событий");
+    assert.ok(!stateRaw.includes(MARKER_DIFF_PATCH), "api/state не должен содержать сырой патч");
+    assert.ok(!stateRaw.includes(tmp), "api/state не должен содержать абсолютный путь root");
+    const state = JSON.parse(stateRaw);
+    assert.equal(state.task.tier, "T2");
+    assert.equal(state.task.title, "Задача T2", "заголовок задачи проецируется в безопасную форму");
+    assert.equal(state.task.status, "open");
+    assert.equal(state.git.isRepo, true);
+    assert.ok(state.git.branch, "ветка репозитория сохранена");
+    assert.equal(state.git.commit.message, undefined, "тема коммита удалена из git.commit");
+    assert.equal(state.git.files[0].path, "service.js", "пути файлов в diff-селекторе сохранены для навигации");
+    assert.ok(state.git.added > 0);
+    assert.ok(state.arch && state.arch.name, "архитектурное дерево доступно");
+    assert.ok(Array.isArray(state.modules), "список модулей доступен");
+    // Регресс: Схема архитектуры не должна терять fileCount и показывать "файлов 0"
+    const totalModuleFiles = state.modules.reduce((s, m) => s + m.fileCount, 0);
+    assert.equal(state.arch.files, totalModuleFiles, "количество файлов в корне схемы совпадает с суммой по модулям");
+    for (const child of state.arch.children || []) {
+      const mod = state.modules.find((m) => m.path === child.name);
+      if (mod) {
+        assert.equal(child.files, mod.fileCount, `файлы в узле схемы ${child.name} совпадают с модулем`);
+      }
+      const graphNode = state.archGraph.nodes.find((n) => n.id === child.name);
+      if (graphNode) {
+        assert.equal(child.files, graphNode.files, `файлы в узле схемы ${child.name} совпадают с графом`);
+      }
+    }
+    assert.equal(state.events[0].kind, "artifact");
+    assert.equal(state.events[0].status, "recon");
+    // --- 2. / (HTML) ---
+    const htmlRes = await fetch(`http://127.0.0.1:${port}/`);
+    const htmlRaw = await htmlRes.text();
+
+    assert.ok(!htmlRaw.includes(MARKER_TASK), "HTML не должен содержать state.task");
+    assert.ok(!htmlRaw.includes(MARKER_ORACLE), "HTML не должен содержать детали оракула / артефактов");
+    assert.ok(!htmlRaw.includes(MARKER_COMMIT), "HTML не должен содержать тему коммита");
+    assert.ok(!htmlRaw.includes(MARKER_EVENT), "HTML не должен содержать свободный текст событий");
+    assert.ok(!htmlRaw.includes(MARKER_DIFF_PATCH), "HTML не должен содержать сырой патч");
+    assert.ok(!htmlRaw.includes(tmp), "HTML не должен содержать абсолютный путь root");
+    assert.ok(htmlRaw.includes("Nullform Console"), "HTML каркас консоли сохранен");
+    assert.ok(htmlRaw.includes("Задача T2"), "HTML содержит безопасный заголовок");
+    assert.ok(htmlRaw.includes("service.js"), "HTML содержит путь файла в diff-списке");
+    assert.ok(htmlRaw.includes("data-file="), "HTML сохраняет кликабельность diff-строк");
+    // --- 3. /api/diff ---
+    const diffRes = await fetch(`http://127.0.0.1:${port}/api/diff?file=${encodeURIComponent(MARKER_DIFF_QUERY)}`);
+    const diffRaw = await diffRes.text();
+
+    assert.ok(!diffRaw.includes(MARKER_DIFF_QUERY), "api/diff не должен эхо-повторять путь файла из запроса");
+    assert.ok(!diffRaw.includes(MARKER_DIFF_PATCH), "api/diff не должен содержать сырой патч");
+
+    const validDiffRes = await fetch(`http://127.0.0.1:${port}/api/diff?file=service.js`);
+    const validDiffRaw = await validDiffRes.text();
+    assert.ok(!validDiffRaw.includes(MARKER_DIFF_PATCH), "api/diff для существующего файла не раскрывает патч");
+    assert.ok(validDiffRaw.includes("+ добавлено строк: 1"), "api/diff возвращает счетчик добавленных строк");
+    assert.ok(validDiffRaw.includes("- удалено строк: 0"), "api/diff возвращает счетчик удаленных строк");
+  } finally {
+    if (bound) {
+      await new Promise((r) => bound.server.close(r));
+    }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ---------------------------------------------- R01, R15 regressions */
+function requestWithHost(port, path, hostHeader) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method: "GET",
+        headers: { Host: hostHeader },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => resolve({ status: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, data }));
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+test("R15: HTTP-маршруты отклоняют не-loopback Host (включая DNS-rebind) и принимают localhost/127.0.0.1", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  try {
+    writeFileSync(join(tmp, "state.json"), "{}", "utf8");
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "state.json"),
+      JSON.stringify({ tier: "T1", task: "host test", status: "open", startedAt: new Date().toISOString(), artifacts: { lane: { at: new Date().toISOString() } } }),
+      "utf8"
+    );
+
+    bound = await startLiveServer(tmp, 4560, { maxAttempts: 10 });
+    const port = bound.port;
+
+    // Unit-проверка функции isAllowedHost
+    assert.equal(isAllowedHost("localhost"), true);
+    assert.equal(isAllowedHost(`localhost:${port}`), true);
+    assert.equal(isAllowedHost("127.0.0.1"), true);
+    assert.equal(isAllowedHost(`127.0.0.1:${port}`), true);
+    assert.equal(isAllowedHost(`[::1]:${port}`), true);
+    assert.equal(isAllowedHost("attacker.example"), false);
+    assert.equal(isAllowedHost(`attacker.example:${port}`), false);
+    assert.equal(isAllowedHost("rebind.evil.com"), false);
+    assert.equal(isAllowedHost("localhost.attacker.com"), false);
+    assert.equal(isAllowedHost("192.168.1.5"), false);
+    assert.equal(isAllowedHost(""), false);
+    assert.equal(isAllowedHost(null), false);
+
+    const routes = ["/api/health", "/api/state", "/api/diff", "/"];
+    const hostileHosts = ["attacker.example", `attacker.example:${port}`, "rebind.evil.com", "192.168.1.100"];
+
+    for (const route of routes) {
+      for (const hostile of hostileHosts) {
+        const res = await requestWithHost(port, route, hostile);
+        assert.equal(res.status, 403, `маршрут ${route} с Host: ${hostile} должен возвращать 403`);
+        assert.equal(res.ok, false);
+      }
+
+      // Легитимный localhost / 127.0.0.1
+      const resLocalhost = await requestWithHost(port, route, `localhost:${port}`);
+      assert.equal(resLocalhost.status, 200, `маршрут ${route} с Host: localhost:${port} должен быть успешен`);
+
+      const resLoopback = await requestWithHost(port, route, `127.0.0.1:${port}`);
+      assert.equal(resLoopback.status, 200, `маршрут ${route} с Host: 127.0.0.1:${port} должен быть успешен`);
+    }
+  } finally {
+    if (bound) await new Promise((r) => bound.server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R01: устаревший протокол здоровья ({ok, pid, root}) и чужой проект отвергаются fast path и orphan scan без убийства процесса", async () => {
+  const tmp = createTempDir();
+  let legacyServer = null;
+  let wrongProjectServer = null;
+  let boundCurrent = null;
+  const legacyPort = 4680;
+  const wrongPort = 4681;
+  const validPort = 4682;
+
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+
+    // Синтетический старый сервер (legacy process shape: { ok: true, pid: 7688, root })
+    legacyServer = createServer((req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (url.pathname === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, pid: 7688, root: tmp }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("legacy");
+    });
+    await new Promise((resolve) => legacyServer.listen(legacyPort, "127.0.0.1", resolve));
+
+    // Синтетический сервер с другим проектом
+    wrongProjectServer = createServer((req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (url.pathname === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: true,
+          pid: 9999,
+          project: "foreign_token_123",
+          protocol: DASHBOARD_PROTOCOL,
+          protocolVersion: DASHBOARD_PROTOCOL_VERSION,
+          build: DASHBOARD_BUILD,
+        }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("wrong project");
+    });
+    await new Promise((resolve) => wrongProjectServer.listen(wrongPort, "127.0.0.1", resolve));
+
+    // 1. Проверка compatibility helper
+    const probedLegacy = await probeDashboard(legacyPort);
+    assert.equal(isCompatibleDashboard(probedLegacy, tmp), false, "старая форма {ok, pid, root} несовместима");
+
+    const probedWrong = await probeDashboard(wrongPort);
+    assert.equal(isCompatibleDashboard(probedWrong, tmp), false, "чужой project несовместим");
+
+    // 2. Fast path: рантайм-файл указывает на legacyPort
+    writeRuntime(tmp, {
+      key: "local",
+      port: legacyPort,
+      pid: 7688,
+      url: `http://localhost:${legacyPort}`,
+      root: tmp,
+      startedAt: new Date().toISOString(),
+    });
+
+    // ensureDashboard должен отказать в переиспользовании legacyPort
+    // и поднять текущий дашборд на свободном порту, обновив маркер
+    boundCurrent = await startLiveServer(tmp, validPort, { maxAttempts: 5 });
+    assert.ok(boundCurrent.port >= validPort);
+    const probedCurrent = await probeDashboard(boundCurrent.port);
+    assert.equal(isCompatibleDashboard(probedCurrent, tmp), true, "текущий сервер совместим");
+
+    // Вызов ensureDashboard при наличии несовместимого рантайма:
+    // должен отказать в fast path и усыновить совместимый orphan сервер boundCurrent на validPort
+    const info = await ensureDashboard(tmp, { open: false, port: legacyPort, session: "local" });
+    assert.equal(info.port, boundCurrent.port, "переиспользован совместимый порт, а не старый");
+    assert.notEqual(info.port, legacyPort, "legacyPort не был переиспользован");
+    // Проверяем, что не верифицированный legacyServer не был убит и продолжает слушать
+    assert.equal(legacyServer.listening, true, "старый сервер не завершён");
+    const checkLegacy = await probeDashboard(legacyPort);
+    assert.equal(checkLegacy?.pid, 7688, "старый процесс по-прежнему отвечает");
+
+    // Маркер в рантайме обновлен на порт актуального сервера
+    const marker = readRuntime(tmp, "local");
+    assert.equal(marker.port, boundCurrent.port, "маркер обновлен на порт актуального сервера");
+
+    // 3. Orphan scan: удаляем рантайм, сканируем диапазон, начинающийся с legacyPort
+    rmSync(runtimePath(tmp, "local"), { force: true });
+    rmSync(runtimePath(tmp), { force: true });
+    assert.equal(readRuntime(tmp), null);
+
+    const orphanInfo = await ensureDashboard(tmp, { open: false, port: legacyPort, session: "local" });
+    assert.equal(orphanInfo.port, boundCurrent.port, "сирота усыновлена только с валидного порта");
+    assert.equal(orphanInfo.adopted, true);
+    assert.equal(legacyServer.listening, true, "legacyServer жив после orphan scan");
+  } finally {
+    if (boundCurrent) await new Promise((r) => boundCurrent.server.close(r));
+    if (legacyServer) await new Promise((r) => legacyServer.close(r));
+    if (wrongProjectServer) await new Promise((r) => wrongProjectServer.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R01: /api/health возвращает протокол, версию сборки и токен проекта, не раскрывая root", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  try {
+    bound = await startLiveServer(tmp, 4710, { maxAttempts: 10 });
+    const res = await fetch(`http://127.0.0.1:${bound.port}/api/health`);
+    assert.equal(res.status, 200);
+    const health = await res.json();
+
+    assert.equal(health.ok, true);
+    assert.equal(health.project, projectToken(tmp));
+    assert.equal(health.protocol, DASHBOARD_PROTOCOL);
+    assert.equal(health.protocolVersion, DASHBOARD_PROTOCOL_VERSION);
+    assert.equal(health.build, DASHBOARD_BUILD);
+    assert.equal(typeof DASHBOARD_BUILD, "string");
+    assert.equal(DASHBOARD_BUILD.length, 16, "DASHBOARD_BUILD вычисляется как 16-значный sha256 хеш исходника");
+    assert.equal(health.root, undefined, "поле root не раскрывается в /api/health");
+    assert.equal(typeof health.pid, "number");
+  } finally {
+    if (bound) await new Promise((r) => bound.server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R01: сервер с отличающимся build ID отвергается isCompatibleDashboard, fast path и orphan scan", async () => {
+  const tmp = createTempDir();
+  let staleBuildServer = null;
+  let boundCurrent = null;
+  const stalePort = 4720;
+  const validPort = 4721;
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+
+    // Сервер со старым build ID (например, после обновления исходного кода)
+    staleBuildServer = createServer((req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (url.pathname === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: true,
+          pid: 7689,
+          project: projectToken(tmp),
+          protocol: DASHBOARD_PROTOCOL,
+          protocolVersion: DASHBOARD_PROTOCOL_VERSION,
+          build: "stale_build_9999",
+        }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("stale build");
+    });
+    await new Promise((resolve) => staleBuildServer.listen(stalePort, "127.0.0.1", resolve));
+
+    // 1. isCompatibleDashboard отвергает иной build
+    const probedStale = await probeDashboard(stalePort);
+    assert.equal(isCompatibleDashboard(probedStale, tmp), false, "сервер с другим build ID отвергается");
+
+    // 2. Fast path: рантайм указывает на stalePort
+    writeRuntime(tmp, {
+      key: "local",
+      port: stalePort,
+      pid: 7689,
+      url: `http://localhost:${stalePort}`,
+      root: tmp,
+      startedAt: new Date().toISOString(),
+    });
+
+    boundCurrent = await startLiveServer(tmp, validPort, { maxAttempts: 5 });
+    const probedCurrent = await probeDashboard(boundCurrent.port);
+    assert.equal(isCompatibleDashboard(probedCurrent, tmp), true);
+
+    // ensureDashboard отказывается переиспользовать stalePort с иным build ID
+    const info = await ensureDashboard(tmp, { open: false, port: stalePort, session: "local" });
+    assert.equal(info.port, boundCurrent.port, "переиспользован актуальный build, а не устаревший");
+    assert.notEqual(info.port, stalePort);
+    assert.equal(staleBuildServer.listening, true, "процесс со старым build ID не был убит");
+
+    // 3. Orphan scan: не усыновляет порт с устаревшим build ID
+    rmSync(runtimePath(tmp, "local"), { force: true });
+    rmSync(runtimePath(tmp), { force: true });
+
+    const orphanInfo = await ensureDashboard(tmp, { open: false, port: stalePort, session: "local" });
+    assert.equal(orphanInfo.port, boundCurrent.port, "orphan scan усыновил только сервер с текущим build ID");
+    assert.equal(orphanInfo.adopted, true);
+    assert.equal(staleBuildServer.listening, true);
+  } finally {
+    if (boundCurrent) await new Promise((r) => boundCurrent.server.close(r));
+    if (staleBuildServer) await new Promise((r) => staleBuildServer.close(r));
     rmSync(tmp, { recursive: true, force: true });
   }
 });

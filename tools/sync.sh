@@ -282,34 +282,133 @@ for entry in "${MANIFEST[@]}"; do
   fi
 done
 
-[ "$QUIET" != "1" ] && echo ""
+REPO_SKILLS="$REPO_ROOT/skills"
+INSTALLED_SKILLS="$AGENTS_ROOT/skills"
+DOCTOR_SCRIPT="$SCRIPT_DIR/skills-doctor.mjs"
+[ ! -f "$DOCTOR_SCRIPT" ] && DOCTOR_SCRIPT="$REPO_ROOT/tools/skills-doctor.mjs"
 
-if [ ${#drift[@]} -eq 0 ]; then
-  [ "$QUIET" != "1" ] && echo "sync: clean ($checked files checked)"
-  exit 0
+skills_applicable=1
+if [ -n "$ONLY" ]; then
+  case "$ONLY" in
+    *skills*|*skill*) skills_applicable=1 ;;
+    *) skills_applicable=0 ;;
+  esac
 fi
 
-if [ "$MODE" = "promote" ] && [ ${#suspect[@]} -gt 0 ]; then
-  if [ "$FORCE" != "1" ]; then
-    echo "sync: REFUSED - ${#suspect[@]} repo file(s) are NEWER than the live tree:" >&2
-    for x in "${suspect[@]}"; do echo "  $x" >&2; done
-    echo "" >&2
-    echo "Promoting would overwrite that work with a stale harness. Either:" >&2
-    echo "  --deploy      push the repo (newer) INTO the live tree, or" >&2
-    echo "  --promote --force   if the live tree really is the intended source" >&2
-    exit 2
+skills_status_text=""
+_skills_parity_status="NOT_CHECKED"
+skills_doctor_ok=0
+
+if [ "$skills_applicable" -eq 1 ]; then
+  if [ -f "$DOCTOR_SCRIPT" ]; then
+    doc_out=$(node "$DOCTOR_SCRIPT" --installed "$INSTALLED_SKILLS" --repo "$REPO_SKILLS" --agents-home "$AGENTS_ROOT" --json 2>&1) || doc_code=$?
+    doc_code=${doc_code:-0}
+
+    parsed_ok=$(node -e '
+      try {
+        const d = JSON.parse(process.argv[1]);
+        const status = d.parityStatus || "UNVERIFIED";
+        process.stdout.write((process.argv[2] === "0" && d.ok && status === "VERIFIED") ? "1" : "0");
+      } catch { process.stdout.write("0"); }
+    ' "$doc_out" "$doc_code")
+
+    parsed_status=$(node -e '
+      try {
+        const d = JSON.parse(process.argv[1]);
+        process.stdout.write(String(d.parityStatus || "UNVERIFIED").replace(/[\r\n\t]/g, " "));
+      } catch { process.stdout.write("UNVERIFIED"); }
+    ' "$doc_out")
+
+    parsed_desc=$(node -e '
+      try {
+        const d = JSON.parse(process.argv[1]);
+        const status = d.parityStatus || "UNVERIFIED";
+        const dis = d.disabledCount ? ", " + d.disabledCount + " disabled by operator" : "";
+        process.stdout.write(("skills: parity " + status + " (" + d.installedCount + " installed, " + d.repoCount + " in repo" + dis + ")").replace(/[\r\n\t]/g, " "));
+      } catch {
+        process.stdout.write("skills: parity UNVERIFIED (failed to parse skills-doctor output)");
+      }
+    ' "$doc_out")
+
+    skills_doctor_ok="${parsed_ok:-0}"
+    _skills_parity_status="${parsed_status:-UNVERIFIED}"
+    skills_status_text="${parsed_desc:-skills: parity UNVERIFIED}"
+    if [ "$MODE" = "check" ] && [ "$skills_doctor_ok" -ne 1 ]; then
+      drift+=("skills")
+      if [ "$QUIET" != "1" ]; then
+        node -e '
+          try {
+            const d = JSON.parse(process.argv[1]);
+            if (d.problems && d.problems.length) {
+              for (const p of d.problems) {
+                const skillName = p.skill === "(repo)" ? "skills" : "skills/" + p.skill;
+                console.log("  [XX] DRIFT   " + skillName + " (" + p.kind + ": " + p.detail + ")");
+              }
+            } else {
+              console.log("  [XX] DRIFT   skills (parity " + (d.parityStatus || "UNVERIFIED") + ")");
+            }
+          } catch {
+            console.log("  [XX] DRIFT   skills (doctor parse error / exit " + process.argv[2] + ")");
+          }
+        ' "$doc_out" "$doc_code"
+      fi
+    fi
   else
-    echo "sync: FORCED - overwrote ${#suspect[@]} newer repo file(s) with the live tree:"
-    for x in "${suspect[@]}"; do echo "  $x"; done
+    _skills_parity_status="UNVERIFIED"
+    skills_doctor_ok=0
+    skills_status_text="skills: parity UNVERIFIED (skills-doctor.mjs not found)"
+    if [ "$MODE" = "check" ]; then
+      drift+=("skills")
+      [ "$QUIET" != "1" ] && echo "  [XX] DRIFT   skills (parity UNVERIFIED - doctor script not found)"
+    fi
   fi
 fi
 
+[ "$QUIET" != "1" ] && echo ""
+
 if [ "$MODE" = "promote" ] || [ "$MODE" = "deploy" ]; then
+  if [ "$MODE" = "promote" ] && [ ${#suspect[@]} -gt 0 ]; then
+    if [ "$FORCE" != "1" ]; then
+      echo "sync: REFUSED - ${#suspect[@]} repo file(s) are NEWER than the live tree:" >&2
+      for x in "${suspect[@]}"; do echo "  $x" >&2; done
+      echo "" >&2
+      echo "Promoting would overwrite that work with a stale harness. Either:" >&2
+      echo "  --deploy      push the repo (newer) INTO the live tree, or" >&2
+      echo "  --promote --force   if the live tree really is the intended source" >&2
+      exit 2
+    else
+      echo "sync: FORCED - overwrote ${#suspect[@]} newer repo file(s) with the live tree:"
+      for x in "${suspect[@]}"; do echo "  $x"; done
+    fi
+  fi
+
   target_name="deployed to harness"
   [ "$MODE" = "promote" ] && target_name="promoted to repo"
+  if [ "$MODE" = "deploy" ] && [ "$skills_applicable" -eq 1 ] && [ -n "$skills_status_text" ]; then
+    [ "$QUIET" != "1" ] && echo "$skills_status_text"
+    if [ "$skills_doctor_ok" -ne 1 ]; then
+      [ "$QUIET" != "1" ] && echo "sync: file deployment complete; skill parity ${_skills_parity_status} (${#drift[@]}/$checked files $target_name)"
+      exit 0
+    fi
+  fi
   [ "$QUIET" != "1" ] && echo "sync: ${#drift[@]}/$checked files $target_name"
   exit 0
 fi
 
-[ "$QUIET" != "1" ] && echo "sync: ${#drift[@]}/$checked files drifted. Run --promote or --deploy."
+if [ ${#drift[@]} -eq 0 ]; then
+  if [ "$QUIET" != "1" ] && [ -n "$skills_status_text" ]; then
+    echo "$skills_status_text"
+  fi
+  extra_clean=""
+  if [ "$skills_applicable" -eq 1 ] && [ "$skills_doctor_ok" -eq 1 ]; then
+    extra_clean=", skills parity verified"
+  fi
+  [ "$QUIET" != "1" ] && echo "sync: clean ($checked files checked$extra_clean)"
+  exit 0
+fi
+
+if [ "$QUIET" != "1" ] && [ -n "$skills_status_text" ]; then
+  echo "$skills_status_text"
+fi
+[ "$QUIET" != "1" ] && echo "sync: ${#drift[@]}/$checked items drifted. Run --promote or --deploy."
 exit 1

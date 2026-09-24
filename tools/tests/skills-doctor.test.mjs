@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -177,6 +177,177 @@ test("--agents-home reads the disabled list from a directory other than the inst
     const withFlag = doctor(installedRoot, repoRoot, ["--agents-home", ops]);
     assert.equal(withFlag.status, 0);
     assert.match(withFlag.stdout, /beta: disabled by operator/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("absent comparison repo reports parity UNVERIFIED and exits nonzero", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "skills-doctor-"));
+  try {
+    const { installedRoot } = fixture(tmp, { installed: ["alpha"] });
+    const nonExistentRepo = join(tmp, "does-not-exist/skills");
+
+    const res = doctor(installedRoot, nonExistentRepo);
+
+    assert.equal(res.status, 1);
+    assert.match(res.stdout, /parity UNVERIFIED/);
+    assert.doesNotMatch(res.stdout, /all checks passed/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("empty comparison repo reports parity UNVERIFIED and exits nonzero", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "skills-doctor-"));
+  try {
+    const { installedRoot, repoRoot } = fixture(tmp, { repo: [], installed: ["alpha"] });
+
+    const res = doctor(installedRoot, repoRoot);
+
+    assert.equal(res.status, 1);
+    assert.match(res.stdout, /parity UNVERIFIED/);
+    assert.doesNotMatch(res.stdout, /all checks passed/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("installed skill drift reports parity problem and exits 1", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "skills-doctor-"));
+  try {
+    const { installedRoot, repoRoot } = fixture(tmp, { repo: ["alpha"], installed: ["alpha"] });
+    writeFileSync(join(installedRoot, "alpha", "SKILL.md"), skillMd("alpha") + "\n# Extra drifted line\n", "utf8");
+
+    const res = doctor(installedRoot, repoRoot);
+
+    assert.equal(res.status, 1);
+    assert.match(res.stdout, /alpha\s+parity/);
+    assert.match(res.stdout, /installed copy differs from repo/);
+    assert.doesNotMatch(res.stdout, /all checks passed/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("--json outputs structured status including parityStatus", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "skills-doctor-"));
+  try {
+    const { installedRoot, repoRoot } = fixture(tmp, { repo: ["alpha"], installed: ["alpha"] });
+
+    const res = doctor(installedRoot, repoRoot, ["--json"]);
+
+    assert.equal(res.status, 0);
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.parityStatus, "VERIFIED");
+    assert.equal(parsed.installedCount, 1);
+    assert.equal(parsed.repoCount, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("deployed script auto-resolves sibling workflow-repo over live skills and detects drift", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "skills-doctor-"));
+  try {
+    const harness = join(tmp, "harness");
+    const agents = join(tmp, "agents");
+    const liveSkills = join(harness, "skills");
+    const repoDir = join(harness, "workflow-repo");
+    const repoSkills = join(repoDir, "skills");
+    const installedSkills = join(agents, "skills");
+
+    mkdirSync(join(harness, "tools"), { recursive: true });
+    mkdirSync(join(liveSkills, "alpha"), { recursive: true });
+    mkdirSync(join(repoDir, "agent"), { recursive: true });
+    mkdirSync(join(repoSkills, "alpha"), { recursive: true });
+    mkdirSync(join(installedSkills, "alpha"), { recursive: true });
+
+    copyFileSync(TOOL, join(harness, "tools", "skills-doctor.mjs"));
+    writeFileSync(join(repoDir, "install.ps1"), "# marker", "utf8");
+    writeFileSync(join(repoDir, "agent", "models.yml.example"), "# marker", "utf8");
+
+    // Canonical repo has one content; live and installed both share a drifting content
+    const repoContent = skillMd("alpha") + "\n# Repo canonical\n";
+    const liveContent = skillMd("alpha") + "\n# Live drifted\n";
+    writeFileSync(join(repoSkills, "alpha", "SKILL.md"), repoContent, "utf8");
+    writeFileSync(join(liveSkills, "alpha", "SKILL.md"), liveContent, "utf8");
+    writeFileSync(join(installedSkills, "alpha", "SKILL.md"), liveContent, "utf8");
+
+    const deployedTool = join(harness, "tools", "skills-doctor.mjs");
+    const res = spawnSync(process.execPath, [deployedTool, "--installed", installedSkills, "--agents-home", agents], { encoding: "utf8" });
+
+    // Default must select sibling workflow-repo (canonical), NOT harness/skills (live), so it detects drift!
+    assert.equal(res.status, 1);
+    assert.match(res.stdout, /alpha\s+parity/);
+    assert.match(res.stdout, /installed copy differs from repo/);
+    assert.doesNotMatch(res.stdout, /all checks passed/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("sync.sh does not execute command substitution in skill name or detail", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "skills-sec-"));
+  try {
+    const canary = join(tmp, "evil-executed.txt");
+    const SYNC_SH = resolve(import.meta.dirname, "../sync.sh");
+    const bashCandidates = [
+      "C:\\Program Files\\Git\\usr\\bin\\sh.exe",
+      "C:\\Program Files\\Git\\bin\\bash.exe",
+      "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+      "sh",
+      "bash",
+    ];
+    let shBin = null;
+    for (const bin of bashCandidates) {
+      if (existsSync(bin)) { shBin = bin; break; }
+    }
+    if (shBin && existsSync(SYNC_SH)) {
+      const repoDir = join(tmp, "repo");
+      const harnessDir = join(tmp, "harness");
+      const agentsDir = join(tmp, "agents");
+      mkdirSync(join(repoDir, "tools"), { recursive: true });
+      mkdirSync(join(repoDir, "agent"), { recursive: true });
+      mkdirSync(join(repoDir, "skills", "evil$(touch evil-executed.txt)"), { recursive: true });
+      mkdirSync(join(harnessDir), { recursive: true });
+      mkdirSync(join(agentsDir, "skills"), { recursive: true });
+      writeFileSync(join(repoDir, "install.ps1"), "# marker", "utf8");
+      writeFileSync(join(repoDir, "agent", "models.yml.example"), "# marker", "utf8");
+      writeFileSync(join(repoDir, "skills", "evil$(touch evil-executed.txt)", "SKILL.md"),
+        `---\nname: evil\ndescription: "$(touch ${canary.replace(/\\/g, "/")})"\n---\n`, "utf8");
+      copyFileSync(TOOL, join(repoDir, "tools", "skills-doctor.mjs"));
+
+      spawnSync(shBin, [SYNC_SH, "--harness", harnessDir, "--repo", repoDir, "--agents-root", agentsDir], {
+        cwd: tmp,
+        encoding: "utf8",
+      });
+
+      assert.equal(existsSync(canary), false, "sync.sh must not execute commands in skill description");
+      assert.equal(existsSync(join(tmp, "evil-executed.txt")), false, "sync.sh must not execute commands in skill name");
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("leading UTF-8 BOM in SKILL.md and .skills-disabled.json does not break frontmatter or disabled parsing", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "skills-bom-"));
+  try {
+    const { agentsHome, installedRoot, repoRoot } = fixture(tmp, { repo: ["alpha", "beta"], installed: ["alpha"] });
+    // Write BOM on installed SKILL.md and on .skills-disabled.json (e.g. from Windows PowerShell 5.1 Set-Content)
+    writeFileSync(join(installedRoot, "alpha", "SKILL.md"), "\uFEFF" + skillMd("alpha"), "utf8");
+    writeFileSync(join(repoRoot, "alpha", "SKILL.md"), skillMd("alpha"), "utf8");
+    writeFileSync(join(agentsHome, ".skills-disabled.json"), "\uFEFF" + JSON.stringify({ version: 1, disabled: ["beta"] }), "utf8");
+
+    const res = doctor(installedRoot, repoRoot);
+
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /all checks passed/);
+    assert.match(res.stdout, /beta: disabled by operator/);
+    assert.doesNotMatch(res.stdout, /alpha\s+frontmatter/);
+    assert.doesNotMatch(res.stdout, /beta\s+orphan/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

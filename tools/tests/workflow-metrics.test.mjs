@@ -12,9 +12,15 @@ import {
   cmdStatus,
   loadMetrics,
   appendMetric,
+  reconcileMetrics,
+  acquireLock,
   load,
   save,
 } from "../workflow.mjs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const CLI = fileURLToPath(new URL("../workflow.mjs", import.meta.url));
 
 test("verify .workflow/ is present in .gitignore", () => {
   const gitignorePath = join(process.cwd(), ".gitignore");
@@ -250,6 +256,78 @@ test("close on a refused auto task is refused and writes no metric", () => {
 
     assert.equal(cmdClose(tmp, {}), 2);
     assert.equal(existsSync(join(tmp, ".workflow", "metrics.jsonl")), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("metrics: interrupted close (closed state durable before metric write) reconciles exactly once", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-test-interrupted-close-"));
+  try {
+    cmdStart(tmp, { tier: "T0", task: "crashed-close-task" });
+    const st = load(tmp);
+    assert.ok(st);
+
+    // Simulate interrupted close: task state became "closed", but crash occurred before metric write
+    st.status = "closed";
+    st.closedAt = new Date().toISOString();
+    save(tmp, st);
+
+    const metricsFile = join(tmp, ".workflow", "metrics.jsonl");
+    assert.equal(existsSync(metricsFile), false, "metric file should not exist yet before reconciliation");
+
+    // First query/reconciliation recovers the missing metric
+    const records1 = loadMetrics(tmp);
+    assert.equal(records1.length, 1, "reconciliation must recover the missing terminal record");
+    assert.equal(records1[0].task, "crashed-close-task");
+    assert.equal(records1[0].tier, "T0");
+    assert.equal(records1[0].closedAt, st.closedAt);
+
+    // Second query must not duplicate the metric
+    const records2 = loadMetrics(tmp);
+    assert.equal(records2.length, 1, "reconciliation must be exactly once without duplicating metrics");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("concurrency: 2 processes recording artifacts concurrently do not overwrite state", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-test-concurrency-"));
+  try {
+    cmdStart(tmp, { tier: "T2", task: "concurrent-recording" });
+
+    writeFileSync(join(tmp, "manifest.md"), "| R01 | user quote |\n", "utf8");
+    writeFileSync(join(tmp, "interfaces.md"), "# Interfaces\n- export function run(): void\n- export function check(): void\n", "utf8");
+
+    function runWorker(kind, path, detail) {
+      return new Promise((resolve, reject) => {
+        const proc = spawn(process.execPath, [
+          CLI, "artifact", "--root", tmp, "--kind", kind, "--path", path, "--detail", detail
+        ], { windowsHide: true });
+        proc.on("close", (code) => resolve(code));
+        proc.on("error", reject);
+      });
+    }
+
+    const [code1, code2] = await Promise.all([
+      runWorker("manifest", "manifest.md", "captured R01 verbatim from user"),
+      runWorker("interfaces", "interfaces.md", "public signatures and invariants recorded in full"),
+    ]);
+
+    assert.equal(code1, 0, "worker 1 must succeed");
+    assert.equal(code2, 0, "worker 2 must succeed");
+
+    const st = load(tmp);
+    assert.ok(st.artifacts.manifest, "manifest artifact must persist");
+    assert.ok(st.artifacts.interfaces, "interfaces artifact must persist");
+
+    // Stale lock recovery verification
+    const lockFile = join(tmp, ".workflow", "state.lock");
+    writeFileSync(lockFile, JSON.stringify({ pid: 9999999, token: "stale-token", createdAt: Date.now() - 30000 }), "utf8");
+
+    const release = acquireLock(tmp, 2000, 1000);
+    assert.ok(typeof release === "function", "acquireLock must cleanly recover stale lock");
+    release();
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
