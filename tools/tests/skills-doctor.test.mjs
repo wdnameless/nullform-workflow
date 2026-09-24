@@ -331,3 +331,24 @@ test("sync.sh does not execute command substitution in skill name or detail", ()
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("leading UTF-8 BOM in SKILL.md and .skills-disabled.json does not break frontmatter or disabled parsing", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "skills-bom-"));
+  try {
+    const { agentsHome, installedRoot, repoRoot } = fixture(tmp, { repo: ["alpha", "beta"], installed: ["alpha"] });
+    // Write BOM on installed SKILL.md and on .skills-disabled.json (e.g. from Windows PowerShell 5.1 Set-Content)
+    writeFileSync(join(installedRoot, "alpha", "SKILL.md"), "\uFEFF" + skillMd("alpha"), "utf8");
+    writeFileSync(join(repoRoot, "alpha", "SKILL.md"), skillMd("alpha"), "utf8");
+    writeFileSync(join(agentsHome, ".skills-disabled.json"), "\uFEFF" + JSON.stringify({ version: 1, disabled: ["beta"] }), "utf8");
+
+    const res = doctor(installedRoot, repoRoot);
+
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /all checks passed/);
+    assert.match(res.stdout, /beta: disabled by operator/);
+    assert.doesNotMatch(res.stdout, /frontmatter/);
+    assert.doesNotMatch(res.stdout, /orphan/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

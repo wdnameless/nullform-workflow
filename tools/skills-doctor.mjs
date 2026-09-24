@@ -34,8 +34,8 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 /* ----------------------------------------------------------------- utilities */
-
-const norm = (s) => s.replace(/\r\n/g, "\n");
+const stripBom = (s) => (typeof s === "string" && s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s);
+const norm = (s) => stripBom(s).replace(/\r\n/g, "\n");
 const sha = (s) => createHash("sha256").update(norm(s), "utf8").digest("hex").slice(0, 16);
 
 function parseFrontmatter(text) {
@@ -77,7 +77,7 @@ function readDisabled(agentsHome) {
 
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(stripBom(readFileSync(path, "utf8")));
   } catch (e) {
     return bad(`${path}: invalid JSON (${e.message}) -> disabled list treated as EMPTY`);
   }
