@@ -221,6 +221,21 @@ test("installation copies core files and directory structure", () => {
   }
 });
 
+/** True when a harness prerequisite (`omp`, `openspec`) is runnable on this host. */
+function hasCommand(name) {
+  const probe = spawnSync(name, ["--version"], {
+    encoding: "utf8",
+    shell: process.platform === "win32",
+    timeout: 10000,
+  });
+  return !probe.error && probe.status === 0;
+}
+
+// The installer's contract is machine-independent: it must succeed with nothing
+// but Node, leaving a tree the shipped verifier can inspect. The verifier then
+// reports the OMP-only prerequisites (`openspec`, `omp`) as FAIL when the host
+// lacks them — honest prerequisites, not install defects. Asserting a blanket
+// exit 0 made a clean CI runner look broken.
 test("OMP sandbox install is usable by the shipped verifier", () => {
   const temp = createTempDir("omp portable ");
   const root = join(temp, "live");
@@ -243,18 +258,44 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
       "--profile", "verify", "--root", root, "--harness", root,
       "--user-home", userHome, "--json",
     ], { encoding: "utf8" });
-    assert.equal(verified.status, 0, verified.stderr);
     const report = JSON.parse(verified.stdout);
-    assert.equal(report.ok, true, JSON.stringify(report.findings));
+    const statusOf = (label) =>
+      report.results.find((result) => result.label.startsWith(label))?.status;
+
+    // Installation-owned checks: must pass with nothing but Node on the host.
     for (const label of [
+      "node present",
       "agent definitions present",
       "skills registry populated",
       "rule installed and addressable",
       "mandatory MCP servers present",
+      "no unsubstituted placeholders",
+      "prompt surfaces have no volatile literals",
       "prompt surfaces match baseline",
+      "tier gate enforces artifacts",
+      "portable core specification",
     ]) {
-      assert.equal(report.results.find((result) => result.label.startsWith(label))?.status, "PASS", label);
+      assert.equal(statusOf(label), "PASS", `${label}: ${JSON.stringify(report.results)}`);
     }
+
+    // Host prerequisites: FAIL is the correct answer when the tool is absent.
+    assert.equal(
+      statusOf("openspec present"),
+      hasCommand("openspec") ? "PASS" : "FAIL",
+      "openspec presence must be reported honestly"
+    );
+    assert.equal(
+      statusOf("install doctor"),
+      hasCommand("omp") ? "PASS" : "FAIL",
+      "omp-dependent doctor must be reported honestly"
+    );
+
+    // Exit code must agree with the reported failures — no silent green.
+    assert.equal(
+      verified.status,
+      report.results.some((r) => r.status === "FAIL") ? 1 : 0,
+      verified.stderr
+    );
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
