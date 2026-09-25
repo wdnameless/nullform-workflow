@@ -52,6 +52,53 @@ test("DEFAULT_THRESHOLDS has maxLines 700 and maxFunctionLines 120", () => {
   assert.equal(DEFAULT_THRESHOLDS.maxFunctionLines, 120);
 });
 
+test("class and object-literal methods count toward the function limit", () => {
+  // Regression: a 409-line file holding two 200-line methods reported zero offenders,
+  // because the matcher knew only `function`, `const x = function`, and arrows.
+  const src = [
+    "class Big {",
+    "  handle() {",
+    ...Array.from({ length: 200 }, (_, i) => `    const v${i} = ${i};`),
+    "  }",
+    "}",
+    "const obj = {",
+    "  run() {",
+    ...Array.from({ length: 200 }, (_, i) => `    const w${i} = ${i};`),
+    "  },",
+    "};",
+  ].join("\n");
+  const fns = scanFunctions(src);
+  const names = fns.map((f) => f.name);
+  assert.ok(names.includes("handle"), `expected class method, got ${JSON.stringify(names)}`);
+  assert.ok(names.includes("run"), `expected object method, got ${JSON.stringify(names)}`);
+  for (const n of ["handle", "run"]) {
+    const fn = fns.find((f) => f.name === n);
+    assert.ok(fn.lines > 120, `${n} should be over 120 lines, got ${fn.lines}`);
+  }
+});
+
+test("control-flow blocks are not mistaken for methods", () => {
+  // Regression: `for (const x of y) {` matched the method pattern and was reported
+  // as a 157-line "function" in the real tree.
+  const src = [
+    "function outer() {",
+    "  for (const x of xs) {",
+    "    if (x) {",
+    "      consume(x);",
+    "    }",
+    "  }",
+    "  while (busy) {",
+    "    tick();",
+    "  }",
+    "}",
+  ].join("\n");
+  const names = scanFunctions(src).map((f) => f.name);
+  for (const kw of ["for", "if", "while"]) {
+    assert.ok(!names.includes(kw), `control-flow keyword '${kw}' was matched as a function`);
+  }
+  assert.ok(names.includes("outer"));
+});
+
 test("globToRegex: correctly matches scope patterns", () => {
   const reTools = globToRegex("tools/**/*.mjs");
   assert.equal(reTools.test("tools/dashboard.mjs"), true);

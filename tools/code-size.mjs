@@ -21,6 +21,11 @@
  *   node tools/code-size.mjs check [--root <dir>] [--json] [--baseline <file>]
  *   node tools/code-size.mjs baseline [--root <dir>] [--json] [--baseline <file>]
  *   node tools/code-size.mjs scan [--root <dir>] [--json]
+ *
+ * НЕ ЛОВИТ (граница названа честно, чтобы метрику не приняли за покрытие): горизонтальную
+ * сложность (файл из 200 строк по 500 символов проходит), цикломатику и связность,
+ * архитектурную запутанность, пути вне DEFAULT_SCOPE. Счёт строк — ПОЛ, не потолок:
+ * гейт останавливает разрастание в длину, но не измеряет, стало ли тяжелее читать.
  */
 
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
@@ -28,9 +33,8 @@ import { resolve, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_THRESHOLDS = { maxLines: 700, maxFunctionLines: 120 };
-// Every code extension the repository actually ships. An extension missing from this list
-// is a hole a file can be renamed into: `.cjs` and `.js` are present in the tree, so a
-// `.mjs`-only scope would let the same length of code slip past by changing its name.
+// Every code extension the repository ships. A missing one is a rename dodge: `.cjs` and
+// `.js` exist in the tree, so an `.mjs`-only scope lets the same code slip past by name.
 export const DEFAULT_SCOPE = [
   "tools/**/*.mjs",
   "tools/**/*.cjs",
@@ -43,9 +47,14 @@ export const DEFAULT_SCOPE = [
 export const DEFAULT_BASELINE_FILE = ".code-size.baseline.json";
 export const DEFAULT_CONFIG_FILE = ".code-size.json";
 
-// Directories the repository does not distribute as live source. `_archive` and
-// `skills-archive` hold parked material (both are gitignored); `bench` and `worktrees`
-// are generated. Scanning them reports offenders nobody can act on.
+/** Control-flow and declaration keywords that take `(...) {` but are not functions. */
+const JS_KEYWORDS = new Set([
+  "for", "while", "if", "else", "switch", "catch", "do", "return", "function", "class",
+  "try", "finally", "with", "typeof", "await", "yield", "new", "delete", "void", "in", "of",
+]);
+
+// Not distributed as live source (gitignored or generated): reporting offenders here
+// would name files nobody can act on.
 const IGNORE_DIRS = new Set([
   "node_modules",
   ".git",
@@ -213,6 +222,15 @@ function matchJsFunctionDecl(lines, i) {
       if (lines[l].includes(";")) break;
     }
   }
+
+  // Method shorthand (`handle() {`, `get x() {`, `*gen() {`). Without it a class or
+  // object-literal method escapes the function limit: a 409-line file with two 200-line
+  // methods reported zero offenders. Needs a same-line brace and a non-keyword name.
+  const methodMatch = line.match(
+    /^[ \t]{2,}(?:static\s+)?(?:async\s+)?(?:\*\s*)?(?:get\s+|set\s+)?([a-zA-Z0-9_$]+)\s*\(([^)]*)\)\s*\{/
+  );
+  if (methodMatch && !JS_KEYWORDS.has(methodMatch[1])) return { name: methodMatch[1] };
+
   return null;
 }
 
@@ -559,15 +577,8 @@ function printUsage() {
   baseline  Создать/обновить .code-size.baseline.json с текущими нарушителями
   scan      Показать текущие нарушители без сверки с baseline
 
-Опции:
-  --root, -r <dir>       Корень репозитория (по умолчанию: текущий каталог)
-  --baseline, -b <file>  Путь к baseline-файлу (по умолчанию: .code-size.baseline.json)
-  --json                 Вывод в формате JSON
-  --help, -h             Справка
-
-Escape-люки:
-  // defer: <что> | ceiling: <порог> | upgrade: <когда>   в первых 50 строках файла
-  // code-size:allow                                      на строке объявления функции
+Опции: --root/-r <dir>, --baseline/-b <file>, --json, --help/-h
+Escape-люки (подробности — в заголовке файла): defer: в первых 50 строках, code-size:allow на функции.
 `);
 }
 
