@@ -213,3 +213,16 @@ correct:
 The expectation came from the author's own prompt to the oracle, not from the code. Recorded
 rather than silently dropped, because a wrong acceptance criterion is itself a defect in the
 process.
+
+## Branch acceptance after portable-install CI change
+
+Verdict: ACCEPT
+
+`BranchOracleA` and `BranchOracleB` independently rechecked the committed
+requirements against the branch with the OS install matrix and OMP sandbox
+test. Both accepted the prior requirements unchanged. Parent verification:
+`node --test tools/tests/*.test.mjs` → `tests 390`, `pass 390`, `fail 0`;
+`node tools/verify.mjs --profile verify` → `29/29 checks passed`;
+`node tools/verify.mjs --profile audit` → `all 15 checks clean`.
+The new Linux/macOS matrix was not yet executed at this acceptance point;
+its remote outcome is a separate deployment gate.

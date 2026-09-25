@@ -9,3 +9,16 @@ Two independent read-only oracle passes used `nullform-gateway/gemini-3.8-flash-
 - Independent parent run: `node --test tools/tests/*.test.mjs` → `tests 389`, `pass 389`, `fail 0`; `node tools/code-size.mjs check --root .` → `PASS — нарушений нет. Проверено 111 файлов, 723 функций.`; `node tools/sync.mjs --harness D:/ohmypi --agent-dir C:/Users/Administrator/.omp/agent --check --quiet` → `sync: clean (60 files checked, skills parity verified)`.
 
 R30–R35: two-pass promote refusal, missing law-copy restoration, token/root/JSON contracts, installed engine/manifest inventory confirmed by sandbox CLI and doctor tests. R36–R38: multiline method counting, lexical masking and deterministic baseline confirmed by targeted tests. R39: stale dashboard runtime replaced and printed URL passed real `/api/health`. R40: agent-owned config protected while template/tool configs remain candidates. R41–R42: browser failure guidance and runnable replay commands matched their live interfaces. No new public domain symbol or conflicting ADR reported.
+
+## Branch acceptance after portable-install CI change
+
+Verdict: ACCEPT
+
+Two independent read-only passes (`BranchOracleA`, `BranchOracleB`) rechecked
+R30–R42 against the branch including the OS install matrix and OMP sandbox
+test; both accepted without a regression. Parent commands:
+`node --test tools/tests/*.test.mjs` → `tests 390`, `pass 390`, `fail 0`;
+`node tools/verify.mjs --profile verify` → `29/29 checks passed`;
+`node tools/verify.mjs --profile audit` → `all 15 checks clean`.
+Windows sandbox installation verified `26` PASS and `3` provider SETUP checks;
+Linux/macOS matrix execution remains to be observed on GitHub Actions.

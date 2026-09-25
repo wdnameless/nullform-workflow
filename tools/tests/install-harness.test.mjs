@@ -221,6 +221,45 @@ test("installation copies core files and directory structure", () => {
   }
 });
 
+test("OMP sandbox install is usable by the shipped verifier", () => {
+  const temp = createTempDir("omp portable ");
+  const root = join(temp, "live");
+  const userHome = join(temp, "home");
+  try {
+    const installed = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(installed.status, 0, installed.stderr);
+
+    const law = readFileSync(join(userHome, ".omp", "agent", "AGENTS.md"), "utf8");
+    assert.ok(law.includes(root.replace(/\\/g, "/")));
+    assert.ok(!law.includes("<HARNESS>"));
+    assert.equal(readFileSync(join(userHome, ".omp", "agent", ".harness-root"), "utf8").trim(), root);
+    assert.ok(existsSync(join(root, "tools", "sync.mjs")));
+    assert.ok(existsSync(join(root, "tools", "sync-manifest.json")));
+
+    const verified = spawnSync(process.execPath, [
+      join(root, "tools", "verify.mjs"),
+      "--profile", "verify", "--root", root, "--harness", root,
+      "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(verified.status, 0, verified.stderr);
+    const report = JSON.parse(verified.stdout);
+    assert.equal(report.ok, true, JSON.stringify(report.findings));
+    for (const label of [
+      "agent definitions present",
+      "skills registry populated",
+      "rule installed and addressable",
+      "mandatory MCP servers present",
+      "prompt surfaces match baseline",
+    ]) {
+      assert.equal(report.results.find((result) => result.label.startsWith(label))?.status, "PASS", label);
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("installation is idempotent on repeated execution", () => {
   const tempRoot = createTempDir("harness-idempotent-");
   try {

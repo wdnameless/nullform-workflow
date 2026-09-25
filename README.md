@@ -84,6 +84,10 @@ node tools/install-harness.mjs --harness auto --root .
 
 Явный выбор харнесса: `--harness omp|claude|codex|opencode|cursor|all`.
 
+CI проверяет установку OMP в отдельном каталоге на Windows, Linux и macOS
+(Node 20; Node 18 дополнительно на Linux). Без настроенного провайдера модельные
+вызовы недоступны: проверка установки помечает эти пункты `SETUP`, а не `PASS`.
+
 Для OMP есть расширенный установщик — с плагинами, MCP-флотом, профилями Paseo и провайдером моделей:
 
 ```powershell

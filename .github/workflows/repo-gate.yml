@@ -12,6 +12,28 @@ permissions:
   pull-requests: write
 
 jobs:
+  portable-install:
+    name: Portable install (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [20]
+        include:
+          - os: ubuntu-latest
+            node: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install OMP in a sandbox and verify it
+        run: node --test tools/tests/install-harness.test.mjs
+      - name: Check Windows PowerShell installer
+        if: runner.os == 'Windows' && matrix.node == 20
+        run: node --test tools/tests/paseo-install.test.mjs
+
   gate:
     name: Repository Verification Gate
     runs-on: ubuntu-latest
