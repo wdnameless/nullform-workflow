@@ -41,3 +41,7 @@ final tree. `FinalOracleB`: `node --test tools/tests/install-harness.test.mjs`
 → `29/29`; `--profile audit` → `15/15`; whole suite → `tests 390`, `pass 390`,
 `fail 0`. Both passes recorded the remote Linux/macOS outcome for `48754c7` as
 NOT PROVEN at acceptance time.
+
+## Sealed on the final tree
+
+Re-accepted after the three CLI fixes (symlink entry guard, stdout flush, doctor stderr). Current suite: 391/391, verify 29/29, audit 15/15, code-size PASS. See `openspec/changes/symlink-entry-guard/oracle.md` for the final double acceptance.

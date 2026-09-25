@@ -240,3 +240,7 @@ tracks the report. Two independent read-only passes (`FinalOracleA`,
 → `tests 390`, `pass 390`, `fail 0`; `verify` `29/29`; `audit` `15/15`;
 `code-size` `PASS — нарушений нет`. Remote Linux/macOS execution for the fixed
 commit is recorded as NOT PROVEN at acceptance time.
+
+## Sealed on the final tree
+
+Re-accepted after the three CLI fixes (symlink entry guard, stdout flush, doctor stderr). Current suite: 391/391, verify 29/29, audit 15/15, code-size PASS. See `openspec/changes/symlink-entry-guard/oracle.md` for the final double acceptance.
