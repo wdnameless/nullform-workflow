@@ -33,11 +33,11 @@
  *   2 — ошибка запуска / параметров
  */
 
-import { existsSync, readFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { findPruneCandidates } from "./sync-prune.mjs";
 import { cleanYamlValue, parseModelsYaml, probeProvider } from "./oracle-model.mjs";
 
@@ -1453,7 +1453,7 @@ export async function main(argv = process.argv.slice(2)) {
   return result.ok ? 0 : 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {

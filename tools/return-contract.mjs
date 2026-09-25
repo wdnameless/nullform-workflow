@@ -13,7 +13,8 @@
  *   node return-contract.mjs <file> [--json]
  *   node return-contract.mjs --text "<content>" [--json]
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { parseArgs as utilParseArgs } from "node:util";
 
 export const ALLOWED_STATUSES = [
@@ -273,7 +274,7 @@ export function validateReturnContract(rawText) {
 
 /* ----------------------------------------------------------------------- main */
 
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("return-contract.mjs");
+const isMain = Boolean(process.argv[1]) && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 
 if (isMain) {
   const argv = process.argv.slice(2);

@@ -23,7 +23,7 @@
  * Требования: Node 18+, без внешних зависимостей.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -546,8 +546,13 @@ export function parseArgs(argv) {
 // Запуск из командной строки
 const isDirectExecution =
   process.argv[1] &&
-  (fileURLToPath(import.meta.url) === resolve(process.argv[1]) ||
-    process.argv[1].endsWith("context-inbox.mjs"));
+  (() => {
+    try {
+      return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+    } catch {
+      return false;
+    }
+  })();
 
 if (isDirectExecution) {
   const args = parseArgs(process.argv.slice(2));

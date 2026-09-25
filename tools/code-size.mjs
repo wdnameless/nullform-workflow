@@ -28,9 +28,9 @@
  * гейт останавливает разрастание в длину, но не измеряет, стало ли тяжелее читать.
  */
 
-import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, existsSync, statSync, realpathSync } from "node:fs";
 import { resolve, join, relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_THRESHOLDS = { maxLines: 700, maxFunctionLines: 120 };
 // Every code extension the repository ships. A missing one is a rename dodge: `.cjs` and
@@ -690,6 +690,6 @@ export function main(argv = process.argv.slice(2)) {
   return 2;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   process.exit(main());
 }

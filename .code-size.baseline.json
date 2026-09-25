@@ -18,8 +18,8 @@
       "reason": ""
     },
     "tools/benchmark.mjs": {
-      "lines": 1615,
-      "reason": ""
+      "lines": 1616,
+      "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
     "tools/dashboard.mjs": {
       "lines": 2937,
@@ -46,8 +46,8 @@
       "reason": ""
     },
     "tools/verify.mjs": {
-      "lines": 1290,
-      "reason": ""
+      "lines": 1291,
+      "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
     "tools/workflow.mjs": {
       "lines": 1648,

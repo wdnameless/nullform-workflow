@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /**
  * test-lens.mjs: Test Output Summarizer for AI Agents
@@ -390,6 +390,6 @@ Usage:
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   process.exit(main(process.argv.slice(2)));
 }

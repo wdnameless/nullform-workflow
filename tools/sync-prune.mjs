@@ -25,9 +25,9 @@
  *                2 — ошибка параметров (нет --harness/--repo).
  */
 
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync, realpathSync } from "node:fs";
 import { join, resolve, relative, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs as utilParseArgs } from "node:util";
 
 /** Каталоги, покрытые манифестом sync.ps1. */
@@ -272,6 +272,6 @@ export function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   process.exit(main());
 }

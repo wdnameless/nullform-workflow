@@ -1552,7 +1552,7 @@ export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdArtifact, cmdCh
 
 import { fileURLToPath } from "node:url";
 
-if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   const args = parse(process.argv.slice(2));
   const root = args.flags.root ? String(args.flags.root) : process.cwd();
   const cmd = args._[0];

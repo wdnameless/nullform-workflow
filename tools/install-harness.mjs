@@ -31,6 +31,7 @@ import {
   readlinkSync,
   symlinkSync,
   unlinkSync,
+  realpathSync,
 } from "node:fs";
 import { resolve, join, dirname, relative } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -624,6 +625,6 @@ function main() {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   main();
 }

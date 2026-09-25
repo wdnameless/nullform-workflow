@@ -23,9 +23,9 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, realpathSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const STATE_DIR = ".prompt-lint";
 const BASELINE = "baseline.json";
@@ -680,6 +680,6 @@ function printUsage() {
   console.log("  node prompt-lint.mjs sizes       --root <harness> [--json] [--check] # size budgets");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   process.exit(main());
 }

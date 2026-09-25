@@ -7,7 +7,8 @@
  * Принцип: quality first, savings second.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { parseArgs as utilParseArgs } from 'node:util';
@@ -387,8 +388,6 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 // Запуск при прямом вызове
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'))) {
-  main();
-} else if (process.argv[1] && process.argv[1].endsWith('cache-doctor.mjs')) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   main();
 }

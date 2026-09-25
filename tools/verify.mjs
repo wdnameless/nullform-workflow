@@ -17,6 +17,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  realpathSync,
 } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -1281,7 +1282,7 @@ Options:
   process.exit(failCount > 0 ? 1 : 0);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   main().catch((err) => {
     console.error(`Unhandled error: ${err.stack || err.message}`);
     process.exit(2);

@@ -20,9 +20,9 @@
  *   node tools/debt-ledger.mjs scan [--root <dir>] [--json] [--check] [--write <file>] [--marker <key>]
  */
 
-import { readdirSync, statSync, readFileSync, openSync, readSync, closeSync, writeFileSync } from "node:fs";
+import { readdirSync, statSync, readFileSync, openSync, readSync, closeSync, writeFileSync, realpathSync } from "node:fs";
 import { resolve, join, extname, relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_MARKER = "defer";
 
@@ -586,6 +586,6 @@ export function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   process.exit(main());
 }

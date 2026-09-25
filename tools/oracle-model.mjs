@@ -11,7 +11,7 @@
  * Zero external dependencies. Node 18+.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -738,7 +738,7 @@ export async function run(argv) {
 }
 
 // CLI entry point
-const isDirectRun = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+const isDirectRun = Boolean(process.argv[1]) && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 if (isDirectRun) {
   run(process.argv.slice(2)).then((code) => {
     if (code !== 0) process.exit(code);

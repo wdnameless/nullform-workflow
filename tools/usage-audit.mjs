@@ -1,8 +1,8 @@
-import { readdirSync, statSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, statSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve, basename, extname } from "node:path";
 import { homedir } from "node:os";
 import { parseArgs as utilParseArgs } from "node:util";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 /**
  * usage-audit.mjs — аудит использования MCP-серверов, встроенных тулов и скиллов
@@ -636,7 +636,7 @@ export function formatAuditReport(data, { top = 15 } = {}) {
 }
 
 // Запуск при прямом вызове CLI
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   const USAGE = `Использование: node tools/usage-audit.mjs [параметры]
 
 Параметры:

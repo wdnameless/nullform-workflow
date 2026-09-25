@@ -14,7 +14,8 @@
  *
  * Zero dependencies. Node 18+ / Bun.
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { parseArgs as utilParseArgs } from "node:util";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -141,7 +142,7 @@ export function runCachePolicyCheck({ root, policyPath, returnContractPath }) {
 
 /* ----------------------------------------------------------------------- main */
 
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("cache-policy.mjs");
+const isMain = process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 
 if (isMain) {
   const args = parseArgs(process.argv.slice(2));

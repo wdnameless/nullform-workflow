@@ -23,7 +23,7 @@
  *   --help, -h        Справка
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, renameSync, openSync, readSync, closeSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, renameSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import { resolve, join, dirname, relative } from "node:path";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
@@ -2922,7 +2922,7 @@ export async function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   // main() асинхронный: без .then() код возврата терялся и CLI всегда выходил с 0.
   Promise.resolve(main(process.argv.slice(2)))
     .then((code) => {

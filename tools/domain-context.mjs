@@ -19,7 +19,7 @@
  * Требования: Node 18+, без внешних зависимостей, RU текст / --json.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve, relative, sep } from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -504,10 +504,7 @@ export function parseArgs(argv) {
 }
 
 // Запуск из командной строки
-const isDirectExecution =
-  process.argv[1] &&
-  (fileURLToPath(import.meta.url) === resolve(process.argv[1]) ||
-    process.argv[1].endsWith("domain-context.mjs"));
+const isDirectExecution = Boolean(process.argv[1]) && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 
 if (isDirectExecution) {
   const argv = process.argv.slice(2);
