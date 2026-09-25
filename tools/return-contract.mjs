@@ -14,6 +14,7 @@
  *   node return-contract.mjs --text "<content>" [--json]
  */
 import { readFileSync, existsSync } from "node:fs";
+import { parseArgs as utilParseArgs } from "node:util";
 
 export const ALLOWED_STATUSES = [
   "DONE",
@@ -32,18 +33,17 @@ export const REQUIRED_SECTIONS = [
   "CONCERNS",
 ];
 
-function parseArgs(argv) {
-  const out = { _: [], text: null, json: false };
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--text") {
-      out.text = argv[++i];
-    } else if (argv[i] === "--json") {
-      out.json = true;
-    } else {
-      out._.push(argv[i]);
-    }
-  }
-  return out;
+function parseArgs(args) {
+  const { values, positionals } = utilParseArgs({
+    args,
+    options: {
+      text: { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+  return { _: positionals, text: values.text ?? null, json: values.json };
 }
 
 /**

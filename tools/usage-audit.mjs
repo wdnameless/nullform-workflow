@@ -119,29 +119,14 @@ export function parseCliArgs(args = process.argv.slice(2)) {
  * Рекурсивный поиск всех .jsonl файлов в директории.
  */
 export function findJsonlFiles(dir) {
-  const files = [];
-  if (!existsSync(dir)) return files;
-
-  function traverse(current) {
-    let entries;
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        traverse(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        files.push(fullPath);
-      }
-    }
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir, { recursive: true })
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => join(dir, f));
+  } catch {
+    return [];
   }
-
-  traverse(dir);
-  return files;
 }
 
 /**

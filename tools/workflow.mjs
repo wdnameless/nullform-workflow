@@ -1565,7 +1565,7 @@ function cmdCheckCi(root, flags) {
 
 /* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, withStateLock, load, save, parse, cmdCheckCi };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi };
 
 import { fileURLToPath } from "node:url";
 

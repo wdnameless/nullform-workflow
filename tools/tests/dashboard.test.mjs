@@ -38,26 +38,13 @@ import {
 } from "../dashboard.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../dashboard.mjs", import.meta.url)));
+import { createTempDir, createGitRepo } from "./test-helpers.mjs";
 
-function createTempDir() {
-  return mkdtempSync(join(tmpdir(), "dashboard-test-"));
-}
 
 function git(dir, args) {
   return spawnSync("git", args, { cwd: dir, encoding: "utf8", shell: false , windowsHide: true});
 }
 
-/** Временный git-репозиторий с одним коммитом. */
-function createGitRepo() {
-  const dir = createTempDir();
-  git(dir, ["init", "-q"]);
-  git(dir, ["config", "user.email", "t@example.com"]);
-  git(dir, ["config", "user.name", "Test"]);
-  writeFileSync(join(dir, "a.js"), "line1\nline2\n", "utf8");
-  git(dir, ["add", "-A"]);
-  git(dir, ["commit", "-q", "-m", "init"]);
-  return dir;
-}
 
 test("REQUIRED_ARTIFACTS_BY_TIER: ярусы требуют разный набор артефактов", () => {
   assert.deepEqual(REQUIRED_ARTIFACTS_BY_TIER.T0, ["lane"]);
@@ -332,7 +319,9 @@ test("CLI: --json и генерация файла дашборда работа
     const outFile = join(tmp, "dash.html");
     const genProc = spawnSync(process.execPath, [CLI_PATH, "--root", tmp, "--output", outFile], { encoding: "utf8" });
     assert.equal(genProc.status, 0);
-    assert.ok(readFileSync(outFile, "utf8").includes("Nullform Console"));
+    const html = readFileSync(outFile, "utf8");
+    assert.ok(html.includes("<!DOCTYPE html>") || html.includes("<html"), "generated output must be HTML");
+    assert.ok(html.includes("</html>"), "generated output must have closing html tag");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

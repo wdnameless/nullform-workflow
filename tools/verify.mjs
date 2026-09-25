@@ -23,14 +23,14 @@ import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export class NotConfiguredError extends Error {
+class NotConfiguredError extends Error {
   constructor(message) {
     super(message);
     this.name = "NotConfiguredError";
   }
 }
 
-export function parseArgs(argv) {
+function parseArgs(argv) {
   const opts = {
     profile: "verify",
     root: "",
@@ -64,7 +64,7 @@ export function parseArgs(argv) {
   return opts;
 }
 
-export function resolveRoots(opts = {}) {
+function resolveRoots(opts = {}) {
   const toolsDir = dirname(fileURLToPath(import.meta.url));
   const scriptParent = dirname(toolsDir);
   const parentOfScriptParent = dirname(scriptParent);
@@ -130,7 +130,7 @@ export function resolveRoots(opts = {}) {
   };
 }
 
-export function runProc(cmd, args = [], options = {}) {
+function runProc(cmd, args = [], options = {}) {
   const isWin = process.platform === "win32";
   return spawnSync(cmd, args, {
     encoding: "utf8",
@@ -150,7 +150,7 @@ function runPromptLint(tool, userHome, args) {
   });
 }
 
-export function runOmp(args = [], options = {}) {
+function runOmp(args = [], options = {}) {
   const isWin = process.platform === "win32";
   if (isWin) {
     const appData = process.env.APPDATA || "";
@@ -171,7 +171,7 @@ export function runOmp(args = [], options = {}) {
   });
 }
 
-export function runOpenspec(args = [], options = {}) {
+function runOpenspec(args = [], options = {}) {
   const isWin = process.platform === "win32";
   if (isWin) {
     return spawnSync("cmd.exe", ["/d", "/s", "/c", `openspec ${args.join(" ")}`], {
@@ -186,7 +186,7 @@ export function runOpenspec(args = [], options = {}) {
   });
 }
 
-export function readModelsYaml(agentDir) {
+function readModelsYaml(agentDir) {
   const p = join(agentDir, "models.yml");
   if (!existsSync(p)) {
     throw new NotConfiguredError(
@@ -196,7 +196,7 @@ export function readModelsYaml(agentDir) {
   return readFileSync(p, "utf8");
 }
 
-export function checkSyncDrift(repoRoot, harnessRoot, userHome) {
+function checkSyncDrift(repoRoot, harnessRoot, userHome) {
   const isWin = process.platform === "win32";
   const syncScript = isWin
     ? join(repoRoot, "tools", "sync.ps1")
@@ -249,7 +249,7 @@ export function checkSyncDrift(repoRoot, harnessRoot, userHome) {
   };
 }
 
-export function checkSkillsDoctor(harnessRoot, userHome, repoRoot) {
+function checkSkillsDoctor(harnessRoot, userHome, repoRoot) {
   const tool = join(harnessRoot, "tools", "skills-doctor.mjs");
   return runProc(process.execPath, [
     tool,
@@ -300,7 +300,7 @@ export function testTierGate(harnessRoot, strict = true) {
   }
 }
 
-export async function executeCheck(id, label, fn) {
+async function executeCheck(id, label, fn) {
   const start = Date.now();
   try {
     const res = await fn();
@@ -344,7 +344,7 @@ export async function executeCheck(id, label, fn) {
   }
 }
 
-export async function runVerifyProfile(ctx) {
+async function runVerifyProfile(ctx) {
   const { harnessRoot, repoRoot, userHome, agentDir } = ctx;
   const results = [];
 
@@ -487,18 +487,24 @@ export async function runVerifyProfile(ctx) {
     })
   );
 
+  function readMcpServers(notConfiguredIfMissing = false) {
+    const p = join(agentDir, "mcp.json");
+    if (!existsSync(p)) {
+      if (notConfiguredIfMissing) throw new NotConfiguredError("mcp.json missing - no servers configured");
+      throw new Error("mcp.json missing");
+    }
+    try {
+      const m = JSON.parse(readFileSync(p, "utf8"));
+      return m.mcpServers || {};
+    } catch (e) {
+      throw new Error(`mcp.json parse error: ${e.message}`);
+    }
+  }
+
   // 9 mcp.json parses, entries well-formed
   results.push(
     await executeCheck(9, "mcp.json parses, entries well-formed", () => {
-      const p = join(agentDir, "mcp.json");
-      if (!existsSync(p)) throw new Error("mcp.json missing");
-      let m;
-      try {
-        m = JSON.parse(readFileSync(p, "utf8"));
-      } catch (e) {
-        throw new Error(`mcp.json parse error: ${e.message}`);
-      }
-      const servers = m.mcpServers || {};
+      const servers = readMcpServers(false);
       const names = Object.keys(servers);
       if (names.length === 0) throw new Error("no MCP servers configured");
       const bad = [];
@@ -518,12 +524,7 @@ export async function runVerifyProfile(ctx) {
   // 10 no MCP server pinned to @latest
   results.push(
     await executeCheck(10, "no MCP server pinned to @latest", () => {
-      const p = join(agentDir, "mcp.json");
-      // Absent config is "not configured", never "clean": returning true here claimed
-      // nothing is unpinned in a file that does not exist.
-      if (!existsSync(p)) throw new NotConfiguredError("mcp.json missing - no servers configured");
-      const m = JSON.parse(readFileSync(p, "utf8"));
-      const servers = m.mcpServers || {};
+      const servers = readMcpServers(true);
       const bad = [];
       for (const [n, entry] of Object.entries(servers)) {
         const a = entry.args;
@@ -537,10 +538,7 @@ export async function runVerifyProfile(ctx) {
   // 11 mandatory MCP servers present
   results.push(
     await executeCheck(11, "mandatory MCP servers present", () => {
-      const p = join(agentDir, "mcp.json");
-      if (!existsSync(p)) throw new Error("mcp.json missing");
-      const m = JSON.parse(readFileSync(p, "utf8"));
-      const servers = m.mcpServers || {};
+      const servers = readMcpServers(false);
       const names = Object.keys(servers);
       const mandatory = ["chrome-devtools"];
       const missing = mandatory.filter((req) => !names.includes(req));
@@ -930,7 +928,7 @@ export async function runVerifyProfile(ctx) {
   return results;
 }
 
-export async function runAuditProfile(ctx) {
+async function runAuditProfile(ctx) {
   const { harnessRoot, repoRoot, userHome, scope } = ctx;
   const results = [];
 
@@ -1150,7 +1148,7 @@ export async function runAuditProfile(ctx) {
   return results;
 }
 
-export function formatVerifyTable(results) {
+function formatVerifyTable(results) {
   const maxLabelLen = Math.max(63, ...results.map((r) => r.label.length));
   const col1W = maxLabelLen;
   const col2W = 6;
@@ -1166,7 +1164,7 @@ export function formatVerifyTable(results) {
   return out;
 }
 
-export function formatAuditTable(results) {
+function formatAuditTable(results) {
   const col1W = 29;
   const col2W = 6;
   const col3W = 46;
@@ -1189,7 +1187,7 @@ export function formatAuditTable(results) {
   return out;
 }
 
-export async function main() {
+async function main() {
   const argv = process.argv.slice(2);
   const opts = parseArgs(argv);
 

@@ -32,6 +32,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 /* ----------------------------------------------------------------- utilities */
 const stripBom = (s) => (typeof s === "string" && s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s);
@@ -267,14 +268,20 @@ export { run, listSkillDirs, readDisabled, parseFrontmatter, resolveDefaultRepoR
 
 /* ---------------------------------------------------------------------- main */
 
-const argv = process.argv.slice(2);
-let installedRoot = null, repoRoot = null, agentsHome = null, json = false;
-for (let i = 0; i < argv.length; i++) {
-  if (argv[i] === "--installed") installedRoot = argv[++i];
-  else if (argv[i] === "--repo") repoRoot = argv[++i];
-  else if (argv[i] === "--agents-home") agentsHome = argv[++i];
-  else if (argv[i] === "--json") json = true;
-}
+const { values } = parseArgs({
+  args: process.argv.slice(2),
+  options: {
+    installed: { type: "string" },
+    repo: { type: "string" },
+    "agents-home": { type: "string" },
+    json: { type: "boolean", default: false },
+  },
+  strict: false,
+});
+let installedRoot = values.installed || null;
+let repoRoot = values.repo || null;
+let agentsHome = values["agents-home"] || null;
+const json = values.json;
 const home = process.env.USERPROFILE || process.env.HOME || "";
 installedRoot = installedRoot || join(home, ".agents", "skills");
 agentsHome = agentsHome || dirname(installedRoot);

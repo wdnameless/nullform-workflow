@@ -28,6 +28,7 @@
 import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseArgs as utilParseArgs } from "node:util";
 
 /** Каталоги, покрытые манифестом sync.ps1. */
 export const MANIFEST_DIRS = ["tools", "agent", "rules", "core", "templates", "paseo"];
@@ -152,17 +153,25 @@ export function deletePruneCandidates(harness, candidates) {
   return { deleted, failed };
 }
 
-function parseArgs(argv) {
-  const args = { harness: null, repo: null, json: false, del: false, help: false };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--harness") args.harness = argv[++i];
-    else if (arg === "--repo") args.repo = argv[++i];
-    else if (arg === "--json") args.json = true;
-    else if (arg === "--delete") args.del = true;
-    else if (arg === "-h" || arg === "--help") args.help = true;
-  }
-  return args;
+function parseArgs(args) {
+  const { values } = utilParseArgs({
+    args,
+    options: {
+      harness: { type: "string" },
+      repo: { type: "string" },
+      json: { type: "boolean", default: false },
+      delete: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+    },
+    strict: false,
+  });
+  return {
+    harness: values.harness || null,
+    repo: values.repo || null,
+    json: values.json,
+    del: values.delete,
+    help: values.help,
+  };
 }
 
 export function main(argv = process.argv.slice(2)) {

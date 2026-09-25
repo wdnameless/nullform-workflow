@@ -117,7 +117,7 @@ Terms used in this OMP workflow harness. Definitions say what a term
   directly rather than inferred. May be temporary or durable; decide which.
 - **Red-capable loop** — a reproduction that genuinely fails on the reported bug.
   Required before implementation code is read or touched.
-- **Benchmark task** — an isolated coding problem specification (`bench/tasks.json`) with an ID, prompt, optional setup commands, timeout, and deterministic verification checks. Never mutates the source repo directly.
+- **Benchmark task** — an isolated coding problem specification with an ID, prompt, optional setup commands, timeout, and deterministic verification checks. Never mutates the source repo directly.
 - **Arm** — a named variant or configuration of an agent workflow being evaluated (e.g. `raw-model` vs `omp-workflow`), defined by a runner command template executed inside a fresh local git clone.
 - **Stage B** — the simplifying second phase in the A→B→A delivery rhythm. After meeting specifications and passing tests in Stage A, the agent executes an explicit compression and deduplication pass, preserving test invariance while achieving neutral or negative net lines of code (`net: -N lines`).
 
@@ -157,12 +157,22 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Usage audit** — audit tool (`tools/usage-audit.mjs [--days 30] [--plugins]`) analyzing tool, MCP, plugin, and skill invocation frequency from local logs, surfacing unused plugins with disable recommendations.
 - **Install doctor** — `tools/doctor.mjs` validates installation prerequisites and environment health. Its opt-in `--probe` checks provider reachability; unreachable providers WARN, never FAIL. In the plugin manifest, missing/wrong-version required plugins FAIL and optional plugins WARN; `--require-plugins` makes all required. `--skip-plugin-check` is for an explicit offline installer opt-out only.
 - **Plugin manifest** — `agent/plugins.json`. Exact `omp plugin install <spec>` versions for 14 OMP plugins. `pi-lens` and `oh-my-pi-plugin-morph` are required; other entries are optional. `install.ps1` applies them automatically unless `-SkipPlugins` is explicit, and doctor checks both presence and version.
+- **Auto-review** — `tools/auto-review.mjs`. Automated quality gate running TypeScript check, ESLint, test suite, and debt-ledger scan without mutating code; exits nonzero on any gate failure.
+- **Cache doctor** — `tools/cache-doctor.mjs`. Explains observed neural prompt-cache misses by analyzing `.jsonl` session events and comparing prompt layer fingerprints without modifying models or prompts.
+- **Cache policy** — `tools/cache-policy.mjs`. Enforces prompt-cache observability gates (volatile literal scan, prompt fingerprint determinism, return-contract validation) while keeping model thresholds advisory.
+- **Context inbox** — `tools/context-inbox.mjs`. Manages the context intake pipeline (`context/REQUESTS.md`) across categories (`init`, `request`, `list`, `resolve`, `check`).
+- **Domain context** — `tools/domain-context.mjs`. Collects domain-scoped context from matching paths, git history, codemap state, and related issues without external dependencies.
+- **Fix plugin windows** — `tools/fix-plugin-windows.cjs`. Eliminates flashing console windows on Windows for installed OMP plugins by adding `windowsHide: true` to child process calls.
+- **Oracle model** — `tools/oracle-model.mjs`. Autoselects the highest-priority model from `models.yml` for the oracle role and updates `config.yml` while preserving comments and layout.
+- **Return contract** — `tools/return-contract.mjs`. Validates subagent return contracts against format constraints (≤25 lines, valid status, required sections, numeric test counts).
+- **Session cost** — `tools/session_cost.py`. Aggregates token usage and estimated costs from session transcripts per provider, model, agent, and UTC day.
+- **Sync prune** — `tools/sync-prune.mjs`. Identifies harness-only orphan files absent from the repository manifest before cleanup (`sync.ps1 -Prune` / `doctor.mjs`).
 
 ## Operations
 
 - **Rate ceiling** — gateway or provider request rate limit if present. A lane
   emits HANDOFF at ~40–45 calls before running into context limits or provider caps so the headroom survives reconciliation.
-- **Session reuse** — continuing a specialist session that still holds useful
+- **Session reuse** — continuing a specialist session that still holds useful in-memory context across related steps instead of discarding it prematurely.
 - **Session snapshot** — the skill registry is read once at session start. A skill
   installed mid-session does not resolve as `skill://<name>` until restart, even
   though its rules may already be embedded in agent files.

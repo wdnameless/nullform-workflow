@@ -2741,20 +2741,6 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   return { url: null, port: null, started: false, error: "сервер не поднялся за 5 с" };
 }
 
-/** Обновить статичный HTML-файл (режим без сервера). */
-export function refreshDashboardFile(root) {
-  const absRoot = resolve(root);
-  const outPath = join(absRoot, ".workflow", "dashboard.html");
-  try {
-    const dir = dirname(outPath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const raw = collectDashboardData(absRoot);
-    writeFileSync(outPath, generateDashboardHtml(sanitizeHttpState(raw)), "utf8");
-    return outPath;
-  } catch {
-    return null;
-  }
-}
 
 export function parseArgs(argv = []) {
   const options = {

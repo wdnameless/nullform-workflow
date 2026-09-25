@@ -28,10 +28,8 @@ import {
 } from "../memory-cadence.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../memory-cadence.mjs", import.meta.url)));
+import { createTempDir } from "./test-helpers.mjs";
 
-function createTempDir() {
-  return mkdtempSync(join(tmpdir(), "memory-cadence-test-"));
-}
 
 test("loadConfig: отсутствующий config.yml возвращает fallback-структуру без исключений", () => {
   const tmp = createTempDir();

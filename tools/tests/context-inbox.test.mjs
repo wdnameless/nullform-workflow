@@ -24,10 +24,8 @@ import {
   parseRequestsTable,
   CATEGORIES,
 } from "../context-inbox.mjs";
+import { createTempDir } from "./test-helpers.mjs";
 
-function createTempDir() {
-  return mkdtempSync(join(tmpdir(), "context-inbox-test-"));
-}
 
 test("init idempotency: creates context/ structure once and preserves existing files", () => {
   const tmp = createTempDir();

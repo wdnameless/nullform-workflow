@@ -10,6 +10,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
+import { parseArgs as utilParseArgs } from 'node:util';
 
 export const CAUSE_CODES = {
   MODEL_SWITCH: 'MODEL_SWITCH',
@@ -326,10 +327,19 @@ export function formatRuReport(sessionResults, fingerprintComparison) {
 /**
  * Точка входа CLI
  */
-export function main() {
-  const args = process.argv.slice(2);
+export function main(argv = process.argv.slice(2)) {
+  const { values, positionals } = utilParseArgs({
+    args: argv,
+    options: {
+      json: { type: 'boolean', default: false },
+      fingerprint: { type: 'string' },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
 
-  if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
+  if (values.help || (positionals.length === 0 && !values.fingerprint)) {
     console.log(`Cache Doctor — инструменты наблюдаемости нейросетевого кэша
 
 Использование:
@@ -343,23 +353,9 @@ export function main() {
     process.exit(0);
   }
 
-  let asJson = false;
-  let fingerprintArg = null;
-  const files = [];
-
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '--json') {
-      asJson = true;
-    } else if (arg.startsWith('--fingerprint=')) {
-      fingerprintArg = arg.slice('--fingerprint='.length);
-    } else if (arg === '--fingerprint') {
-      fingerprintArg = args[++i];
-    } else {
-      files.push(arg);
-    }
-  }
-
+  const asJson = values.json;
+  const fingerprintArg = values.fingerprint || null;
+  const files = positionals;
   let fingerprintComparison = null;
   if (fingerprintArg) {
     const [oldPath, newPath] = fingerprintArg.split(',');

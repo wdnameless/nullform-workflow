@@ -41,9 +41,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 
-export const SUPPORTED_HARNESSES = ["claude", "codex", "opencode", "cursor", "omp", "all", "auto"];
+const SUPPORTED_HARNESSES = ["claude", "codex", "opencode", "cursor", "omp", "all", "auto"];
 
-export function isCommandInPath(cmd) {
+function isCommandInPath(cmd) {
   const pathEnv = process.env.PATH || "";
   const sep = process.platform === "win32" ? ";" : ":";
   const extensions = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
@@ -60,7 +60,7 @@ export function isCommandInPath(cmd) {
   return false;
 }
 
-export function detectHarness({ userHome = homedir() } = {}) {
+function detectHarness({ userHome = homedir() } = {}) {
   if (existsSync(join(userHome, ".claude"))) return "claude";
   if (existsSync(join(userHome, ".codex"))) return "codex";
   if (existsSync(join(userHome, ".opencode"))) return "opencode";
@@ -69,7 +69,7 @@ export function detectHarness({ userHome = homedir() } = {}) {
   return "omp";
 }
 
-export function getDefaultRoot(harness, userHome) {
+function getDefaultRoot(harness, userHome) {
   switch (harness) {
     case "claude":
       return join(userHome, ".claude", "workflow");
@@ -87,7 +87,7 @@ export function getDefaultRoot(harness, userHome) {
   }
 }
 
-export function getMarkdownAdapter(slashRoot, title = "Workflow & Orchestration Adapter") {
+function getMarkdownAdapter(slashRoot, title = "Workflow & Orchestration Adapter") {
   return [
     `# ${title}`,
     "",
@@ -124,7 +124,7 @@ export function getMarkdownAdapter(slashRoot, title = "Workflow & Orchestration 
   ].join("\n");
 }
 
-export function getCursorAdapter(slashRoot) {
+function getCursorAdapter(slashRoot) {
   return [
     "---",
     "description: Workflow & Orchestration Rules",
@@ -134,7 +134,7 @@ export function getCursorAdapter(slashRoot) {
   ].join("\n");
 }
 
-export function getOpencodeJson(existingPath) {
+function getOpencodeJson(existingPath) {
   let cfg = {};
   if (existingPath && existsSync(existingPath)) {
     try {
@@ -288,7 +288,7 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false)
   return out;
 }
 
-export function parseCliArgs(argv) {
+function parseCliArgs(argv) {
   const options = {
     harness: "auto",
     root: "",
@@ -335,7 +335,7 @@ export function parseCliArgs(argv) {
   return options;
 }
 
-export function installHarness(options = {}) {
+function installHarness(options = {}) {
   const userHome = options.userHome
     ? resolve(options.userHome)
     : process.env.USERPROFILE || process.env.HOME || homedir();
@@ -482,15 +482,17 @@ export function installHarness(options = {}) {
           // one that fails to connect on every session boot.
           const mcpTarget = join(homeAgentDir, "mcp.json");
           if (!existsSync(mcpTarget)) {
-            const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
-            // Drop any server still carrying an unsubstituted placeholder: there is
-            // no secrets.env on this path, so a kept entry would ship a literal
-            // `__X__` into mcp.json (which verification then flags) and fail to
-            // connect on every session boot.
-            for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
-              if (JSON.stringify(entry).includes("__")) delete cfg.mcpServers[name];
-            }
-            writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
+            try {
+              const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
+              // Drop any server still carrying an unsubstituted placeholder: there is
+              // no secrets.env on this path, so a kept entry would ship a literal
+              // `__X__` into mcp.json (which verification then flags) and fail to
+              // connect on every session boot.
+              for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
+                if (JSON.stringify(entry).includes("__")) delete cfg.mcpServers[name];
+              }
+              writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
+            } catch {}
           }
           // Without these the installed harness has no roles, no skills and no
           // rules: OMP cannot start the orchestrator at all.
@@ -555,7 +557,7 @@ function runPromptLintBaseline(promptLint, harnessRoot, userHome) {
   });
 }
 
-export function printHelp() {
+function printHelp() {
   console.log(`
 Workflow Harness Portable Installer
 
@@ -572,7 +574,7 @@ Options:
 `.trim());
 }
 
-export function main() {
+function main() {
   let options;
   try {
     options = parseCliArgs(process.argv.slice(2));

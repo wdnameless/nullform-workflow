@@ -12,23 +12,18 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import {
   isGitRepo,
   collectDomainFiles,
-  collectRecentCommits,
-  collectGhIssues,
   collectDecisions,
   collectDomainContext,
   formatRussianOutput,
-  parseArgs,
 } from "../domain-context.mjs";
-function createTempDir() {
-  return mkdtempSync(join(tmpdir(), "domain-context-test-"));
-}
+import { createTempDir } from "./test-helpers.mjs";
 
 test("collectDomainFiles: case-insensitive matching, src/** priority, and max-files cap", () => {
   const tmp = createTempDir();

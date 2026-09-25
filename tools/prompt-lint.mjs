@@ -39,11 +39,16 @@ const VOLATILE = [
   ["today-literal",  /\btoday\s+is\s+\d{4}-\d{2}-\d{2}/gi,     "hardcoded current date"],
   ["uuid",           /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "unique per render"],
   ["long-hex",       /\b[0-9a-f]{16,}\b/g,                      "hash/id — verify it is a stable example, not generated"],
-  // A prompt surface ships with '<HARNESS>'; a resolved absolute path in the template
-  // means someone promoted a live copy back into the repo (or hand-edited a machine path
-  // in). On another host that path points nowhere. Allow-list: '<HARNESS>', URLs,
-  // relative paths, and lines that already carry a prompt-lint:allow marker.
-  ["machine-abs-path", /(?:^|[\s"'(=:])(?:[A-Za-z]:[\\/]|\/(?:home|Users|mnt|opt|var)\/)[^\s"')]*/g,
+  // A prompt surface ships with '<HARNESS>'; a resolved path to the HARNESS ROOT in the
+  // template means someone promoted a live copy back into the repo (or hand-edited one in).
+  // On another host that path points nowhere.
+  //
+  // Scope is deliberately narrow. These are NOT flagged, because they are portable:
+  //   - drive-letter paths and /home|/Users/<name> are host-specific -> FLAGGED
+  //   - container-internal paths (/var/lib/postgresql/data), URLs, relative paths,
+  //     /usr, /etc, /tmp -> legitimate documentation examples, NOT flagged.
+  // A line can opt out with `prompt-lint:allow`.
+  ["machine-abs-path", /(?:^|[\s"'(=:])(?:[A-Za-z]:[\\/]|\/(?:home|Users)\/[^\s"')]+)/g,
                        "machine-specific absolute path — ships broken on another host"],
   ["js-clock",       /\b(?:Date\.now|performance\.now)\s*\(/g,  "wall-clock read"],
   ["js-new-date",    /\bnew\s+Date\s*\(/g,                      "wall-clock read"],
@@ -102,6 +107,18 @@ function parseArgs(argv) {
   return out;
 }
 
+/** Every `<dir>/<skill>/SKILL.md` under a skills root. */
+function skillFilesIn(skillsDir) {
+  const out = [];
+  if (!existsSync(skillsDir)) return out;
+  for (const d of readdirSync(skillsDir, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const p = join(skillsDir, d.name, "SKILL.md");
+    if (existsSync(p)) out.push(p);
+  }
+  return out;
+}
+
 /** Prompt surfaces, in the order OMP loads them. */
 function collectSurfaces(root) {
   const out = [];
@@ -115,6 +132,16 @@ function collectSurfaces(root) {
       if (f.endsWith(".md")) push(join(agentsDir, f));
     }
   }
+
+  // rules/ and skills/ ship from the repo tree too, and a resolved machine path in
+  // them is the same defect as in agent/. Without these the tripwire only ever
+  // guarded agent/ while the other two template kinds went unchecked.
+  const rulesDir = join(root, "rules");
+  if (existsSync(rulesDir)) {
+    for (const f of readdirSync(rulesDir)) if (f.endsWith(".md")) push(join(rulesDir, f));
+  }
+  out.push(...skillFilesIn(join(root, "skills")));
+
   return out;
 }
 
@@ -125,14 +152,7 @@ function collectInstalled(home) {
   if (existsSync(rulesDir)) {
     for (const f of readdirSync(rulesDir)) if (f.endsWith(".md")) out.push(join(rulesDir, f));
   }
-  const skillsDir = join(home, ".agents", "skills");
-  if (existsSync(skillsDir)) {
-    for (const d of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (!d.isDirectory()) continue;
-      const p = join(skillsDir, d.name, "SKILL.md");
-      if (existsSync(p)) out.push(p);
-    }
-  }
+  out.push(...skillFilesIn(join(home, ".agents", "skills")));
   return out;
 }
 
@@ -513,7 +533,17 @@ function cmdScan(root, home) {
       // Fenced code blocks are illustrative, not injected text — but only skip
       // when the pattern looks like an example we deliberately show.
       for (const [name, re, why] of VOLATILE) {
-        if (name === "machine-abs-path" && !isTemplate) continue;
+        // Two scopes of pattern:
+        //   machine-abs-path — only a defect in a TEMPLATE surface; an installed copy
+        //     under ~/.agents holds the resolved path by design.
+        //   js-clock/js-random — a wall-clock or random call inside a third-party
+        //     skill's example code (an animation snippet) is documentation, not
+        //     prompt content. Scanning installed copies for it fails the audit for
+        //     skills we do not ship.
+        const templateOnly = name === "machine-abs-path";
+        const runtimeExample = name === "js-clock" || name === "js-new-date" ||
+                               name === "js-random" || name === "js-randomuuid";
+        if (!isTemplate && (templateOnly || runtimeExample)) continue;
         re.lastIndex = 0;
         const m = re.exec(line);
         if (m) found.push({ line: i + 1, name, sample: m[0].slice(0, 48), why });

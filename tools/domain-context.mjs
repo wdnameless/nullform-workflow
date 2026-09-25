@@ -309,22 +309,14 @@ export function collectDecisions(root, domain, maxRows = 5) {
   const tokenLower = domain.toLowerCase();
 
   function scanDirRecursive(dir) {
-    const files = [];
-    if (!existsSync(dir)) return files;
+    if (!existsSync(dir)) return [];
     try {
-      const entries = readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          files.push(...scanDirRecursive(full));
-        } else if (entry.isFile()) {
-          files.push(full);
-        }
-      }
+      return readdirSync(dir, { recursive: true, withFileTypes: true })
+        .filter((d) => d.isFile())
+        .map((d) => join(d.parentPath || dir, d.name));
     } catch {
-      // игнорируем ошибки доступа
+      return [];
     }
-    return files;
   }
 
   const candidateFiles = [];

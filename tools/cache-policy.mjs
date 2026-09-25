@@ -15,6 +15,7 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { readFileSync, existsSync } from "node:fs";
+import { parseArgs as utilParseArgs } from "node:util";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { collectFingerprint } from "./prompt-lint.mjs";
@@ -32,23 +33,25 @@ const DEFAULT_POLICY = {
   dynamicContextPlacement: "tail",
 };
 
-function parseArgs(argv) {
-  const out = { _: [], root: null, policy: null, returnContract: null, json: false };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--root") {
-      out.root = argv[++i];
-    } else if (a === "--policy") {
-      out.policy = argv[++i];
-    } else if (a === "--return-contract") {
-      out.returnContract = argv[++i];
-    } else if (a === "--json") {
-      out.json = true;
-    } else {
-      out._.push(a);
-    }
-  }
-  return out;
+function parseArgs(args) {
+  const { values, positionals } = utilParseArgs({
+    args,
+    options: {
+      root: { type: "string" },
+      policy: { type: "string" },
+      "return-contract": { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+  return {
+    _: positionals,
+    root: values.root ?? null,
+    policy: values.policy ?? null,
+    returnContract: values["return-contract"] ?? null,
+    json: values.json,
+  };
 }
 
 export function loadPolicy(root, policyPath) {
