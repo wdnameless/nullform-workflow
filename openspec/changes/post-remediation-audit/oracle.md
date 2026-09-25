@@ -47,3 +47,7 @@ NOT PROVEN at acceptance time.
 Re-accepted after the three CLI fixes (symlink entry guard, stdout flush, doctor stderr). Current suite: 391/391, verify 29/29, audit 15/15, code-size PASS. See `openspec/changes/symlink-entry-guard/oracle.md` for the final double acceptance.
 
 Sealed together with the sibling acceptance records in the final commit.
+
+## CI green
+
+Run 36180534521 on the tip passed all five jobs, macOS included. No further code changes followed this acceptance.

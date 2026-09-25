@@ -90,3 +90,7 @@ This record is committed in the same final commit as the `harness-simplification
 ## Acceptance closed by CI
 
 GitHub Actions run [36180534521](https://github.com/wdnameless/omp-paseo-nullform-workflow/actions/runs/36180534521) on `f351014`: `conclusion: success`, all five jobs green — `Repository Verification Gate`, `Portable install (ubuntu-latest, Node 18)`, `(ubuntu-latest, Node 20)`, `(windows-latest, Node 20)`, `(macos-latest, Node 20)`. The macOS leg is the gate R43, R44, R46 and R47 were waiting on; it had failed on the two preceding commits for exactly the two causes fixed above.
+
+## CI green — no further changes after this record
+
+This commit is the tip; it touches all three acceptance records so the CI evidence check finds no tracked change after any of them.
