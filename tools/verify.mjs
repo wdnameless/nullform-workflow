@@ -1279,12 +1279,15 @@ Options:
     console.log("");
   }
 
-  process.exit(failCount > 0 ? 1 : 0);
+  // process.exit() discards stdout/stderr still queued on a pipe, which on
+  // macOS truncates the JSON document mid-object (seen in CI: a parse error at
+  // an arbitrary offset). Set the code and let Node flush before exiting.
+  process.exitCode = failCount > 0 ? 1 : 0;
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   main().catch((err) => {
     console.error(`Unhandled error: ${err.stack || err.message}`);
-    process.exit(2);
+    process.exitCode = 2;
   });
 }

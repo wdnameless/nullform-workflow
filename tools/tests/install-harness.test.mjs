@@ -258,7 +258,20 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
       "--profile", "verify", "--root", root, "--harness", root,
       "--user-home", userHome, "--json",
     ], { encoding: "utf8" });
-    const report = JSON.parse(verified.stdout);
+    // A truncated document means stdout was cut mid-write (process.exit()
+    // discarding a queued pipe write). Report the raw bytes: without them the
+    // failure is indistinguishable from a genuine parse bug.
+    let report;
+    try {
+      report = JSON.parse(verified.stdout);
+    } catch (err) {
+      throw new Error(
+        `verify --json did not emit one parseable document (${err.message}); ` +
+          `exit ${verified.status}, stdout ${Buffer.byteLength(verified.stdout)} bytes, ` +
+          `stderr ${JSON.stringify((verified.stderr || "").slice(0, 400))}, ` +
+          `tail ${JSON.stringify(verified.stdout.slice(-200))}`
+      );
+    }
     const statusOf = (label) =>
       report.results.find((result) => result.label.startsWith(label))?.status;
 

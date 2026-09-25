@@ -22,8 +22,8 @@
       "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
     "tools/dashboard.mjs": {
-      "lines": 2937,
-      "reason": ""
+      "lines": 2939,
+      "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated"
     },
     "tools/doctor.mjs": {
       "lines": 1464,
@@ -46,8 +46,8 @@
       "reason": ""
     },
     "tools/verify.mjs": {
-      "lines": 1291,
-      "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
+      "lines": 1294,
+      "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated on macOS"
     },
     "tools/workflow.mjs": {
       "lines": 1648,

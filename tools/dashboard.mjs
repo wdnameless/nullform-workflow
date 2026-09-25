@@ -2926,11 +2926,13 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
   // main() асинхронный: без .then() код возврата терялся и CLI всегда выходил с 0.
   Promise.resolve(main(process.argv.slice(2)))
     .then((code) => {
-      if (typeof code === "number") process.exit(code);
+      // process.exit() discards stdout still queued on a pipe; on macOS that
+      // truncates large --json output. Set the code and let Node flush.
+      if (typeof code === "number") process.exitCode = code;
     })
     .catch((err) => {
       process.stderr.write(`dashboard: ${err && err.message ? err.message : err}
 `);
-      process.exit(2);
+      process.exitCode = 2;
     });
 }
