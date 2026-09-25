@@ -398,19 +398,25 @@ export async function runVerifyProfile(ctx) {
   results.push(
     await executeCheck(4, "every agent def has name + description", () => {
       const agentsDir = join(agentDir, "agents");
+      // An absent directory means the check cannot run — that is a FAILURE, not a pass.
+      // Skipping the loop silently reported "every definition is valid" when there were none.
+      if (!existsSync(agentsDir)) {
+        throw new Error(`agent definitions directory missing: ${agentsDir}`);
+      }
+      const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
+      if (files.length === 0) {
+        throw new Error(`no agent definitions in ${agentsDir}`);
+      }
       const bad = [];
-      if (existsSync(agentsDir)) {
-        const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
-        for (const f of files) {
-          const raw = readFileSync(join(agentsDir, f), "utf8");
-          const head = raw.split(/\r?\n/).slice(0, 8);
-          const hasName = head.some((line) => /^name:/.test(line));
-          const hasDesc = head.some((line) => /^description:/.test(line));
-          if (!hasName || !hasDesc) bad.push(f);
-        }
+      for (const f of files) {
+        const raw = readFileSync(join(agentsDir, f), "utf8");
+        const head = raw.split(/\r?\n/).slice(0, 8);
+        const hasName = head.some((line) => /^name:/.test(line));
+        const hasDesc = head.some((line) => /^description:/.test(line));
+        if (!hasName || !hasDesc) bad.push(f);
       }
       if (bad.length) throw new Error(`missing frontmatter: ${bad.join(", ")}`);
-      return true;
+      return `${files.length} definitions valid`;
     })
   );
 
@@ -513,7 +519,9 @@ export async function runVerifyProfile(ctx) {
   results.push(
     await executeCheck(10, "no MCP server pinned to @latest", () => {
       const p = join(agentDir, "mcp.json");
-      if (!existsSync(p)) return true;
+      // Absent config is "not configured", never "clean": returning true here claimed
+      // nothing is unpinned in a file that does not exist.
+      if (!existsSync(p)) throw new NotConfiguredError("mcp.json missing - no servers configured");
       const m = JSON.parse(readFileSync(p, "utf8"));
       const servers = m.mcpServers || {};
       const bad = [];
@@ -862,21 +870,40 @@ export async function runVerifyProfile(ctx) {
     })
   );
 
-  // 28 CI template present and parses as YAML
+  // 28 CI template present and structurally sound
+  // Named for what it does: this is a targeted structural lint, not a YAML parse — the
+  // harness is zero-dependency, so there is no parser to call. It checks the anchors the
+  // gate depends on AND the shape that makes them real (indentation, no tabs), which a
+  // substring match alone would accept while the workflow is broken.
   results.push(
-    await executeCheck(28, "CI template present and parses as YAML", () => {
+    await executeCheck(28, "CI template present and structurally sound", () => {
       let ciTemplate = join(harnessRoot, "templates", "ci", "workflow-gate.yml");
       if (!existsSync(ciTemplate)) {
         ciTemplate = join(repoRoot, "templates", "ci", "workflow-gate.yml");
       }
       if (!existsSync(ciTemplate)) throw new Error("templates/ci/workflow-gate.yml not found");
       const content = readFileSync(ciTemplate, "utf8");
+
+      // A tab in YAML is invalid at any indentation level.
+      const tabLine = content.split(/\r?\n/).findIndex((l) => /^\s*\t/.test(l));
+      if (tabLine !== -1) throw new Error(`tab character at line ${tabLine + 1} - invalid YAML`);
+
+      // Every `- name:` step must sit under `steps:` with consistent indentation.
+      const lines = content.split(/\r?\n/);
+      const stepIndents = lines
+        .filter((l) => /^\s*- name:/.test(l))
+        .map((l) => l.match(/^\s*/)[0].length);
+      if (stepIndents.length === 0) throw new Error("no workflow steps found");
+      if (new Set(stepIndents).size > 1) {
+        throw new Error(`inconsistent step indentation: ${[...new Set(stepIndents)].join(", ")}`);
+      }
+
       if (!/name:\s*Workflow Gate/.test(content)) throw new Error("missing name: Workflow Gate");
       if (!/on:\s*(?:\r?\n)\s+push:/.test(content)) throw new Error("missing push trigger");
       if (!/node-version:\s*20/.test(content)) throw new Error("missing node 20");
       if (!/auto-review\.mjs/.test(content)) throw new Error("missing auto-review invocation");
       if (!/actions\/github-script/.test(content)) throw new Error("missing PR comment action");
-      return "valid CI YAML template";
+      return `${stepIndents.length} steps, structurally sound`;
     })
   );
 
@@ -974,12 +1001,15 @@ export async function runAuditProfile(ctx) {
       if (r.status === 0) {
         detail = `all documented (${effectiveScope.join(",")})`;
       } else if (r.status === 2) {
-        detail = "no CONTEXT.md";
+        // A missing glossary is an intended, non-failing state (AGENTS.md: "do not create
+        // one unprompted"), but reporting it as PASS made the audit claim coverage it never
+        // measured. SETUP states the truth: nothing to check yet.
+        throw new NotConfiguredError("no CONTEXT.md - nothing to check yet");
       } else {
         detail = "undocumented public symbols";
       }
       return {
-        ok: r.status === 0 || r.status === 2,
+        ok: r.status === 0,
         detail,
       };
     })
@@ -1037,8 +1067,10 @@ export async function runAuditProfile(ctx) {
       if (!m) return { ok: true, detail: "no change data" };
       const n = parseInt(m[1], 10) + parseInt(m[2], 10) + parseInt(m[3], 10);
       return {
-        ok: true,
-        detail: n === 0 ? "current" : `${n} file(s) changed - CODEMAP.md may be stale`,
+        // Stale is stale: reporting ok:true with a "may be stale" note made the audit
+        // list a drifted map as clean.
+        ok: n === 0,
+        detail: n === 0 ? "current" : `${n} file(s) changed - CODEMAP.md is stale`,
       };
     })
   );

@@ -131,6 +131,14 @@ export function deletePruneCandidates(harness, candidates) {
   for (const rel of candidates) {
     const full = join(harnessRoot, rel);
     try {
+      // A deletion routine must not trust its caller: a candidate that resolves outside
+      // the root (via `..`, an absolute path, or a symlinked parent) is reported and left
+      // alone, never removed.
+      const resolved = resolve(full);
+      if (resolved !== harnessRoot && !resolved.startsWith(harnessRoot + sep)) {
+        failed.push({ path: rel, error: "resolves outside the harness root" });
+        continue;
+      }
       if (!statSync(full).isFile()) {
         failed.push({ path: rel, error: "not a regular file" });
         continue;
@@ -190,7 +198,9 @@ export function main(argv = process.argv.slice(2)) {
     process.stdout.write(
       JSON.stringify({ harness, repo, candidates, deleted: deletion.deleted, failed: deletion.failed }, null, 2) + "\n"
     );
-    return 0;
+    // A deletion that failed is not a success signal: callers such as sync.ps1 branch on
+    // this exit code, and returning 0 told them a partially failed prune was clean.
+    return deletion.failed.length ? 1 : 0;
   }
 
   process.stdout.write(`prune: ${candidates.length} candidate(s)\n`);
@@ -201,6 +211,10 @@ export function main(argv = process.argv.slice(2)) {
     process.stdout.write(`prune: deleted ${deletion.deleted.length} file(s)\n`);
     for (const f of deletion.failed) {
       process.stdout.write(`  [!] ${f.path}: ${f.error}\n`);
+    }
+    if (deletion.failed.length) {
+      process.stdout.write(`prune: ${deletion.failed.length} file(s) could NOT be deleted\n`);
+      return 1;
     }
   }
   return 0;

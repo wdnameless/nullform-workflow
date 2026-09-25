@@ -23,7 +23,7 @@
  *   --help, -h        Справка
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, openSync, readSync, closeSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, renameSync, openSync, readSync, closeSync } from "node:fs";
 import { resolve, join, dirname, relative } from "node:path";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
@@ -2165,9 +2165,17 @@ export function writeRuntime(root, info) {
   const dir = dirname(p);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const text = JSON.stringify(info, null, 2);
-  writeFileSync(p, text, "utf8");
+  // workflow.mjs polls .workflow/dashboard.json every 80 ms and JSON.parses it; a plain
+  // writeFileSync leaves a window where that read sees a truncated document and throws.
+  // Same tmp+rename pattern the workflow state already uses.
+  const writeAtomic = (target) => {
+    const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+    writeFileSync(tmp, text, "utf8");
+    renameSync(tmp, target);
+  };
+  writeAtomic(p);
   // Дублируем «последний» рантайм: старые вызовы и скрипты ждут .workflow/dashboard.json
-  if (key) writeFileSync(runtimePath(absRoot), text, "utf8");
+  if (key) writeAtomic(runtimePath(absRoot));
   return p;
 }
 

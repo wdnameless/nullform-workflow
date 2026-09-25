@@ -651,7 +651,7 @@ export function formatAuditReport(data, { top = 15 } = {}) {
 }
 
 // Запуск при прямом вызове CLI
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const USAGE = `Использование: node tools/usage-audit.mjs [параметры]
 
 Параметры:

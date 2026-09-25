@@ -264,7 +264,14 @@ for entry in "${MANIFEST[@]}"; do
       continue
     fi
     mkdir -p "$(dirname "$repo_path")"
-    tr -d '\r' < "$live_path" > "$repo_path"
+    # Promote is the reverse of Deploy: the live copy holds the RESOLVED harness path,
+    # the repo copy must hold '<HARNESS>'. Without this, promoting an edited prompt
+    # surface bakes a machine-specific absolute path into the canonical template.
+    if [ $is_prompt_surface -eq 1 ]; then
+      sed "s|${harness_slash}|<HARNESS>|g" "$live_path" | tr -d '\r' > "$repo_path"
+    else
+      tr -d '\r' < "$live_path" > "$repo_path"
+    fi
     [ "$QUIET" != "1" ] && echo "  [->] promote $rel"
   elif [ "$MODE" = "deploy" ]; then
     if [ $repo_exists -eq 0 ]; then

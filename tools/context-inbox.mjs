@@ -496,7 +496,7 @@ const FLAG_SPEC = {
  * `--need` без значения раньше уходил в неизвестность, а `--bogus` игнорировался.
  */
 function printUsage() {
-  console.log(`Использование: node tools/context-inbox.mjs <init|request|list|resolve|check> [опции]\n\n  init    [--root <dir>]\n  request --category <c> --need "<описание>" [--why "<причина>"] [--hint "<подсказка>"] [--root <dir>] [--json]\n  list    [--root <dir>] [--json]\n  resolve --id <N> [--note "<итог>"] [--root <dir>]\n  check   [--root <dir>] [--json]   exit 1, если есть открытые запросы\n\nФлаги: --root, --category, --need, --why, --hint, --id, --note, --json, --help`);
+  console.log(`Использование: node tools/context-inbox.mjs <init|request|list|resolve|check> [опции]\n\n  init    [--root <dir>]\n  request --category <c> --need "<описание>" [--why "<причина>"] [--hint "<подсказка>"] [--root <dir>] [--json]\n  list    [--root <dir>] [--json]\n  resolve --id <N> [--file "<где лежит ответ>"] [--root <dir>]\n  check   [--root <dir>] [--json]   exit 1, если есть открытые запросы\n\nФлаги: --root, --category, --need, --why, --hint, --id, --file, --json, --help`);
 }
 
 export function parseArgs(argv) {

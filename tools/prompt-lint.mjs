@@ -24,7 +24,7 @@
  */
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
-import { join, relative, sep, basename } from "node:path";
+import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const STATE_DIR = ".prompt-lint";
@@ -39,6 +39,12 @@ const VOLATILE = [
   ["today-literal",  /\btoday\s+is\s+\d{4}-\d{2}-\d{2}/gi,     "hardcoded current date"],
   ["uuid",           /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "unique per render"],
   ["long-hex",       /\b[0-9a-f]{16,}\b/g,                      "hash/id — verify it is a stable example, not generated"],
+  // A prompt surface ships with '<HARNESS>'; a resolved absolute path in the template
+  // means someone promoted a live copy back into the repo (or hand-edited a machine path
+  // in). On another host that path points nowhere. Allow-list: '<HARNESS>', URLs,
+  // relative paths, and lines that already carry a prompt-lint:allow marker.
+  ["machine-abs-path", /(?:^|[\s"'(=:])(?:[A-Za-z]:[\\/]|\/(?:home|Users|mnt|opt|var)\/)[^\s"')]*/g,
+                       "machine-specific absolute path — ships broken on another host"],
   ["js-clock",       /\b(?:Date\.now|performance\.now)\s*\(/g,  "wall-clock read"],
   ["js-new-date",    /\bnew\s+Date\s*\(/g,                      "wall-clock read"],
   ["js-random",      /\bMath\.random\s*\(/g,                    "non-deterministic"],
@@ -486,6 +492,7 @@ function normaliseHarnessRoot(text, root) {
 }
 
 function cmdScan(root, home) {
+  const installed = new Set(collectInstalled(home));
   const files = [...collectSurfaces(root), ...collectInstalled(home)];
   let hits = 0;
   const perFile = [];
@@ -494,13 +501,19 @@ function cmdScan(root, home) {
     // The installer deliberately substitutes <HARNESS> with this machine's
     // absolute path. A UUID-like segment in a sandbox/user path is not volatile
     // prompt content: it is the stable install root for that installation.
-    const lines = normaliseHarnessRoot(readText(f), root).split("\n");
+    const normalised = normaliseHarnessRoot(readText(f), root);
+    const lines = normalised.split("\n");
     const found = [];
+    // A path that survives normalisation is a defect only in a TEMPLATE surface (the
+    // repo tree, which ships to other hosts). An installed copy under ~/.agents holds
+    // the resolved path by design — flagging it would make every install fail.
+    const isTemplate = !installed.has(f);
     lines.forEach((line, i) => {
       if (line.includes("prompt-lint:allow")) return;
       // Fenced code blocks are illustrative, not injected text — but only skip
       // when the pattern looks like an example we deliberately show.
       for (const [name, re, why] of VOLATILE) {
+        if (name === "machine-abs-path" && !isTemplate) continue;
         re.lastIndex = 0;
         const m = re.exec(line);
         if (m) found.push({ line: i + 1, name, sample: m[0].slice(0, 48), why });

@@ -28,6 +28,10 @@
 param(
   [string]$HarnessRoot = (Join-Path $HOME 'omp-workflow'),
   [string]$AgentsRoot  = (Join-Path $HOME '.agents'),
+  # OMP loads ~/.omp/agent/AGENTS.md verbatim at session start. install.ps1 writes it
+  # alongside the harness copy, but nothing kept the two in step afterwards, so the file
+  # the agent actually reads drifted silently. It is covered by the manifest below.
+  [string]$AgentDir    = (Join-Path $HOME '.omp\agent'),
   [switch]$Promote,
   [switch]$Deploy,
   [switch]$Prune,
@@ -201,6 +205,13 @@ foreach ($entry in $Manifest) {
     # Never write a NULL side over an existing file: a missing source means
     # "nothing to copy", not "erase the destination".
     if ($null -eq $live) { continue }
+    # Promote is the reverse of Deploy: the live copy holds the RESOLVED harness path,
+    # the repo copy must hold '<HARNESS>'. Without this, promoting an edited prompt
+    # surface bakes a machine-specific absolute path into the canonical template.
+    if ($isPromptSurface) {
+      $resolvedRoot = $HarnessRoot.Replace([char]92, [char]47)
+      $live = $live.Replace($resolvedRoot, '<HARNESS>')
+    }
     Write-Normalized $repoPath $live
     Write-Host "  [->] promote $rel" -ForegroundColor Cyan
   } elseif ($Deploy) {
@@ -223,6 +234,33 @@ $skillsApplicable = (-not $Only) -or ($Only -like "*skills*") -or ('skills' -lik
 $skillsStatusText = ""
 $skillsParityStatus = "NOT_CHECKED"
 $skillsDoctorOk = $false
+
+# ---------- OMP law copy parity ----------
+# OMP reads ~/.omp/agent/AGENTS.md at session start. install.ps1 writes it, but nothing
+# kept it in step afterwards: the manifest above covers the harness copy only, so the file
+# the agent actually obeys could fall arbitrarily behind. Both copies hold the RESOLVED
+# path (no <HARNESS>), so they are compared verbatim.
+$ompAgents = Join-Path $AgentDir 'AGENTS.md'
+$harnessAgents = Join-Path $HarnessRoot 'agent\AGENTS.md'
+$ompApplicable = (-not $Only) -or ($Only -like "*AGENTS*")
+if ($ompApplicable -and (Test-Path $ompAgents) -and (Test-Path $harnessAgents)) {
+  $ompText = Read-Normalized $ompAgents
+  $harnessText = Read-Normalized $harnessAgents
+  if ($ompText -ne $harnessText) {
+    if ($Deploy) {
+      Write-Normalized $ompAgents $harnessText
+      if (-not $Quiet) { Write-Host "  [<-] deploy  ~/.omp/agent/AGENTS.md" -ForegroundColor Cyan }
+    } elseif ($Promote) {
+      # The OMP copy is a resolved artifact of the harness copy, never a template source:
+      # promoting it would write a machine path into the repo.
+      if (-not $Quiet) { Write-Host "  [--] skip    ~/.omp/agent/AGENTS.md (resolved copy; promote the harness copy instead)" -ForegroundColor Yellow }
+    } else {
+      $drift += '~/.omp/agent/AGENTS.md'
+      $checked++
+      if (-not $Quiet) { Write-Host "  [XX] DRIFT   ~/.omp/agent/AGENTS.md (OMP loads this file; differs from the harness copy)" -ForegroundColor Red }
+    }
+  }
+}
 
 if ($skillsApplicable) {
   if (Test-Path $doctorScript) {
