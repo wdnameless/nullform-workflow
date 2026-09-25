@@ -226,3 +226,17 @@ test. Both accepted the prior requirements unchanged. Parent verification:
 `node tools/verify.mjs --profile audit` → `all 15 checks clean`.
 The new Linux/macOS matrix was not yet executed at this acceptance point;
 its remote outcome is a separate deployment gate.
+
+## Final-tree acceptance after the portability test fix
+
+Verdict: ACCEPT
+
+First matrix run (all four legs) failed for one cause: the sandbox test required
+the verifier to exit 0, which cannot hold on a runner without `openspec`/`omp`.
+The assertion was replaced by the machine-independent contract — Node-only
+installation checks PASS, missing prerequisites are reported as FAIL, exit code
+tracks the report. Two independent read-only passes (`FinalOracleA`,
+`FinalOracleB`) accepted the final tree with `node --test tools/tests/*.test.mjs`
+→ `tests 390`, `pass 390`, `fail 0`; `verify` `29/29`; `audit` `15/15`;
+`code-size` `PASS — нарушений нет`. Remote Linux/macOS execution for the fixed
+commit is recorded as NOT PROVEN at acceptance time.

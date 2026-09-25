@@ -22,3 +22,22 @@ test; both accepted without a regression. Parent commands:
 `node tools/verify.mjs --profile audit` → `all 15 checks clean`.
 Windows sandbox installation verified `26` PASS and `3` provider SETUP checks;
 Linux/macOS matrix execution remains to be observed on GitHub Actions.
+
+## Final-tree acceptance after the portability test fix
+
+Verdict: ACCEPT
+
+The first CI matrix run failed on all four legs: the sandbox test asserted the
+verifier exits 0, and on a clean runner `openspec`/`omp` are absent, so the
+honest answer is exit 1 with two FAIL rows. The test now asserts the real
+contract — installation-owned checks PASS with nothing but Node, the two
+prerequisites are reported honestly (FAIL when absent), and the exit code must
+agree with the reported rows. Fix: `48754c7`.
+
+Two independent read-only passes (`FinalOracleA`, `FinalOracleB`) accepted the
+final tree. `FinalOracleB`: `node --test tools/tests/install-harness.test.mjs`
+→ `tests 11`, `pass 11`, `fail 0`, both on the full host and with
+`omp`/`openspec` removed from `PATH`; `node tools/verify.mjs --profile verify`
+→ `29/29`; `--profile audit` → `15/15`; whole suite → `tests 390`, `pass 390`,
+`fail 0`. Both passes recorded the remote Linux/macOS outcome for `48754c7` as
+NOT PROVEN at acceptance time.
