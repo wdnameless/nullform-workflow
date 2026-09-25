@@ -46,21 +46,30 @@ export const NEVER_DIRS = new Set([
   "cache",
   "logs",
   "custom-session-files",
+  // Operator-owned rollback artifacts. .gitignore already declares this directory as
+  // excluded from the repo, so a file inside it is by definition not a harness orphan.
+  "migration-backup",
 ]);
-
-export const NEVER_SUFFIX = /\.(ya?ml|json|jsonl|db|db-wal|db-shm|key|env|log|bak|tmp|pem|crt|sqlite3?|skipped)$/i;
 
 /**
  * Extensions the repository actually distributes in manifest-covered directories.
  *
  * A prune candidate is a file the harness has and the repo does not. But the live harness
  * root often doubles as the host agent's own home, so `agent/` also holds runtime state
- * (`agent.db`, `kimi-device-id`, `last-changelog-version`, `config.yml`) that the repo was
- * never meant to ship. A deny-list of suffixes cannot see those — extension-less runtime
- * files slipped through and were reported as prunable. An allow-list of distributable
- * extensions inverts the default: anything unrecognised is left alone, never deleted.
+ * (`agent.db`, `kimi-device-id`, `last-changelog-version`) that the repo was never meant to
+ * ship. A deny-list of suffixes cannot see those — extension-less runtime files slipped
+ * through and were reported as prunable. An allow-list inverts the default: anything
+ * unrecognised is left alone, never deleted.
  */
-export const SHIPPED_SUFFIX = /\.(mjs|cjs|js|ts|py|sh|ps1|md|json|jsonl|ya?ml|example)$/i;
+export const SHIPPED_SUFFIX = /\.(mjs|cjs|js|ts|py|sh|ps1|md|json|jsonl|ya?ml)$/i;
+
+/**
+ * Host-owned configuration. The repo ships these as TEMPLATES (`agent/config.yml.example`,
+ * `agent/oracle-priority.example.json`); the live tree holds the operator's real values in
+ * the un-suffixed name. They are not orphans — deleting them loses the operator's setup,
+ * which is exactly what an earlier suffix deny-list was trying to prevent.
+ */
+export const HOST_CONFIG = /(^|\/)(config|mcp|models)\.(ya?ml|json)$/i;
 
 /** Files whose NAME marks them as host runtime state rather than distributable content. */
 export const RUNTIME_NAMES = new Set([
@@ -69,7 +78,6 @@ export const RUNTIME_NAMES = new Set([
   "agent.db",
   "models.db",
   "history.db",
-  "config.yml",
 ]);
 
 function toPosix(p) {
@@ -134,12 +142,16 @@ export function findPruneCandidates({ harness, repo, dirs = MANIFEST_DIRS } = {}
     const found = [];
     walk(dirPath, harnessRoot, found);
     for (const rel of found) {
-      if (NEVER_SUFFIX.test(rel)) continue;
-      // Only files the repository could plausibly have shipped are prune candidates.
-      // Anything else in a manifest-covered directory is host runtime state or a local
+      // ONE filter, and it is an allow-list. The old suffix deny-list is deliberately NOT
+      // applied here any more: it matched .yml/.json/.md/.jsonl, i.e. exactly the extensions
+      // the repository DOES ship (templates/ci/*.yml, agent/plugins.json, skills/*/SKILL.md),
+      // so applying it first made the allow-list unable to reach real orphans.
+      // Only files the repository could plausibly have shipped are prune candidates:
+      // everything else in a manifest-covered directory is host runtime state or a local
       // file, and is left alone — deleting it would destroy state the user cannot restore.
       const base = rel.split("/").pop();
       if (RUNTIME_NAMES.has(base)) continue;
+      if (HOST_CONFIG.test(rel)) continue;
       if (!SHIPPED_SUFFIX.test(rel)) continue;
       if (existsSync(join(repoRoot, rel))) continue;
       candidates.push(rel);
