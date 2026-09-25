@@ -551,9 +551,9 @@ if (isDirectExecution) {
       console.log(formatRussianOutput(data));
     }
 
-    process.exit(0);
+    process.exitCode = 0;
   } catch (err) {
     console.error(`Ошибка сбора контекста: ${err.message}`);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }

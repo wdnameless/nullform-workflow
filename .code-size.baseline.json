@@ -26,8 +26,8 @@
       "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated"
     },
     "tools/doctor.mjs": {
-      "lines": 1464,
-      "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; without them installed wrappers silently break"
+      "lines": 1482,
+      "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; quote args explicitly so shell-based omp.cmd spawns stop emitting DEP0190 on stderr that install.ps1 treats as fatal"
     },
     "tools/oracle-model.mjs": {
       "lines": 750,

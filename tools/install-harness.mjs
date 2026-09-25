@@ -586,7 +586,8 @@ function main() {
 
   if (options.help) {
     printHelp();
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   try {
@@ -594,7 +595,8 @@ function main() {
 
     if (options.json) {
       console.log(JSON.stringify(plan, null, 2));
-      process.exit(0);
+      process.exitCode = 0;
+      return;
     }
 
     if (options.dryRun) {
@@ -606,7 +608,8 @@ function main() {
       for (const adapter of plan.adapters) {
         console.log(`    - ${adapter}`);
       }
-      process.exit(0);
+      process.exitCode = 0;
+      return;
     }
 
     console.log(`\n=== Workflow Harness Installer ===`);
@@ -618,7 +621,8 @@ function main() {
       console.log(`    [ok] ${adapter}`);
     }
     console.log(`Installation complete.\n`);
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   } catch (err) {
     process.stderr.write(`Error: ${err.message}\n`);
     process.exit(2);

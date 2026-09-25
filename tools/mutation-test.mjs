@@ -445,8 +445,12 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (!opts.target) {
-    process.stderr.write("Ошибка: параметр --target <file> обязателен.\n");
-    return 2;
+    if (opts.dryRun && existsSync("tools/verify.mjs")) {
+      opts.target = "tools/verify.mjs";
+    } else {
+      process.stderr.write("Ошибка: параметр --target <file> обязателен.\n");
+      return 2;
+    }
   }
 
   try {
@@ -481,5 +485,5 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
-  process.exit(main(process.argv.slice(2)));
+  process.exitCode = main(process.argv.slice(2));
 }

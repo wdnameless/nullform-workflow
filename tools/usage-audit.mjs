@@ -681,5 +681,5 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
     console.log(formatAuditReport(auditResult, { top: options.top }));
   }
 
-  process.exit(0);
+  process.exitCode = 0;
 }

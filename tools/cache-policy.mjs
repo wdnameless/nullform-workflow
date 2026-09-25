@@ -151,7 +151,7 @@ if (isMain) {
   if (cmd !== "check") {
     console.log("cache-policy.mjs — safe, advisory policy checks for prompt cache observability\n");
     console.log("  node cache-policy.mjs check --root <harness> [--policy <file>] [--return-contract <file>] [--json]\n");
-    process.exit(0);
+    process.exitCode = 0;
   }
 
   const result = runCachePolicyCheck({
@@ -179,10 +179,10 @@ if (isMain) {
       for (const err of result.errors) {
         console.error(`  [FAIL] ${err}`);
       }
-      process.exit(1);
+      process.exitCode = 1;
     } else {
       console.log("\nAll hard safety gates PASSED.");
-      process.exit(0);
+      process.exitCode = 0;
     }
   }
 }

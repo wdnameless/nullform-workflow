@@ -179,10 +179,14 @@ export function unpackBuiltinAgents() {
   }
 
   // На Windows `omp` — это .cmd-шим, а Node ≥ 18.20 запускает .cmd только через shell;
-  // shell не квотирует аргументы сам, поэтому путь к временному каталогу квотируем явно.
+  // массив аргументов вместе с shell даёт DEP0190 в stderr (а install.ps1 читает
+  // stderr доктора и падал на этом предупреждении). Собираем одну команду с
+  // явным квотированием пути.
   const viaShell = process.platform === "win32";
-  const targetDir = viaShell ? `"${dir}"` : dir;
-  const res = spawnSync("omp", ["agents", "unpack", "--dir", targetDir, "--json"], {
+  const command = viaShell
+    ? [quoteShellArg("omp"), "agents", "unpack", "--dir", quoteShellArg(dir), "--json"].join(" ")
+    : "omp";
+  const res = spawnSync(command, viaShell ? [] : ["agents", "unpack", "--dir", dir, "--json"], {
     encoding: "utf8",
     shell: viaShell,
     windowsHide: true,
@@ -268,19 +272,35 @@ function tailOf(text, lines = 2, limit = 300) {
  */
 export function runOmp(args, { timeout = 60000 } = {}) {
   // На Windows `omp` — это .cmd-шим, а Node ≥ 18.20 запускает .cmd только через
-  // shell (та же причина, что в unpackBuiltinAgents).
-  const res = spawnSync("omp", args, {
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    timeout,
-    windowsHide: true,
-  });
+  // shell (та же причина, что в unpackBuiltinAgents). Массив аргументов вместе
+  // с shell даёт DEP0190 в stderr; install.ps1 читает stderr доктора и падал на
+  // этом предупреждении после того, как вывод перестал теряться. Поэтому
+  // команда собирается в одну строку с явным квотированием.
+  const isWin = process.platform === "win32";
+  const res = isWin
+    ? spawnSync([quoteShellArg("omp"), ...args.map(quoteShellArg)].join(" "), {
+        encoding: "utf8",
+        shell: true,
+        timeout,
+        windowsHide: true,
+      })
+    : spawnSync("omp", args, {
+        encoding: "utf8",
+        timeout,
+        windowsHide: true,
+      });
   return {
     status: res.status,
     stdout: res.stdout || "",
     stderr: res.stderr || "",
     error: res.error || null,
   };
+}
+
+/** Кавычит аргумент для cmd.exe: пробелы и метасимволы не должны разбираться шеллом. */
+function quoteShellArg(value) {
+  const text = String(value);
+  return /[\s"^&|<>()]/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
 }
 
 
@@ -1454,10 +1474,8 @@ export async function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
-  main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      process.stderr.write(`doctor: необработанная ошибка: ${err.message}\n`);
-      process.exit(2);
-    });
+  main().then((code) => { process.exitCode = code; }).catch((err) => {
+    process.stderr.write(`doctor: необработанная ошибка: ${err.message}\n`);
+    process.exitCode = 2;
+  });
 }

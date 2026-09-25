@@ -580,5 +580,5 @@ const isDirectRun = Boolean(process.argv[1]) && (() => { try { return realpathSy
 
 if (isDirectRun) {
   const exitCode = main(process.argv.slice(2));
-  process.exit(typeof exitCode === "number" ? exitCode : 0);
+  process.exitCode = typeof exitCode === "number" ? exitCode : 0;
 }

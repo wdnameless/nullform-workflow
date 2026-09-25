@@ -273,5 +273,5 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
-  process.exit(main());
+  process.exitCode = main();
 }

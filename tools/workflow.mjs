@@ -1590,5 +1590,5 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
       console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
       if (cmd !== undefined) code = 2;
   }
-  process.exit(code);
+  process.exitCode = code;
 }

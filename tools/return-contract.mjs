@@ -276,9 +276,7 @@ export function validateReturnContract(rawText) {
 
 const isMain = Boolean(process.argv[1]) && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 
-if (isMain) {
-  const argv = process.argv.slice(2);
-
+export function main(argv = process.argv.slice(2)) {
   // --help/-h — запрос справки, а не файл с таким именем.
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(`Использование: node tools/return-contract.mjs [<file>] [--text "<контракт>"] [--json]
@@ -287,7 +285,7 @@ if (isMain) {
 REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TESTS (было N → стало M).
 
 Флаги: <file> — путь к файлу, --text <строка> — контракт текстом, --json — машинный отчёт, --help`);
-    process.exit(0);
+    return 0;
   }
 
   const args = parseArgs(argv);
@@ -302,7 +300,7 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
       } else {
         console.error(`Ошибка: файл не найден: ${file}`);
       }
-      process.exit(1);
+      return 1;
     }
     content = readFileSync(file, "utf8");
   } else {
@@ -318,14 +316,14 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
         console.log("  node return-contract.mjs <file> [--json]");
         console.log("  node return-contract.mjs --text \"<content>\" [--json]");
         console.log("  echo \"<content>\" | node return-contract.mjs [--json]\n");
-        process.exit(1);
+        return 1;
       }
       if (args.json) {
         console.log(JSON.stringify({ valid: false, errors: ["Пустой ввод: контракт возврата не получен на stdin."] }, null, 2));
       } else {
         console.error("ОШИБКА: пустой ввод: контракт возврата не получен на stdin.");
       }
-      process.exit(1);
+      return 1;
     }
   }
   const result = validateReturnContract(content);
@@ -343,5 +341,9 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
     }
   }
 
-  process.exit(result.valid ? 0 : 1);
+  return result.valid ? 0 : 1;
+}
+
+if (isMain) {
+  process.exitCode = main();
 }

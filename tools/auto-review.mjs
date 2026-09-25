@@ -262,20 +262,20 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
             2
           ) + "\n"
         );
-        process.exit(res.exitCode);
+        process.exitCode = res.exitCode;
       })
       .catch((err) => {
         console.log = originalLog;
         console.info = originalInfo;
         process.stdout.write(JSON.stringify({ ok: false, error: String(err && err.message ? err.message : err) }) + "\n");
-        process.exit(2);
+        process.exitCode = 2;
       });
   } else {
     runAutoReview({ root: flags.root }).then((res) => {
-      process.exit(res.exitCode);
+      process.exitCode = res.exitCode;
     }).catch((err) => {
       console.error("Ошибка выполнения auto-review:", err);
-      process.exit(2);
+      process.exitCode = 2;
     });
   }
 }

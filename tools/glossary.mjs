@@ -291,4 +291,4 @@ switch (cmd) {
     console.log("  node glossary.mjs check --root .            # symbols missing from CONTEXT.md");
     code = 0;
 }
-process.exit(code);
+process.exitCode = code;

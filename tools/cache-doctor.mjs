@@ -351,7 +351,8 @@ export function main(argv = process.argv.slice(2)) {
   --json                  Вывести результат в формате JSON
   -h, --help              Показать эту справку
 `);
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   const asJson = values.json;
