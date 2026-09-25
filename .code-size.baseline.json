@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-25T11:23:28.240Z",
+  "thresholds": {
+    "maxLines": 700,
+    "maxFunctionLines": 120
+  },
+  "files": {
+    "skills/biblicism-extractor/scripts/run_pipeline.py": {
+      "lines": 770,
+      "reason": ""
+    },
+    "skills/design-system/scripts/generate-slide.py": {
+      "lines": 771,
+      "reason": ""
+    },
+    "skills/ui-ux-pro-max/scripts/design_system.py": {
+      "lines": 1480,
+      "reason": ""
+    },
+    "tools/benchmark.mjs": {
+      "lines": 1615,
+      "reason": ""
+    },
+    "tools/dashboard.mjs": {
+      "lines": 2937,
+      "reason": ""
+    },
+    "tools/doctor.mjs": {
+      "lines": 1461,
+      "reason": ""
+    },
+    "tools/oracle-model.mjs": {
+      "lines": 750,
+      "reason": ""
+    },
+    "tools/tests/benchmark.test.mjs": {
+      "lines": 889,
+      "reason": ""
+    },
+    "tools/tests/dashboard.test.mjs": {
+      "lines": 982,
+      "reason": ""
+    },
+    "tools/tests/doctor.test.mjs": {
+      "lines": 1535,
+      "reason": ""
+    },
+    "tools/verify.mjs": {
+      "lines": 1290,
+      "reason": ""
+    },
+    "tools/workflow.mjs": {
+      "lines": 1648,
+      "reason": ""
+    }
+  },
+  "functions": {
+    "skills/ui-styling/scripts/tailwind_config_gen.py:main": {
+      "lines": 168,
+      "file": "skills/ui-styling/scripts/tailwind_config_gen.py",
+      "name": "main",
+      "line": 302,
+      "reason": ""
+    },
+    "skills/ui-ux-pro-max/scripts/design_system.py:generate": {
+      "lines": 129,
+      "file": "skills/ui-ux-pro-max/scripts/design_system.py",
+      "name": "generate",
+      "line": 309,
+      "reason": ""
+    },
+    "skills/ui-ux-pro-max/scripts/design_system.py:format_ascii_box": {
+      "lines": 161,
+      "file": "skills/ui-ux-pro-max/scripts/design_system.py",
+      "name": "format_ascii_box",
+      "line": 473,
+      "reason": ""
+    },
+    "skills/ui-ux-pro-max/scripts/design_system.py:format_markdown": {
+      "lines": 137,
+      "file": "skills/ui-ux-pro-max/scripts/design_system.py",
+      "name": "format_markdown",
+      "line": 636,
+      "reason": ""
+    },
+    "skills/ui-ux-pro-max/scripts/design_system.py:format_master_md": {
+      "lines": 315,
+      "file": "skills/ui-ux-pro-max/scripts/design_system.py",
+      "name": "format_master_md",
+      "line": 900,
+      "reason": ""
+    },
+    "tools/benchmark.mjs:runBenchmark": {
+      "lines": 258,
+      "file": "tools/benchmark.mjs",
+      "name": "runBenchmark",
+      "line": 501,
+      "reason": ""
+    },
+    "tools/benchmark.mjs:main": {
+      "lines": 266,
+      "file": "tools/benchmark.mjs",
+      "name": "main",
+      "line": 1345,
+      "reason": ""
+    },
+    "tools/dashboard.mjs:generateDashboardHtml": {
+      "lines": 861,
+      "file": "tools/dashboard.mjs",
+      "name": "generateDashboardHtml",
+      "line": 1253,
+      "reason": ""
+    },
+    "tools/dashboard.mjs:sanitizeHttpState": {
+      "lines": 318,
+      "file": "tools/dashboard.mjs",
+      "name": "sanitizeHttpState",
+      "line": 2246,
+      "reason": ""
+    },
+    "tools/dashboard.mjs:main": {
+      "lines": 126,
+      "file": "tools/dashboard.mjs",
+      "name": "main",
+      "line": 2798,
+      "reason": ""
+    },
+    "tools/doctor.mjs:runDoctor": {
+      "lines": 918,
+      "file": "tools/doctor.mjs",
+      "name": "runDoctor",
+      "line": 486,
+      "reason": ""
+    },
+    "tools/oracle-model.mjs:run": {
+      "lines": 210,
+      "file": "tools/oracle-model.mjs",
+      "name": "run",
+      "line": 529,
+      "reason": ""
+    },
+    "tools/return-contract.mjs:validateReturnContract": {
+      "lines": 220,
+      "file": "tools/return-contract.mjs",
+      "name": "validateReturnContract",
+      "line": 53,
+      "reason": ""
+    },
+    "tools/skills-doctor.mjs:run": {
+      "lines": 131,
+      "file": "tools/skills-doctor.mjs",
+      "name": "run",
+      "line": 135,
+      "reason": ""
+    },
+    "tools/sync.mjs:main": {
+      "lines": 281,
+      "file": "tools/sync.mjs",
+      "name": "main",
+      "line": 171,
+      "reason": ""
+    },
+    "tools/usage-audit.mjs:auditUsage": {
+      "lines": 316,
+      "file": "tools/usage-audit.mjs",
+      "name": "auditUsage",
+      "line": 237,
+      "reason": ""
+    },
+    "tools/verify.mjs:runVerifyProfile": {
+      "lines": 583,
+      "file": "tools/verify.mjs",
+      "name": "runVerifyProfile",
+      "line": 347,
+      "reason": ""
+    },
+    "tools/verify.mjs:runAuditProfile": {
+      "lines": 236,
+      "file": "tools/verify.mjs",
+      "name": "runAuditProfile",
+      "line": 931,
+      "reason": ""
+    },
+    "tools/workflow.mjs:cmdStart": {
+      "lines": 125,
+      "file": "tools/workflow.mjs",
+      "name": "cmdStart",
+      "line": 565,
+      "reason": ""
+    },
+    "tools/workflow.mjs:cmdCheckCi": {
+      "lines": 216,
+      "file": "tools/workflow.mjs",
+      "name": "cmdCheckCi",
+      "line": 1383,
+      "reason": ""
+    }
+  }
+}

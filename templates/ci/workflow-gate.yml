@@ -84,6 +84,13 @@ jobs:
             node --test tools/tests/*.test.mjs
           fi
 
+      - name: Code size gate
+        # Stops modules growing into god-objects. The baseline records
+        # today's offenders; only GROWTH past a baselined size, or a NEW
+        # offender, fails. A `defer:` header marker reports but does not fail.
+        run: |
+          node tools/code-size.mjs check --root .
+
       - name: Auto-review gate
         id: auto_review
         run: |

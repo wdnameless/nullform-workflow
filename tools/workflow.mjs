@@ -468,6 +468,30 @@ function parse(argv) {
   return o;
 }
 
+/** Read .workflow/dashboard.json and report whether its process is still alive. */
+function readDashboardRuntime(root) {
+  try {
+    const rt = join(root, ".workflow", "dashboard.json");
+    if (!existsSync(rt)) return null;
+    const parsed = JSON.parse(readFileSync(rt, "utf8"));
+    if (!parsed || !parsed.url) return null;
+    // A pid that no longer exists means the file is a leftover from a dead server.
+    // process.kill(pid, 0) is the same liveness probe acquireLock already uses.
+    let alive = false;
+    try {
+      if (typeof parsed.pid === "number") {
+        process.kill(parsed.pid, 0);
+        alive = true;
+      }
+    } catch {
+      alive = false;
+    }
+    return { ...parsed, alive };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Автозапуск дашборда (best-effort): поднимает фоновый сервер наблюдения и
  * открывает страницу. Никогда не влияет на код возврата воркфлоу — дашборд
@@ -479,33 +503,45 @@ function autoOpenDashboard(root, flags) {
   try {
     const dash = join(dirname(fileURLToPath(import.meta.url)), "dashboard.mjs");
     if (!existsSync(dash)) return;
+
+    // Capture the runtime file BEFORE spawning. The previous implementation accepted the
+    // first url it read, which is the STALE one left by a dead server — so it printed a
+    // dead address and the printed browser_new_tab link went nowhere. Accept a runtime
+    // file only when it names a different, live process than the one we started with.
+    const before = readDashboardRuntime(root);
+
     const child = spawn(process.execPath, [dash, "--ensure", "--root", root], {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
     });
     child.unref();
-    // Ждём до 2 с появления рантайм-файла с реальным URL, чтобы напечатать точный адрес
-    let url = null;
-    const rt = join(root, ".workflow", "dashboard.json");
+
+    let live = null;
+    let sawFresh = false;
     for (let i = 0; i < 25; i++) {
-      try {
-        if (existsSync(rt)) {
-          const parsed = JSON.parse(readFileSync(rt, "utf8"));
-          if (parsed && parsed.url) {
-            url = parsed.url;
-            break;
-          }
+      const cur = readDashboardRuntime(root);
+      if (cur && cur.alive) {
+        const isNewProcess = !before || before.pid !== cur.pid;
+        if (isNewProcess) sawFresh = true;
+        // Accept a live server that is either freshly started or already running.
+        if (isNewProcess || (before && before.alive)) {
+          live = cur;
+          break;
         }
-      } catch {}
+      }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
     }
-    if (url) {
-      if (process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI) {
-        console.log(`  dashboard: ${url} — открой во вкладке Paseo: browser_new_tab("${url}")`);
+
+    const inPaseo = Boolean(process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI);
+    if (live) {
+      if (inPaseo) {
+        console.log(`  dashboard: ${live.url} — открой во вкладке Paseo: browser_new_tab("${live.url}")${sawFresh ? "" : " (уже работал)"}`);
       } else {
-        console.log(`  dashboard: ${url} (сервер запущен, открывается в браузере)`);
+        console.log(`  dashboard: ${live.url} (сервер запущен, открывается в браузере)`);
       }
+    } else if (before && !before.alive) {
+      console.log(`  dashboard: прежний сервер (pid ${before.pid}) мёртв, новый не поднялся за 2 с — адрес в .workflow/dashboard.json`);
     } else {
       console.log("  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
     }

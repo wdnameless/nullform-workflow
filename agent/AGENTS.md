@@ -24,11 +24,10 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
 - Close honestly: `close` refuses while artifacts are missing. If you must deviate,
   `close --force --reason "<why>"` records the deviation so it is visible, not silent.
 - Task genuinely trivial (a typo, one line in one known file)? Say so in one line and use T0.
-- **OBSERVABILITY DASHBOARD**: `start` launches the dashboard in the background and prints its live URL (`--no-dashboard` or `NF_NO_DASHBOARD=1` permitted in read-only/security situations).
-  Inside a Paseo workspace (`PASEO_AGENT_ID`), unless `--no-dashboard` was specified, you MUST IMMEDIATELY call `browser_new_tab(url)` right after
-  `workflow.mjs start` so the live dashboard opens directly in the **Paseo IDE browser tab** for the human user.
-  Outside Paseo the CLI opens the system browser itself. Read the URL from `.workflow/dashboard.json` or
-  `node tools/dashboard.mjs --url`. The page updates itself every 3 s — do not reload it.
+- **OBSERVABILITY DASHBOARD**: `start` launches the dashboard in the background and prints its **live** URL — the printed address is liveness-checked (a leftover runtime file from a dead server is ignored and a fresh one started). (`--no-dashboard` or `NF_NO_DASHBOARD=1` permitted in read-only/security situations.)
+  Inside a Paseo workspace (`PASEO_AGENT_ID`), unless `--no-dashboard` was specified, use the URL that `start` printed and call `browser_new_tab(url)` immediately, so the dashboard opens in the **Paseo IDE browser tab** for the human user.
+  If `browser_new_tab` fails because no browser host is connected, say so in one line and give the user the URL — do NOT report the dashboard as opened, and do NOT retry in a loop.
+  Outside Paseo the CLI opens the system browser itself. If you need the URL later, run `node tools/dashboard.mjs --url`; that command also verifies liveness, whereas reading `.workflow/dashboard.json` directly can hand you a dead address. The page updates itself every 3 s — do not reload it.
 ## 1. CLASSIFY FIRST — four lanes, output verdict in first line
 - `⚡ [T0 FAST]` 1–2 known files, localized → direct edit or ≤2 specialists, ≤10 min, NO OpenSpec/interview/oracle.
 - `🔧 [T1 STANDARD]` 3+ files or unfamiliar area → quick recon, micro-plan in chat, 1–2 specialists in ONE batch, NO mandatory Wave 0 interview.

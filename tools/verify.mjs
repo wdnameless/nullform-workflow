@@ -1053,6 +1053,23 @@ async function runAuditProfile(ctx) {
     })
   );
 
+  // 9b code size gate — runs the tool, not merely checks that it exists.
+  // Checking for the file would repeat the false-pass pattern this audit removed from
+  // checks 4/5/10: "the tool is present" says nothing about whether the code is growing.
+  results.push(
+    await executeCheck("9b", "code size gate (no module growth past baseline)", () => {
+      const tool = join(harnessRoot, "tools", "code-size.mjs");
+      if (!existsSync(tool)) throw new NotConfiguredError("code-size.mjs not installed");
+      // The tool exits 1 with the violation list on stderr; no need to re-parse its JSON.
+      const r = runProc(process.execPath, [tool, "check", "--root", repoRoot]);
+      const out = `${r.stdout || ""}${r.stderr || ""}`;
+      const first = out.split("\n").find((l) => l.includes("[FAIL]"))?.trim() || "";
+      if (r.status !== 0) throw new Error(first || `code-size exited ${r.status}`);
+      const n = out.match(/Проверено (\d+) файлов/)?.[1] ?? "?";
+      return `${n} files, no growth past baseline`;
+    })
+  );
+
   // 10 codemap currency
   results.push(
     await executeCheck(10, "codemap currency", () => {
