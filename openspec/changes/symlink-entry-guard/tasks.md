@@ -13,6 +13,7 @@
 - [x] R47: the doctor's shell-based `omp` spawns now build a quoted command
   string, so no `DEP0190` reaches stderr; `install.ps1` no longer aborts and
   `paseo-install.test.mjs` passes `10/10` (was `8/2`).
-- [ ] R44: full suite `391/391`, verify `29/29`, audit `15/15`, size gate PASS
-  and OpenSpec validation all confirmed locally; push and confirm the
-  three-platform CI matrix is green.
+- [x] R44: full suite `391/391`, verify `29/29`, audit `15/15`, size gate PASS and
+  OpenSpec validation confirmed locally, then all five CI jobs green on
+  `f351014` (run 36180534521) — Repository Verification Gate plus portable
+  install on ubuntu Node 18 and 20, windows Node 20, and **macos Node 20**.

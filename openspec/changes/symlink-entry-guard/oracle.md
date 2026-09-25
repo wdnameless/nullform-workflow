@@ -86,3 +86,7 @@ reports it.
 ## Sealed with the sibling acceptance records
 
 This record is committed in the same final commit as the `harness-simplification` and `post-remediation-audit` records, because the CI evidence check requires the acceptance commit to be the last tracked change for every change it validates.
+
+## Acceptance closed by CI
+
+GitHub Actions run [36180534521](https://github.com/wdnameless/omp-paseo-nullform-workflow/actions/runs/36180534521) on `f351014`: `conclusion: success`, all five jobs green — `Repository Verification Gate`, `Portable install (ubuntu-latest, Node 18)`, `(ubuntu-latest, Node 20)`, `(windows-latest, Node 20)`, `(macos-latest, Node 20)`. The macOS leg is the gate R43, R44, R46 and R47 were waiting on; it had failed on the two preceding commits for exactly the two causes fixed above.
