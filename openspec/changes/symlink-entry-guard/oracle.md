@@ -82,3 +82,7 @@ The remote `portable-install` matrix has not run for this commit. The two prior
 macOS failures had distinct causes, both now fixed; the green macOS leg is the
 acceptance gate for R43, R44, R46 and R47 and remains **NOT PROVEN** until CI
 reports it.
+
+## Sealed with the sibling acceptance records
+
+This record is committed in the same final commit as the `harness-simplification` and `post-remediation-audit` records, because the CI evidence check requires the acceptance commit to be the last tracked change for every change it validates.
