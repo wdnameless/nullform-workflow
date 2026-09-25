@@ -42,3 +42,43 @@ unconditionally (`sync.mjs`, `codemap.mjs`, `glossary.mjs`, `replay.mjs`) were
 left alone, confirmed by both passes. The code-size baseline rose by exactly one
 line for `tools/benchmark.mjs` and `tools/verify.mjs` — the added `realpathSync`
 import — each with a written reason.
+
+## Final acceptance — three defects, two more found while verifying
+
+Verdict: ACCEPT
+
+Running the tools for real on macOS (via the junction reproduction) exposed two
+further faults that the old silent-exit behaviour had been hiding, both fixed
+before this verdict. `SealOracleA` and `SealOracleB` accepted the final tree
+independently; neither found a remaining defect in a shipped tool.
+
+1. **R46 — truncated stdout.** `process.exit()` discards pipe writes still
+   queued; on macOS `verify --json` arrived cut mid-document. Reproduced in CI
+   run 36173422355 as `Expected ',' or '}' after property value in JSON at
+   position 7671` against a 7875-byte document. Fixed in `672281a` and
+   `e39e906`; `install-harness --dry-run --json` now emits 57,901 bytes that
+   parse. Oracle A re-measured `dashboard --json` → 51,626 bytes, exit 0, and
+   confirmed exit-code fidelity: `doctor` on a missing harness → 1,
+   `code-size --bad-flag` → 2, `install-harness --bad-flag` → 2.
+2. **R47 — a warning that aborted the install.** Flushing revealed that
+   doctor's shell-based `omp` spawns passed an argument array with `shell: true`,
+   making Node print `DEP0190` on stderr. `install.ps1` runs the doctor with
+   `2>&1` under `$ErrorActionPreference='Stop'` and treated the warning as
+   fatal, so two installer tests failed (`pass 8 / fail 2`). The command is now
+   built as a quoted string; `doctor --json` stderr is **0 bytes** and
+   `paseo-install.test.mjs` passes `10/10`. Oracle A verified no shipped CLI
+   passes a non-empty argument array with `shell: true` any more.
+
+Local evidence for the final tree: `node --test tools/tests/*.test.mjs` →
+`tests 391`, `pass 391`, `fail 0`; `verify` → `29/29 checks passed`; `audit` →
+`all 15 checks clean`; `code-size` → `PASS — нарушений нет. Проверено 112 файлов,
+728 функций.` Remaining `process.exit()` calls are deliberate — server modes and
+small-output paths (`debt-ledger` 90 bytes, `skills-doctor` 612 bytes,
+`sync` 1,990 bytes) — re-measured by Oracle A.
+
+## Still not proven
+
+The remote `portable-install` matrix has not run for this commit. The two prior
+macOS failures had distinct causes, both now fixed; the green macOS leg is the
+acceptance gate for R43, R44, R46 and R47 and remains **NOT PROVEN** until CI
+reports it.
