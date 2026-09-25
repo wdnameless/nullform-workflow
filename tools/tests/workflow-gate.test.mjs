@@ -441,6 +441,38 @@ test("start: replacing active task with --force requires --reason and records de
   }
 });
 
+test("start prints a responding dashboard URL, not a stale file with a live PID", async () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-dashboard-stale-"));
+  const runtime = join(root, ".workflow", "dashboard.json");
+  mkdirSync(join(root, ".workflow"), { recursive: true });
+  // A live process can own a stale runtime file whose port no longer answers HTTP.
+  writeFileSync(runtime, JSON.stringify({ pid: process.pid, port: 1, url: "http://localhost:1", root }));
+  try {
+    const res = spawnSync(process.execPath, [
+      join(import.meta.dirname, "..", "workflow.mjs"), "start", "--tier", "T0",
+      "--task", "dashboard-probe", "--root", root,
+    ], {
+      encoding: "utf8", timeout: 45000, windowsHide: true,
+      env: { ...process.env, PASEO_AGENT_ID: `wf-dashboard-${process.pid}-${Date.now()}` },
+    });
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+    const url = res.stdout.match(/dashboard: (http:\/\/localhost:\d+)/)?.[1];
+    assert.ok(url && url !== "http://localhost:1", res.stdout);
+    const health = await (await fetch(`${url}/api/health`, {
+      signal: AbortSignal.timeout(2000),
+    })).json();
+    const current = JSON.parse(readFileSync(runtime, "utf8"));
+    assert.equal(health.ok, true);
+    assert.equal(health.pid, current.pid);
+  } finally {
+    try {
+      const current = JSON.parse(readFileSync(runtime, "utf8"));
+      if (current.root === root && current.pid !== process.pid) process.kill(current.pid, "SIGTERM");
+    } catch {}
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
 test("check-ci: rejects invalid changeId containing path traversal or illegal characters", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-gate-slug-"));
   try {

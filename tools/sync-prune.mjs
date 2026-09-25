@@ -69,7 +69,10 @@ export const SHIPPED_SUFFIX = /\.(mjs|cjs|js|ts|py|sh|ps1|md|json|jsonl|ya?ml)$/
  * the un-suffixed name. They are not orphans — deleting them loses the operator's setup,
  * which is exactly what an earlier suffix deny-list was trying to prevent.
  */
-export const HOST_CONFIG = /(^|\/)(config|mcp|models)\.(ya?ml|json)$/i;
+// Host config lives in agent/ as the un-suffixed twin of a shipped `*.example.*` template.
+// Anchoring to agent/ is what stops the same regex from wrongly shielding a genuinely
+// distributable `templates/ci/config.yml` or `tools/config.json` from the orphan report.
+export const HOST_CONFIG = /^agent\/(config|mcp|models|oracle-priority)\.(ya?ml|json)$/i;
 
 /** Files whose NAME marks them as host runtime state rather than distributable content. */
 export const RUNTIME_NAMES = new Set([

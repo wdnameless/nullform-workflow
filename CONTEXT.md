@@ -10,10 +10,10 @@ Terms used in this OMP workflow harness. Definitions say what a term
 - **Tree** — one of the two physical copies of the harness:
   - **Live tree** — the harness root (`$HOME/omp-workflow` by default; `install.ps1 -HarnessRoot` overrides). Read by OMP at runtime.
   - **Repo tree** — the git clone you installed from. The distributable source of truth.
-  - **Drift** — divergence between the two. Owned by `tools/sync.ps1` (Windows) and `tools/sync.sh` (POSIX).
+  - **Drift** — divergence between the two. Owned by `tools/sync.mjs`; `tools/sync.ps1` and `tools/sync.sh` are OS entrypoints.
 - **Install** — copying the repo tree onto a machine (`install.ps1` on Windows, `install.sh`/`tools/install-harness.mjs` on any OS). Produces
   the live tree. Does not mutate Paseo; Paseo profile setup is an optional explicit step (`paseo/setup-paseo.ps1`).
-- **Verification runner** — `tools/verify.mjs`, the single cross-platform implementation of both gate profiles (`--profile verify` = 29 install checks, `--profile audit` = 14 health checks). Thin per-OS entrypoints forward to it: `verify.sh` / `tools/audit.sh` on POSIX, `verify.ps1` / `tools/audit.ps1` on Windows. Exit 0 = all pass, 1 = at least one FAIL, 2 = cannot run; unconfigured areas report `SETUP`, not `FAIL`.
+- **Verification runner** — `tools/verify.mjs`, the single cross-platform implementation of both gate profiles (`--profile verify` = 29 install checks, `--profile audit` = 15 health checks). Thin per-OS entrypoints forward to it: `verify.sh` / `tools/audit.sh` on POSIX, `verify.ps1` / `tools/audit.ps1` on Windows. Exit 0 = all pass, 1 = at least one FAIL, 2 = cannot run; unconfigured areas report `SETUP`, not `FAIL`.
 - **Portable core** — execution-environment-agnostic specification, contracts, and interfaces (`core/PORTABLE.md`) defining the 4-wave SDD process independently of OMP or Paseo.
 - **Prompt surface** — any file whose text reaches a model's context:
   `agent/AGENTS.md`, `agent/agents/*.md`, `~/.agents/rules/*.md`,
@@ -133,6 +133,7 @@ Terms used in this OMP workflow harness. Definitions say what a term
   would drop silently (bad frontmatter, truncation, parity, orphans).
 - **Disabled skill** — a skill named in `~/.agents/.skills-disabled.json` (an operator's stop-list). `tools/skills-doctor.mjs` reports it as `disabled by operator` and excludes it from orphan/parity problems. Distinct from a *dropped* skill, which the registry discards by accident.
 - **Prune** — `tools/sync.ps1 -Prune` / `tools/sync.sh --prune`: lists harness files absent from the repo within manifest-covered directories (dry-run by default), deleting only with `-Confirm` / `--confirm`; never touches `.prompt-lint`, `.workflow`, `.archmap`, `node_modules`, `worktrees`, session or config files.
+- **Code-size gate** — `tools/code-size.mjs check` limits growth beyond the committed `.code-size.baseline.json`; new oversize files/functions fail, while a `defer:` marker in the header is an explicit, reported exemption. It measures line count, not coupling or cognitive complexity.
 - **Glossary tool** — `tools/glossary.mjs`. Drafts `CONTEXT.md` from real symbols
   and measures which public symbols are still undocumented. Never invents a
   definition; `--scope` keeps vendored tooling out of the project's glossary.

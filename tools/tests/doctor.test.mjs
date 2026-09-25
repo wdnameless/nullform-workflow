@@ -297,10 +297,10 @@ test("doctor broken fixture missing required file returns exit 1 with exact path
   }
 });
 
-test("doctor broken fixture missing core tool returns exit 1 with exact path", () => {
+test("doctor fails when required sync engine and manifest are missing", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-test-fail-tool-"));
   try {
-    const harness = createMockHarness(tmp, { omitTools: ["prompt-lint.mjs"] });
+    const harness = createMockHarness(tmp, { omitTools: ["sync.mjs", "sync-manifest.json"] });
 
     const res = spawnSync(
       process.execPath,
@@ -308,16 +308,16 @@ test("doctor broken fixture missing core tool returns exit 1 with exact path", (
       { encoding: "utf8" }
     );
 
-    assert.equal(res.status, 1, `Expected exit 1 for missing core tool, got ${res.status}`);
+    assert.equal(res.status, 1, `Expected exit 1 for missing sync files, got ${res.status}`);
 
     const json = JSON.parse(res.stdout);
     assert.equal(json.ok, false);
     assert.ok(json.summary.fail > 0);
-
     const toolsSyntaxCheck = json.checks.find(c => c.id === "tools-syntax");
     assert.ok(toolsSyntaxCheck, "tools-syntax check must be present");
     assert.equal(toolsSyntaxCheck.status, "fail");
-    assert.ok(toolsSyntaxCheck.detail.includes("prompt-lint.mjs"), `Expected prompt-lint.mjs in fail detail: ${toolsSyntaxCheck.detail}`);
+    assert.match(toolsSyntaxCheck.detail, /sync\.mjs/);
+    assert.match(toolsSyntaxCheck.detail, /sync-manifest\.json/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

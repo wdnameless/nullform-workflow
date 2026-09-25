@@ -62,6 +62,7 @@ export const CORE_TOOLS = [
   "benchmark.mjs",
   "usage-audit.mjs",
   "test-lens.mjs",
+  "code-size.mjs",
   "auto-review.mjs",
   "doctor.mjs",
   "sync-prune.mjs",
@@ -74,6 +75,8 @@ export const CORE_TOOLS = [
   "verify.mjs",
   "audit.ps1",
   "sync.ps1",
+  "sync.mjs",
+  "sync-manifest.json",
   "audit.sh",
   "sync.sh",
 ];

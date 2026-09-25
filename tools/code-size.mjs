@@ -36,13 +36,8 @@ export const DEFAULT_THRESHOLDS = { maxLines: 700, maxFunctionLines: 120 };
 // Every code extension the repository ships. A missing one is a rename dodge: `.cjs` and
 // `.js` exist in the tree, so an `.mjs`-only scope lets the same code slip past by name.
 export const DEFAULT_SCOPE = [
-  "tools/**/*.mjs",
-  "tools/**/*.cjs",
-  "tools/**/*.js",
-  "tools/tests/**/*.mjs",
-  "skills/*/scripts/*.py",
-  "*.ps1",
-  "*.sh",
+  "tools/**/*.mjs", "tools/**/*.cjs", "tools/**/*.js", "tools/tests/**/*.mjs",
+  "skills/*/scripts/*.py", "*.ps1", "*.sh",
 ];
 export const DEFAULT_BASELINE_FILE = ".code-size.baseline.json";
 export const DEFAULT_CONFIG_FILE = ".code-size.json";
@@ -56,15 +51,8 @@ const JS_KEYWORDS = new Set([
 // Not distributed as live source (gitignored or generated): reporting offenders here
 // would name files nobody can act on.
 const IGNORE_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "data",
-  "_archive",
-  "skills-archive",
-  "skills-tmp",
-  "worktrees",
-  "migration-backup",
-  "bench",
+  "node_modules", ".git", "data", "_archive", "skills-archive",
+  "skills-tmp", "worktrees", "migration-backup", "bench",
 ]);
 const COMMENT_PREFIX = "(?:\\/\\/|#|--|;|(?:\\/\\*+)|\\*|<!--)";
 const DEFER_HEADER_REGEX = new RegExp(`^[ \\t]*${COMMENT_PREFIX}\\s*defer:\\s*`, "i");
@@ -112,80 +100,68 @@ function isEscaped(str, idx) {
   return count % 2 === 1;
 }
 
-function countToMatchingBrace(lines, startLineIdx, openColIdx, options = {}) {
-  const { supportsTemplates = false, shellComment = false } = options;
-  let depth = 0;
-  let inSingle = false, inDouble = false, inBlockComment = false;
-  const templateStack = [];
+function maskJsCode(lines) {
+  let inBlock = false, inSingle = false, inDouble = false;
+  const tplStack = [];
+  return lines.map((line) => {
+    let out = "";
+    for (let c = 0; c < line.length; c++) {
+      const ch = line[c], next = line[c + 1] || "", prev = c > 0 ? line[c - 1] : "";
+      if (inBlock) {
+        if (ch === "/" && prev === "*") inBlock = false;
+        out += " ";
+      } else if (inSingle) {
+        if (ch === "'" && !isEscaped(line, c)) inSingle = false;
+        out += " ";
+      } else if (inDouble) {
+        if (ch === '"' && !isEscaped(line, c)) inDouble = false;
+        out += " ";
+      } else if (tplStack.length > 0 && tplStack[tplStack.length - 1] === null) {
+        if (ch === "`" && !isEscaped(line, c)) { tplStack.pop(); out += " "; }
+        else if (ch === "$" && next === "{" && !isEscaped(line, c)) { tplStack[tplStack.length - 1] = 0; out += " {"; c++; }
+        else out += " ";
+      } else {
+        if (ch === "/" && next === "/") { out += " ".repeat(line.length - c); break; }
+        if (ch === "/" && next === "*") { inBlock = true; out += "  "; c++; continue; }
+        if (ch === "'") { inSingle = true; out += " "; }
+        else if (ch === '"') { inDouble = true; out += " "; }
+        else if (ch === "`") { tplStack.push(null); out += " "; }
+        else if (tplStack.length > 0 && typeof tplStack[tplStack.length - 1] === "number") {
+          if (ch === "{") tplStack[tplStack.length - 1]++;
+          else if (ch === "}") {
+            if (tplStack[tplStack.length - 1] > 0) tplStack[tplStack.length - 1]--;
+            else tplStack[tplStack.length - 1] = null;
+          }
+          out += ch;
+        } else {
+          out += ch;
+        }
+      }
+    }
+    if (!line.endsWith("\\") || isEscaped(line, line.length)) {
+      inSingle = false;
+      inDouble = false;
+    }
+    return out;
+  });
+}
 
+function countToMatchingBrace(lines, startLineIdx, openColIdx, options = {}) {
+  const { shellComment = false } = options;
+  let depth = 0;
+  let inSingle = false, inDouble = false;
   for (let l = startLineIdx; l < lines.length; l++) {
     const curLine = lines[l];
-    let inLineComment = false;
     const cStart = (l === startLineIdx) ? openColIdx : 0;
-
     for (let c = cStart; c < curLine.length; c++) {
       const ch = curLine[c];
-      const prev = c > 0 ? curLine[c - 1] : "";
-      if (inLineComment) break;
-      if (inBlockComment) {
-        if (ch === "/" && prev === "*") inBlockComment = false;
-        continue;
-      }
-      if (inSingle) {
-        if (ch === "'" && !isEscaped(curLine, c)) inSingle = false;
-        continue;
-      }
-      if (inDouble) {
-        if (ch === '"' && !isEscaped(curLine, c)) inDouble = false;
-        continue;
-      }
-
-      // Template string literal: top is null
-      if (supportsTemplates && templateStack.length > 0 && templateStack[templateStack.length - 1] === null) {
-        if (ch === "`" && !isEscaped(curLine, c)) {
-          templateStack.pop();
-        } else if (ch === "$" && curLine[c + 1] === "{" && !isEscaped(curLine, c)) {
-          c++;
-          templateStack[templateStack.length - 1] = 0;
-        }
-        continue;
-      }
-
-      // Template expression: top is number (brace depth inside expression)
-      if (supportsTemplates && templateStack.length > 0 && typeof templateStack[templateStack.length - 1] === "number") {
-        if (ch === "/" && curLine[c + 1] === "/") { inLineComment = true; break; }
-        if (ch === "/" && curLine[c + 1] === "*") { inBlockComment = true; c++; continue; }
-        if (ch === "'") { inSingle = true; continue; }
-        if (ch === '"') { inDouble = true; continue; }
-        if (ch === "`") { templateStack.push(null); continue; }
-
-        if (ch === "{") {
-          templateStack[templateStack.length - 1]++;
-        } else if (ch === "}") {
-          if (templateStack[templateStack.length - 1] > 0) {
-            templateStack[templateStack.length - 1]--;
-          } else {
-            templateStack[templateStack.length - 1] = null;
-          }
-        }
-        continue;
-      }
-
-      // Normal code outside template literals
-      if (shellComment) {
-        if (ch === "#") { inLineComment = true; break; }
-      } else {
-        if (ch === "/" && curLine[c + 1] === "/") { inLineComment = true; break; }
-        if (ch === "/" && curLine[c + 1] === "*") { inBlockComment = true; c++; continue; }
-      }
-
+      if (inSingle) { if (ch === "'" && !isEscaped(curLine, c)) inSingle = false; continue; }
+      if (inDouble) { if (ch === '"' && !isEscaped(curLine, c)) inDouble = false; continue; }
+      if (shellComment && ch === "#") break;
       if (ch === "'") { inSingle = true; continue; }
       if (ch === '"') { inDouble = true; continue; }
-      if (supportsTemplates && ch === "`") { templateStack.push(null); continue; }
-
-      if (ch === "{") {
-        depth++;
-      } else if (ch === "}") {
+      if (ch === "{") depth++;
+      else if (ch === "}") {
         depth--;
         if (depth === 0) return l + 1;
       }
@@ -194,7 +170,7 @@ function countToMatchingBrace(lines, startLineIdx, openColIdx, options = {}) {
   return null;
 }
 
-function parseBracedFunction(lines, lineIdx, name, allowed, braceOpts) {
+function parseBracedFunction(lines, lineIdx, name, allowed, braceOpts = {}) {
   const bracePos = findOpenBrace(lines, lineIdx, 20);
   if (!bracePos) return null;
   const endLine = countToMatchingBrace(lines, bracePos.lineIdx, bracePos.colIdx, braceOpts);
@@ -223,30 +199,57 @@ function matchJsFunctionDecl(lines, i) {
     }
   }
 
-  // Method shorthand (`handle() {`, `get x() {`, `*gen() {`). Without it a class or
-  // object-literal method escapes the function limit: a 409-line file with two 200-line
-  // methods reported zero offenders. Needs a same-line brace and a non-keyword name.
-  const methodMatch = line.match(
-    /^[ \t]{2,}(?:static\s+)?(?:async\s+)?(?:\*\s*)?(?:get\s+|set\s+)?([a-zA-Z0-9_$]+)\s*\(([^)]*)\)\s*\{/
+  // Method shorthand (`handle() {`, `get x() {`, `*gen() {`, multiline params/brace).
+  const methodHead = line.match(
+    /^[ \t]{2,}(?:static\s+)?(?:async\s+)?(?:\*\s*)?(?:get\s+|set\s+)?([a-zA-Z0-9_$]+)\s*\(/
   );
-  if (methodMatch && !JS_KEYWORDS.has(methodMatch[1])) return { name: methodMatch[1] };
+  if (methodHead && !JS_KEYWORDS.has(methodHead[1])) {
+    const openCol = line.indexOf("(", methodHead[0].length - 1);
+    let depth = 0;
+    const limit = Math.min(lines.length, i + 20);
+    for (let l = i; l < limit; l++) {
+      const cur = lines[l];
+      const startCol = (l === i) ? openCol : 0;
+      for (let c = startCol; c < cur.length; c++) {
+        const ch = cur[c];
+        if (depth > 0) {
+          if (ch === "(") depth++;
+          else if (ch === ")") depth--;
+        } else if (ch === "(") {
+          depth = 1;
+        } else {
+          if (ch === " " || ch === "\t") continue;
+          if (ch === "{") return { name: methodHead[1] };
+          return null;
+        }
+      }
+    }
+  }
 
   return null;
 }
 
 export function scanJsFunctions(lines) {
+  const cleanLines = maskJsCode(lines);
   const results = [];
   let i = 0;
-  while (i < lines.length) {
-    const match = matchJsFunctionDecl(lines, i);
+  while (i < cleanLines.length) {
+    const match = matchJsFunctionDecl(cleanLines, i);
     if (match) {
-      const fn = parseBracedFunction(lines, i, match.name, ALLOW_REGEX.test(lines[i]), { supportsTemplates: true });
+      let allowed = false;
+      const limit = Math.min(lines.length, i + 20);
+      for (let l = i; l < limit; l++) {
+        if (ALLOW_REGEX.test(lines[l])) { allowed = true; break; }
+        if (cleanLines[l].includes("{")) break;
+      }
+      const fn = parseBracedFunction(cleanLines, i, match.name, allowed);
       if (fn) { results.push(fn); i = fn.endLine - 1; }
     }
     i++;
   }
   return results;
 }
+
 
 export function scanPythonFunctions(lines) {
   const fns = [];
@@ -424,7 +427,6 @@ export function buildBaseline(root, options = {}) {
 
   return {
     version: 1,
-    generatedAt: new Date().toISOString(),
     thresholds: { maxLines: config.maxLines, maxFunctionLines: config.maxFunctionLines },
     files: fileOffenders,
     functions: fnOffenders,
@@ -551,11 +553,9 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--root" || a === "-r") {
-      if (i + 1 < argv.length) args.root = argv[++i];
-      else args.errors.push("Флаг --root требует указания пути");
+      if (i + 1 < argv.length) args.root = argv[++i]; else args.errors.push("Флаг --root требует указания пути");
     } else if (a === "--baseline" || a === "-b") {
-      if (i + 1 < argv.length) args.baseline = argv[++i];
-      else args.errors.push("Флаг --baseline требует указания пути");
+      if (i + 1 < argv.length) args.baseline = argv[++i]; else args.errors.push("Флаг --baseline требует указания пути");
     } else if (a === "--json") {
       args.json = true;
     } else if (a === "--help" || a === "-h") {

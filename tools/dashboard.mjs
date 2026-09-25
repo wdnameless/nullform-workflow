@@ -2165,8 +2165,8 @@ export function writeRuntime(root, info) {
   const dir = dirname(p);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const text = JSON.stringify(info, null, 2);
-  // workflow.mjs polls .workflow/dashboard.json every 80 ms and JSON.parses it; a plain
-  // writeFileSync leaves a window where that read sees a truncated document and throws.
+  // --ensure and --url probe /api/health before reporting this runtime file. Atomic
+  // replacement also prevents other readers from seeing a truncated document.
   // Same tmp+rename pattern the workflow state already uses.
   const writeAtomic = (target) => {
     const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;

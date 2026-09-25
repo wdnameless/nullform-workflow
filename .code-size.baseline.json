@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-25T11:45:36.910Z",
   "thresholds": {
     "maxLines": 700,
     "maxFunctionLines": 120
@@ -27,8 +26,8 @@
       "reason": ""
     },
     "tools/doctor.mjs": {
-      "lines": 1461,
-      "reason": ""
+      "lines": 1464,
+      "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; without them installed wrappers silently break"
     },
     "tools/oracle-model.mjs": {
       "lines": 750,
@@ -155,10 +154,10 @@
       "reason": ""
     },
     "tools/sync.mjs:main": {
-      "lines": 281,
+      "lines": 265,
       "file": "tools/sync.mjs",
       "name": "main",
-      "line": 171,
+      "line": 201,
       "reason": ""
     },
     "tools/usage-audit.mjs:auditUsage": {

@@ -31,7 +31,7 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { spawn, execFileSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -468,85 +468,32 @@ function parse(argv) {
   return o;
 }
 
-/** Read .workflow/dashboard.json and report whether its process is still alive. */
-function readDashboardRuntime(root) {
-  try {
-    const rt = join(root, ".workflow", "dashboard.json");
-    if (!existsSync(rt)) return null;
-    const parsed = JSON.parse(readFileSync(rt, "utf8"));
-    if (!parsed || !parsed.url) return null;
-    // A pid that no longer exists means the file is a leftover from a dead server.
-    // process.kill(pid, 0) is the same liveness probe acquireLock already uses.
-    let alive = false;
-    try {
-      if (typeof parsed.pid === "number") {
-        process.kill(parsed.pid, 0);
-        alive = true;
-      }
-    } catch {
-      alive = false;
-    }
-    return { ...parsed, alive };
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Автозапуск дашборда (best-effort): поднимает фоновый сервер наблюдения и
- * открывает страницу. Никогда не влияет на код возврата воркфлоу — дашборд
- * это наблюдаемость, а не условие работы. Отключается --no-dashboard или NF_NO_DASHBOARD=1.
+ * Start or reuse the dashboard and print only the URL verified by its own HTTP health
+ * probe. Reading dashboard.json here used to publish a stale or hung server's address.
+ * Observability is best-effort and never changes the workflow command's exit code.
  */
 function autoOpenDashboard(root, flags) {
   if (flags && flags["no-dashboard"]) return;
   if (process.env.NF_NO_DASHBOARD === "1") return;
-  try {
-    const dash = join(dirname(fileURLToPath(import.meta.url)), "dashboard.mjs");
-    if (!existsSync(dash)) return;
-
-    // Capture the runtime file BEFORE spawning. The previous implementation accepted the
-    // first url it read, which is the STALE one left by a dead server — so it printed a
-    // dead address and the printed browser_new_tab link went nowhere. Accept a runtime
-    // file only when it names a different, live process than the one we started with.
-    const before = readDashboardRuntime(root);
-
-    const child = spawn(process.execPath, [dash, "--ensure", "--root", root], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-
-    let live = null;
-    let sawFresh = false;
-    for (let i = 0; i < 25; i++) {
-      const cur = readDashboardRuntime(root);
-      if (cur && cur.alive) {
-        const isNewProcess = !before || before.pid !== cur.pid;
-        if (isNewProcess) sawFresh = true;
-        // Accept a live server that is either freshly started or already running.
-        if (isNewProcess || (before && before.alive)) {
-          live = cur;
-          break;
-        }
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
-    }
-
-    const inPaseo = Boolean(process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI);
-    if (live) {
-      if (inPaseo) {
-        console.log(`  dashboard: ${live.url} — открой во вкладке Paseo: browser_new_tab("${live.url}")${sawFresh ? "" : " (уже работал)"}`);
-      } else {
-        console.log(`  dashboard: ${live.url} (сервер запущен, открывается в браузере)`);
-      }
-    } else if (before && !before.alive) {
-      console.log(`  dashboard: прежний сервер (pid ${before.pid}) мёртв, новый не поднялся за 2 с — адрес в .workflow/dashboard.json`);
-    } else {
-      console.log("  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
-    }
-  } catch {
-    // молча: наблюдаемость не должна ломать гейт
+  const dash = join(dirname(fileURLToPath(import.meta.url)), "dashboard.mjs");
+  if (!existsSync(dash)) return;
+  const result = spawnSync(process.execPath, [dash, "--ensure", "--root", root], {
+    encoding: "utf8",
+    timeout: 35000,
+    windowsHide: true,
+  });
+  const url = result.status === 0
+    ? result.stdout.match(/Дашборд: (http:\/\/localhost:\d+)/)?.[1]
+    : null;
+  if (!url) {
+    console.error(`  dashboard: ${result.stderr.trim() || result.error?.message || "не удалось запустить"}`);
+    return;
+  }
+  if (process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI) {
+    console.log(`  dashboard: ${url} — открой во вкладке Paseo: browser_new_tab("${url}")`);
+  } else {
+    console.log(`  dashboard: ${url} (сервер запущен, открывается в браузере)`);
   }
 }
 

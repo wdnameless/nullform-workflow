@@ -121,6 +121,12 @@
     "rel": "tools/sync.sh"
   },
   {
+    "rel": "tools/sync.mjs"
+  },
+  {
+    "rel": "tools/sync-manifest.json"
+  },
+  {
     "rel": "tools/verify.mjs"
   },
   {

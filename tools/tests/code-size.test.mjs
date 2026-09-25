@@ -349,3 +349,126 @@ test("temp directories are cleaned up", () => {
   });
   assert.equal(existsSync(createdDir), false);
 });
+
+test("R36: multiline method signatures count toward the function limit", () => {
+  const src = [
+    "class Handler {",
+    "  handle(",
+    "    req,",
+    "    res,",
+    "    next",
+    "  ) {",
+    ...Array.from({ length: 150 }, (_, i) => `    const a${i} = ${i};`),
+    "  }",
+    "}",
+    "const service = {",
+    "  process(data)",
+    "  {",
+    ...Array.from({ length: 150 }, (_, i) => `    const b${i} = ${i};`),
+    "  },",
+    "};",
+    "class AsyncService {",
+    "  async dispatch(",
+    "    payload",
+    "  )",
+    "  {",
+    ...Array.from({ length: 150 }, (_, i) => `    const c${i} = ${i};`),
+    "  }",
+    "}",
+  ].join("\n");
+
+  const fns = scanFunctions(src);
+  const names = fns.map((f) => f.name);
+  assert.ok(names.includes("handle"), `expected handle, got ${JSON.stringify(names)}`);
+  assert.ok(names.includes("process"), `expected process, got ${JSON.stringify(names)}`);
+  assert.ok(names.includes("dispatch"), `expected dispatch, got ${JSON.stringify(names)}`);
+
+  for (const name of ["handle", "process", "dispatch"]) {
+    const fn = fns.find((f) => f.name === name);
+    assert.ok(fn.lines > 120, `${name} should be over 120 lines, got ${fn.lines}`);
+  }
+});
+
+test("R37: template literals containing function-syntax text are not measured", () => {
+  const src = [
+    "const tpl = `",
+    "function fakeInTemplate() {",
+    ...Array.from({ length: 150 }, (_, i) => `  const x${i} = ${i};`),
+    "}",
+    "`;",
+    "function realFn() {",
+    "  return 1;",
+    "}",
+    "function wrapper() {",
+    "  const str = `",
+    "    function fakeNestedInTemplate() {",
+    "      return 42;",
+    "    }",
+    "  `;",
+    "  return str;",
+    "}",
+  ].join("\n");
+
+  const fns = scanFunctions(src);
+  const names = fns.map((f) => f.name);
+  assert.ok(!names.includes("fakeInTemplate"), "fakeInTemplate should NOT be measured");
+  assert.ok(!names.includes("fakeNestedInTemplate"), "fakeNestedInTemplate should NOT be measured");
+  assert.ok(names.includes("realFn"), "realFn SHOULD be measured");
+  assert.ok(names.includes("wrapper"), "wrapper SHOULD be measured");
+});
+
+test("R37: block comments containing function-syntax text are not measured", () => {
+  const src = [
+    "/*",
+    "function fakeInBlockComment() {",
+    ...Array.from({ length: 150 }, (_, i) => `  const y${i} = ${i};`),
+    "}",
+    "class Dummy {",
+    "  commentedMethod() {",
+    "    return true;",
+    "  }",
+    "}",
+    "*/",
+    "function realCommentFn() {",
+    "  return 2;",
+    "}",
+  ].join("\n");
+
+  const fns = scanFunctions(src);
+  const names = fns.map((f) => f.name);
+  assert.ok(!names.includes("fakeInBlockComment"), "fakeInBlockComment should NOT be measured");
+  assert.ok(!names.includes("commentedMethod"), "commentedMethod should NOT be measured");
+  assert.ok(names.includes("realCommentFn"), "realCommentFn SHOULD be measured");
+});
+
+test("R38: two baseline runs produce byte-identical output", () => {
+  withTempDir((dir) => {
+    mkdirSync(join(dir, "tools"), { recursive: true });
+    const offenderCode = [
+      "export function bigHandler() {",
+      ...Array.from({ length: 150 }, (_, i) => `  const v${i} = ${i};`),
+      "}",
+    ].join("\n") + "\n";
+    writeFileSync(join(dir, "tools", "offender.mjs"), offenderCode, "utf8");
+
+    const baselinePath = join(dir, ".code-size.baseline.json");
+
+    // First run
+    const proc1 = spawnSync(process.execPath, [CLI_PATH, "baseline", "--root", dir], { encoding: "utf8" });
+    assert.equal(proc1.status, 0);
+    const content1 = readFileSync(baselinePath, "utf8");
+
+    // Second run
+    const proc2 = spawnSync(process.execPath, [CLI_PATH, "baseline", "--root", dir], { encoding: "utf8" });
+    assert.equal(proc2.status, 0);
+    const content2 = readFileSync(baselinePath, "utf8");
+
+    assert.equal(content1, content2, "Two baseline runs must produce byte-identical files");
+    assert.ok(!content1.includes("generatedAt"), "Baseline output should not contain volatile generatedAt timestamp");
+
+    // Check buildBaseline function directly
+    const b1 = buildBaseline(dir);
+    const b2 = buildBaseline(dir);
+    assert.deepStrictEqual(b1, b2, "buildBaseline calls must produce identical objects");
+  });
+});

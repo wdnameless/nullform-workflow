@@ -8,8 +8,8 @@
 
 | | |
 |---|---|
-| **29** проверок установки · **14** проверок аудита | один раннер `tools/verify.mjs`, обёртки под каждую ОС |
-| **69** навыков · **8** ролей · **31** инструмент | без единой внешней npm-зависимости |
+| **29** проверок установки · **15** проверок аудита | один раннер `tools/verify.mjs`, обёртки под каждую ОС |
+| **69** навыков · **8** ролей · **33** инструмента | без единой внешней npm-зависимости |
 | **Юнит-тесты** | `node --test tools/tests/*.test.mjs` |
 | **0** внешних npm-пакетов | только стандартная библиотека Node.js 18+ |
 
@@ -60,8 +60,9 @@
 | **4-Wave SDD** | Бриф с интервью → манифест требований `R##` → спецификация → параллельная сборка → **слепая приёмка Оракула** |
 | **Коридор качества** | TDD → `test-lens` (шум тестов) → мутационное тестирование → BDD Gherkin → независимая приёмка |
 | **Роли** | `orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic` — у каждой свой фокус и права |
-| **Дашборд** | Открывается сам при старте задачи, привязан к сессии, обновляется каждые 3 с, три режима архитектуры (схема / граф зависимостей / таблица) |
-| **Контроль дрейфа** | `tools/verify.mjs` — единый раннер: профиль `verify` (29 проверок) и `audit` (14 проверок); обёртки `.sh` и `.ps1` под каждую ОС; `sync.sh` / `sync.ps1` (репозиторий ↔ живая установка); `doctor.mjs` (31 инструмент, роли, плагины, конфиги) |
+| **Дашборд** | Сервер поднимается при старте задачи, URL выдаётся после HTTP health-проверки; в Paseo агент открывает вкладку через `browser_new_tab`, при недоступном браузерном хосте отдаёт URL пользователю |
+| **Контроль дрейфа** | `tools/verify.mjs` — единый раннер: профиль `verify` (29 проверок) и `audit` (15 проверок); обёртки `.sh` и `.ps1` под каждую ОС; `sync.mjs` с манифестом через `sync.sh` / `sync.ps1`; `doctor.mjs` проверяет обязательные инструменты, роли, плагины и конфиги |
+| **Рост кода** | `tools/code-size.mjs check` блокирует новые превышения и рост относительно `.code-size.baseline.json`; `defer:` в заголовке — явное, видимое в отчёте исключение |
 | **Экономия контекста** | Бюджеты промптов, `prompt-lint`, кеш-бейзлайн, аудит использования плагинов и навыков |
 
 ---
@@ -125,7 +126,7 @@ https://github.com/wdnameless/omp-paseo-nullform-workflow в текущее ок
 
 ```text
 <HarnessRoot>/agent/agents/     роли (orchestrator, fixer, oracle, ...)
-<HarnessRoot>/tools/            31 инструмент: verify, workflow, dashboard, ...
+<HarnessRoot>/tools/            инструменты: verify, workflow, dashboard, sync, ...
 <HarnessRoot>/core/PORTABLE.md  спецификация процесса, независимая от харнесса
 ~/.omp/agent/AGENTS.md          свод законов, читается каждый сеанс
 ~/.omp/agent/rules/*.md          правила, адресуемые как rule://
@@ -149,7 +150,8 @@ node tools/dashboard.mjs --url             # адрес живого дашбо�
 
 ```bash
 node tools/verify.mjs --profile verify     # 29 проверок установки
-node tools/verify.mjs --profile audit      # 14 проверок здоровья
+node tools/verify.mjs --profile audit      # 15 проверок здоровья
+node tools/code-size.mjs check             # рост кода относительно baseline
 ```
 
 ---
@@ -452,7 +454,7 @@ node tools/usage-audit.mjs --json
 
 ```bash
 node tools/verify.mjs --profile verify     # 29 проверок установки
-node tools/verify.mjs --profile audit      # сводный аудит (14 проверок)
+node tools/verify.mjs --profile audit      # сводный аудит (15 проверок)
 ./verify.sh                                # POSIX-обёртка профиля verify
 ./tools/audit.sh                           # POSIX-обёртка профиля audit
 
