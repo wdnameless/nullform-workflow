@@ -71,6 +71,10 @@ const HARNESS_ONLY = [
   "secrets.env" /* нет: вне каталогов манифеста */,
   "agent/sessions/session.jsonl",
   "agent/cache/hit.txt",
+  // Локальные файлы в каталогах манифеста — НЕ сироты. Prune трогает только те
+  // расширения, которые репозиторий реально поставляет (SHIPPED_SUFFIX): .txt в
+  // tools/ — это заметка пользователя, и удаление её необратимо.
+  "tools/notes.txt",
   // вне каталогов манифеста
   "skills/mock-skill/SKILL.md",
   "tests/portability.ps1",
@@ -84,7 +88,6 @@ const EXPECTED = [
   "templates/local/extra.md",
   "tools/extra.mjs",
   "tools/nested/deep/chunk.js",
-  "tools/notes.txt",
 ];
 
 function makeFixture(baseDir) {

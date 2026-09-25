@@ -14,9 +14,15 @@ param(
 )
 
 $syncMjs = Join-Path $PSScriptRoot 'sync.mjs'
-if (-not (Test-Path $syncMjs)) {
-  $cand = 'D:\ohmypi\workflow-repo\tools\sync.mjs'
+if (-not (Test-Path $syncMjs) -and $HarnessRoot) {
+  # The installed copy lives at <harness>\tools\; the repo copy at <repo>\tools\.
+  # Never a literal machine path here — this file ships to other hosts.
+  $cand = Join-Path $HarnessRoot 'workflow-repo\tools\sync.mjs'
   if (Test-Path $cand) { $syncMjs = $cand }
+}
+if (-not (Test-Path $syncMjs)) {
+  Write-Error "sync.ps1: sync.mjs not found next to this script ($PSScriptRoot) and no -HarnessRoot fallback resolved."
+  exit 2
 }
 
 if (-not $RepoRoot) {

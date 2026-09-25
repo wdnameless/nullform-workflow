@@ -50,6 +50,28 @@ export const NEVER_DIRS = new Set([
 
 export const NEVER_SUFFIX = /\.(ya?ml|json|jsonl|db|db-wal|db-shm|key|env|log|bak|tmp|pem|crt|sqlite3?|skipped)$/i;
 
+/**
+ * Extensions the repository actually distributes in manifest-covered directories.
+ *
+ * A prune candidate is a file the harness has and the repo does not. But the live harness
+ * root often doubles as the host agent's own home, so `agent/` also holds runtime state
+ * (`agent.db`, `kimi-device-id`, `last-changelog-version`, `config.yml`) that the repo was
+ * never meant to ship. A deny-list of suffixes cannot see those — extension-less runtime
+ * files slipped through and were reported as prunable. An allow-list of distributable
+ * extensions inverts the default: anything unrecognised is left alone, never deleted.
+ */
+export const SHIPPED_SUFFIX = /\.(mjs|cjs|js|ts|py|sh|ps1|md|json|jsonl|ya?ml|example)$/i;
+
+/** Files whose NAME marks them as host runtime state rather than distributable content. */
+export const RUNTIME_NAMES = new Set([
+  "kimi-device-id",
+  "last-changelog-version",
+  "agent.db",
+  "models.db",
+  "history.db",
+  "config.yml",
+]);
+
 function toPosix(p) {
   return p.split(sep).join("/");
 }
@@ -113,6 +135,12 @@ export function findPruneCandidates({ harness, repo, dirs = MANIFEST_DIRS } = {}
     walk(dirPath, harnessRoot, found);
     for (const rel of found) {
       if (NEVER_SUFFIX.test(rel)) continue;
+      // Only files the repository could plausibly have shipped are prune candidates.
+      // Anything else in a manifest-covered directory is host runtime state or a local
+      // file, and is left alone — deleting it would destroy state the user cannot restore.
+      const base = rel.split("/").pop();
+      if (RUNTIME_NAMES.has(base)) continue;
+      if (!SHIPPED_SUFFIX.test(rel)) continue;
       if (existsSync(join(repoRoot, rel))) continue;
       candidates.push(rel);
     }
