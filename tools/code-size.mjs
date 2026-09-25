@@ -28,8 +28,13 @@ import { resolve, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_THRESHOLDS = { maxLines: 700, maxFunctionLines: 120 };
+// Every code extension the repository actually ships. An extension missing from this list
+// is a hole a file can be renamed into: `.cjs` and `.js` are present in the tree, so a
+// `.mjs`-only scope would let the same length of code slip past by changing its name.
 export const DEFAULT_SCOPE = [
   "tools/**/*.mjs",
+  "tools/**/*.cjs",
+  "tools/**/*.js",
   "tools/tests/**/*.mjs",
   "skills/*/scripts/*.py",
   "*.ps1",

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-25T11:23:28.240Z",
+  "generatedAt": "2026-09-25T11:30:08.394Z",
   "thresholds": {
     "maxLines": 700,
     "maxFunctionLines": 120
