@@ -26,7 +26,9 @@ description: "On-demand enterprise directives: vertical-slice architecture, ente
     3. **Atomic Conventional Commits**: Make small, focused commits during implementation (`feat(slice): ...`, `test(slice): ...`).
     4. **PR Verification Gate**: Before merging into `main`:
        - Run full CI checks locally (`typecheck`, `lint`, `test`).
-       - Ensure 100% diff test coverage via `test-gap`.
+       - Ensure the diff is covered by tests: `node tools/test-lens.mjs run -- <test cmd>` for the
+         summary and `node tools/mutation-test.mjs` when test quality (not just coverage) is in
+         doubt. There is no `test-gap` tool — this line used to name one that never existed.
        - Conduct blind acceptance verification via `@oracle`.
     5. **Clean Merge & Prune**: Perform a clean merge (Squash or Rebase Merge) into `main` and immediately delete the merged feature branch.
 

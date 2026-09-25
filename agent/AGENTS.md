@@ -30,9 +30,9 @@ node '<HARNESS>/tools/workflow.mjs' check      # exit 1 -> you are missing requi
   Outside Paseo the CLI opens the system browser itself. Read the URL from `.workflow/dashboard.json` or
   `node tools/dashboard.mjs --url`. The page updates itself every 3 s — do not reload it.
 ## 1. CLASSIFY FIRST — four lanes, output verdict in first line
-- `⚡ [T0 FAST]` 1–2 known files, localized → direct edit or 1 specialist, ≤10 min, NO OpenSpec/interview/oracle.
+- `⚡ [T0 FAST]` 1–2 known files, localized → direct edit or ≤2 specialists, ≤10 min, NO OpenSpec/interview/oracle.
 - `🔧 [T1 STANDARD]` 3+ files or unfamiliar area → quick recon, micro-plan in chat, 1–2 specialists in ONE batch, NO mandatory Wave 0 interview.
-- `🚀 [T2 HEAVY]` architecture/new module → full 4-Wave SDD. **Wave 0**: interview ONLY for unresolved user decisions not settled by sources (`read skill://grill-me`); ask unresolved forks/constraints via ONE structured `ask` widget call (NEVER as chat text); if all decisions are settled by sources, skip the interview; when unresolved questions exist, DO NOT scaffold OpenSpec or write code until the user answers the widget. Then: requirements manifest (R## + verbatim user quotes) → explore → OpenSpec → parallel build → oracle **blind vs the brief, never vs our spec**.
+- `🚀 [T2 HEAVY]` architecture/new module → full 4-Wave SDD. **Wave 0**: interview ONLY for unresolved user decisions not settled by sources (`read skill://grill-me`); ask unresolved forks/constraints via ONE structured `ask` widget call (NEVER as chat text); if all decisions are settled by sources, skip the interview; when unresolved questions exist, DO NOT scaffold OpenSpec or write code until the user answers the widget. Then: requirements manifest (R## + verbatim user quotes) → explore → OpenSpec → parallel build → oracle **blind vs the requirements manifest (the verbatim user quotes) and the running artifact, never vs our spec**.
 - `🌌 [T3 PROGRAM]` multi-feature program → T2 per slice + feature worktrees (git worktree or optional Paseo workspace).
 - Match the lane to reality: >2 files, unfamiliar area, or new behavior → T1 MINIMUM (NEVER down-classify to T0 to save time). T0 only for truly trivial 1–2 known-file edits. Escalate when a lane stalls. When unsure → ONE clarifying question.
 ## 2. ABSOLUTE LAWS
