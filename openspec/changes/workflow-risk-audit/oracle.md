@@ -15,3 +15,7 @@ Two independent read-only passes on `nullform-gateway/gemini-3.8-flash-high` (`a
 The report does **not** claim remote HTTP path traversal or raw diff disclosure; `--session` is a local CLI option, not an HTTP parameter. The proposed POSIX OMP transcript-path encoding issue, PowerShell-on-POSIX path strings, and dashboard graph symlink denial of service were not promoted to must-fix findings without a native/attacker-boundary reproduction. The nested install destination's 3-second timeout is qualified as a user-triggered resource risk, not a proved infinite process.
 
 No project code or live user configuration was changed. The local T2 gate is an audit artifact, not evidence that the bugs were fixed.
+
+## Re-sealed after the remediation
+
+The audit produced findings only. Its ten defects are now fixed on this branch (`4c64ad8`), so the audit record is re-committed alongside the remediation acceptance; no audit code changed. Verification on the fixed tree: 415/415 tests, verify 29/29, audit 15/15, size PASS, sync clean (62 files).

@@ -19,3 +19,7 @@ R01–R13 proven by both passes. R14 is **partial by design**: the oracle cannot
 ## Limits
 
 Native POSIX execution of `install.sh` is **not proven on this Windows host** — the POSIX path is covered by the bash syntax test and the CI matrix on `ubuntu-latest`/`macos-latest`, not by a local run. Remote CI results are not observable from this workstation; the parent verifies them after the push. The earlier audit's finding 7 (installing into a nested source subtree) is fixed by refusing the destination, not by making the copy recursion safe for such a destination.
+
+## Sealed with the sibling audit record
+
+Committed in the same final commit as the `workflow-risk-audit` record so the CI evidence check finds no tracked change after either acceptance.
