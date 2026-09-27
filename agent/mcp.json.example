@@ -6,7 +6,7 @@
     "dap-debugger": {
       "$comment": "Interactive debugging (breakpoints, stepping). Pin the version: `@latest` forces a registry round-trip on every cold start and intermittently fails to connect.",
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "dap-mcp-server@0.1.12"],
+      "args": ["/c", "npx", "-y", "dap-mcp-server@0.1.17"],
       "env": {}
     },
     "context7": {
@@ -39,7 +39,7 @@
     "chrome-devtools": {
       "$comment": "Chrome DevTools MCP server for browser inspection, console, network, performance, and automation.",
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "chrome-devtools-mcp@1.9.0"],
+      "args": ["/c", "npx", "-y", "chrome-devtools-mcp@1.10.1"],
       "env": {}
     },
     "github": {
@@ -51,9 +51,9 @@
       }
     },
     "postgres": {
-      "$comment": "PostgreSQL MCP Server (optional, read-only DB inspection). Replace with your database connection URL.",
+      "$comment": "PostgreSQL MCP Server (optional, read-only DB inspection). Set POSTGRES_URL to your database connection URL.",
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-postgres@0.6.2", "postgresql://user:pass@localhost:5432/mydb"],
+      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-postgres@0.6.2", "__POSTGRES_URL__"],
       "env": {}
     },
     "docker": {

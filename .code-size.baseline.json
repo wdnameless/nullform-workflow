@@ -38,7 +38,7 @@
       "reason": ""
     },
     "tools/tests/dashboard.test.mjs": {
-      "lines": 982,
+      "lines": 1145,
       "reason": ""
     },
     "tools/tests/doctor.test.mjs": {
@@ -46,11 +46,11 @@
       "reason": "Regression tests for the OMP 18.3.3+ plugin-list exit-code tolerance"
     },
     "tools/verify.mjs": {
-      "lines": 1294,
+      "lines": 1286,
       "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated on macOS"
     },
     "tools/workflow.mjs": {
-      "lines": 1648,
+      "lines": 1883,
       "reason": ""
     }
   },
@@ -94,28 +94,28 @@
       "lines": 258,
       "file": "tools/benchmark.mjs",
       "name": "runBenchmark",
-      "line": 501,
+      "line": 502,
       "reason": ""
     },
     "tools/benchmark.mjs:main": {
       "lines": 266,
       "file": "tools/benchmark.mjs",
       "name": "main",
-      "line": 1345,
+      "line": 1346,
       "reason": ""
     },
     "tools/dashboard.mjs:generateDashboardHtml": {
       "lines": 861,
       "file": "tools/dashboard.mjs",
       "name": "generateDashboardHtml",
-      "line": 1253,
+      "line": 1240,
       "reason": ""
     },
     "tools/dashboard.mjs:sanitizeHttpState": {
       "lines": 318,
       "file": "tools/dashboard.mjs",
       "name": "sanitizeHttpState",
-      "line": 2246,
+      "line": 2237,
       "reason": ""
     },
     "tools/dashboard.mjs:main": {
@@ -126,10 +126,10 @@
       "reason": ""
     },
     "tools/doctor.mjs:runDoctor": {
-      "lines": 918,
+      "lines": 901,
       "file": "tools/doctor.mjs",
       "name": "runDoctor",
-      "line": 486,
+      "line": 557,
       "reason": ""
     },
     "tools/oracle-model.mjs:run": {
@@ -143,7 +143,7 @@
       "lines": 220,
       "file": "tools/return-contract.mjs",
       "name": "validateReturnContract",
-      "line": 53,
+      "line": 54,
       "reason": ""
     },
     "tools/skills-doctor.mjs:run": {
@@ -154,10 +154,10 @@
       "reason": ""
     },
     "tools/sync.mjs:main": {
-      "lines": 265,
+      "lines": 272,
       "file": "tools/sync.mjs",
       "name": "main",
-      "line": 201,
+      "line": 232,
       "reason": ""
     },
     "tools/usage-audit.mjs:auditUsage": {
@@ -168,31 +168,31 @@
       "reason": ""
     },
     "tools/verify.mjs:runVerifyProfile": {
-      "lines": 583,
+      "lines": 575,
       "file": "tools/verify.mjs",
       "name": "runVerifyProfile",
-      "line": 347,
+      "line": 358,
       "reason": ""
     },
     "tools/verify.mjs:runAuditProfile": {
-      "lines": 236,
+      "lines": 226,
       "file": "tools/verify.mjs",
       "name": "runAuditProfile",
-      "line": 931,
+      "line": 934,
       "reason": ""
     },
     "tools/workflow.mjs:cmdStart": {
       "lines": 125,
       "file": "tools/workflow.mjs",
       "name": "cmdStart",
-      "line": 565,
+      "line": 512,
       "reason": ""
     },
     "tools/workflow.mjs:cmdCheckCi": {
-      "lines": 216,
+      "lines": 187,
       "file": "tools/workflow.mjs",
       "name": "cmdCheckCi",
-      "line": 1383,
+      "line": 1647,
       "reason": ""
     }
   }

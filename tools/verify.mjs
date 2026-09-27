@@ -344,6 +344,16 @@ async function executeCheck(id, label, fn) {
     };
   }
 }
+function invokeDoctor(harnessRoot, agentDir, userHome) {
+  const doc = join(harnessRoot, "tools", "doctor.mjs");
+  if (!existsSync(doc)) return { exists: false };
+  const args = [doc, "--harness", harnessRoot];
+  if (agentDir) args.push("--agent-dir", agentDir);
+  if (userHome) args.push("--agents-home", join(userHome, ".agents"));
+  args.push("--json");
+  return { exists: true, res: runProc(process.execPath, args) };
+}
+
 
 async function runVerifyProfile(ctx) {
   const { harnessRoot, repoRoot, userHome, agentDir } = ctx;
@@ -906,23 +916,15 @@ async function runVerifyProfile(ctx) {
     })
   );
 
-  // 29 install doctor (repo mode)
+  // 29 install doctor
   results.push(
-    await executeCheck(29, "install doctor (repo mode)", () => {
-      const doc = join(harnessRoot, "tools", "doctor.mjs");
-      if (!existsSync(doc)) throw new Error("doctor.mjs missing");
-      const r = runProc(process.execPath, [doc, "--harness", harnessRoot, "--json"]);
-      if (r.status !== 0) {
-        throw new Error(`doctor failed with code ${r.status}: ${(r.stdout || r.stderr || "").trim()}`);
-      }
-      let json;
-      try {
-        json = JSON.parse(r.stdout);
-      } catch (e) {
-        throw new Error(`failed to parse doctor JSON output: ${e.message}`);
-      }
-      if (!json) throw new Error("empty doctor JSON output");
-      return "repo mode ok";
+    await executeCheck(29, "install doctor", () => {
+      const { exists, res } = invokeDoctor(harnessRoot, agentDir, userHome);
+      if (!exists) throw new Error("doctor.mjs missing");
+      if (res.status !== 0) throw new Error(`doctor failed with code ${res.status}: ${(res.stdout || res.stderr || "").trim()}`);
+      const json = JSON.parse(res.stdout || "{}");
+      if (!json || Object.keys(json).length === 0) throw new Error("empty doctor JSON output");
+      return json.mode ? `${json.mode} mode ok` : "doctor ok";
     })
   );
 
@@ -930,7 +932,7 @@ async function runVerifyProfile(ctx) {
 }
 
 async function runAuditProfile(ctx) {
-  const { harnessRoot, repoRoot, userHome, scope } = ctx;
+  const { harnessRoot, repoRoot, userHome, agentDir, scope } = ctx;
   const results = [];
 
   // 1 harness/repo drift
@@ -1130,23 +1132,13 @@ async function runAuditProfile(ctx) {
   // 13 install doctor
   results.push(
     await executeCheck(13, "install doctor", () => {
-      const agentHarnessRoot = join(userHome, ".omp", "agent", ".harness-root");
-      if (!existsSync(agentHarnessRoot)) {
-        return { ok: true, detail: "n/a (no installed agent dir)" };
-      }
-      const doc = join(harnessRoot, "tools", "doctor.mjs");
-      if (!existsSync(doc)) return { ok: false, detail: "doctor.mjs missing" };
-      const r = runProc(process.execPath, [doc, "--harness", harnessRoot, "--json"]);
-      if (r.status !== 0) {
-        return { ok: false, detail: `doctor check failed with exit ${r.status}` };
-      }
-      try {
-        const json = JSON.parse(r.stdout);
-        if (json.ok) return { ok: true, detail: `clean (${json.summary?.pass} pass)` };
-        return { ok: false, detail: `${json.summary?.fail} check(s) failed` };
-      } catch (e) {
-        return { ok: false, detail: `failed to parse doctor json output: ${e.message}` };
-      }
+      const resolved = agentDir || (userHome ? join(userHome, ".omp", "agent") : null);
+      if (!resolved || !existsSync(join(resolved, ".harness-root"))) return { ok: true, detail: "n/a (no installed agent dir)" };
+      const { exists, res } = invokeDoctor(harnessRoot, resolved, userHome);
+      if (!exists) return { ok: false, detail: "doctor.mjs missing" };
+      if (res.status !== 0) return { ok: false, detail: `doctor check failed with exit ${res.status}` };
+      const json = JSON.parse(res.stdout || "{}");
+      return json.ok ? { ok: true, detail: `clean (${json.summary?.pass} pass)` } : { ok: false, detail: `${json.summary?.fail} check(s) failed` };
     })
   );
 

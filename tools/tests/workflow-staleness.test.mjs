@@ -44,11 +44,14 @@ function project() {
  * failure here would leave close() blocked for the wrong reason and mask a real
  * staleness regression. */
 function completeT2(root) {
-  mkdirSync(join(root, "openspec", "changes", "p"), { recursive: true });
+  const pDir = join(root, "openspec", "changes", "p");
+  mkdirSync(join(pDir, "specs"), { recursive: true });
   writeFileSync(join(root, "m.md"), "| R01 | \"user asked for X\" |\n", "utf8");
   writeFileSync(join(root, "i.md"), "# iface\n- fn(): void\n", "utf8");
-  writeFileSync(join(root, "openspec", "changes", "p", "proposal.md"), "proposal\n", "utf8");
-
+  writeFileSync(join(pDir, "proposal.md"), "proposal\n", "utf8");
+  writeFileSync(join(pDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+  writeFileSync(join(pDir, "specs", "spec.md"), "# Spec\n", "utf8");
+  writeFileSync(join(pDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
   const steps = [
     ["recon", null, "recon done: mapped the tree and the acceptance criteria"],
     ["manifest", "m.md", "captured R01 verbatim from the brief"],
@@ -389,5 +392,29 @@ test("staleness: out-of-root symlinks are excluded from worktree snapshot withou
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("staleness: tracked credentials file edited after oracle verdict blocks close", () => {
+  const root = project();
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    const credPath = join(root, "src", "credentials.ts");
+    writeFileSync(credPath, "export const apiKey = 'initial';\n", "utf8");
+    git(root, ["add", "src/credentials.ts"]);
+    git(root, ["commit", "-qm", "add credentials.ts"]);
+
+    cmdStart(root, { tier: "T2", task: "probe-credentials-staleness" });
+    completeT2(root);
+    assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
+
+    // Edit the tracked credentials file
+    sleepMs(1100);
+    writeFileSync(credPath, "export const apiKey = 'modified_after_oracle';\n", "utf8");
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "editing tracked credentials file must block close with staleness");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

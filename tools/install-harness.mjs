@@ -33,7 +33,7 @@ import {
   unlinkSync,
   realpathSync,
 } from "node:fs";
-import { resolve, join, dirname, relative } from "node:path";
+import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -167,7 +167,8 @@ function getOpencodeJson(existingPath) {
  * machine's absolute path back into the repository.
  */
 function isPromptSurface(srcPath) {
-  return /^(agent|rules|skills)[\\/]/.test(relative(REPO_ROOT, srcPath));
+  const rel = relative(REPO_ROOT, srcPath);
+  return /^(agent|rules|skills)[\\/]/.test(rel) || /(?:^|[\\/])(agent|rules|skills)[\\/]/.test(srcPath);
 }
 
 function copyAndSubstitute(srcPath, destPath, slashRoot) {
@@ -289,6 +290,36 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false)
   return out;
 }
 
+export function translateStdioEntry(entry, platform = process.platform) {
+  if (!entry || typeof entry !== "object") return entry;
+  const isWin = platform === "win32";
+  const cmd = entry.command;
+  const args = Array.isArray(entry.args) ? [...entry.args] : [];
+
+  if (isWin) {
+    if (typeof cmd === "string" && cmd.toLowerCase() === "cmd.exe") {
+      return { ...entry, command: cmd, args };
+    }
+    if (cmd) {
+      return { ...entry, command: "cmd.exe", args: ["/c", cmd, ...args] };
+    }
+    return { ...entry, args };
+  }
+  if (typeof cmd === "string" && (cmd.toLowerCase() === "cmd.exe" || cmd.toLowerCase() === "cmd")) {
+    if (args[0] && args[0].toLowerCase() === "/c") {
+      return { ...entry, command: args[1] || "", args: args.slice(2) };
+    }
+  }
+  return { ...entry, command: cmd, args };
+}
+
+export const translateMcpEntry = translateStdioEntry;
+
+function isStrictlyInside(parent, child) {
+  const rel = relative(resolve(parent), resolve(child));
+  return Boolean(rel && !rel.startsWith("..") && !isAbsolute(rel));
+}
+
 function parseCliArgs(argv) {
   const options = {
     harness: "auto",
@@ -354,6 +385,13 @@ function installHarness(options = {}) {
     : getDefaultRoot(selectedHarness, userHome);
   const slashRoot = targetRoot.replace(/\\/g, "/");
 
+  if (isStrictlyInside(REPO_ROOT, targetRoot)) {
+    throw new Error(
+      `Cannot install harness into a subdirectory of the repository root ("${targetRoot}"). ` +
+      `Use in-place install with "--root ." or specify a destination outside "${REPO_ROOT}".`
+    );
+  }
+
   const targetHarnesses =
     selectedHarness === "all"
       ? ["claude", "codex", "opencode", "cursor", "omp"]
@@ -373,7 +411,14 @@ function installHarness(options = {}) {
   // install.ps1/install.sh deliberately stay behind: audit/sync decide whether a
   // tree is a repo clone or an installed harness by looking for install.ps1, so
   // shipping it into the harness would make a standalone install look like a repo.
-  const coreFiles = ["CONTEXT.md", "README.md", "secrets.example.env", "verify.ps1", "verify.sh"];
+  const coreFiles = [
+    ".code-size.baseline.json",
+    "CONTEXT.md",
+    "README.md",
+    "secrets.example.env",
+    "verify.ps1",
+    "verify.sh",
+  ];
 
   for (const dir of coreDirs) {
     const srcDir = join(REPO_ROOT, dir);
@@ -490,7 +535,11 @@ function installHarness(options = {}) {
               // `__X__` into mcp.json (which verification then flags) and fail to
               // connect on every session boot.
               for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
-                if (JSON.stringify(entry).includes("__")) delete cfg.mcpServers[name];
+                if (JSON.stringify(entry).includes("__")) {
+                  delete cfg.mcpServers[name];
+                } else {
+                  cfg.mcpServers[name] = translateStdioEntry(entry);
+                }
               }
               writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
             } catch {}
@@ -501,6 +550,14 @@ function installHarness(options = {}) {
             ...installRoleRoster(
               join(targetRoot, "agent", "agents"),
               join(homeAgentDir, "agents"),
+              slashRoot,
+              options.dryRun
+            )
+          );
+          plan.filesToCopy.push(
+            ...copyDirRecursive(
+              join(targetRoot, "rules"),
+              join(homeAgentDir, "rules"),
               slashRoot,
               options.dryRun
             )
@@ -581,7 +638,8 @@ function main() {
     options = parseCliArgs(process.argv.slice(2));
   } catch (err) {
     process.stderr.write(`Error: ${err.message}\n`);
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
 
   if (options.help) {
@@ -625,10 +683,13 @@ function main() {
     return;
   } catch (err) {
     process.stderr.write(`Error: ${err.message}\n`);
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   main();
 }
+
+export { installHarness };

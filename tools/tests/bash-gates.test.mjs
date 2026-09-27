@@ -369,6 +369,35 @@ test("R10: lean tier T0 passes --base-ref origin/$BASE_REF to check-ci", (t) => 
   }
 });
 
+test("R08: tier T1 passes --base-ref and --recon to check-ci", (t) => {
+  if (!bashBin) {
+    t.skip("bash is not available or not runnable on this system");
+    return;
+  }
+  const gateScript = extractWorkflowGateScript(
+    join(REPO_ROOT, ".github/workflows/repo-gate.yml")
+  );
+  const { dir, git } = setupTestRepo();
+  try {
+    writeFileSync(join(dir, "recon.md"), "# Recon\n## Files touched\n- a\n## Acceptance check\n- check\n", "utf8");
+    git(["add", "recon.md"]);
+    git(["commit", "-m", "add recon"]);
+
+    const res = runGateScript(gateScript, dir, {
+      LABELS_JSON: JSON.stringify([{ name: "workflow:T1" }]),
+      BASE_REF: "main",
+    });
+
+    assert.equal(res.status, 0, `Tier T1 should pass to check-ci: ${res.stderr || res.stdout}`);
+    const output = res.stdout || "";
+    assert.match(output, /--tier T1/);
+    assert.match(output, /--base-ref origin\/main/);
+    assert.match(output, /--recon recon\.md/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("R02: git diff failure exits non-zero without silent || true masking", (t) => {
   if (!bashBin) {
     t.skip("bash is not available or not runnable on this system");

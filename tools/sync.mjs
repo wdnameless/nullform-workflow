@@ -27,7 +27,7 @@ function parseArgs(argv) {
     quiet: false,
     json: false,
     only: '',
-    harnessRoot: '',
+    harnessRoot: null,
     agentsRoot: '',
     agentDir: '',
     repoRoot: '',
@@ -87,7 +87,7 @@ function parseArgs(argv) {
       case '--harness':
       case '--harness-root':
       case '-HarnessRoot':
-        opts.harnessRoot = val !== undefined ? val : argv[++i] || '';
+        opts.harnessRoot = val !== undefined ? val : (argv[++i] ?? '');
         break;
       case '--agents':
       case '--agents-root':
@@ -198,13 +198,53 @@ function runPrune(harnessRoot, repoRoot, confirm) {
   process.exit(0);
 }
 
+function isUnusableRoot(rootPath) {
+  if (!rootPath || typeof rootPath !== 'string' || rootPath.trim() === '') {
+    return true;
+  }
+  const resolved = path.resolve(rootPath);
+  if (!path.isAbsolute(resolved) || resolved === '.' || resolved === '..') {
+    return true;
+  }
+  const parsed = path.parse(resolved);
+  return parsed.root === resolved || parsed.base === '';
+}
+
+function substituteHarnessRoot(text, harnessRoot) {
+  const slashHarness = harnessRoot.replace(/\\/g, '/');
+  const winHarness = harnessRoot.replace(/\//g, '\\');
+  const targets = Array.from(new Set([slashHarness, winHarness])).filter(Boolean);
+  let res = text;
+  const lb = '(?<![a-zA-Z0-9_\\-\\/\\\\])';
+  const la = '(?=[\\/\\\\]|[ \'"`\\(\\)\\[\\]\\{\\}<>:;,]|\\.(?:\\s|$)|$)';
+  for (const t of targets) {
+    let escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (/^[a-zA-Z]:/.test(t)) {
+      const drive = t[0];
+      escaped = `[${drive.toLowerCase()}${drive.toUpperCase()}]:` + escaped.slice(2);
+    }
+    const regex = new RegExp(lb + escaped + la, 'g');
+    res = res.replace(regex, '<HARNESS>');
+  }
+  return res;
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
 
   const log = opts.json ? console.error : console.log;
-  const harnessRoot = opts.harnessRoot || process.env.HARNESS_ROOT || path.join(os.homedir(), 'omp-workflow');
-  const agentsRoot = opts.agentsRoot || process.env.AGENTS_ROOT || path.join(os.homedir(), '.agents');
-  const agentDir = opts.agentDir || process.env.AGENT_DIR || path.join(os.homedir(), '.omp', 'agent');
+  const rawHarnessRoot = opts.harnessRoot !== null
+    ? opts.harnessRoot
+    : (process.env.HARNESS_ROOT || path.join(os.homedir(), 'omp-workflow'));
+
+  if (isUnusableRoot(rawHarnessRoot)) {
+    console.error(`sync: REFUSED - harness root "${rawHarnessRoot}" is unusable (resolves to filesystem/drive root or bare path: "${path.resolve(rawHarnessRoot || '.')}"). Provide a valid harness directory path via --harness.`);
+    process.exit(2);
+  }
+
+  const harnessRoot = path.resolve(rawHarnessRoot);
+  const agentsRoot = path.resolve(opts.agentsRoot || process.env.AGENTS_ROOT || path.join(os.homedir(), '.agents'));
+  const agentDir = path.resolve(opts.agentDir || process.env.AGENT_DIR || path.join(os.homedir(), '.omp', 'agent'));
   const repoRoot = resolveRepoRoot(harnessRoot, opts.repoRoot);
 
   if (opts.prune) {
@@ -280,16 +320,14 @@ function main() {
 
   if (opts.mode === 'promote') {
     if (suspect.length === 0 || opts.force) {
+      const seenPromoted = new Set();
       for (const item of drifted) {
         if (item.live === null) continue;
+        if (seenPromoted.has(item.repoPath)) continue;
+        seenPromoted.add(item.repoPath);
         let promoteText = item.live;
         if (item.isPromptSurface) {
-          const slashHarness = harnessRoot.replace(/\\/g, '/');
-          promoteText = promoteText.replaceAll(slashHarness, '<HARNESS>');
-          const winHarness = harnessRoot.replace(/\//g, '\\');
-          if (winHarness !== slashHarness) {
-            promoteText = promoteText.replaceAll(winHarness, '<HARNESS>');
-          }
+          promoteText = substituteHarnessRoot(promoteText, harnessRoot);
         }
         writeNormalized(item.repoPath, promoteText);
         if (!opts.quiet) {

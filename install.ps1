@@ -164,6 +164,8 @@ function Patch([string]$text) {
     '__CRAWL_MCP_URL__'     = $crawlUrl
     '__CRAWL_TOKEN__'       = $crawlToken
     '__CONTEXT7_API_KEY__'  = $context7Key
+    '__GITHUB_PAT__'        = [string]$cfgVals['GITHUB_PERSONAL_ACCESS_TOKEN']
+    '__POSTGRES_URL__'      = [string]$cfgVals['POSTGRES_URL']
   }
   foreach ($k in $map.Keys) { $text = $text.Replace($k, $map[$k]) }
   return $text

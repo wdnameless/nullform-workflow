@@ -448,3 +448,113 @@ test("generated markdown adapter does not reference unsupported verification art
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("isolated OMP install copies rules to both agent-dir and agents-home and includes size baseline", () => {
+  const temp = createTempDir("omp-rules-baseline-");
+  const root = join(temp, "live");
+  const userHome = join(temp, "home");
+  try {
+    const installed = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(installed.status, 0, installed.stderr);
+
+    const agentEd = join(userHome, ".omp", "agent", "rules", "enterprise-directives.md");
+    const homeEd = join(userHome, ".agents", "rules", "enterprise-directives.md");
+    const baseline = join(root, ".code-size.baseline.json");
+
+    assert.ok(existsSync(agentEd), `agent-dir rule must exist at ${agentEd}`);
+    assert.ok(existsSync(homeEd), `agents-home rule must exist at ${homeEd}`);
+    assert.ok(existsSync(baseline), `size baseline must exist at ${baseline}`);
+
+    const agentContent = readFileSync(agentEd, "utf8");
+    const homeContent = readFileSync(homeEd, "utf8");
+    assert.ok(!agentContent.includes("<HARNESS>"), "agent-dir rule must have <HARNESS> substituted");
+    assert.ok(!homeContent.includes("<HARNESS>"), "agents-home rule must have <HARNESS> substituted");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("seeded chrome-devtools command in mcp.json is platform-correct", () => {
+  const temp = createTempDir("omp-mcp-seed-");
+  const root = join(temp, "live");
+  const userHome = join(temp, "home");
+  try {
+    const installed = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(installed.status, 0, installed.stderr);
+
+    const mcpPath = join(userHome, ".omp", "agent", "mcp.json");
+    assert.ok(existsSync(mcpPath), "mcp.json must exist");
+    const mcpCfg = JSON.parse(readFileSync(mcpPath, "utf8"));
+    const devtools = mcpCfg.mcpServers?.["chrome-devtools"];
+    assert.ok(devtools, "chrome-devtools server must be seeded");
+
+    if (process.platform === "win32") {
+      assert.equal(devtools.command, "cmd.exe");
+      assert.equal(devtools.args[0], "/c");
+      assert.equal(devtools.args[1], "npx");
+    } else {
+      assert.equal(devtools.command, "npx");
+      assert.equal(devtools.args[0], "-y");
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("translateStdioEntry translates commands for win32 and POSIX platforms", async () => {
+  const mod = await import("../install-harness.mjs");
+  const translate = mod.translateStdioEntry || mod.translateMcpEntry;
+  assert.equal(typeof translate, "function", "translateStdioEntry must be exported");
+
+  const winInput = {
+    command: "cmd.exe",
+    args: ["/c", "npx", "-y", "chrome-devtools-mcp@1.9.0"],
+    env: {},
+  };
+
+  // On win32: keep cmd.exe /c
+  const onWin = translate(winInput, "win32");
+  assert.equal(onWin.command, "cmd.exe");
+  assert.deepEqual(onWin.args, ["/c", "npx", "-y", "chrome-devtools-mcp@1.9.0"]);
+
+  // On POSIX: unwrap to command = <cli> with remaining args
+  const onPosix = translate(winInput, "linux");
+  assert.equal(onPosix.command, "npx");
+  assert.deepEqual(onPosix.args, ["-y", "chrome-devtools-mcp@1.9.0"]);
+
+  // POSIX input wrapped for win32
+  const posixInput = {
+    command: "npx",
+    args: ["-y", "chrome-devtools-mcp@1.9.0"],
+    env: {},
+  };
+  const wrappedWin = translate(posixInput, "win32");
+  assert.equal(wrappedWin.command, "cmd.exe");
+  assert.deepEqual(wrappedWin.args, ["/c", "npx", "-y", "chrome-devtools-mcp@1.9.0"]);
+});
+
+test("nested --root inside repository is refused before filesystem mutation", () => {
+  const nestedDir = resolve(REPO_ROOT, "tools", `test-nested-refused-${Date.now()}`);
+  try {
+    const res = spawnSync(process.execPath, [
+      SCRIPT_PATH,
+      "--harness", "claude",
+      "--root", nestedDir,
+    ], {
+      encoding: "utf8",
+      timeout: 3000,
+    });
+
+    assert.notEqual(res.status, 0, "Nested --root inside repo must fail");
+    assert.match(res.stderr, /subdirector|repo|inside|refus/i, "Must provide actionable error message");
+    assert.equal(existsSync(nestedDir), false, "Must refuse before any filesystem mutation");
+  } finally {
+    if (existsSync(nestedDir)) {
+      rmSync(nestedDir, { recursive: true, force: true });
+    }
+  }
+});
