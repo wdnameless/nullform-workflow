@@ -51,3 +51,7 @@ Sealed together with the sibling acceptance records in the final commit.
 ## CI green
 
 Run 36180534521 on the tip passed all five jobs, macOS included. No further code changes followed this acceptance.
+
+## Re-sealed after the OMP 18.3.3+ doctor fix
+
+The plugin-list exit-code tolerance (`551cb19`) touched `tools/`, so every acceptance record is re-committed in one final commit. Current: 393/393 tests, verify 29/29, audit 15/15, size PASS.

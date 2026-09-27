@@ -94,3 +94,7 @@ GitHub Actions run [36180534521](https://github.com/wdnameless/omp-paseo-nullfor
 ## CI green — no further changes after this record
 
 This commit is the tip; it touches all three acceptance records so the CI evidence check finds no tracked change after any of them.
+
+## Re-sealed after the OMP 18.3.3+ doctor fix
+
+The plugin-list exit-code tolerance (`551cb19`) touched `tools/`, so every acceptance record is re-committed in one final commit. Current: 393/393 tests, verify 29/29, audit 15/15, size PASS.
