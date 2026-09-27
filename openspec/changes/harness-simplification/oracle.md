@@ -258,3 +258,8 @@ The plugin-list exit-code tolerance (`551cb19`) touched `tools/`, so every accep
 ## Sealed with .gitignore update
 
 Ignoring runtime `data/` directory (control-room SQLite DB). Re-verified: 393/393 tests, verify 29/29, audit 15/15, size PASS.
+
+
+## Re-sealed on the remediation tip (stacked-PR tree move)
+
+This record is re-committed on the `fix/workflow-risk-remediation` tip because that branch touched a shared file (`agent/plugins.json`, `.code-size.baseline.json`, `tools/**`) belonging to the dependency and gate work. This change's own code is unchanged; only the shared tree fingerprint moved. Re-verified at the tip: 415/415 tests, verify 29/29, audit 15/15, size PASS, sync clean (62 files).
