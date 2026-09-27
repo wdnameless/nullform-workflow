@@ -25,9 +25,10 @@
  *                2 — ошибка параметров (нет --harness/--repo).
  */
 
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync, realpathSync } from "node:fs";
 import { join, resolve, relative, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { parseArgs as utilParseArgs } from "node:util";
 
 /** Каталоги, покрытые манифестом sync.ps1. */
 export const MANIFEST_DIRS = ["tools", "agent", "rules", "core", "templates", "paseo"];
@@ -45,9 +46,42 @@ export const NEVER_DIRS = new Set([
   "cache",
   "logs",
   "custom-session-files",
+  // Operator-owned rollback artifacts. .gitignore already declares this directory as
+  // excluded from the repo, so a file inside it is by definition not a harness orphan.
+  "migration-backup",
 ]);
 
-export const NEVER_SUFFIX = /\.(ya?ml|json|jsonl|db|db-wal|db-shm|key|env|log|bak|tmp|pem|crt|sqlite3?|skipped)$/i;
+/**
+ * Extensions the repository actually distributes in manifest-covered directories.
+ *
+ * A prune candidate is a file the harness has and the repo does not. But the live harness
+ * root often doubles as the host agent's own home, so `agent/` also holds runtime state
+ * (`agent.db`, `kimi-device-id`, `last-changelog-version`) that the repo was never meant to
+ * ship. A deny-list of suffixes cannot see those — extension-less runtime files slipped
+ * through and were reported as prunable. An allow-list inverts the default: anything
+ * unrecognised is left alone, never deleted.
+ */
+export const SHIPPED_SUFFIX = /\.(mjs|cjs|js|ts|py|sh|ps1|md|json|jsonl|ya?ml)$/i;
+
+/**
+ * Host-owned configuration. The repo ships these as TEMPLATES (`agent/config.yml.example`,
+ * `agent/oracle-priority.example.json`); the live tree holds the operator's real values in
+ * the un-suffixed name. They are not orphans — deleting them loses the operator's setup,
+ * which is exactly what an earlier suffix deny-list was trying to prevent.
+ */
+// Host config lives in agent/ as the un-suffixed twin of a shipped `*.example.*` template.
+// Anchoring to agent/ is what stops the same regex from wrongly shielding a genuinely
+// distributable `templates/ci/config.yml` or `tools/config.json` from the orphan report.
+export const HOST_CONFIG = /^agent\/(config|mcp|models|oracle-priority)\.(ya?ml|json)$/i;
+
+/** Files whose NAME marks them as host runtime state rather than distributable content. */
+export const RUNTIME_NAMES = new Set([
+  "kimi-device-id",
+  "last-changelog-version",
+  "agent.db",
+  "models.db",
+  "history.db",
+]);
 
 function toPosix(p) {
   return p.split(sep).join("/");
@@ -111,7 +145,17 @@ export function findPruneCandidates({ harness, repo, dirs = MANIFEST_DIRS } = {}
     const found = [];
     walk(dirPath, harnessRoot, found);
     for (const rel of found) {
-      if (NEVER_SUFFIX.test(rel)) continue;
+      // ONE filter, and it is an allow-list. The old suffix deny-list is deliberately NOT
+      // applied here any more: it matched .yml/.json/.md/.jsonl, i.e. exactly the extensions
+      // the repository DOES ship (templates/ci/*.yml, agent/plugins.json, skills/*/SKILL.md),
+      // so applying it first made the allow-list unable to reach real orphans.
+      // Only files the repository could plausibly have shipped are prune candidates:
+      // everything else in a manifest-covered directory is host runtime state or a local
+      // file, and is left alone — deleting it would destroy state the user cannot restore.
+      const base = rel.split("/").pop();
+      if (RUNTIME_NAMES.has(base)) continue;
+      if (HOST_CONFIG.test(rel)) continue;
+      if (!SHIPPED_SUFFIX.test(rel)) continue;
       if (existsSync(join(repoRoot, rel))) continue;
       candidates.push(rel);
     }
@@ -131,6 +175,14 @@ export function deletePruneCandidates(harness, candidates) {
   for (const rel of candidates) {
     const full = join(harnessRoot, rel);
     try {
+      // A deletion routine must not trust its caller: a candidate that resolves outside
+      // the root (via `..`, an absolute path, or a symlinked parent) is reported and left
+      // alone, never removed.
+      const resolved = resolve(full);
+      if (resolved !== harnessRoot && !resolved.startsWith(harnessRoot + sep)) {
+        failed.push({ path: rel, error: "resolves outside the harness root" });
+        continue;
+      }
       if (!statSync(full).isFile()) {
         failed.push({ path: rel, error: "not a regular file" });
         continue;
@@ -144,17 +196,25 @@ export function deletePruneCandidates(harness, candidates) {
   return { deleted, failed };
 }
 
-function parseArgs(argv) {
-  const args = { harness: null, repo: null, json: false, del: false, help: false };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--harness") args.harness = argv[++i];
-    else if (arg === "--repo") args.repo = argv[++i];
-    else if (arg === "--json") args.json = true;
-    else if (arg === "--delete") args.del = true;
-    else if (arg === "-h" || arg === "--help") args.help = true;
-  }
-  return args;
+function parseArgs(args) {
+  const { values } = utilParseArgs({
+    args,
+    options: {
+      harness: { type: "string" },
+      repo: { type: "string" },
+      json: { type: "boolean", default: false },
+      delete: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+    },
+    strict: false,
+  });
+  return {
+    harness: values.harness || null,
+    repo: values.repo || null,
+    json: values.json,
+    del: values.delete,
+    help: values.help,
+  };
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -190,7 +250,9 @@ export function main(argv = process.argv.slice(2)) {
     process.stdout.write(
       JSON.stringify({ harness, repo, candidates, deleted: deletion.deleted, failed: deletion.failed }, null, 2) + "\n"
     );
-    return 0;
+    // A deletion that failed is not a success signal: callers such as sync.ps1 branch on
+    // this exit code, and returning 0 told them a partially failed prune was clean.
+    return deletion.failed.length ? 1 : 0;
   }
 
   process.stdout.write(`prune: ${candidates.length} candidate(s)\n`);
@@ -202,10 +264,14 @@ export function main(argv = process.argv.slice(2)) {
     for (const f of deletion.failed) {
       process.stdout.write(`  [!] ${f.path}: ${f.error}\n`);
     }
+    if (deletion.failed.length) {
+      process.stdout.write(`prune: ${deletion.failed.length} file(s) could NOT be deleted\n`);
+      return 1;
+    }
   }
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
+  process.exitCode = main();
 }

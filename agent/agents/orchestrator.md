@@ -30,10 +30,10 @@ Match tool class to task stage — never bulk-dump everything:
 - **Verification**: deterministic first — `lsp diagnostics`, build, tests. LLM-judgment (@oracle) only for what tools can't decide.
 - **External truth**: `context7` (library docs) before guessing APIs; `web_search` for ecosystem questions.
 - Skip MCP calls whose answer won't change your decision.
-- **Observability dashboard**: `workflow.mjs start` launches it in the background and prints the live URL (`--no-dashboard` or `NF_NO_DASHBOARD=1` permitted in read-only/security situations).
-  In a Paseo workspace (`PASEO_AGENT_ID`), unless `--no-dashboard` was specified, you MUST IMMEDIATELY open that URL in the **Paseo browser**
-  (`browser_new_tab`) — that is the development environment and it opens directly inside the IDE for the user.
-  Outside Paseo the CLI opens the system browser itself. The page self-updates every 3 s.
+- **Observability dashboard**: `workflow.mjs start` launches it in the background and prints its **live** URL — the printed address is liveness-checked (a leftover runtime file from a dead server is ignored and a fresh one started). (`--no-dashboard` or `NF_NO_DASHBOARD=1` permitted in read-only/security situations.)
+  In a Paseo workspace (`PASEO_AGENT_ID`), unless `--no-dashboard` was specified, use the URL that `start` printed and call `browser_new_tab(url)` immediately, so the dashboard opens in the **Paseo IDE browser tab** for the user.
+  If `browser_new_tab` fails because no browser host is connected, say so in one line and give the user the URL — do NOT report the dashboard as opened, and do NOT retry in a loop.
+  Outside Paseo the CLI opens the system browser itself. If you need the URL later, run `node tools/dashboard.mjs --url`; that command also verifies liveness, whereas reading `.workflow/dashboard.json` directly can hand you a dead address. The page self-updates every 3 s — do not reload it.
 
 ### Wave 0 (T2/T3 ONLY) INTERVIEW — unresolved decisions only:
 - T1 NEVER mandates a Wave 0 interview.

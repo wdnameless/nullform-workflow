@@ -19,7 +19,7 @@
  * Требования: Node 18+, без внешних зависимостей, RU текст / --json.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve, relative, sep } from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -309,22 +309,14 @@ export function collectDecisions(root, domain, maxRows = 5) {
   const tokenLower = domain.toLowerCase();
 
   function scanDirRecursive(dir) {
-    const files = [];
-    if (!existsSync(dir)) return files;
+    if (!existsSync(dir)) return [];
     try {
-      const entries = readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          files.push(...scanDirRecursive(full));
-        } else if (entry.isFile()) {
-          files.push(full);
-        }
-      }
+      return readdirSync(dir, { recursive: true, withFileTypes: true })
+        .filter((d) => d.isFile())
+        .map((d) => join(d.parentPath || dir, d.name));
     } catch {
-      // игнорируем ошибки доступа
+      return [];
     }
-    return files;
   }
 
   const candidateFiles = [];
@@ -512,10 +504,7 @@ export function parseArgs(argv) {
 }
 
 // Запуск из командной строки
-const isDirectExecution =
-  process.argv[1] &&
-  (fileURLToPath(import.meta.url) === resolve(process.argv[1]) ||
-    process.argv[1].endsWith("domain-context.mjs"));
+const isDirectExecution = Boolean(process.argv[1]) && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 
 if (isDirectExecution) {
   const argv = process.argv.slice(2);
@@ -562,9 +551,9 @@ if (isDirectExecution) {
       console.log(formatRussianOutput(data));
     }
 
-    process.exit(0);
+    process.exitCode = 0;
   } catch (err) {
     console.error(`Ошибка сбора контекста: ${err.message}`);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }

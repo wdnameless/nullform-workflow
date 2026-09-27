@@ -14,9 +14,9 @@
  *   --help, -h            Справка
  */
 
-import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, join, extname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const STEP_KEYWORDS = ["given", "when", "then", "and", "but"];
 
@@ -361,6 +361,6 @@ export function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  process.exit(main(process.argv.slice(2)));
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
+  process.exitCode = main(process.argv.slice(2));
 }

@@ -20,10 +20,10 @@
  *   node tools/memory-cadence.mjs [--status] [--check] [--record] [--json] [--config <path>] [--state <path>] [--max-days <n>]
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), ".omp", "agent", "config.yml");
 export const DEFAULT_STATE_PATH = join(process.cwd(), ".workflow", "memory-cadence.json");
@@ -576,13 +576,9 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 // Запуск при прямом вызове
-const isDirectRun =
-  Boolean(process.argv[1]) &&
-  (resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url)) ||
-    import.meta.url === pathToFileURL(resolve(process.argv[1])).href ||
-    process.argv[1].endsWith("memory-cadence.mjs"));
+const isDirectRun = Boolean(process.argv[1]) && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 
 if (isDirectRun) {
   const exitCode = main(process.argv.slice(2));
-  process.exit(typeof exitCode === "number" ? exitCode : 0);
+  process.exitCode = typeof exitCode === "number" ? exitCode : 0;
 }

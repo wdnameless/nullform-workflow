@@ -1,0 +1,180 @@
+[
+  {
+    "rel": "agent/AGENTS.md"
+  },
+  {
+    "rel": "agent/agents/orchestrator.md"
+  },
+  {
+    "rel": "agent/agents/fixer.md"
+  },
+  {
+    "rel": "agent/agents/oracle.md"
+  },
+  {
+    "rel": "agent/agents/designer.md"
+  },
+  {
+    "rel": "agent/agents/explorer.md"
+  },
+  {
+    "rel": "agent/agents/reviewer.md"
+  },
+  {
+    "rel": "agent/agents/librarian.md"
+  },
+  {
+    "rel": "agent/agents/sonic.md"
+  },
+  {
+    "rel": "rules/enterprise-directives.md",
+    "liveRoot": "@agents"
+  },
+  {
+    "rel": "tools/codemap.mjs"
+  },
+  {
+    "rel": "tools/prompt-lint.mjs"
+  },
+  {
+    "rel": "tools/skills-doctor.mjs"
+  },
+  {
+    "rel": "tools/glossary.mjs"
+  },
+  {
+    "rel": "tools/replay.mjs"
+  },
+  {
+    "rel": "tools/workflow.mjs"
+  },
+  {
+    "rel": "tools/code-size.mjs"
+  },
+  {
+    "rel": "tools/auto-review.mjs"
+  },
+  {
+    "rel": "tools/cache-doctor.mjs"
+  },
+  {
+    "rel": "tools/cache-policy.mjs"
+  },
+  {
+    "rel": "tools/return-contract.mjs"
+  },
+  {
+    "rel": "tools/session_cost.py"
+  },
+  {
+    "rel": "tools/context-inbox.mjs"
+  },
+  {
+    "rel": "tools/domain-context.mjs"
+  },
+  {
+    "rel": "tools/oracle-model.mjs"
+  },
+  {
+    "rel": "tools/debt-ledger.mjs"
+  },
+  {
+    "rel": "tools/benchmark.mjs"
+  },
+  {
+    "rel": "tools/usage-audit.mjs"
+  },
+  {
+    "rel": "tools/test-lens.mjs"
+  },
+  {
+    "rel": "tools/doctor.mjs"
+  },
+  {
+    "rel": "tools/sync-prune.mjs"
+  },
+  {
+    "rel": "tools/memory-cadence.mjs"
+  },
+  {
+    "rel": "tools/mutation-test.mjs"
+  },
+  {
+    "rel": "tools/gherkin-spec.mjs"
+  },
+  {
+    "rel": "tools/dashboard.mjs"
+  },
+  {
+    "rel": "tools/fix-plugin-windows.cjs"
+  },
+  {
+    "rel": "tools/audit.ps1"
+  },
+  {
+    "rel": "tools/sync.ps1"
+  },
+  {
+    "rel": "tools/audit.sh"
+  },
+  {
+    "rel": "tools/sync.sh"
+  },
+  {
+    "rel": "tools/sync.mjs"
+  },
+  {
+    "rel": "tools/sync-manifest.json"
+  },
+  {
+    "rel": "tools/verify.mjs"
+  },
+  {
+    "rel": "verify.ps1"
+  },
+  {
+    "rel": "verify.sh"
+  },
+  {
+    "rel": "core/PORTABLE.md"
+  },
+  {
+    "rel": "paseo/profiles.json"
+  },
+  {
+    "rel": "paseo/setup-paseo.ps1"
+  },
+  {
+    "rel": "templates/design/DESIGN.md"
+  },
+  {
+    "rel": "agent/oracle-priority.example.json"
+  },
+  {
+    "rel": "agent/plugins.json"
+  },
+  {
+    "rel": "templates/design/examples/good/README.md"
+  },
+  {
+    "rel": "templates/design/examples/bad/README.md"
+  },
+  {
+    "rel": "templates/ci/workflow-gate.yml"
+  },
+  {
+    "rel": "templates/workflow/cache-policy.example.json"
+  },
+  {
+    "rel": "templates/paseo.json"
+  },
+  {
+    "rel": "CONTEXT.md"
+  },
+  {
+    "rel": "README.md"
+  },
+  {
+    "rel": ".code-size.baseline.json"
+  }
+]

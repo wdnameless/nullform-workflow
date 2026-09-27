@@ -7,9 +7,11 @@
  * Принцип: quality first, savings second.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import process from 'node:process';
+import { parseArgs as utilParseArgs } from 'node:util';
 
 export const CAUSE_CODES = {
   MODEL_SWITCH: 'MODEL_SWITCH',
@@ -326,10 +328,19 @@ export function formatRuReport(sessionResults, fingerprintComparison) {
 /**
  * Точка входа CLI
  */
-export function main() {
-  const args = process.argv.slice(2);
+export function main(argv = process.argv.slice(2)) {
+  const { values, positionals } = utilParseArgs({
+    args: argv,
+    options: {
+      json: { type: 'boolean', default: false },
+      fingerprint: { type: 'string' },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
 
-  if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
+  if (values.help || (positionals.length === 0 && !values.fingerprint)) {
     console.log(`Cache Doctor — инструменты наблюдаемости нейросетевого кэша
 
 Использование:
@@ -340,26 +351,13 @@ export function main() {
   --json                  Вывести результат в формате JSON
   -h, --help              Показать эту справку
 `);
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
-  let asJson = false;
-  let fingerprintArg = null;
-  const files = [];
-
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '--json') {
-      asJson = true;
-    } else if (arg.startsWith('--fingerprint=')) {
-      fingerprintArg = arg.slice('--fingerprint='.length);
-    } else if (arg === '--fingerprint') {
-      fingerprintArg = args[++i];
-    } else {
-      files.push(arg);
-    }
-  }
-
+  const asJson = values.json;
+  const fingerprintArg = values.fingerprint || null;
+  const files = positionals;
   let fingerprintComparison = null;
   if (fingerprintArg) {
     const [oldPath, newPath] = fingerprintArg.split(',');
@@ -391,8 +389,6 @@ export function main() {
 }
 
 // Запуск при прямом вызове
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'))) {
-  main();
-} else if (process.argv[1] && process.argv[1].endsWith('cache-doctor.mjs')) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   main();
 }

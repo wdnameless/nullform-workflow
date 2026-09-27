@@ -33,11 +33,11 @@
  *   2 — ошибка запуска / параметров
  */
 
-import { existsSync, readFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { findPruneCandidates } from "./sync-prune.mjs";
 import { cleanYamlValue, parseModelsYaml, probeProvider } from "./oracle-model.mjs";
 
@@ -62,6 +62,7 @@ export const CORE_TOOLS = [
   "benchmark.mjs",
   "usage-audit.mjs",
   "test-lens.mjs",
+  "code-size.mjs",
   "auto-review.mjs",
   "doctor.mjs",
   "sync-prune.mjs",
@@ -74,6 +75,8 @@ export const CORE_TOOLS = [
   "verify.mjs",
   "audit.ps1",
   "sync.ps1",
+  "sync.mjs",
+  "sync-manifest.json",
   "audit.sh",
   "sync.sh",
 ];
@@ -176,10 +179,14 @@ export function unpackBuiltinAgents() {
   }
 
   // На Windows `omp` — это .cmd-шим, а Node ≥ 18.20 запускает .cmd только через shell;
-  // shell не квотирует аргументы сам, поэтому путь к временному каталогу квотируем явно.
+  // массив аргументов вместе с shell даёт DEP0190 в stderr (а install.ps1 читает
+  // stderr доктора и падал на этом предупреждении). Собираем одну команду с
+  // явным квотированием пути.
   const viaShell = process.platform === "win32";
-  const targetDir = viaShell ? `"${dir}"` : dir;
-  const res = spawnSync("omp", ["agents", "unpack", "--dir", targetDir, "--json"], {
+  const command = viaShell
+    ? [quoteShellArg("omp"), "agents", "unpack", "--dir", quoteShellArg(dir), "--json"].join(" ")
+    : "omp";
+  const res = spawnSync(command, viaShell ? [] : ["agents", "unpack", "--dir", dir, "--json"], {
     encoding: "utf8",
     shell: viaShell,
     windowsHide: true,
@@ -265,19 +272,35 @@ function tailOf(text, lines = 2, limit = 300) {
  */
 export function runOmp(args, { timeout = 60000 } = {}) {
   // На Windows `omp` — это .cmd-шим, а Node ≥ 18.20 запускает .cmd только через
-  // shell (та же причина, что в unpackBuiltinAgents).
-  const res = spawnSync("omp", args, {
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    timeout,
-    windowsHide: true,
-  });
+  // shell (та же причина, что в unpackBuiltinAgents). Массив аргументов вместе
+  // с shell даёт DEP0190 в stderr; install.ps1 читает stderr доктора и падал на
+  // этом предупреждении после того, как вывод перестал теряться. Поэтому
+  // команда собирается в одну строку с явным квотированием.
+  const isWin = process.platform === "win32";
+  const res = isWin
+    ? spawnSync([quoteShellArg("omp"), ...args.map(quoteShellArg)].join(" "), {
+        encoding: "utf8",
+        shell: true,
+        timeout,
+        windowsHide: true,
+      })
+    : spawnSync("omp", args, {
+        encoding: "utf8",
+        timeout,
+        windowsHide: true,
+      });
   return {
     status: res.status,
     stdout: res.stdout || "",
     stderr: res.stderr || "",
     error: res.error || null,
   };
+}
+
+/** Кавычит аргумент для cmd.exe: пробелы и метасимволы не должны разбираться шеллом. */
+function quoteShellArg(value) {
+  const text = String(value);
+  return /[\s"^&|<>()]/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
 }
 
 
@@ -353,6 +376,54 @@ function installedPlugins(stdout) {
     throw new Error("в выводе нет массива npm или marketplace");
   }
   return map;
+}
+
+/**
+ * Результат `omp plugin list --json` → `{installed, listError}`.
+ *
+ * OMP 18.3.3+ печатает ПОЛНЫЙ и разбираемый документ и затем выходит с кодом 1:
+ * его хук `beforeExit` срабатывает, пока команда ещё не завершилась
+ * («the event loop drained while it was still pending»). Код возврата врёт, данные
+ * корректны, поэтому валидный список важнее кода. Пустой или неразбираемый вывод,
+ * а также `omp`, отсутствующий в PATH, остаются настоящей ошибкой.
+ */
+function resolvePluginList(listed) {
+  if (listed.error) {
+    const timedOut = listed.error.code === "ETIMEDOUT";
+    return {
+      installed: null,
+      listError: timedOut ? "таймаут команды" : `omp не запущен (${listed.error.message})`,
+    };
+  }
+
+  const absent = /not recognized|не является внутренней|command not found|no such file/i.test(
+    listed.stderr || ""
+  );
+  if (!absent) {
+    try {
+      return { installed: installedPlugins(listed.stdout), listError: null };
+    } catch {
+      // fall through to the honest non-zero report below
+    }
+  }
+
+  if (listed.status === 0) {
+    let reason = "неизвестная ошибка разбора";
+    try {
+      installedPlugins(listed.stdout);
+    } catch (err) {
+      reason = err.message;
+    }
+    return { installed: null, listError: `вывод omp plugin list не разобран: ${reason}` };
+  }
+
+  const tail = tailOf(listed.stderr || listed.stdout);
+  return {
+    installed: null,
+    listError: absent
+      ? "omp не найден в PATH"
+      : `omp plugin list завершился с кодом ${listed.status}${tail ? `: ${tail}` : ""}`,
+  };
 }
 
 /** Причина WARN по результату `omp plugin doctor`; пустая строка — чисто. */
@@ -1047,24 +1118,7 @@ export function runDoctor(options) {
         });
       } else {
         const listed = omp(["plugin", "list", "--json"]);
-        let installed = null;
-        let listError = null;
-
-        if (listed.error) {
-          listError = listed.error.code === "ETIMEDOUT" ? "таймаут команды" : `omp не запущен (${listed.error.message})`;
-        } else if (listed.status !== 0) {
-          const tail = tailOf(listed.stderr || listed.stdout);
-          const absent = /not recognized|не является внутренней|command not found|no such file/i.test(listed.stderr || "");
-          listError = absent
-            ? "omp не найден в PATH"
-            : `omp plugin list завершился с кодом ${listed.status}${tail ? `: ${tail}` : ""}`;
-        } else {
-          try {
-            installed = installedPlugins(listed.stdout);
-          } catch (err) {
-            listError = `вывод omp plugin list не разобран: ${err.message}`;
-          }
-        }
+        const { installed, listError } = resolvePluginList(listed);
 
         if (listError) {
           checks.push({
@@ -1450,11 +1504,9 @@ export async function main(argv = process.argv.slice(2)) {
   return result.ok ? 0 : 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      process.stderr.write(`doctor: необработанная ошибка: ${err.message}\n`);
-      process.exit(2);
-    });
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
+  main().then((code) => { process.exitCode = code; }).catch((err) => {
+    process.stderr.write(`doctor: необработанная ошибка: ${err.message}\n`);
+    process.exitCode = 2;
+  });
 }

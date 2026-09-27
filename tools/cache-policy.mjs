@@ -14,7 +14,9 @@
  *
  * Zero dependencies. Node 18+ / Bun.
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { parseArgs as utilParseArgs } from "node:util";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { collectFingerprint } from "./prompt-lint.mjs";
@@ -32,23 +34,25 @@ const DEFAULT_POLICY = {
   dynamicContextPlacement: "tail",
 };
 
-function parseArgs(argv) {
-  const out = { _: [], root: null, policy: null, returnContract: null, json: false };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--root") {
-      out.root = argv[++i];
-    } else if (a === "--policy") {
-      out.policy = argv[++i];
-    } else if (a === "--return-contract") {
-      out.returnContract = argv[++i];
-    } else if (a === "--json") {
-      out.json = true;
-    } else {
-      out._.push(a);
-    }
-  }
-  return out;
+function parseArgs(args) {
+  const { values, positionals } = utilParseArgs({
+    args,
+    options: {
+      root: { type: "string" },
+      policy: { type: "string" },
+      "return-contract": { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+  return {
+    _: positionals,
+    root: values.root ?? null,
+    policy: values.policy ?? null,
+    returnContract: values["return-contract"] ?? null,
+    json: values.json,
+  };
 }
 
 export function loadPolicy(root, policyPath) {
@@ -138,7 +142,7 @@ export function runCachePolicyCheck({ root, policyPath, returnContractPath }) {
 
 /* ----------------------------------------------------------------------- main */
 
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("cache-policy.mjs");
+const isMain = process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 
 if (isMain) {
   const args = parseArgs(process.argv.slice(2));
@@ -147,7 +151,7 @@ if (isMain) {
   if (cmd !== "check") {
     console.log("cache-policy.mjs — safe, advisory policy checks for prompt cache observability\n");
     console.log("  node cache-policy.mjs check --root <harness> [--policy <file>] [--return-contract <file>] [--json]\n");
-    process.exit(0);
+    process.exitCode = 0;
   }
 
   const result = runCachePolicyCheck({
@@ -175,10 +179,10 @@ if (isMain) {
       for (const err of result.errors) {
         console.error(`  [FAIL] ${err}`);
       }
-      process.exit(1);
+      process.exitCode = 1;
     } else {
       console.log("\nAll hard safety gates PASSED.");
-      process.exit(0);
+      process.exitCode = 0;
     }
   }
 }

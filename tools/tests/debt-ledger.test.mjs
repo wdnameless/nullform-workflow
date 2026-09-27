@@ -33,10 +33,8 @@ import {
 } from "../debt-ledger.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../debt-ledger.mjs", import.meta.url));
+import { createTempDir } from "./test-helpers.mjs";
 
-function createTempDir() {
-  return mkdtempSync(join(tmpdir(), "debt-ledger-test-"));
-}
 
 test("DEFAULT_MARKER is 'defer'", () => {
   assert.equal(DEFAULT_MARKER, "defer");

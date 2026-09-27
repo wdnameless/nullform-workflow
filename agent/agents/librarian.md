@@ -8,6 +8,7 @@ tools:
   - lsp
   - web_search
   - ast_grep
+  - bash
   - yield
 model: 
   - "@smol"
@@ -88,7 +89,7 @@ MUST read-only on user's project. NEVER modify project files.
 
 ## 2. Locate source: local first
 - Check `node_modules/<package>`, `vendor/`, or similar first. Installed library: read there; no clone. Prioritize `.d.ts` definitions and exported types.
-- Otherwise: `web_search` canonical repo; `git clone --depth 1 <url> /tmp/librarian-<name>`.
+- Otherwise: `web_search` canonical repo; clone into a scratch dir **inside the workspace** — `<cwd>/.tmp/librarian-<name>` (never `/tmp`, which breaks on Windows).
 - Specific version: clone; `git checkout tags/<version>`; or read locally installed version.
 
 ## 3. Investigate
@@ -107,7 +108,7 @@ MUST read-only on user's project. NEVER modify project files.
 - Call `yield` with structured findings.
 - Every `sources` entry MUST include verbatim excerpt.
 - `api` MUST contain exact signatures copied from source.
-- Clean cloned repos: `rm -rf /tmp/librarian-*`.
+- Clean cloned repos: remove the scratch dir (`<cwd>/.tmp/librarian-*`).
 </procedure>
 
 <directives>

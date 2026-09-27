@@ -19,10 +19,8 @@ import {
 } from "../mutation-test.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../mutation-test.mjs", import.meta.url)));
+import { createTempDir } from "./test-helpers.mjs";
 
-function createTempDir() {
-  return mkdtempSync(join(tmpdir(), "mutation-test-"));
-}
 
 test("MUTATION_OPERATORS: содержит ключевые мутационные операторы", () => {
   const names = MUTATION_OPERATORS.map((op) => op.name);

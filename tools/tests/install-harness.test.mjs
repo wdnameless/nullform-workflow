@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, symlinkSync } from "node:fs";
+import { rmSync, readFileSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -10,10 +10,8 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
 const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 const SH_PATH = resolve(REPO_ROOT, "install.sh");
+import { createTempDir } from "./test-helpers.mjs";
 
-function createTempDir(prefix = "harness-test-") {
-  return mkdtempSync(join(tmpdir(), prefix));
-}
 
 function getBashPath() {
   const candidates = process.platform === "win32"
@@ -220,6 +218,99 @@ test("installation copies core files and directory structure", () => {
     assert.equal(orchestratorContent.includes("<HARNESS>"), false);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+/** True when a harness prerequisite (`omp`, `openspec`) is runnable on this host. */
+function hasCommand(name) {
+  const probe = spawnSync(name, ["--version"], {
+    encoding: "utf8",
+    shell: process.platform === "win32",
+    timeout: 10000,
+  });
+  return !probe.error && probe.status === 0;
+}
+
+// The installer's contract is machine-independent: it must succeed with nothing
+// but Node, leaving a tree the shipped verifier can inspect. The verifier then
+// reports the OMP-only prerequisites (`openspec`, `omp`) as FAIL when the host
+// lacks them — honest prerequisites, not install defects. Asserting a blanket
+// exit 0 made a clean CI runner look broken.
+test("OMP sandbox install is usable by the shipped verifier", () => {
+  const temp = createTempDir("omp portable ");
+  const root = join(temp, "live");
+  const userHome = join(temp, "home");
+  try {
+    const installed = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(installed.status, 0, installed.stderr);
+
+    const law = readFileSync(join(userHome, ".omp", "agent", "AGENTS.md"), "utf8");
+    assert.ok(law.includes(root.replace(/\\/g, "/")));
+    assert.ok(!law.includes("<HARNESS>"));
+    assert.equal(readFileSync(join(userHome, ".omp", "agent", ".harness-root"), "utf8").trim(), root);
+    assert.ok(existsSync(join(root, "tools", "sync.mjs")));
+    assert.ok(existsSync(join(root, "tools", "sync-manifest.json")));
+
+    const verified = spawnSync(process.execPath, [
+      join(root, "tools", "verify.mjs"),
+      "--profile", "verify", "--root", root, "--harness", root,
+      "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    // A truncated document means stdout was cut mid-write (process.exit()
+    // discarding a queued pipe write). Report the raw bytes: without them the
+    // failure is indistinguishable from a genuine parse bug.
+    let report;
+    try {
+      report = JSON.parse(verified.stdout);
+    } catch (err) {
+      throw new Error(
+        `verify --json did not emit one parseable document (${err.message}); ` +
+          `exit ${verified.status}, stdout ${Buffer.byteLength(verified.stdout)} bytes, ` +
+          `stderr ${JSON.stringify((verified.stderr || "").slice(0, 400))}, ` +
+          `tail ${JSON.stringify(verified.stdout.slice(-200))}`
+      );
+    }
+    const statusOf = (label) =>
+      report.results.find((result) => result.label.startsWith(label))?.status;
+
+    // Installation-owned checks: must pass with nothing but Node on the host.
+    for (const label of [
+      "node present",
+      "agent definitions present",
+      "skills registry populated",
+      "rule installed and addressable",
+      "mandatory MCP servers present",
+      "no unsubstituted placeholders",
+      "prompt surfaces have no volatile literals",
+      "prompt surfaces match baseline",
+      "tier gate enforces artifacts",
+      "portable core specification",
+    ]) {
+      assert.equal(statusOf(label), "PASS", `${label}: ${JSON.stringify(report.results)}`);
+    }
+
+    // Host prerequisites: FAIL is the correct answer when the tool is absent.
+    assert.equal(
+      statusOf("openspec present"),
+      hasCommand("openspec") ? "PASS" : "FAIL",
+      "openspec presence must be reported honestly"
+    );
+    assert.equal(
+      statusOf("install doctor"),
+      hasCommand("omp") ? "PASS" : "FAIL",
+      "omp-dependent doctor must be reported honestly"
+    );
+
+    // Exit code must agree with the reported failures — no silent green.
+    assert.equal(
+      verified.status,
+      report.results.some((r) => r.status === "FAIL") ? 1 : 0,
+      verified.stderr
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
   }
 });
 

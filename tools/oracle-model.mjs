@@ -11,10 +11,11 @@
  * Zero external dependencies. Node 18+.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { parseArgs as utilParseArgs } from "node:util";
 
 // Резервная модель НЕ прибита к вендору: воркфлоу обязан работать с любым
 // провайдером. Приоритеты берутся из oracle-priority.json (его правит оператор),
@@ -22,47 +23,30 @@ import { fileURLToPath } from "node:url";
 const FALLBACK_MATCH = "best-reasoning";
 
 export function parseArgs(argv) {
-  const args = {
-    command: null,
-    config: null,
-    models: null,
-    priority: null,
-    probe: false,
-    dryRun: false,
-    json: false,
-    help: false,
+  const { values, positionals } = utilParseArgs({
+    args: argv,
+    options: {
+      config: { type: "string" },
+      models: { type: "string" },
+      priority: { type: "string" },
+      probe: { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+  return {
+    command: positionals[0] || null,
+    config: values.config || null,
+    models: values.models || null,
+    priority: values.priority || null,
+    probe: values.probe,
+    dryRun: values["dry-run"],
+    json: values.json,
+    help: values.help,
   };
-
-  const positional = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--config") {
-      args.config = argv[++i];
-    } else if (arg === "--models") {
-      args.models = argv[++i];
-    } else if (arg === "--priority") {
-      args.priority = argv[++i];
-    } else if (arg === "--probe") {
-      args.probe = true;
-    } else if (arg === "--dry-run") {
-      args.dryRun = true;
-    } else if (arg === "--json") {
-      args.json = true;
-    } else if (arg === "-h" || arg === "--help") {
-      args.help = true;
-    } else if (arg.startsWith("--config=")) {
-      args.config = arg.slice("--config=".length);
-    } else if (arg.startsWith("--models=")) {
-      args.models = arg.slice("--models=".length);
-    } else if (arg.startsWith("--priority=")) {
-      args.priority = arg.slice("--priority=".length);
-    } else if (!arg.startsWith("-")) {
-      positional.push(arg);
-    }
-  }
-
-  args.command = positional[0] || null;
-  return args;
 }
 
 /**
@@ -754,7 +738,7 @@ export async function run(argv) {
 }
 
 // CLI entry point
-const isDirectRun = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+const isDirectRun = Boolean(process.argv[1]) && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 if (isDirectRun) {
   run(process.argv.slice(2)).then((code) => {
     if (code !== 0) process.exit(code);

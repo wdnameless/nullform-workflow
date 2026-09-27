@@ -17,20 +17,25 @@ import {
   load,
   save,
 } from "../workflow.mjs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const CLI = fileURLToPath(new URL("../workflow.mjs", import.meta.url));
 
-test("verify .workflow/ is present in .gitignore", () => {
-  const gitignorePath = join(process.cwd(), ".gitignore");
-  if (existsSync(gitignorePath)) {
-    const content = readFileSync(gitignorePath, "utf8");
-    const lines = content.split(/\r?\n/).map((l) => l.trim());
-    assert.ok(
-      lines.includes(".workflow/"),
-      "expected .gitignore to include .workflow/"
-    );
+test("verify .workflow/ is ignored by git", () => {
+  const res = spawnSync("git", ["check-ignore", "-q", ".workflow/"], { windowsHide: true });
+  if (res.status === 0) {
+    assert.equal(res.status, 0, "expected .workflow/ to be ignored by git");
+  } else {
+    const gitignorePath = join(process.cwd(), ".gitignore");
+    if (existsSync(gitignorePath)) {
+      const content = readFileSync(gitignorePath, "utf8");
+      const lines = content.split(/\r?\n/).map((l) => l.trim());
+      assert.ok(
+        lines.includes(".workflow/"),
+        "expected .gitignore to include .workflow/"
+      );
+    }
   }
 });
 

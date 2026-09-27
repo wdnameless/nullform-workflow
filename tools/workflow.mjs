@@ -31,7 +31,7 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { spawn, execFileSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -469,48 +469,31 @@ function parse(argv) {
 }
 
 /**
- * Автозапуск дашборда (best-effort): поднимает фоновый сервер наблюдения и
- * открывает страницу. Никогда не влияет на код возврата воркфлоу — дашборд
- * это наблюдаемость, а не условие работы. Отключается --no-dashboard или NF_NO_DASHBOARD=1.
+ * Start or reuse the dashboard and print only the URL verified by its own HTTP health
+ * probe. Reading dashboard.json here used to publish a stale or hung server's address.
+ * Observability is best-effort and never changes the workflow command's exit code.
  */
 function autoOpenDashboard(root, flags) {
   if (flags && flags["no-dashboard"]) return;
   if (process.env.NF_NO_DASHBOARD === "1") return;
-  try {
-    const dash = join(dirname(fileURLToPath(import.meta.url)), "dashboard.mjs");
-    if (!existsSync(dash)) return;
-    const child = spawn(process.execPath, [dash, "--ensure", "--root", root], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
-    // Ждём до 2 с появления рантайм-файла с реальным URL, чтобы напечатать точный адрес
-    let url = null;
-    const rt = join(root, ".workflow", "dashboard.json");
-    for (let i = 0; i < 25; i++) {
-      try {
-        if (existsSync(rt)) {
-          const parsed = JSON.parse(readFileSync(rt, "utf8"));
-          if (parsed && parsed.url) {
-            url = parsed.url;
-            break;
-          }
-        }
-      } catch {}
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
-    }
-    if (url) {
-      if (process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI) {
-        console.log(`  dashboard: ${url} — открой во вкладке Paseo: browser_new_tab("${url}")`);
-      } else {
-        console.log(`  dashboard: ${url} (сервер запущен, открывается в браузере)`);
-      }
-    } else {
-      console.log("  dashboard: автозапуск фоном (адрес — .workflow/dashboard.json)");
-    }
-  } catch {
-    // молча: наблюдаемость не должна ломать гейт
+  const dash = join(dirname(fileURLToPath(import.meta.url)), "dashboard.mjs");
+  if (!existsSync(dash)) return;
+  const result = spawnSync(process.execPath, [dash, "--ensure", "--root", root], {
+    encoding: "utf8",
+    timeout: 35000,
+    windowsHide: true,
+  });
+  const url = result.status === 0
+    ? result.stdout.match(/Дашборд: (http:\/\/localhost:\d+)/)?.[1]
+    : null;
+  if (!url) {
+    console.error(`  dashboard: ${result.stderr.trim() || result.error?.message || "не удалось запустить"}`);
+    return;
+  }
+  if (process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI) {
+    console.log(`  dashboard: ${url} — открой во вкладке Paseo: browser_new_tab("${url}")`);
+  } else {
+    console.log(`  dashboard: ${url} (сервер запущен, открывается в браузере)`);
   }
 }
 
@@ -588,6 +571,16 @@ function cmdStart(root, flags) {
           : "local";
         if (prev.session && prev.session !== mine) {
           console.error(`  opened by another session (${prev.session}); two agents in one project share the lane gate.`);
+        }
+        // A lane whose owner died leaves the project permanently blocked and gives no
+        // clue why. Report its age so an abandoned lane is distinguishable from a live
+        // one; never expire silently — that would hide the interruption.
+        const ageMs = Date.now() - new Date(prev.startedAt || 0).getTime();
+        const ageHours = Number.isFinite(ageMs) ? ageMs / 36e5 : NaN;
+        const ttlHours = Number(flags["ttl-hours"] ?? process.env.WORKFLOW_LANE_TTL_HOURS ?? 12);
+        if (Number.isFinite(ageHours) && ageHours >= ttlHours) {
+          console.error(`  ABANDONED: open ${ageHours.toFixed(1)}h (TTL ${ttlHours}h) — the owning session likely died.`);
+          console.error(`  release it: workflow.mjs close --force --reason "abandoned lane from ${prev.session || 'unknown session'}"`);
         }
         console.error(`  close it first, escalate it with 'escalate', or pass --force --reason "<why>" to replace it.`);
         return 2;
@@ -790,6 +783,12 @@ function isPositiveOracleVerdict(text) {
   return POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text);
 }
 
+/** True when the text states an explicit rejection. Distinct from "states nothing". */
+function isNegativeOracleVerdict(text) {
+  if (!text || typeof text !== "string") return false;
+  return NEGATIVE_VERDICT_RE.test(text) && !POSITIVE_VERDICT_RE.test(text);
+}
+
 
 function validateArtifacts(root, st) {
   const reqs = requiredFor(st.tier);
@@ -866,17 +865,26 @@ function validateArtifacts(root, st) {
     }
 
     if (r.kind === "oracle") {
+      // An absent verdict and a negative verdict are different failures. Reporting
+      // "verdict is REJECT" for a file that simply has no verdict sends the operator
+      // hunting for a rejection nobody wrote (hit while closing this very audit).
       const detail = a.detail || "";
-      if (!isPositiveOracleVerdict(detail)) {
+      if (!detail.trim()) {
+        invalid.push("oracle: no verdict recorded — pass --detail \"ACCEPT: <evidence>\"");
+      } else if (isNegativeOracleVerdict(detail)) {
         invalid.push("oracle: verdict is REJECT (must be ACCEPT)");
+      } else if (!isPositiveOracleVerdict(detail)) {
+        invalid.push("oracle: note states no verdict — expected an explicit ACCEPT line");
       }
       if (a.path) {
         const fullPath = join(root, a.path);
         if (existsSync(fullPath)) {
           let body = "";
           try { body = readFileSync(fullPath, "utf8"); } catch {}
-          if (!isPositiveOracleVerdict(body)) {
+          if (isNegativeOracleVerdict(body)) {
             invalid.push(`oracle: verdict in '${a.path}' is REJECT`);
+          } else if (!isPositiveOracleVerdict(body)) {
+            invalid.push(`oracle: '${a.path}' states no verdict — expected an explicit ACCEPT line`);
           }
         }
       }
@@ -966,7 +974,10 @@ function cmdArtifact(root, flags) {
       console.error(`  record it: --detail "<what you actually did/verified>"`);
       return 1;
     }
-    if (req.mustContain && detail && !req.mustContain.test(detail)) {
+    // `mustContain` describes the ARTIFACT's file body (e.g. a manifest holds R## rows),
+    // never the free-text note. Testing the note rejected valid submissions whenever the
+    // operator described the work in prose instead of echoing the pattern.
+    if (req.minDetail && detail && req.mustContain && /ACCEPT|REJECT/i.test(String(req.mustContain)) && !req.mustContain.test(detail)) {
       console.error(`workflow: ${kind} must state the outcome — expected ${req.mustContain}.`);
       console.error(`  e.g. --detail "ACCEPT: verified X and Y, no gaps"`);
       return 1;
@@ -1291,7 +1302,7 @@ function cmdClose(root, flags) {
   if (missing.length && flags.force) {
     deviation.forced = true;
     deviation.reason = String(flags.reason);
-    deviation.missing = missing.map((m) => m.kind);
+    deviation.missing = [...missing];
   }
   if (staleAcceptance && flags.force) {
     deviation.forced = true;
@@ -1537,11 +1548,11 @@ function cmdCheckCi(root, flags) {
 
 /* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdSuggest, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, withStateLock, load, save, parse, cmdCheckCi };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi };
 
 import { fileURLToPath } from "node:url";
 
-if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   const args = parse(process.argv.slice(2));
   const root = args.flags.root ? String(args.flags.root) : process.cwd();
   const cmd = args._[0];
@@ -1562,6 +1573,9 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
     case "metrics":  code = cmdMetrics(root); break;
     case "check-ci": code = cmdCheckCi(root, args.flags); break;
     default:
+      // An unrecognised subcommand is an error, not a help request: exiting 0 on a typo
+      // tells every calling script and CI gate that the run succeeded.
+      if (cmd !== undefined) console.error(`workflow: unknown command '${cmd}'\n`);
       console.log("workflow.mjs — tier enforcement\n");
       console.log("  node workflow.mjs suggest --files a.ts,b.ts [--task \"...\"]");
       console.log("  node workflow.mjs start --tier T2 --task \"add rate limiting\"");
@@ -1574,6 +1588,7 @@ if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(proce
       console.log("  node workflow.mjs metrics [--root .]");
       console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
       console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
+      if (cmd !== undefined) code = 2;
   }
-  process.exit(code);
+  process.exitCode = code;
 }

@@ -44,26 +44,8 @@ import {
 } from "../benchmark.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../benchmark.mjs", import.meta.url));
+import { createTempDir, createGitRepo } from "./test-helpers.mjs";
 
-function createTempDir() {
-  return mkdtempSync(join(tmpdir(), "bench-test-"));
-}
-
-/**
- * Инициализирует временный git-репозиторий с одним коммитом.
- */
-function createGitRepo() {
-  const dir = createTempDir();
-  spawnSync("git", ["init"], { cwd: dir, encoding: "utf8" , windowsHide: true});
-  spawnSync("git", ["config", "user.name", "BenchTester"], { cwd: dir });
-  spawnSync("git", ["config", "user.email", "bench@test.local"], { cwd: dir });
-  spawnSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir });
-
-  writeFileSync(join(dir, "initial.txt"), "hello\n", "utf8");
-  spawnSync("git", ["add", "initial.txt"], { cwd: dir });
-  spawnSync("git", ["commit", "-m", "Initial commit"], { cwd: dir });
-  return dir;
-}
 
 test("parseArgs: разбирает команды и все флаги", () => {
   const args = parseArgs([

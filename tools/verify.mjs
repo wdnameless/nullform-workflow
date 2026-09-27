@@ -17,20 +17,21 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  realpathSync,
 } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export class NotConfiguredError extends Error {
+class NotConfiguredError extends Error {
   constructor(message) {
     super(message);
     this.name = "NotConfiguredError";
   }
 }
 
-export function parseArgs(argv) {
+function parseArgs(argv) {
   const opts = {
     profile: "verify",
     root: "",
@@ -64,7 +65,7 @@ export function parseArgs(argv) {
   return opts;
 }
 
-export function resolveRoots(opts = {}) {
+function resolveRoots(opts = {}) {
   const toolsDir = dirname(fileURLToPath(import.meta.url));
   const scriptParent = dirname(toolsDir);
   const parentOfScriptParent = dirname(scriptParent);
@@ -130,7 +131,7 @@ export function resolveRoots(opts = {}) {
   };
 }
 
-export function runProc(cmd, args = [], options = {}) {
+function runProc(cmd, args = [], options = {}) {
   const isWin = process.platform === "win32";
   return spawnSync(cmd, args, {
     encoding: "utf8",
@@ -150,7 +151,7 @@ function runPromptLint(tool, userHome, args) {
   });
 }
 
-export function runOmp(args = [], options = {}) {
+function runOmp(args = [], options = {}) {
   const isWin = process.platform === "win32";
   if (isWin) {
     const appData = process.env.APPDATA || "";
@@ -171,7 +172,7 @@ export function runOmp(args = [], options = {}) {
   });
 }
 
-export function runOpenspec(args = [], options = {}) {
+function runOpenspec(args = [], options = {}) {
   const isWin = process.platform === "win32";
   if (isWin) {
     return spawnSync("cmd.exe", ["/d", "/s", "/c", `openspec ${args.join(" ")}`], {
@@ -186,7 +187,7 @@ export function runOpenspec(args = [], options = {}) {
   });
 }
 
-export function readModelsYaml(agentDir) {
+function readModelsYaml(agentDir) {
   const p = join(agentDir, "models.yml");
   if (!existsSync(p)) {
     throw new NotConfiguredError(
@@ -196,7 +197,7 @@ export function readModelsYaml(agentDir) {
   return readFileSync(p, "utf8");
 }
 
-export function checkSyncDrift(repoRoot, harnessRoot, userHome) {
+function checkSyncDrift(repoRoot, harnessRoot, userHome) {
   const isWin = process.platform === "win32";
   const syncScript = isWin
     ? join(repoRoot, "tools", "sync.ps1")
@@ -249,7 +250,7 @@ export function checkSyncDrift(repoRoot, harnessRoot, userHome) {
   };
 }
 
-export function checkSkillsDoctor(harnessRoot, userHome, repoRoot) {
+function checkSkillsDoctor(harnessRoot, userHome, repoRoot) {
   const tool = join(harnessRoot, "tools", "skills-doctor.mjs");
   return runProc(process.execPath, [
     tool,
@@ -300,7 +301,7 @@ export function testTierGate(harnessRoot, strict = true) {
   }
 }
 
-export async function executeCheck(id, label, fn) {
+async function executeCheck(id, label, fn) {
   const start = Date.now();
   try {
     const res = await fn();
@@ -344,7 +345,7 @@ export async function executeCheck(id, label, fn) {
   }
 }
 
-export async function runVerifyProfile(ctx) {
+async function runVerifyProfile(ctx) {
   const { harnessRoot, repoRoot, userHome, agentDir } = ctx;
   const results = [];
 
@@ -398,19 +399,25 @@ export async function runVerifyProfile(ctx) {
   results.push(
     await executeCheck(4, "every agent def has name + description", () => {
       const agentsDir = join(agentDir, "agents");
+      // An absent directory means the check cannot run — that is a FAILURE, not a pass.
+      // Skipping the loop silently reported "every definition is valid" when there were none.
+      if (!existsSync(agentsDir)) {
+        throw new Error(`agent definitions directory missing: ${agentsDir}`);
+      }
+      const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
+      if (files.length === 0) {
+        throw new Error(`no agent definitions in ${agentsDir}`);
+      }
       const bad = [];
-      if (existsSync(agentsDir)) {
-        const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
-        for (const f of files) {
-          const raw = readFileSync(join(agentsDir, f), "utf8");
-          const head = raw.split(/\r?\n/).slice(0, 8);
-          const hasName = head.some((line) => /^name:/.test(line));
-          const hasDesc = head.some((line) => /^description:/.test(line));
-          if (!hasName || !hasDesc) bad.push(f);
-        }
+      for (const f of files) {
+        const raw = readFileSync(join(agentsDir, f), "utf8");
+        const head = raw.split(/\r?\n/).slice(0, 8);
+        const hasName = head.some((line) => /^name:/.test(line));
+        const hasDesc = head.some((line) => /^description:/.test(line));
+        if (!hasName || !hasDesc) bad.push(f);
       }
       if (bad.length) throw new Error(`missing frontmatter: ${bad.join(", ")}`);
-      return true;
+      return `${files.length} definitions valid`;
     })
   );
 
@@ -481,18 +488,24 @@ export async function runVerifyProfile(ctx) {
     })
   );
 
+  function readMcpServers(notConfiguredIfMissing = false) {
+    const p = join(agentDir, "mcp.json");
+    if (!existsSync(p)) {
+      if (notConfiguredIfMissing) throw new NotConfiguredError("mcp.json missing - no servers configured");
+      throw new Error("mcp.json missing");
+    }
+    try {
+      const m = JSON.parse(readFileSync(p, "utf8"));
+      return m.mcpServers || {};
+    } catch (e) {
+      throw new Error(`mcp.json parse error: ${e.message}`);
+    }
+  }
+
   // 9 mcp.json parses, entries well-formed
   results.push(
     await executeCheck(9, "mcp.json parses, entries well-formed", () => {
-      const p = join(agentDir, "mcp.json");
-      if (!existsSync(p)) throw new Error("mcp.json missing");
-      let m;
-      try {
-        m = JSON.parse(readFileSync(p, "utf8"));
-      } catch (e) {
-        throw new Error(`mcp.json parse error: ${e.message}`);
-      }
-      const servers = m.mcpServers || {};
+      const servers = readMcpServers(false);
       const names = Object.keys(servers);
       if (names.length === 0) throw new Error("no MCP servers configured");
       const bad = [];
@@ -512,10 +525,7 @@ export async function runVerifyProfile(ctx) {
   // 10 no MCP server pinned to @latest
   results.push(
     await executeCheck(10, "no MCP server pinned to @latest", () => {
-      const p = join(agentDir, "mcp.json");
-      if (!existsSync(p)) return true;
-      const m = JSON.parse(readFileSync(p, "utf8"));
-      const servers = m.mcpServers || {};
+      const servers = readMcpServers(true);
       const bad = [];
       for (const [n, entry] of Object.entries(servers)) {
         const a = entry.args;
@@ -529,10 +539,7 @@ export async function runVerifyProfile(ctx) {
   // 11 mandatory MCP servers present
   results.push(
     await executeCheck(11, "mandatory MCP servers present", () => {
-      const p = join(agentDir, "mcp.json");
-      if (!existsSync(p)) throw new Error("mcp.json missing");
-      const m = JSON.parse(readFileSync(p, "utf8"));
-      const servers = m.mcpServers || {};
+      const servers = readMcpServers(false);
       const names = Object.keys(servers);
       const mandatory = ["chrome-devtools"];
       const missing = mandatory.filter((req) => !names.includes(req));
@@ -862,21 +869,40 @@ export async function runVerifyProfile(ctx) {
     })
   );
 
-  // 28 CI template present and parses as YAML
+  // 28 CI template present and structurally sound
+  // Named for what it does: this is a targeted structural lint, not a YAML parse — the
+  // harness is zero-dependency, so there is no parser to call. It checks the anchors the
+  // gate depends on AND the shape that makes them real (indentation, no tabs), which a
+  // substring match alone would accept while the workflow is broken.
   results.push(
-    await executeCheck(28, "CI template present and parses as YAML", () => {
+    await executeCheck(28, "CI template present and structurally sound", () => {
       let ciTemplate = join(harnessRoot, "templates", "ci", "workflow-gate.yml");
       if (!existsSync(ciTemplate)) {
         ciTemplate = join(repoRoot, "templates", "ci", "workflow-gate.yml");
       }
       if (!existsSync(ciTemplate)) throw new Error("templates/ci/workflow-gate.yml not found");
       const content = readFileSync(ciTemplate, "utf8");
+
+      // A tab in YAML is invalid at any indentation level.
+      const tabLine = content.split(/\r?\n/).findIndex((l) => /^\s*\t/.test(l));
+      if (tabLine !== -1) throw new Error(`tab character at line ${tabLine + 1} - invalid YAML`);
+
+      // Every `- name:` step must sit under `steps:` with consistent indentation.
+      const lines = content.split(/\r?\n/);
+      const stepIndents = lines
+        .filter((l) => /^\s*- name:/.test(l))
+        .map((l) => l.match(/^\s*/)[0].length);
+      if (stepIndents.length === 0) throw new Error("no workflow steps found");
+      if (new Set(stepIndents).size > 1) {
+        throw new Error(`inconsistent step indentation: ${[...new Set(stepIndents)].join(", ")}`);
+      }
+
       if (!/name:\s*Workflow Gate/.test(content)) throw new Error("missing name: Workflow Gate");
       if (!/on:\s*(?:\r?\n)\s+push:/.test(content)) throw new Error("missing push trigger");
       if (!/node-version:\s*20/.test(content)) throw new Error("missing node 20");
       if (!/auto-review\.mjs/.test(content)) throw new Error("missing auto-review invocation");
       if (!/actions\/github-script/.test(content)) throw new Error("missing PR comment action");
-      return "valid CI YAML template";
+      return `${stepIndents.length} steps, structurally sound`;
     })
   );
 
@@ -903,7 +929,7 @@ export async function runVerifyProfile(ctx) {
   return results;
 }
 
-export async function runAuditProfile(ctx) {
+async function runAuditProfile(ctx) {
   const { harnessRoot, repoRoot, userHome, scope } = ctx;
   const results = [];
 
@@ -974,12 +1000,15 @@ export async function runAuditProfile(ctx) {
       if (r.status === 0) {
         detail = `all documented (${effectiveScope.join(",")})`;
       } else if (r.status === 2) {
-        detail = "no CONTEXT.md";
+        // A missing glossary is an intended, non-failing state (AGENTS.md: "do not create
+        // one unprompted"), but reporting it as PASS made the audit claim coverage it never
+        // measured. SETUP states the truth: nothing to check yet.
+        throw new NotConfiguredError("no CONTEXT.md - nothing to check yet");
       } else {
         detail = "undocumented public symbols";
       }
       return {
-        ok: r.status === 0 || r.status === 2,
+        ok: r.status === 0,
         detail,
       };
     })
@@ -1025,6 +1054,23 @@ export async function runAuditProfile(ctx) {
     })
   );
 
+  // 9b code size gate — runs the tool, not merely checks that it exists.
+  // Checking for the file would repeat the false-pass pattern this audit removed from
+  // checks 4/5/10: "the tool is present" says nothing about whether the code is growing.
+  results.push(
+    await executeCheck("9b", "code size gate (no module growth past baseline)", () => {
+      const tool = join(harnessRoot, "tools", "code-size.mjs");
+      if (!existsSync(tool)) throw new NotConfiguredError("code-size.mjs not installed");
+      // The tool exits 1 with the violation list on stderr; no need to re-parse its JSON.
+      const r = runProc(process.execPath, [tool, "check", "--root", repoRoot]);
+      const out = `${r.stdout || ""}${r.stderr || ""}`;
+      const first = out.split("\n").find((l) => l.includes("[FAIL]"))?.trim() || "";
+      if (r.status !== 0) throw new Error(first || `code-size exited ${r.status}`);
+      const n = out.match(/Проверено (\d+) файлов/)?.[1] ?? "?";
+      return `${n} files, no growth past baseline`;
+    })
+  );
+
   // 10 codemap currency
   results.push(
     await executeCheck(10, "codemap currency", () => {
@@ -1037,8 +1083,10 @@ export async function runAuditProfile(ctx) {
       if (!m) return { ok: true, detail: "no change data" };
       const n = parseInt(m[1], 10) + parseInt(m[2], 10) + parseInt(m[3], 10);
       return {
-        ok: true,
-        detail: n === 0 ? "current" : `${n} file(s) changed - CODEMAP.md may be stale`,
+        // Stale is stale: reporting ok:true with a "may be stale" note made the audit
+        // list a drifted map as clean.
+        ok: n === 0,
+        detail: n === 0 ? "current" : `${n} file(s) changed - CODEMAP.md is stale`,
       };
     })
   );
@@ -1118,7 +1166,7 @@ export async function runAuditProfile(ctx) {
   return results;
 }
 
-export function formatVerifyTable(results) {
+function formatVerifyTable(results) {
   const maxLabelLen = Math.max(63, ...results.map((r) => r.label.length));
   const col1W = maxLabelLen;
   const col2W = 6;
@@ -1134,7 +1182,7 @@ export function formatVerifyTable(results) {
   return out;
 }
 
-export function formatAuditTable(results) {
+function formatAuditTable(results) {
   const col1W = 29;
   const col2W = 6;
   const col3W = 46;
@@ -1157,7 +1205,7 @@ export function formatAuditTable(results) {
   return out;
 }
 
-export async function main() {
+async function main() {
   const argv = process.argv.slice(2);
   const opts = parseArgs(argv);
 
@@ -1231,12 +1279,15 @@ Options:
     console.log("");
   }
 
-  process.exit(failCount > 0 ? 1 : 0);
+  // process.exit() discards stdout/stderr still queued on a pipe, which on
+  // macOS truncates the JSON document mid-object (seen in CI: a parse error at
+  // an arbitrary offset). Set the code and let Node flush before exiting.
+  process.exitCode = failCount > 0 ? 1 : 0;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   main().catch((err) => {
     console.error(`Unhandled error: ${err.stack || err.message}`);
-    process.exit(2);
+    process.exitCode = 2;
   });
 }

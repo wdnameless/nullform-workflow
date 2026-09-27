@@ -15,10 +15,11 @@ import {
   writeFileSync,
   readdirSync,
   statSync,
+  realpathSync,
 } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 export const TASKS_FILE = "bench/tasks.json";
 export const RUNS_DIR = "bench/runs";
@@ -1609,6 +1610,6 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
+  process.exitCode = main();
 }

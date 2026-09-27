@@ -14,10 +14,10 @@
  *   node tools/auto-review.mjs [--root <dir>]
  */
 
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 
 /** Resolve npm-family executables on Windows without a shell (injection-safe). */
 function npmBin(name) {
@@ -215,7 +215,7 @@ export async function runAutoReview(opts = {}) {
 }
 
 // CLI entry point
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   const flags = parseArgs(process.argv.slice(2));
 
   if (flags.help) {
@@ -262,20 +262,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
             2
           ) + "\n"
         );
-        process.exit(res.exitCode);
+        process.exitCode = res.exitCode;
       })
       .catch((err) => {
         console.log = originalLog;
         console.info = originalInfo;
         process.stdout.write(JSON.stringify({ ok: false, error: String(err && err.message ? err.message : err) }) + "\n");
-        process.exit(2);
+        process.exitCode = 2;
       });
   } else {
     runAutoReview({ root: flags.root }).then((res) => {
-      process.exit(res.exitCode);
+      process.exitCode = res.exitCode;
     }).catch((err) => {
       console.error("Ошибка выполнения auto-review:", err);
-      process.exit(2);
+      process.exitCode = 2;
     });
   }
 }

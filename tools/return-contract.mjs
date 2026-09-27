@@ -13,7 +13,9 @@
  *   node return-contract.mjs <file> [--json]
  *   node return-contract.mjs --text "<content>" [--json]
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { parseArgs as utilParseArgs } from "node:util";
 
 export const ALLOWED_STATUSES = [
   "DONE",
@@ -32,18 +34,17 @@ export const REQUIRED_SECTIONS = [
   "CONCERNS",
 ];
 
-function parseArgs(argv) {
-  const out = { _: [], text: null, json: false };
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--text") {
-      out.text = argv[++i];
-    } else if (argv[i] === "--json") {
-      out.json = true;
-    } else {
-      out._.push(argv[i]);
-    }
-  }
-  return out;
+function parseArgs(args) {
+  const { values, positionals } = utilParseArgs({
+    args,
+    options: {
+      text: { type: "string" },
+      json: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: false,
+  });
+  return { _: positionals, text: values.text ?? null, json: values.json };
 }
 
 /**
@@ -273,11 +274,9 @@ export function validateReturnContract(rawText) {
 
 /* ----------------------------------------------------------------------- main */
 
-const isMain = process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("return-contract.mjs");
+const isMain = Boolean(process.argv[1]) && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 
-if (isMain) {
-  const argv = process.argv.slice(2);
-
+export function main(argv = process.argv.slice(2)) {
   // --help/-h — запрос справки, а не файл с таким именем.
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(`Использование: node tools/return-contract.mjs [<file>] [--text "<контракт>"] [--json]
@@ -286,7 +285,7 @@ if (isMain) {
 REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TESTS (было N → стало M).
 
 Флаги: <file> — путь к файлу, --text <строка> — контракт текстом, --json — машинный отчёт, --help`);
-    process.exit(0);
+    return 0;
   }
 
   const args = parseArgs(argv);
@@ -301,7 +300,7 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
       } else {
         console.error(`Ошибка: файл не найден: ${file}`);
       }
-      process.exit(1);
+      return 1;
     }
     content = readFileSync(file, "utf8");
   } else {
@@ -317,14 +316,14 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
         console.log("  node return-contract.mjs <file> [--json]");
         console.log("  node return-contract.mjs --text \"<content>\" [--json]");
         console.log("  echo \"<content>\" | node return-contract.mjs [--json]\n");
-        process.exit(1);
+        return 1;
       }
       if (args.json) {
         console.log(JSON.stringify({ valid: false, errors: ["Пустой ввод: контракт возврата не получен на stdin."] }, null, 2));
       } else {
         console.error("ОШИБКА: пустой ввод: контракт возврата не получен на stdin.");
       }
-      process.exit(1);
+      return 1;
     }
   }
   const result = validateReturnContract(content);
@@ -342,5 +341,9 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
     }
   }
 
-  process.exit(result.valid ? 0 : 1);
+  return result.valid ? 0 : 1;
+}
+
+if (isMain) {
+  process.exitCode = main();
 }

@@ -47,11 +47,12 @@ const SHARED = [
 const HARNESS_ONLY = [
   // кандидаты
   "tools/extra.mjs",
-  "tools/notes.txt",
   "tools/nested/deep/chunk.js",
   "agent/agent-local.md",
   "rules/scratch.md",
   "templates/local/extra.md",
+  "templates/ci/config.yml",
+  "tools/config.json",
   "paseo/old-setup.ps1",
   // служебные каталоги — вне области
   "tools/node_modules/pkg/index.js",
@@ -65,12 +66,17 @@ const HARNESS_ONLY = [
   "agent/config.yml",
   "agent/models.yml",
   "agent/mcp.json",
+  "agent/oracle-priority.json",
   "agent/plugins.skipped",
   "agent/models.db",
   "agent/api.key",
   "secrets.env" /* нет: вне каталогов манифеста */,
   "agent/sessions/session.jsonl",
   "agent/cache/hit.txt",
+  // Локальные файлы в каталогах манифеста — НЕ сироты. Prune трогает только те
+  // расширения, которые репозиторий реально поставляет (SHIPPED_SUFFIX): .txt в
+  // tools/ — это заметка пользователя, и удаление её необратимо.
+  "tools/notes.txt",
   // вне каталогов манифеста
   "skills/mock-skill/SKILL.md",
   "tests/portability.ps1",
@@ -81,10 +87,11 @@ const EXPECTED = [
   "agent/agent-local.md",
   "paseo/old-setup.ps1",
   "rules/scratch.md",
+  "templates/ci/config.yml",
   "templates/local/extra.md",
+  "tools/config.json",
   "tools/extra.mjs",
   "tools/nested/deep/chunk.js",
-  "tools/notes.txt",
 ];
 
 function makeFixture(baseDir) {

@@ -18,10 +18,8 @@ import {
 } from "../gherkin-spec.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../gherkin-spec.mjs", import.meta.url)));
+import { createTempDir } from "./test-helpers.mjs";
 
-function createTempDir() {
-  return mkdtempSync(join(tmpdir(), "gherkin-test-"));
-}
 
 test("parseGherkin: парсит Feature, Scenario, теги и шаги", () => {
   const gherkinText = `

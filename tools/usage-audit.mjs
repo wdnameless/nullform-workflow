@@ -1,8 +1,8 @@
-import { readdirSync, statSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, statSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve, basename, extname } from "node:path";
 import { homedir } from "node:os";
 import { parseArgs as utilParseArgs } from "node:util";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 /**
  * usage-audit.mjs — аудит использования MCP-серверов, встроенных тулов и скиллов
@@ -119,29 +119,14 @@ export function parseCliArgs(args = process.argv.slice(2)) {
  * Рекурсивный поиск всех .jsonl файлов в директории.
  */
 export function findJsonlFiles(dir) {
-  const files = [];
-  if (!existsSync(dir)) return files;
-
-  function traverse(current) {
-    let entries;
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        traverse(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        files.push(fullPath);
-      }
-    }
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir, { recursive: true })
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => join(dir, f));
+  } catch {
+    return [];
   }
-
-  traverse(dir);
-  return files;
 }
 
 /**
@@ -651,7 +636,7 @@ export function formatAuditReport(data, { top = 15 } = {}) {
 }
 
 // Запуск при прямом вызове CLI
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   const USAGE = `Использование: node tools/usage-audit.mjs [параметры]
 
 Параметры:
@@ -696,5 +681,5 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     console.log(formatAuditReport(auditResult, { top: options.top }));
   }
 
-  process.exit(0);
+  process.exitCode = 0;
 }

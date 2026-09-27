@@ -1,0 +1,467 @@
+#!/usr/bin/env node
+/**
+ * tools/sync.mjs — Sync the live OMP harness with the workflow repo (drift control).
+ *
+ * Single cross-platform implementation replacing twin sync.ps1 and sync.sh logic.
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function printHelp() {
+  console.log(`Usage: node sync.mjs [--check|--promote|--deploy|--prune [--confirm]] [--harness <dir>] [--agents-root <dir>] [--agent-dir <dir>] [--repo <dir>] [--force] [--only <substr>] [--quiet] [--json]`);
+}
+
+function parseArgs(argv) {
+  const opts = {
+    mode: 'check',
+    prune: false,
+    confirm: false,
+    force: false,
+    quiet: false,
+    json: false,
+    only: '',
+    harnessRoot: '',
+    agentsRoot: '',
+    agentDir: '',
+    repoRoot: '',
+  };
+
+  let promoteSet = false;
+  let deploySet = false;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    let key = arg;
+    let val = undefined;
+    if (arg.startsWith('--') && arg.includes('=')) {
+      const eqIdx = arg.indexOf('=');
+      key = arg.slice(0, eqIdx);
+      val = arg.slice(eqIdx + 1);
+    }
+
+    switch (key) {
+      case 'check':
+      case '--check':
+      case '-Check':
+        opts.mode = 'check';
+        break;
+      case '--promote':
+      case '-Promote':
+        promoteSet = true;
+        break;
+      case '--deploy':
+      case '-Deploy':
+        deploySet = true;
+        break;
+      case '--prune':
+      case '-Prune':
+        opts.prune = true;
+        break;
+      case '--confirm':
+      case '-Confirm':
+        opts.confirm = true;
+        break;
+      case '--force':
+      case '-Force':
+        opts.force = true;
+        break;
+      case '--quiet':
+      case '-Quiet':
+        opts.quiet = true;
+        break;
+      case '--json':
+      case '-Json':
+        opts.json = true;
+        break;
+      case '--only':
+      case '-Only':
+        opts.only = val !== undefined ? val : argv[++i] || '';
+        break;
+      case '--harness':
+      case '--harness-root':
+      case '-HarnessRoot':
+        opts.harnessRoot = val !== undefined ? val : argv[++i] || '';
+        break;
+      case '--agents':
+      case '--agents-root':
+      case '-AgentsRoot':
+      case '--agents-home':
+        opts.agentsRoot = val !== undefined ? val : argv[++i] || '';
+        break;
+      case '--agent-dir':
+      case '-AgentDir':
+        opts.agentDir = val !== undefined ? val : argv[++i] || '';
+        break;
+      case '--repo':
+      case '--repo-root':
+      case '-RepoRoot':
+        opts.repoRoot = val !== undefined ? val : argv[++i] || '';
+        break;
+      case '-h':
+      case '--help':
+      case '-Help':
+        printHelp();
+        process.exit(0);
+        break;
+      default:
+        console.error(`Unknown argument: ${arg}`);
+        process.exit(2);
+    }
+  }
+
+  if (promoteSet && deploySet) {
+    console.error('Choose one of --promote or --deploy.');
+    process.exit(2);
+  }
+  if (opts.prune && (promoteSet || deploySet)) {
+    console.error('Choose one of --prune, --promote or --deploy.');
+    process.exit(2);
+  }
+
+  if (promoteSet) opts.mode = 'promote';
+  else if (deploySet) opts.mode = 'deploy';
+
+  return opts;
+}
+
+function resolveRepoRoot(harnessRoot, explicitRepoRoot) {
+  if (explicitRepoRoot) {
+    const hasInstall = fs.existsSync(path.join(explicitRepoRoot, 'install.ps1'));
+    const hasModels = fs.existsSync(path.join(explicitRepoRoot, 'agent', 'models.yml.example'));
+    if (hasInstall && hasModels) {
+      return path.resolve(explicitRepoRoot);
+    }
+    const missing = [];
+    if (!hasInstall) missing.push('install.ps1');
+    if (!hasModels) missing.push('agent/models.yml.example');
+    console.error(`Cannot locate workflow-repo at explicit path "${explicitRepoRoot}" (missing ${missing.join(', ')}).`);
+    process.exit(2);
+  }
+
+  const candidates = [
+    path.resolve(__dirname, '..'),
+    path.resolve(harnessRoot, 'workflow-repo'),
+    process.cwd(),
+    path.resolve(process.cwd(), 'workflow-repo'),
+  ];
+
+  for (const c of candidates) {
+    if (!c) continue;
+    if (fs.existsSync(path.join(c, 'install.ps1')) && fs.existsSync(path.join(c, 'agent', 'models.yml.example'))) {
+      return c;
+    }
+  }
+
+  console.error("Cannot locate workflow-repo (needs install.ps1 + agent/models.yml.example). Pass -HarnessRoot or run from the repo's tools/ directory.");
+  process.exit(2);
+}
+
+function readNormalized(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  let text = fs.readFileSync(filePath, 'utf8');
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  return text.replace(/\r\n/g, '\n');
+}
+
+function writeNormalized(filePath, text) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, text.replace(/\r\n/g, '\n'), 'utf8');
+}
+
+function runPrune(harnessRoot, repoRoot, confirm) {
+  let pruneScript = path.join(__dirname, 'sync-prune.mjs');
+  if (!fs.existsSync(pruneScript)) {
+    pruneScript = path.join(repoRoot, 'tools', 'sync-prune.mjs');
+  }
+  if (!fs.existsSync(pruneScript)) {
+    console.error(`sync-prune.mjs not found. Deploy tools/sync-prune.mjs first.`);
+    process.exit(2);
+  }
+  const pruneArgs = [pruneScript, '--harness', harnessRoot, '--repo', repoRoot];
+  if (confirm) pruneArgs.push('--delete');
+
+  const res = spawnSync(process.execPath, pruneArgs, { stdio: 'inherit' });
+  if (res.status !== 0) {
+    console.error(`sync: prune failed (exit ${res.status})`);
+    process.exit(res.status ?? 1);
+  }
+  if (!confirm) {
+    console.log("sync: dry-run only - nothing was deleted. Re-run with '-Prune -Confirm' to delete.");
+  }
+  process.exit(0);
+}
+
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+
+  const log = opts.json ? console.error : console.log;
+  const harnessRoot = opts.harnessRoot || process.env.HARNESS_ROOT || path.join(os.homedir(), 'omp-workflow');
+  const agentsRoot = opts.agentsRoot || process.env.AGENTS_ROOT || path.join(os.homedir(), '.agents');
+  const agentDir = opts.agentDir || process.env.AGENT_DIR || path.join(os.homedir(), '.omp', 'agent');
+  const repoRoot = resolveRepoRoot(harnessRoot, opts.repoRoot);
+
+  if (opts.prune) {
+    runPrune(harnessRoot, repoRoot, opts.confirm);
+  }
+
+  let manifest;
+  const manifestPath = path.join(__dirname, 'sync-manifest.json');
+  try {
+    if (fs.existsSync(manifestPath)) {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } else {
+      const repoManifest = path.join(repoRoot, 'tools', 'sync-manifest.json');
+      if (fs.existsSync(repoManifest)) {
+        manifest = JSON.parse(fs.readFileSync(repoManifest, 'utf8'));
+      } else {
+        console.error('sync-manifest.json not found.');
+        process.exit(2);
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to parse sync-manifest.json: ${err.message}`);
+    process.exit(2);
+  }
+
+  const drift = [];
+  const suspect = [];
+  const drifted = [];
+  let checked = 0;
+
+  for (const entry of manifest) {
+    const rel = entry.rel;
+    const liveRoot = entry.liveRoot === '@agents' ? agentsRoot : (entry.liveRoot === '@agentdir' ? agentDir : harnessRoot);
+
+    if (opts.only && !rel.toLowerCase().includes(opts.only.toLowerCase())) {
+      continue;
+    }
+
+    const livePath = path.join(liveRoot, ...rel.split('/'));
+    const repoPath = path.join(repoRoot, ...rel.split('/'));
+    checked++;
+
+    let live = readNormalized(livePath);
+    let repo = readNormalized(repoPath);
+
+    const isPromptSurface = rel.startsWith('agent/') || rel.startsWith('rules/') || rel.startsWith('skills/');
+    let repoResolved = repo;
+    if (repo !== null && isPromptSurface) {
+      const slashHarness = harnessRoot.replace(/\\/g, '/');
+      repoResolved = repo.replaceAll('<HARNESS>', slashHarness);
+    }
+
+    if (live === repoResolved) {
+      continue;
+    }
+
+    drift.push(rel);
+
+    if (opts.mode === 'promote') {
+      if (live !== null && repo !== null) {
+        const liveTime = fs.statSync(livePath).mtimeMs;
+        const repoTime = fs.statSync(repoPath).mtimeMs;
+        if (repoTime > liveTime) {
+          suspect.push(rel);
+        }
+      }
+    } else if (opts.mode === 'check') {
+      log(`  [XX] DRIFT   ${rel}`);
+    }
+
+    drifted.push({ rel, livePath, repoPath, live, repoResolved, isPromptSurface });
+  }
+
+  if (opts.mode === 'promote') {
+    if (suspect.length === 0 || opts.force) {
+      for (const item of drifted) {
+        if (item.live === null) continue;
+        let promoteText = item.live;
+        if (item.isPromptSurface) {
+          const slashHarness = harnessRoot.replace(/\\/g, '/');
+          promoteText = promoteText.replaceAll(slashHarness, '<HARNESS>');
+          const winHarness = harnessRoot.replace(/\//g, '\\');
+          if (winHarness !== slashHarness) {
+            promoteText = promoteText.replaceAll(winHarness, '<HARNESS>');
+          }
+        }
+        writeNormalized(item.repoPath, promoteText);
+        if (!opts.quiet) {
+          log(`  [->] promote ${item.rel}`);
+        }
+      }
+    }
+  } else if (opts.mode === 'deploy') {
+    for (const item of drifted) {
+      if (item.repoResolved === null) continue;
+      writeNormalized(item.livePath, item.repoResolved);
+      if (!opts.quiet) {
+        log(`  [<-] deploy  ${item.rel}`);
+      }
+    }
+  }
+
+  // ---------- OMP law copy parity ----------
+  const ompAgents = path.join(agentDir, 'AGENTS.md');
+  const harnessAgents = path.join(harnessRoot, 'agent', 'AGENTS.md');
+  const ompApplicable = !opts.only || opts.only.toLowerCase().includes('agents');
+  if (ompApplicable && fs.existsSync(harnessAgents)) {
+    checked++;
+    const ompText = readNormalized(ompAgents);
+    const harnessText = readNormalized(harnessAgents);
+    if (ompText !== harnessText) {
+      if (opts.mode !== 'promote') drift.push('~/.omp/agent/AGENTS.md');
+      if (opts.mode === 'deploy') {
+        writeNormalized(ompAgents, harnessText);
+        if (!opts.quiet) log("  [<-] deploy  ~/.omp/agent/AGENTS.md");
+      } else if (opts.mode === 'promote') {
+        if (!opts.quiet) log("  [--] skip    ~/.omp/agent/AGENTS.md (resolved copy; promote the harness copy instead)");
+      } else {
+        if (!opts.quiet) {
+          log("  [XX] DRIFT   ~/.omp/agent/AGENTS.md (OMP loads this file; differs from the harness copy)");
+        } else {
+          log("  [XX] DRIFT   ~/.omp/agent/AGENTS.md");
+        }
+      }
+    }
+  }
+
+  // ---------- Skills parity ----------
+  const repoSkills = path.join(repoRoot, 'skills');
+  const installedSkills = path.join(agentsRoot, 'skills');
+  let doctorScript = path.join(__dirname, 'skills-doctor.mjs');
+  if (!fs.existsSync(doctorScript)) {
+    doctorScript = path.join(repoRoot, 'tools', 'skills-doctor.mjs');
+  }
+
+  const skillsApplicable = !opts.only || opts.only.toLowerCase().includes('skill') || 'skills'.includes(opts.only.toLowerCase());
+  let skillsStatusText = '';
+  let skillsParityStatus = 'NOT_CHECKED';
+  let skillsDoctorOk = false;
+
+  if (skillsApplicable) {
+    if (fs.existsSync(doctorScript)) {
+      const docRes = spawnSync(
+        process.execPath,
+        [doctorScript, '--installed', installedSkills, '--repo', repoSkills, '--agents-home', agentsRoot, '--json'],
+        { encoding: 'utf8' }
+      );
+      try {
+        const parsed = JSON.parse(docRes.stdout);
+        skillsParityStatus = parsed.parityStatus || 'UNVERIFIED';
+        skillsDoctorOk = docRes.status === 0 && parsed.ok === true && skillsParityStatus === 'VERIFIED';
+        const disText = parsed.disabledCount ? `, ${parsed.disabledCount} disabled by operator` : '';
+        skillsStatusText = `skills: parity ${skillsParityStatus} (${parsed.installedCount} installed, ${parsed.repoCount} in repo${disText})`;
+        if (!skillsDoctorOk && opts.mode !== 'deploy' && opts.mode !== 'promote') {
+          if (parsed.problems && parsed.problems.length) {
+            for (const p of parsed.problems) {
+              const pSkill = p.skill === '(repo)' ? 'skills' : `skills/${p.skill}`;
+              if (!opts.quiet) log(`  [XX] DRIFT   ${pSkill} (${p.kind}: ${p.detail})`);
+              else log(`  [XX] DRIFT   ${pSkill}`);
+              drift.push(pSkill);
+            }
+          } else {
+            drift.push('skills');
+            if (!opts.quiet) log(`  [XX] DRIFT   skills (parity ${skillsParityStatus})`);
+            else log('  [XX] DRIFT   skills');
+          }
+        }
+      } catch {
+        skillsParityStatus = 'UNVERIFIED';
+        skillsDoctorOk = false;
+        skillsStatusText = 'skills: parity UNVERIFIED (failed to parse skills-doctor output)';
+        if (opts.mode !== 'deploy' && opts.mode !== 'promote') {
+          drift.push('skills');
+          if (!opts.quiet) log(`  [XX] DRIFT   skills (doctor parse error / exit ${docRes.status})`);
+          else log('  [XX] DRIFT   skills');
+        }
+      }
+    } else {
+      skillsParityStatus = 'UNVERIFIED';
+      skillsDoctorOk = false;
+      skillsStatusText = 'skills: parity UNVERIFIED (skills-doctor.mjs not found)';
+      if (opts.mode !== 'deploy' && opts.mode !== 'promote') {
+        drift.push('skills');
+        if (!opts.quiet) log('  [XX] DRIFT   skills (parity UNVERIFIED - doctor script not found)');
+        else log('  [XX] DRIFT   skills');
+      }
+    }
+  }
+
+  if (opts.json) {
+    const isOk = opts.mode === 'check'
+      ? drift.length === 0
+      : (opts.mode === 'promote' ? (suspect.length === 0 || opts.force) : true);
+    const out = {
+      ok: isOk,
+      mode: opts.mode,
+      clean: drift.length === 0,
+      checked,
+      drift,
+      suspect,
+      skills: {
+        applicable: skillsApplicable,
+        status: skillsParityStatus,
+        ok: skillsDoctorOk,
+        text: skillsStatusText,
+      },
+    };
+    console.log(JSON.stringify(out, null, 2));
+    process.exit(isOk ? 0 : (opts.mode === 'promote' && suspect.length && !opts.force ? 2 : 1));
+  }
+
+  if (!opts.quiet) {
+    console.log('');
+  }
+
+  if (opts.mode === 'promote' || opts.mode === 'deploy') {
+    if (opts.mode === 'promote' && suspect.length > 0) {
+      if (!opts.force) {
+        console.log(`sync: REFUSED - ${suspect.length} repo file(s) are NEWER than the live tree:`);
+        for (const x of suspect) console.log(`  ${x}`);
+        console.log('');
+        console.log('Promoting would overwrite that work with a stale harness. Either:');
+        console.log('  -Deploy      push the repo (newer) INTO the live tree, or');
+        console.log('  -Promote -Force   if the live tree really is the intended source');
+        process.exit(2);
+      } else {
+        console.log(`sync: FORCED - overwrote ${suspect.length} newer repo file(s) with the live tree:`);
+        for (const x of suspect) console.log(`  ${x}`);
+      }
+    }
+
+    const action = opts.mode === 'promote' ? 'promoted to repo' : 'deployed to harness';
+    if (opts.mode === 'deploy' && skillsApplicable && skillsStatusText) {
+      console.log(skillsStatusText);
+      if (skillsParityStatus !== 'VERIFIED') {
+        console.log(`sync: file deployment complete; skill parity ${skillsParityStatus} (${drift.length}/${checked} files ${action})`);
+        process.exit(0);
+      }
+    }
+    console.log(`sync: ${drift.length}/${checked} files ${action}`);
+    process.exit(0);
+  }
+
+  if (drift.length === 0) {
+    if (skillsStatusText && !opts.quiet) {
+      console.log(skillsStatusText);
+    }
+    const extraClean = (skillsApplicable && skillsDoctorOk) ? ', skills parity verified' : '';
+    console.log(`sync: clean (${checked} files checked${extraClean})`);
+    process.exit(0);
+  }
+
+  if (skillsStatusText && !opts.quiet) {
+    console.log(skillsStatusText);
+  }
+  console.log(`sync: ${drift.length}/${checked} items drifted. Run -Promote or -Deploy.`);
+  process.exit(1);
+}
+
+main();

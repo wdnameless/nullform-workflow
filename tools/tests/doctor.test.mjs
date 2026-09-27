@@ -297,10 +297,10 @@ test("doctor broken fixture missing required file returns exit 1 with exact path
   }
 });
 
-test("doctor broken fixture missing core tool returns exit 1 with exact path", () => {
+test("doctor fails when required sync engine and manifest are missing", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-test-fail-tool-"));
   try {
-    const harness = createMockHarness(tmp, { omitTools: ["prompt-lint.mjs"] });
+    const harness = createMockHarness(tmp, { omitTools: ["sync.mjs", "sync-manifest.json"] });
 
     const res = spawnSync(
       process.execPath,
@@ -308,16 +308,16 @@ test("doctor broken fixture missing core tool returns exit 1 with exact path", (
       { encoding: "utf8" }
     );
 
-    assert.equal(res.status, 1, `Expected exit 1 for missing core tool, got ${res.status}`);
+    assert.equal(res.status, 1, `Expected exit 1 for missing sync files, got ${res.status}`);
 
     const json = JSON.parse(res.stdout);
     assert.equal(json.ok, false);
     assert.ok(json.summary.fail > 0);
-
     const toolsSyntaxCheck = json.checks.find(c => c.id === "tools-syntax");
     assert.ok(toolsSyntaxCheck, "tools-syntax check must be present");
     assert.equal(toolsSyntaxCheck.status, "fail");
-    assert.ok(toolsSyntaxCheck.detail.includes("prompt-lint.mjs"), `Expected prompt-lint.mjs in fail detail: ${toolsSyntaxCheck.detail}`);
+    assert.match(toolsSyntaxCheck.detail, /sync\.mjs/);
+    assert.match(toolsSyntaxCheck.detail, /sync-manifest\.json/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1498,6 +1498,58 @@ test("plugins: --require-plugins виден в CLI и в JSON-отчёте", () 
   }
 });
 
+
+test("plugins: валидный JSON при ненулевом коде omp plugin list → PASS (регрессия OMP 18.3.3+)", () => {
+  // OMP 18.3.3+ печатает ПОЛНЫЙ документ и затем выходит с кодом 1: хук beforeExit
+  // срабатывает, пока команда ещё не завершилась ("the event loop drained while it
+  // was still pending"). Код возврата врёт, данные корректны — иначе doctor валит
+  // установку на любой машине с таким OMP.
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-exit1-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({
+        installed: [{ name: "pi-lens", version: "4.2.1" }],
+        listStatus: 1,
+        listStderr: "omp: `omp plugin` ended before completing: the event loop drained while it was still pending",
+      }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "pass", check.detail);
+    assert.match(check.detail, /1\/1 плагинов установлено/);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: неразбираемый вывод при ненулевом коде остаётся FAIL", () => {
+  // Терпимость к коду возврата не должна маскировать настоящую поломку: без
+  // валидного списка плагинов проверка честно падает.
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-junk-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({ listStdout: "not json at all", listStatus: 1 }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /завершился с кодом 1/);
+    assert.equal(result.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 test("plugin-patches: снятый патч pi-lens → WARN (иначе краш хоста не виден)", () => {
   // Патчи живут в node_modules и теряются при обновлении плагина. Проверка только

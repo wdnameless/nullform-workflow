@@ -23,7 +23,7 @@
  * Требования: Node 18+, без внешних зависимостей.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -496,7 +496,7 @@ const FLAG_SPEC = {
  * `--need` без значения раньше уходил в неизвестность, а `--bogus` игнорировался.
  */
 function printUsage() {
-  console.log(`Использование: node tools/context-inbox.mjs <init|request|list|resolve|check> [опции]\n\n  init    [--root <dir>]\n  request --category <c> --need "<описание>" [--why "<причина>"] [--hint "<подсказка>"] [--root <dir>] [--json]\n  list    [--root <dir>] [--json]\n  resolve --id <N> [--note "<итог>"] [--root <dir>]\n  check   [--root <dir>] [--json]   exit 1, если есть открытые запросы\n\nФлаги: --root, --category, --need, --why, --hint, --id, --note, --json, --help`);
+  console.log(`Использование: node tools/context-inbox.mjs <init|request|list|resolve|check> [опции]\n\n  init    [--root <dir>]\n  request --category <c> --need "<описание>" [--why "<причина>"] [--hint "<подсказка>"] [--root <dir>] [--json]\n  list    [--root <dir>] [--json]\n  resolve --id <N> [--file "<где лежит ответ>"] [--root <dir>]\n  check   [--root <dir>] [--json]   exit 1, если есть открытые запросы\n\nФлаги: --root, --category, --need, --why, --hint, --id, --file, --json, --help`);
 }
 
 export function parseArgs(argv) {
@@ -546,8 +546,13 @@ export function parseArgs(argv) {
 // Запуск из командной строки
 const isDirectExecution =
   process.argv[1] &&
-  (fileURLToPath(import.meta.url) === resolve(process.argv[1]) ||
-    process.argv[1].endsWith("context-inbox.mjs"));
+  (() => {
+    try {
+      return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+    } catch {
+      return false;
+    }
+  })();
 
 if (isDirectExecution) {
   const args = parseArgs(process.argv.slice(2));

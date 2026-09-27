@@ -23,7 +23,7 @@
  *   --help, -h        Справка
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, openSync, readSync, closeSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, renameSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import { resolve, join, dirname, relative } from "node:path";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
@@ -2165,9 +2165,17 @@ export function writeRuntime(root, info) {
   const dir = dirname(p);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const text = JSON.stringify(info, null, 2);
-  writeFileSync(p, text, "utf8");
+  // --ensure and --url probe /api/health before reporting this runtime file. Atomic
+  // replacement also prevents other readers from seeing a truncated document.
+  // Same tmp+rename pattern the workflow state already uses.
+  const writeAtomic = (target) => {
+    const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+    writeFileSync(tmp, text, "utf8");
+    renameSync(tmp, target);
+  };
+  writeAtomic(p);
   // Дублируем «последний» рантайм: старые вызовы и скрипты ждут .workflow/dashboard.json
-  if (key) writeFileSync(runtimePath(absRoot), text, "utf8");
+  if (key) writeAtomic(runtimePath(absRoot));
   return p;
 }
 
@@ -2733,20 +2741,6 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   return { url: null, port: null, started: false, error: "сервер не поднялся за 5 с" };
 }
 
-/** Обновить статичный HTML-файл (режим без сервера). */
-export function refreshDashboardFile(root) {
-  const absRoot = resolve(root);
-  const outPath = join(absRoot, ".workflow", "dashboard.html");
-  try {
-    const dir = dirname(outPath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const raw = collectDashboardData(absRoot);
-    writeFileSync(outPath, generateDashboardHtml(sanitizeHttpState(raw)), "utf8");
-    return outPath;
-  } catch {
-    return null;
-  }
-}
 
 export function parseArgs(argv = []) {
   const options = {
@@ -2928,15 +2922,17 @@ export async function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
   // main() асинхронный: без .then() код возврата терялся и CLI всегда выходил с 0.
   Promise.resolve(main(process.argv.slice(2)))
     .then((code) => {
-      if (typeof code === "number") process.exit(code);
+      // process.exit() discards stdout still queued on a pipe; on macOS that
+      // truncates large --json output. Set the code and let Node flush.
+      if (typeof code === "number") process.exitCode = code;
     })
     .catch((err) => {
       process.stderr.write(`dashboard: ${err && err.message ? err.message : err}
 `);
-      process.exit(2);
+      process.exitCode = 2;
     });
 }
