@@ -263,3 +263,8 @@ Ignoring runtime `data/` directory (control-room SQLite DB). Re-verified: 393/39
 ## Re-sealed on the remediation tip (stacked-PR tree move)
 
 This record is re-committed on the `fix/workflow-risk-remediation` tip because that branch touched a shared file (`agent/plugins.json`, `.code-size.baseline.json`, `tools/**`) belonging to the dependency and gate work. This change's own code is unchanged; only the shared tree fingerprint moved. Re-verified at the tip: 415/415 tests, verify 29/29, audit 15/15, size PASS, sync clean (62 files).
+
+
+## Re-sealed with the full stacked-PR acceptance set
+
+Re-committed on the remediation tip together with the sibling records so no tracked change follows any acceptance in this stacked PR.

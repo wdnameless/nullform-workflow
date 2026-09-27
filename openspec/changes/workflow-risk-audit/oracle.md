@@ -23,3 +23,8 @@ The audit produced findings only. Its ten defects are now fixed on this branch (
 ## Re-sealed after the CI flake fix
 
 `tools/tests/bash-gates.test.mjs` changed after this acceptance (`b8c0197`) to remove a git auto-gc race in fixture cleanup. Findings are unchanged; the ten defects remain fixed on this tip.
+
+
+## Re-sealed with the full stacked-PR acceptance set
+
+Re-committed on the remediation tip together with the sibling records so no tracked change follows any acceptance in this stacked PR.
