@@ -378,6 +378,54 @@ function installedPlugins(stdout) {
   return map;
 }
 
+/**
+ * Результат `omp plugin list --json` → `{installed, listError}`.
+ *
+ * OMP 18.3.3+ печатает ПОЛНЫЙ и разбираемый документ и затем выходит с кодом 1:
+ * его хук `beforeExit` срабатывает, пока команда ещё не завершилась
+ * («the event loop drained while it was still pending»). Код возврата врёт, данные
+ * корректны, поэтому валидный список важнее кода. Пустой или неразбираемый вывод,
+ * а также `omp`, отсутствующий в PATH, остаются настоящей ошибкой.
+ */
+function resolvePluginList(listed) {
+  if (listed.error) {
+    const timedOut = listed.error.code === "ETIMEDOUT";
+    return {
+      installed: null,
+      listError: timedOut ? "таймаут команды" : `omp не запущен (${listed.error.message})`,
+    };
+  }
+
+  const absent = /not recognized|не является внутренней|command not found|no such file/i.test(
+    listed.stderr || ""
+  );
+  if (!absent) {
+    try {
+      return { installed: installedPlugins(listed.stdout), listError: null };
+    } catch {
+      // fall through to the honest non-zero report below
+    }
+  }
+
+  if (listed.status === 0) {
+    let reason = "неизвестная ошибка разбора";
+    try {
+      installedPlugins(listed.stdout);
+    } catch (err) {
+      reason = err.message;
+    }
+    return { installed: null, listError: `вывод omp plugin list не разобран: ${reason}` };
+  }
+
+  const tail = tailOf(listed.stderr || listed.stdout);
+  return {
+    installed: null,
+    listError: absent
+      ? "omp не найден в PATH"
+      : `omp plugin list завершился с кодом ${listed.status}${tail ? `: ${tail}` : ""}`,
+  };
+}
+
 /** Причина WARN по результату `omp plugin doctor`; пустая строка — чисто. */
 function ompHealthNote(res) {
   if (res.error) {
@@ -1070,24 +1118,7 @@ export function runDoctor(options) {
         });
       } else {
         const listed = omp(["plugin", "list", "--json"]);
-        let installed = null;
-        let listError = null;
-
-        if (listed.error) {
-          listError = listed.error.code === "ETIMEDOUT" ? "таймаут команды" : `omp не запущен (${listed.error.message})`;
-        } else if (listed.status !== 0) {
-          const tail = tailOf(listed.stderr || listed.stdout);
-          const absent = /not recognized|не является внутренней|command not found|no such file/i.test(listed.stderr || "");
-          listError = absent
-            ? "omp не найден в PATH"
-            : `omp plugin list завершился с кодом ${listed.status}${tail ? `: ${tail}` : ""}`;
-        } else {
-          try {
-            installed = installedPlugins(listed.stdout);
-          } catch (err) {
-            listError = `вывод omp plugin list не разобран: ${err.message}`;
-          }
-        }
+        const { installed, listError } = resolvePluginList(listed);
 
         if (listError) {
           checks.push({

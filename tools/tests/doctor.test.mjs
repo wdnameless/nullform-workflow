@@ -1499,6 +1499,58 @@ test("plugins: --require-plugins виден в CLI и в JSON-отчёте", () 
 });
 
 
+test("plugins: валидный JSON при ненулевом коде omp plugin list → PASS (регрессия OMP 18.3.3+)", () => {
+  // OMP 18.3.3+ печатает ПОЛНЫЙ документ и затем выходит с кодом 1: хук beforeExit
+  // срабатывает, пока команда ещё не завершилась ("the event loop drained while it
+  // was still pending"). Код возврата врёт, данные корректны — иначе doctor валит
+  // установку на любой машине с таким OMP.
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-exit1-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({
+        installed: [{ name: "pi-lens", version: "4.2.1" }],
+        listStatus: 1,
+        listStderr: "omp: `omp plugin` ended before completing: the event loop drained while it was still pending",
+      }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "pass", check.detail);
+    assert.match(check.detail, /1\/1 плагинов установлено/);
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugins: неразбираемый вывод при ненулевом коде остаётся FAIL", () => {
+  // Терпимость к коду возврата не должна маскировать настоящую поломку: без
+  // валидного списка плагинов проверка честно падает.
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-junk-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writePluginsManifest(harness, [
+      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
+    ]);
+
+    const result = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({ listStdout: "not json at all", listStatus: 1 }),
+    });
+    const check = checkOf(result, "plugins");
+
+    assert.equal(check.status, "fail");
+    assert.match(check.detail, /завершился с кодом 1/);
+    assert.equal(result.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("plugin-patches: снятый патч pi-lens → WARN (иначе краш хоста не виден)", () => {
   // Патчи живут в node_modules и теряются при обновлении плагина. Проверка только
   // наличия файла-патчера это не ловит: харнесс рапортует «здоров», а непатченный

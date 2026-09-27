@@ -26,8 +26,8 @@
       "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated"
     },
     "tools/doctor.mjs": {
-      "lines": 1482,
-      "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; quote args explicitly so shell-based omp.cmd spawns stop emitting DEP0190 on stderr that install.ps1 treats as fatal"
+      "lines": 1513,
+      "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; quote args explicitly so shell-based omp.cmd spawns stop emitting DEP0190 on stderr install.ps1 treats as fatal; accept a complete plugin list when OMP 18.3.3+ exits 1 after printing it"
     },
     "tools/oracle-model.mjs": {
       "lines": 750,
@@ -42,8 +42,8 @@
       "reason": ""
     },
     "tools/tests/doctor.test.mjs": {
-      "lines": 1535,
-      "reason": ""
+      "lines": 1587,
+      "reason": "Regression tests for the OMP 18.3.3+ plugin-list exit-code tolerance"
     },
     "tools/verify.mjs": {
       "lines": 1294,
