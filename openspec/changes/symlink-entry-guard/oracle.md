@@ -98,3 +98,7 @@ This commit is the tip; it touches all three acceptance records so the CI eviden
 ## Re-sealed after the OMP 18.3.3+ doctor fix
 
 The plugin-list exit-code tolerance (`551cb19`) touched `tools/`, so every acceptance record is re-committed in one final commit. Current: 393/393 tests, verify 29/29, audit 15/15, size PASS.
+
+## Sealed with .gitignore update
+
+Ignoring runtime `data/` directory (control-room SQLite DB). Re-verified: 393/393 tests, verify 29/29, audit 15/15, size PASS.
