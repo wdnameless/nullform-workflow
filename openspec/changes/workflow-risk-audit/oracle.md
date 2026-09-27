@@ -19,3 +19,7 @@ No project code or live user configuration was changed. The local T2 gate is an 
 ## Re-sealed after the remediation
 
 The audit produced findings only. Its ten defects are now fixed on this branch (`4c64ad8`), so the audit record is re-committed alongside the remediation acceptance; no audit code changed. Verification on the fixed tree: 415/415 tests, verify 29/29, audit 15/15, size PASS, sync clean (62 files).
+
+## Re-sealed after the CI flake fix
+
+`tools/tests/bash-gates.test.mjs` changed after this acceptance (`b8c0197`) to remove a git auto-gc race in fixture cleanup. Findings are unchanged; the ten defects remain fixed on this tip.

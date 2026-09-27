@@ -23,3 +23,7 @@ Native POSIX execution of `install.sh` is **not proven on this Windows host** â€
 ## Sealed with the sibling audit record
 
 Committed in the same final commit as the `workflow-risk-audit` record so the CI evidence check finds no tracked change after either acceptance.
+
+## Re-sealed after the CI flake fix
+
+`tools/tests/bash-gates.test.mjs` changed after this acceptance (`b8c0197`): `git commit` could spawn `git gc --auto` in the background, which raced the fixture removal on Linux and surfaced as `ENOTEMPTY: rmdir .../.git`. Auto-gc and maintenance are now disabled in the fixture repos and every removal carries the sibling tests' retry budget. No remediation behavior changed; gates re-verified on the new tip.
