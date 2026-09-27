@@ -27,6 +27,13 @@
     "rel": "agent/agents/sonic.md"
   },
   {
+    "rel": "rules/enterprise-directives.md"
+  },
+  {
+    "rel": "rules/enterprise-directives.md",
+    "liveRoot": "@agentdir"
+  },
+  {
     "rel": "rules/enterprise-directives.md",
     "liveRoot": "@agents"
   },

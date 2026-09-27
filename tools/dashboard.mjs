@@ -2,16 +2,8 @@
 /**
  * tools/dashboard.mjs — Nullform Workflow: интерактивный дашборд полной наблюдаемости.
  *
- * Единая «стеклянная кабина» (glass cockpit) в стиле Autopilot/SwarmForge:
- *   1. Прогресс проекта, покрытие брифа (R##), этапы 4-Wave SDD с таймингами.
- *   2. Метрики: время, оценка остатка, таски/артефакты, техдолг, тесты, требования.
- *   3. Волны сборки: артефакты по волнам и роли субагентов (fleet).
- *   4. Архитектура: модули репозитория с файлами и строками.
- *   5. Диффы: изменения git (staged/unstaged) с построчным диффом по клику.
- *   6. Критика и ревью: вердикты оракула, замечания, автопроверки.
- *   7. Технический долг: маркеры defer: и их триггеры.
- *   8. Как это работает: ярусы T0-T3, законы, коридор гейтов.
- *
+ * Единая «стеклянная кабина» (glass cockpit) в стиле Autopilot/SwarmForge.
+ * Прогресс проекта, покрытие R##, 4-Wave SDD, метрики, модули, диффы, критика, техдолг.
  * CLI опции:
  *   --root <dir>      Корень проекта (по умолчанию: .)
  *   --output <path>   Куда записать dashboard.html (по умолчанию: .workflow/dashboard.html)
@@ -24,7 +16,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, renameSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
-import { resolve, join, dirname, relative } from "node:path";
+import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -80,13 +72,14 @@ export function isAllowedHost(hostHeader) {
  * Сервер должен возвращать ok: true, правильный токен проекта, актуальный протокол и сборку.
  * Устаревшие серверы (формат {ok, pid, root}), серверы других проектов или старых сборок не переиспользуются.
  */
-export function isCompatibleDashboard(info, absRoot) {
+export function isCompatibleDashboard(info, absRoot, session = null) {
   if (!info || typeof info !== "object") return false;
   if (info.ok !== true) return false;
   if (!info.project || info.project !== projectToken(absRoot)) return false;
   if (info.protocol !== DASHBOARD_PROTOCOL) return false;
   if (info.protocolVersion !== DASHBOARD_PROTOCOL_VERSION) return false;
   if (info.build !== DASHBOARD_BUILD) return false;
+  if (session !== null && session !== undefined && info.session !== session) return false;
   return true;
 }
 const CHECKS_CACHE = ".workflow/dashboard-checks.json";
@@ -95,20 +88,16 @@ const CHECKS_CACHE = ".workflow/dashboard-checks.json";
  * Всё, что не требуется ярусом, дашборд показывает как «не требуется», а не «не начато».
  */
 export const REQUIRED_ARTIFACTS_BY_TIER = {
-  T0: ["lane"],
-  T1: ["lane", "recon"],
+  T0: ["lane"], T1: ["lane", "recon"],
   T2: ["lane", "recon", "manifest", "openspec", "interfaces", "oracle"],
   T3: ["lane", "recon", "manifest", "openspec", "interfaces", "oracle"],
 };
 
 /** Все стадии 4-Wave SDD с привязкой к волне и артефакту. */
 const STAGE_DEFS = [
-  { id: "lane", name: "Ярус и постановка", wave: 0 },
-  { id: "recon", name: "Разведка и контекст", wave: 1 },
-  { id: "manifest", name: "Манифест требований (R##)", wave: 2 },
-  { id: "openspec", name: "Спецификация OpenSpec", wave: 2 },
-  { id: "interfaces", name: "Интерфейсы и владельцы", wave: 3 },
-  { id: "oracle", name: "Слепая приёмка Оракула", wave: 4 },
+  { id: "lane", name: "Ярус и постановка", wave: 0 }, { id: "recon", name: "Разведка и контекст", wave: 1 },
+  { id: "manifest", name: "Манифест требований (R##)", wave: 2 }, { id: "openspec", name: "Спецификация OpenSpec", wave: 2 },
+  { id: "interfaces", name: "Интерфейсы и владельцы", wave: 3 }, { id: "oracle", name: "Слепая приёмка Оракула", wave: 4 },
   { id: "closed", name: "Закрытие и архив", wave: 4 },
 ];
 
@@ -127,18 +116,8 @@ export function buildWaves(stages, fleet) {
 
 /** Расширения, которые не считаем исходником: шрифты, медиа, архивы, замки. */
 const BINARY_EXT = /\.(ttf|otf|woff2?|eot|png|jpe?g|gif|webp|svgz?|ico|bmp|mp[34]|wav|ogg|pdf|zip|gz|tar|7z|rar|xz|exe|dll|so|dylib|bin|wasm|db|sqlite3?|lock)$/i;
-function isBinaryName(name) {
-  return BINARY_EXT.test(name);
-}
-
-/**
- * TTL-кэш для тяжёлых сборщиков.
- *
- * Дашборд опрашивается каждые 3 секунды, а часть данных стоит дорого:
- * обход 250+ файлов (граф зависимостей), спавн node-процесса (debt-ledger),
- * три вызова git. Без кэша один поток сервера занят почти постоянно, и
- * /api/health перестаёт отвечать. Кэш ограничивает пересчёт, не мешая свежести.
- */
+const isBinaryName = (name) => BINARY_EXT.test(name);
+/** TTL-кэш для тяжёлых сборщиков: ограничивает пересчёт, не мешая свежести. */
 const TTL_CACHE = new Map();
 
 function cached(key, ttlMs, compute) {
@@ -756,24 +735,32 @@ export const EVENTS_FILE = ".workflow/events.jsonl";
 
 /** Каталог рантайм-файлов дашбордов: по одному на (проект, сессия). */
 export const DASHBOARDS_DIR = ".workflow/dashboards";
+const RESERVED_DEVICE_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
 
-/**
- * Ключ сессии. Приоритет: явный --session, затем идентификатор агента Paseo,
- * затем идентификатор сессии OMP из env, иначе «local».
- * Дашборд привязан к паре (проект, сессия) — у каждой сессии свой экземпляр.
- */
+/** Валидация ключа сессии: отказ от пустых, слэшей, .., букв диска, зарезервированных имён. */
+export function validateSessionKey(key) {
+  if (typeof key !== "string" || key.trim().length === 0) throw new Error("Недопустимый ключ сессии: ключ не может быть пустым");
+  if (key.includes("/") || key.includes("\\")) throw new Error(`Недопустимый ключ сессии "${key}": содержит разделители пути`);
+  if (key.includes("..")) throw new Error(`Недопустимый ключ сессии "${key}": содержит ".."`);
+  if (/^[a-zA-Z]:/.test(key) || key.includes(":")) throw new Error(`Недопустимый ключ сессии "${key}": содержит букву диска или двоеточие`);
+  if (RESERVED_DEVICE_NAMES.test(key)) throw new Error(`Недопустимый ключ сессии "${key}": зарезервированное имя устройства`);
+  if (/[<>:"/\\|?*\x00-\x1f]/.test(key)) throw new Error(`Недопустимый ключ сессии "${key}": содержит недопустимые символы`);
+  return key;
+}
+
+/** Ключ сессии: явный --session, Paseo agent id, OMP session id, иначе «local». */
 export function sessionKey(override = null) {
-  if (override) return String(override);
-  if (process.env.PASEO_AGENT_ID) return `paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`;
-  if (process.env.OMP_SESSION_ID) return `omp-${String(process.env.OMP_SESSION_ID).slice(0, 8)}`;
+  if (override !== null && override !== undefined) return validateSessionKey(String(override));
+  if (process.env.PASEO_AGENT_ID) return validateSessionKey(`paseo-${String(process.env.PASEO_AGENT_ID).slice(0, 8)}`);
+  if (process.env.OMP_SESSION_ID) return validateSessionKey(`omp-${String(process.env.OMP_SESSION_ID).slice(0, 8)}`);
   return "local";
 }
 
 /** Стабильный порт для сессии: база + смещение от хеша ключа. */
 export function portForSession(key, base = 4200, span = 60) {
+  const valid = validateSessionKey(key);
   let h = 0;
-  const s = String(key);
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < valid.length; i++) h = (h * 31 + valid.charCodeAt(i)) >>> 0;
   return base + (h % span);
 }
 
@@ -2124,8 +2111,20 @@ export const RUNTIME_FILE = ".workflow/dashboard.json"; // обратная со
 /** Рантайм-файл конкретной сессии: .workflow/dashboards/<key>.json */
 export function runtimePath(root, key = null) {
   const absRoot = resolve(root);
-  if (!key) return join(absRoot, RUNTIME_FILE);
-  return join(absRoot, DASHBOARDS_DIR, key + ".json");
+  if (key === null || key === undefined) {
+    const target = resolve(absRoot, RUNTIME_FILE);
+    const rel = relative(absRoot, target);
+    if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`Целевой путь рантайма "${target}" выходит за пределы каталога проекта`);
+    return target;
+  }
+  validateSessionKey(key);
+  const dashboardsDir = resolve(absRoot, DASHBOARDS_DIR);
+  const target = resolve(dashboardsDir, key + ".json");
+  const rel = relative(dashboardsDir, target);
+  if (rel.startsWith("..") || isAbsolute(rel) || dirname(target) !== dashboardsDir) {
+    throw new Error(`Целевой путь рантайма "${target}" выходит за пределы каталога рантайма`);
+  }
+  return target;
 }
 
 /** Все известные дашборды проекта: [{key, port, url, pid}] — для --list. */
@@ -2160,30 +2159,26 @@ export function readRuntime(root, key = null) {
 /** Записать рантайм-файл (порт/pid/url/время старта). */
 export function writeRuntime(root, info) {
   const absRoot = resolve(root);
-  const key = info && info.key ? info.key : null;
+  const key = info && "key" in info && info.key !== null && info.key !== undefined ? info.key : null;
   const p = runtimePath(absRoot, key);
   const dir = dirname(p);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const text = JSON.stringify(info, null, 2);
-  // --ensure and --url probe /api/health before reporting this runtime file. Atomic
-  // replacement also prevents other readers from seeing a truncated document.
-  // Same tmp+rename pattern the workflow state already uses.
   const writeAtomic = (target) => {
     const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
     writeFileSync(tmp, text, "utf8");
     renameSync(tmp, target);
   };
   writeAtomic(p);
-  // Дублируем «последний» рантайм: старые вызовы и скрипты ждут .workflow/dashboard.json
   if (key) writeAtomic(runtimePath(absRoot));
   return p;
 }
 
 /** Живой ли дашборд на порту (быстрый health-пинг). */
-export async function isServerAlive(port, timeoutMs = 900, absRoot = null) {
+export async function isServerAlive(port, timeoutMs = 900, absRoot = null, session = null) {
   const probed = await probeDashboard(port, timeoutMs);
   if (!probed) return false;
-  if (absRoot) return isCompatibleDashboard(probed, absRoot);
+  if (absRoot) return isCompatibleDashboard(probed, absRoot, session);
   return probed.ok === true;
 }
 
@@ -2204,11 +2199,7 @@ export async function probeDashboard(port, timeoutMs = 900) {
   }
 }
 
-/**
- * Мы внутри рабочего пространства Paseo? Тогда браузер по умолчанию — не цель:
- * приоритет у браузера среды разработки, а его открывает агент (browser_new_tab).
- * Маркеры ставит сам Paseo для запущенных им процессов.
- */
+/** Мы внутри рабочего пространства Paseo? */
 export function isPaseoWorkspace() {
   return Boolean(process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI);
 }
@@ -2228,9 +2219,9 @@ export function openInBrowser(url) {
 }
 
 /** Попытка занять порт; null — порт занят. */
-function tryListen(port, absRoot) {
+function tryListen(port, absRoot, session = null) {
   return new Promise((resolvePort) => {
-    const server = createServer((req, res) => handleRequest(req, res, absRoot));
+    const server = createServer((req, res) => handleRequest(req, res, absRoot, session));
     server.once("error", () => resolvePort(null));
     server.once("listening", () => resolvePort({ server, port }));
     server.listen(port, "127.0.0.1");
@@ -2563,7 +2554,7 @@ export function sanitizeHttpState(data) {
 }
 
 /** HTTP-обработчик: страница, /api/state, /api/diff, /api/health. */
-function handleRequest(req, res, absRoot) {
+function handleRequest(req, res, absRoot, session = null) {
   const host = req.headers.host;
   if (!isAllowedHost(host)) {
     res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
@@ -2571,6 +2562,7 @@ function handleRequest(req, res, absRoot) {
     return;
   }
 
+  const currentSession = sessionKey(session || SERVER_SESSION);
   const url = new URL(req.url, "http://127.0.0.1");
 
   if (url.pathname === "/api/health") {
@@ -2582,13 +2574,14 @@ function handleRequest(req, res, absRoot) {
       protocol: DASHBOARD_PROTOCOL,
       protocolVersion: DASHBOARD_PROTOCOL_VERSION,
       build: DASHBOARD_BUILD,
+      session: currentSession,
     }));
     return;
   }
 
   if (url.pathname === "/api/state") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-    const raw = collectDashboardData(absRoot, { session: SERVER_SESSION });
+    const raw = collectDashboardData(absRoot, { session: currentSession });
     res.end(JSON.stringify(sanitizeHttpState(raw)));
     return;
   }
@@ -2660,15 +2653,16 @@ function handleRequest(req, res, absRoot) {
   }
 
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-  const raw = collectDashboardData(absRoot, { session: SERVER_SESSION });
+  const raw = collectDashboardData(absRoot, { session: currentSession });
   res.end(generateDashboardHtml(sanitizeHttpState(raw)));
 }
 
 /** Запустить сервер дашборда на первом свободном порту. */
-export async function startLiveServer(root, port = 4200, { maxAttempts = 64 } = {}) {
+export async function startLiveServer(root, port = 4200, { maxAttempts = 64, session = null } = {}) {
   const absRoot = resolve(root);
+  const activeSession = sessionKey(session || SERVER_SESSION);
   for (let p = port; p < port + maxAttempts; p++) {
-    const bound = await tryListen(p, absRoot);
+    const bound = await tryListen(p, absRoot, activeSession);
     if (bound) return bound;
   }
   throw new Error(`нет свободного порта в диапазоне ${port}..${port + maxAttempts - 1}`);
@@ -2690,7 +2684,7 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   const existing = readRuntime(absRoot, key);
   if (existing) {
     const probed = await probeDashboard(existing.port);
-    if (isCompatibleDashboard(probed, absRoot)) {
+    if (isCompatibleDashboard(probed, absRoot, key)) {
       const url = `http://localhost:${existing.port}`;
       if (openSystem) openInBrowser(url);
       return { url, port: existing.port, started: false };
@@ -2701,7 +2695,7 @@ export async function ensureDashboard(root, { open = true, port = null, session 
   //    усыновляем его вместо запуска второго сервера на соседнем порту.
   for (let p = chosenPort; p < chosenPort + 64; p++) {
     const probed = await probeDashboard(p, 400);
-    if (isCompatibleDashboard(probed, absRoot)) {
+    if (isCompatibleDashboard(probed, absRoot, key)) {
       writeRuntime(absRoot, { key,
         pid: probed.pid,
         port: p,
@@ -2730,14 +2724,13 @@ export async function ensureDashboard(root, { open = true, port = null, session 
     const info = readRuntime(absRoot, key);
     if (info && (!existing || info.pid !== existing.pid || info.port !== existing.port)) {
       const probed = await probeDashboard(info.port);
-      if (isCompatibleDashboard(probed, absRoot)) {
+      if (isCompatibleDashboard(probed, absRoot, key)) {
         const url = `http://localhost:${info.port}`;
         if (openSystem) openInBrowser(url);
         return { url, port: info.port, started: true };
       }
     }
   }
-
   return { url: null, port: null, started: false, error: "сервер не поднялся за 5 с" };
 }
 
@@ -2772,8 +2765,15 @@ export function parseArgs(argv = []) {
     else if (arg === "--json") options.json = true;
     else if (arg === "--url") options.url = true;
     else if (arg === "--list") options.list = true;
-    else if (arg === "--session" || arg.startsWith("--session="))
-      options.session = arg.startsWith("--session=") ? arg.slice("--session=".length) : argv[++i];
+    else if (arg === "--session" || arg.startsWith("--session=")) {
+      const raw = arg.startsWith("--session=") ? arg.slice("--session=".length) : argv[++i];
+      try {
+        validateSessionKey(raw);
+        options.session = raw;
+      } catch (err) {
+        options.errors.push(err.message);
+      }
+    }
     else if (arg === "--root" || arg.startsWith("--root="))
       options.root = arg.startsWith("--root=") ? arg.slice("--root=".length) : argv[++i];
     else if (arg === "--output" || arg.startsWith("--output="))
@@ -2853,7 +2853,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   // --url: только адрес живого дашборда (для агентов и скриптов).
   if (opts.url) {
-    const info = await ensureDashboard(absRoot, { open: false, port: opts.port });
+    const info = await ensureDashboard(absRoot, { open: false, port: opts.port, session: opts.session });
     if (info.url) {
       process.stdout.write(info.url + "\n");
       return 0;
@@ -2864,7 +2864,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   // --ensure: автозапуск (идемпотентно) — поднять фоновый сервер и открыть страницу.
   if (opts.ensure) {
-    const info = await ensureDashboard(absRoot, { open: !opts.noOpen, port: opts.port });
+    const info = await ensureDashboard(absRoot, { open: !opts.noOpen, port: opts.port, session: opts.session });
     if (info.url) {
       process.stdout.write(`Дашборд: ${info.url}${info.started ? " (запущен)" : " (уже работал)"}\n`);
       return 0;
@@ -2889,7 +2889,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   if (opts.serve) {
     SERVER_SESSION = key;
-    const bound = await startLiveServer(absRoot, opts.port);
+    const bound = await startLiveServer(absRoot, opts.port, { session: key });
     const url = `http://localhost:${bound.port}`;
     writeRuntime(absRoot, { key,
       pid: process.pid,

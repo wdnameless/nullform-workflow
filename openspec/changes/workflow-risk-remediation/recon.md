@@ -1,0 +1,9 @@
+# Recon — workflow remediation
+
+Starting point: branch `fix/workflow-risk-remediation` from `cb5e98f`; existing read-only audit in `openspec/changes/workflow-risk-audit/report.md` and `recon.md`, with two blind ACCEPT verdicts. Worktree initially contains only the untracked audit change; no user code edits. Hindsight recall failed once (timeout), so local source/fixtures are authoritative.
+
+Repo dependency inventory (tracked): `agent/plugins.json` (14 OMP plugin version pins), `agent/mcp.json.example` (MCP CLI package pins), `.github/workflows/repo-gate.yml` (GitHub Actions + OpenSpec CLI pin), `skills/ui-styling/scripts/requirements.txt` and `skills/ui-styling/scripts/tests/requirements.txt` (Python dev minima). No top-level `package.json`, npm lock, pyproject.toml, Cargo.toml or go.mod. Avoid installing undeclared libraries or changing global plugins merely for a version bump.
+
+Prior audit reproduced: destructive relative-root promote, rule drift falsely clean, POSIX OMP installer missing agent rules/size baseline and Windows-only MCP commands, dummy PAT not substituted, nested-root self-copy, dashboard `--session` path escape/session alias, T1/T3/guarded-auto bypass, first-oracle ACCEPT masking second REJECT, tracked credentials-named code invisible to local oracle freshness, swallowed Git errors and PR merge false staleness, local-vs-CI artifact mismatch. Current baseline in audit: verify 29/29, audit 15/15, size PASS 112 files/729 functions, sync clean 60. Normal-path green is not evidence against those inputs.
+
+Wave boundaries: shared code-size baseline and OpenSpec artifacts owned by parent; agents own disjoint runtime/tests zones as in `interfaces.md`. Integration after TDD assertions and deterministic checks; blind oracle judges against verbatim `manifest.md` and running product, not the spec.

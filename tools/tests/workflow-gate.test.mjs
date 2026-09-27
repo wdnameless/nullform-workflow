@@ -27,10 +27,14 @@ import {
 } from "../workflow.mjs";
 
 function setupT2(root) {
-  mkdirSync(join(root, "openspec", "changes", "feat-x"), { recursive: true });
+  const featDir = join(root, "openspec", "changes", "feat-x");
+  mkdirSync(join(featDir, "specs"), { recursive: true });
   writeFileSync(join(root, "manifest.md"), "| R01 | \"user wanted X\" |\n", "utf8");
   writeFileSync(join(root, "interfaces.md"), "# Interfaces\n- export function run(): void\n", "utf8");
-  writeFileSync(join(root, "openspec", "changes", "feat-x", "proposal.md"), "proposal body\n", "utf8");
+  writeFileSync(join(featDir, "proposal.md"), "proposal body\n", "utf8");
+  writeFileSync(join(featDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+  writeFileSync(join(featDir, "specs", "spec.md"), "# Spec\n", "utf8");
+  writeFileSync(join(featDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
 }
 
 test("gate: T2 rejects registering manifest, openspec, or interfaces without a path", () => {
@@ -168,11 +172,13 @@ test("check-ci: enforces PR tier label and lean T0/T1 execution", () => {
       "PR with multiple workflow labels must fail"
     );
 
-    // Lean T0 and T1 succeed without change directory
+    // Lean T0 succeeds; T1 requires --recon
     assert.equal(cmdCheckCi(root, { labels: "workflow:T0" }), 0, "T0 is lean");
-    assert.equal(cmdCheckCi(root, { labels: "workflow:T1" }), 0, "T1 is lean");
     assert.equal(cmdCheckCi(root, { tier: "T0" }), 0, "direct tier T0 is lean");
-    assert.equal(cmdCheckCi(root, { tier: "T1" }), 0, "direct tier T1 is lean");
+    assert.equal(cmdCheckCi(root, { labels: "workflow:T1" }), 1, "T1 without recon must fail");
+    assert.equal(cmdCheckCi(root, { tier: "T1" }), 1, "direct tier T1 without recon must fail");
+    writeFileSync(join(root, "recon.md"), "# Recon\n## Files touched\n- a\n## Acceptance check\n- check\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T1", recon: "recon.md" }), 0, "T1 with recon passes");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -513,5 +519,168 @@ test("check-ci: rejects external symlink in change directory or artifacts", () =
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+function writeT2Files(dir, extra = {}) {
+  mkdirSync(join(dir, "specs"), { recursive: true });
+  writeFileSync(join(dir, "manifest.md"), "| R01 | quote |\n", "utf8");
+  writeFileSync(join(dir, "proposal.md"), "# Proposal\n", "utf8");
+  writeFileSync(join(dir, "tasks.md"), "# Tasks\n- task\n", "utf8");
+  writeFileSync(join(dir, "specs", "spec.md"), "# Spec\n", "utf8");
+  writeFileSync(join(dir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
+  if (extra.oracle !== false) writeFileSync(join(dir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
+  if (extra.worktrees) writeFileSync(join(dir, "worktrees.md"), "# Worktrees\n- isolated wt-1\n", "utf8");
+}
+
+test("check-ci: split-oracle REJECT blocks CI even if another oracle ACCEPT exists", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-split-oracle-"));
+  try {
+    const changeDir = join(root, "openspec", "changes", "split-oracle");
+    writeT2Files(changeDir, { oracle: false });
+    writeFileSync(join(changeDir, "oracle-1.md"), "# Oracle 1\nVerdict: ACCEPT\n", "utf8");
+    writeFileSync(join(changeDir, "oracle-2.md"), "# Oracle 2\nVerdict: REJECT\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: "split-oracle" }), 1, "split-oracle REJECT must fail");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: T1 requires --recon, 3-9 files ceiling, >9 refuses with hint", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-t1-"));
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  try {
+    git("init", "-q", "-b", "main", ".");
+    writeFileSync(join(root, "init.txt"), "init\n", "utf8");
+    git("add", "init.txt");
+    git("commit", "-qm", "init");
+    git("checkout", "-qb", "feature-t1");
+    assert.equal(cmdCheckCi(root, { tier: "T1", "base-ref": "main" }), 1, "T1 without --recon must fail");
+    const reconContent = "# Recon\n## Files touched\n- a.txt\n- b.txt\n## Acceptance check\nSmoke ok.\n";
+    writeFileSync(join(root, "recon.md"), reconContent, "utf8");
+    writeFileSync(join(root, "a.txt"), "a\n", "utf8");
+    writeFileSync(join(root, "b.txt"), "b\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "add recon and 2 files");
+    assert.equal(cmdCheckCi(root, { tier: "T1", "base-ref": "main", recon: "recon.md" }), 0, "T1 with 3 files must pass");
+    for (let i = 1; i <= 7; i++) writeFileSync(join(root, `extra${i}.txt`), `${i}\n`, "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "add 7 extra files");
+    assert.equal(cmdCheckCi(root, { tier: "T1", "base-ref": "main", recon: "recon.md" }), 1, "T1 with >9 files must fail");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: T3 requires committed worktrees.md describing at least one isolated worktree", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-t3-"));
+  try {
+    const changeDir = join(root, "openspec", "changes", "t3-change");
+    writeT2Files(changeDir);
+    assert.equal(cmdCheckCi(root, { tier: "T3", change: "t3-change" }), 1, "T3 without worktrees.md must fail");
+    writeFileSync(join(changeDir, "worktrees.md"), "# Worktrees\n- isolated worktree wt-1\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T3", change: "t3-change" }), 0, "T3 with worktrees.md must pass");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cmdClose: guarded-auto refuses outside.txt 12-line edit and accepts in-scope 1-line edit", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-auto-"));
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  try {
+    git("init", "-q", ".");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "app.ts"), "console.log(1);\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    assert.equal(cmdStart(root, { tier: "T0", auto: true, allow: "src/**", "max-diff": 1, task: "auto-test" }), 0);
+    writeFileSync(join(root, "outside.txt"), "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n", "utf8");
+    assert.equal(cmdClose(root, {}), 1, "guarded auto must refuse outside.txt write");
+    rmSync(join(root, "outside.txt"));
+    writeFileSync(join(root, "src", "app.ts"), "console.log(1);\nconst x = 1;\n", "utf8");
+    assert.equal(cmdClose(root, {}), 0, "guarded auto must accept in-scope 1-line edit");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("local T2: refuses while proposal/tasks/specs/oracle file are absent", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-t2-align-"));
+  try {
+    const changeDir = join(root, "openspec", "changes", "align-feat");
+    mkdirSync(changeDir, { recursive: true });
+    writeFileSync(join(changeDir, "stub.txt"), "stub\n", "utf8");
+    writeFileSync(join(root, "manifest.md"), "| R01 | quote |\n", "utf8");
+    writeFileSync(join(root, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
+    cmdStart(root, { tier: "T2", task: "align-t2-test" });
+    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" });
+    cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from brief" });
+    cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "openspec", path: "openspec/changes/align-feat", detail: "change proposal scaffolded and validated" });
+    cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against brief, no gaps found" });
+    assert.equal(cmdCheck(root), 1, "missing proposal, tasks, specs, oracle file");
+    assert.equal(cmdClose(root, {}), 1, "close must refuse when artifacts absent");
+    writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
+    assert.equal(cmdCheck(root), 1, "missing tasks, specs, oracle file");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+    assert.equal(cmdCheck(root), 1, "missing specs, oracle file");
+    mkdirSync(join(changeDir, "specs"), { recursive: true });
+    writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
+    assert.equal(cmdCheck(root), 1, "missing oracle file");
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+    cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against brief, no gaps found" });
+    assert.equal(cmdCheck(root), 0, "all required evidence present: passes check");
+    assert.equal(cmdClose(root, {}), 0, "all required evidence present: passes close");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: git failure fails closed", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-git-fail-"));
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  try {
+    git("init", "-q", ".");
+    const changeDir = join(root, "openspec", "changes", "git-fail-change");
+    writeT2Files(changeDir);
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    const binDir = join(root, "broken-bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, process.platform === "win32" ? "git.bat" : "git"), "@echo off\nexit /b 1\n", { mode: 0o755 });
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${process.platform === "win32" ? ";" : ":"}${origPath}`;
+    try {
+      assert.equal(cmdCheckCi(root, { tier: "T2", change: "git-fail-change" }), 1, "git failure must fail closed in check-ci");
+    } finally {
+      process.env.PATH = origPath;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: base-ref intersection stops false merge failure from unrelated base branch updates", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-base-merge-"));
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  try {
+    git("init", "-q", "-b", "main", ".");
+    writeFileSync(join(root, "root.txt"), "root\n", "utf8");
+    git("add", "root.txt");
+    git("commit", "-qm", "base commit");
+    git("checkout", "-qb", "feature");
+    const changeDir = join(root, "openspec", "changes", "feat-merge");
+    writeT2Files(changeDir);
+    git("add", "-A");
+    git("commit", "-qm", "feature with oracle");
+    git("checkout", "main");
+    writeFileSync(join(root, "unrelated.txt"), "unrelated change on main\n", "utf8");
+    git("add", "unrelated.txt");
+    git("commit", "-qm", "unrelated commit on main");
+    git("checkout", "feature");
+    git("merge", "-qm", "merge main into feature", "main");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: "feat-merge", "base-ref": "main" }), 0, "base-ref intersection must stop false merge failure");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

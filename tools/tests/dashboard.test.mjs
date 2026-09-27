@@ -1,6 +1,8 @@
 /**
  * tools/tests/dashboard.test.mjs — Тесты для dashboard.mjs (Nullform Workflow cockpit).
  */
+delete process.env.PASEO_AGENT_ID;
+delete process.env.OMP_SESSION_ID;
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -976,6 +978,167 @@ test("R01: сервер с отличающимся build ID отвергает�
   } finally {
     if (boundCurrent) await new Promise((r) => boundCurrent.server.close(r));
     if (staleBuildServer) await new Promise((r) => staleBuildServer.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ---------------------------------------------- R06, R07 regressions */
+
+function getFreePort() {
+  return new Promise((res, rej) => {
+    const s = createServer();
+    s.listen(0, "127.0.0.1", () => {
+      const port = s.address().port;
+      s.close(() => res(port));
+    });
+    s.on("error", rej);
+  });
+}
+
+test("R06: writeRuntime и runtimePath отказывают ключам с выходом за каталог, оставляя внешние файлы нетронутыми", () => {
+  const tmp = createTempDir();
+  try {
+    const outsideFile = join(tmp, "unrelated.json");
+    writeFileSync(outsideFile, JSON.stringify({ sentinel: "untouched" }), "utf8");
+
+    const project = join(tmp, "project");
+    mkdirSync(join(project, ".workflow"), { recursive: true });
+
+    // 1. Попытка записать с traversal-ключом через writeRuntime
+    assert.throws(
+      () => writeRuntime(project, { key: "../../../unrelated", port: 9999, pid: 1234 }),
+      /ключ сессии|session key/i,
+      "writeRuntime должен отклонить traversal-ключ"
+    );
+
+    // Внешний файл НЕ должен быть перезаписан
+    const outsideContent = JSON.parse(readFileSync(outsideFile, "utf8"));
+    assert.equal(outsideContent.sentinel, "untouched", "внешний файл должен остаться нетронутым");
+
+    // 2. Отклонение недопустимых ключей: пустые, слэши, .., буквы диска, зарезервированные имена
+    const badKeys = [
+      "",
+      "   ",
+      "sub/dir",
+      "sub\\dir",
+      "..",
+      "../escape",
+      "C:drive",
+      "CON",
+      "con",
+      "aux.json",
+      "NUL",
+      "COM1",
+    ];
+
+    for (const bad of badKeys) {
+      assert.throws(
+        () => runtimePath(project, bad),
+        /ключ сессии|session key/i,
+        `runtimePath должен отклонить недопустимый ключ ${JSON.stringify(bad)}`
+      );
+      assert.throws(
+        () => writeRuntime(project, { key: bad, port: 9999 }),
+        /ключ сессии|session key/i,
+        `writeRuntime должен отклонить недопустимый ключ ${JSON.stringify(bad)}`
+      );
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R07: CLI --ensure и --url учитывают --session, создавая файл сессии вместо local", async () => {
+  const tmp = createTempDir();
+  const port = await getFreePort();
+  let spawnedPid = null;
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+
+    // Вызов CLI --ensure --session alpha
+    const runEnsure = spawnSync(
+      process.execPath,
+      [CLI_PATH, "--ensure", "--no-open", "--session", "alpha", "--port", String(port), "--root", tmp],
+      { encoding: "utf8", env: { ...process.env, NF_NO_OPEN: "1" }, timeout: 15000 }
+    );
+    assert.equal(runEnsure.status, 0, `CLI --ensure завершился с ошибкой: ${runEnsure.stderr}`);
+
+    // Проверяем, что создан рантайм alpha, а local НЕ создан
+    const alphaRuntime = readRuntime(tmp, "alpha");
+    assert.ok(alphaRuntime, "файл .workflow/dashboards/alpha.json должен существовать");
+    assert.equal(alphaRuntime.port, port);
+    spawnedPid = alphaRuntime.pid;
+
+    const localRuntime = readRuntime(tmp, "local");
+    assert.equal(localRuntime, null, "файл local.json НЕ должен быть создан при --session alpha");
+
+    // Вызов CLI --url --session alpha
+    const runUrl = spawnSync(
+      process.execPath,
+      [CLI_PATH, "--url", "--session", "alpha", "--root", tmp],
+      { encoding: "utf8", env: { ...process.env, NF_NO_OPEN: "1" }, timeout: 15000 }
+    );
+    assert.equal(runUrl.status, 0, `CLI --url завершился с ошибкой: ${runUrl.stderr}`);
+    assert.match(runUrl.stdout.trim(), new RegExp(`http://localhost:${port}`), "--url должен вернуть URL alpha");
+  } finally {
+    if (spawnedPid) {
+      try { process.kill(spawnedPid); } catch {}
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R07: две разные сессии получают разные серверы и не усыновляют друг друга, а та же сессия переиспользуется", async () => {
+  const tmp = createTempDir();
+  const portA = await getFreePort();
+  const portB = await getFreePort();
+  let pidA = null;
+  let pidB = null;
+  try {
+    mkdirSync(join(tmp, ".workflow"), { recursive: true });
+
+    // 1. Запуск сессии alpha
+    const infoA = await ensureDashboard(tmp, { open: false, session: "alpha", port: portA });
+    assert.ok(infoA.url, "alpha должен запуститься");
+    assert.equal(infoA.started, true);
+    const recA = readRuntime(tmp, "alpha");
+    assert.ok(recA);
+    pidA = recA.pid;
+
+    // Проверяем /api/health у сервера alpha
+    const healthA = await (await fetch(`http://127.0.0.1:${infoA.port}/api/health`)).json();
+    assert.equal(healthA.session, "alpha", "/api/health должен содержать session: alpha");
+
+    // 2. Запуск сессии beta с ТЕМ ЖЕ portA: orphan scan не должен усыновить сервер alpha!
+    const infoB = await ensureDashboard(tmp, { open: false, session: "beta", port: portA });
+    assert.ok(infoB.url, "beta должен запуститься");
+    assert.equal(infoB.started, true, "beta должен запуститься новым сервером, а не усыновить alpha");
+    assert.notEqual(infoB.adopted, true, "beta не должен быть помечен как adopted");
+    assert.notEqual(infoB.port, infoA.port, "порт beta должен отличаться от alpha, даже при том же запрошенном порту");
+    const recB = readRuntime(tmp, "beta");
+    assert.ok(recB);
+    pidB = recB.pid;
+
+    // Порты и PID должны быть строго разными!
+    assert.notEqual(infoA.port, infoB.port, "порты alpha и beta должны различаться");
+    assert.notEqual(pidA, pidB, "PID alpha и beta должны различаться");
+
+    // Проверяем /api/health у сервера beta
+    const healthB = await (await fetch(`http://127.0.0.1:${infoB.port}/api/health`)).json();
+    assert.equal(healthB.session, "beta", "/api/health должен содержать session: beta");
+
+    // 3. Повторный вызов alpha идемпотентно переиспользует тот же сервер alpha
+    const againA = await ensureDashboard(tmp, { open: false, session: "alpha", port: portA });
+    assert.equal(againA.started, false, "повторный вызов alpha должен переиспользовать сервер");
+    assert.equal(againA.port, infoA.port);
+  } finally {
+    for (const p of [pidA, pidB]) {
+      if (p) {
+        try { process.kill(p); } catch {}
+      }
+    }
+    await new Promise((r) => setTimeout(r, 400));
     rmSync(tmp, { recursive: true, force: true });
   }
 });

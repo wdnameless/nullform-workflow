@@ -158,6 +158,12 @@ function setupTestRepo() {
   git(["config", "user.name", "CI Test"]);
   git(["config", "user.email", "ci@example.com"]);
   git(["config", "commit.gpgSign", "false"]);
+  // `git commit` can spawn `git gc --auto` in the background, which keeps
+  // writing inside .git while the test removes the fixture. On Linux that
+  // surfaced as `ENOTEMPTY: rmdir '.../.git'`; disabling auto-gc removes the
+  // race at its source instead of only retrying the removal.
+  git(["config", "gc.auto", "0"]);
+  git(["config", "maintenance.auto", "false"]);
 
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(
@@ -255,7 +261,7 @@ test("R02: T2 fails when changed OpenSpec directory is deleted", (t) => {
     const output = (res.stderr || "") + (res.stdout || "");
     assert.match(output, /missing\/deleted|does not exist or was deleted/i);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -284,7 +290,7 @@ test("R02: T2 fails when changed OpenSpec directory name contains spaces", (t) =
     const output = (res.stderr || "") + (res.stdout || "");
     assert.match(output, /invalid|whitespace/i);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -311,7 +317,7 @@ test("R02: T2 fails when no existing directory reaches check-ci (zero-validation
     const output = (res.stderr || "") + (res.stdout || "");
     assert.match(output, /needs openspec\/changes|No OpenSpec change validated/i);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -341,7 +347,7 @@ test("R10: T2 passes --base-ref origin/$BASE_REF and change ID to check-ci", (t)
     assert.match(output, /--change feat-valid/);
     assert.match(output, /--base-ref origin\/main/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -365,7 +371,36 @@ test("R10: lean tier T0 passes --base-ref origin/$BASE_REF to check-ci", (t) => 
     assert.match(output, /--tier T0/);
     assert.match(output, /--base-ref origin\/main/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("R08: tier T1 passes --base-ref and --recon to check-ci", (t) => {
+  if (!bashBin) {
+    t.skip("bash is not available or not runnable on this system");
+    return;
+  }
+  const gateScript = extractWorkflowGateScript(
+    join(REPO_ROOT, ".github/workflows/repo-gate.yml")
+  );
+  const { dir, git } = setupTestRepo();
+  try {
+    writeFileSync(join(dir, "recon.md"), "# Recon\n## Files touched\n- a\n## Acceptance check\n- check\n", "utf8");
+    git(["add", "recon.md"]);
+    git(["commit", "-m", "add recon"]);
+
+    const res = runGateScript(gateScript, dir, {
+      LABELS_JSON: JSON.stringify([{ name: "workflow:T1" }]),
+      BASE_REF: "main",
+    });
+
+    assert.equal(res.status, 0, `Tier T1 should pass to check-ci: ${res.stderr || res.stdout}`);
+    const output = res.stdout || "";
+    assert.match(output, /--tier T1/);
+    assert.match(output, /--base-ref origin\/main/);
+    assert.match(output, /--recon recon\.md/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -386,6 +421,6 @@ test("R02: git diff failure exits non-zero without silent || true masking", (t) 
 
     assert.notEqual(res.status, 0, "Git diff failure must not be masked by || true");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

@@ -94,3 +94,94 @@ test("invalid explicit repo fails and JSON remains parseable on drift", () => {
     rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+test("promote with relative root preserves punctuation and unrelated text while substituting real root", () => {
+  const f = fixture();
+  try {
+    const slashHarness = f.harness.replace(/\\/g, "/");
+    const liveFile = join(f.harness, "agent", "AGENTS.md");
+    const repoFile = join(f.repo, "agent", "AGENTS.md");
+    const liveContent = `workflow.mjs ... 1.2\nRun node '${slashHarness}/tools/workflow.mjs'\nfoo.bar.baz 2.4.1\n`;
+    writeFileSync(liveFile, liveContent);
+    writeFileSync(repoFile, "old repo\n");
+    const now = Date.now() / 1000;
+    utimesSync(repoFile, now - 120, now - 120);
+    utimesSync(liveFile, now, now);
+
+    // Call with relative harness root "." from inside f.harness directory
+    const res = spawnSync(process.execPath, [CLI,
+      "--repo", f.repo, "--harness", ".", "--agent-dir", f.agentDir,
+      "--agents-root", f.agentsRoot, "--promote", "--only", "AGENTS.md",
+    ], { cwd: f.harness, encoding: "utf8", timeout: 30000, windowsHide: true });
+
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+    const promoted = readFileSync(repoFile, "utf8");
+    const expected = `workflow.mjs ... 1.2\nRun node '<HARNESS>/tools/workflow.mjs'\nfoo.bar.baz 2.4.1\n`;
+    assert.equal(promoted, expected);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("three divergent rule copies make --check non-zero and --deploy converges all three", () => {
+  const f = fixture();
+  try {
+    const repoRule = join(f.repo, "rules", "enterprise-directives.md");
+    const harnessRule = join(f.harness, "rules", "enterprise-directives.md");
+    const agentDirRule = join(f.agentDir, "rules", "enterprise-directives.md");
+    const agentsRootRule = join(f.agentsRoot, "rules", "enterprise-directives.md");
+
+    mkdirSync(join(f.repo, "rules"), { recursive: true });
+    mkdirSync(join(f.harness, "rules"), { recursive: true });
+    mkdirSync(join(f.agentDir, "rules"), { recursive: true });
+    mkdirSync(join(f.agentsRoot, "rules"), { recursive: true });
+
+    writeFileSync(repoRule, "# Directives\nRun <HARNESS>/tools/workflow.mjs\nv2\n");
+    writeFileSync(harnessRule, "# Directives\nOld harness\n");
+    writeFileSync(agentDirRule, "# Directives\nOld agentDir\n");
+    writeFileSync(agentsRootRule, "# Directives\nOld agentsRoot\n");
+
+    const check1 = f.run("--check", "--only", "enterprise-directives.md", "--json");
+    assert.equal(check1.status, 1, check1.stderr || check1.stdout);
+    const data1 = JSON.parse(check1.stdout);
+    assert.equal(data1.ok, false);
+    assert.equal(data1.checked, 3, "must check all three rule copies");
+
+    const deploy = f.run("--deploy", "--only", "enterprise-directives.md");
+    assert.equal(deploy.status, 0, deploy.stderr || deploy.stdout);
+
+    const slashHarness = f.harness.replace(/\\/g, "/");
+    const expectedContent = `# Directives\nRun ${slashHarness}/tools/workflow.mjs\nv2\n`;
+    assert.equal(readFileSync(harnessRule, "utf8"), expectedContent);
+    assert.equal(readFileSync(agentDirRule, "utf8"), expectedContent);
+    assert.equal(readFileSync(agentsRootRule, "utf8"), expectedContent);
+
+    const check2 = f.run("--check", "--only", "enterprise-directives.md", "--json");
+    assert.equal(check2.status, 0, check2.stderr || check2.stdout);
+    const data2 = JSON.parse(check2.stdout);
+    assert.equal(data2.ok, true);
+    assert.equal(data2.checked, 3);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("an unusable root is refused non-zero without touching files", () => {
+  const f = fixture();
+  try {
+    const repoMarker = join(f.repo, "agent", "AGENTS.md");
+    writeFileSync(repoMarker, "marker original\n");
+    const mtimeBefore = Date.now() - 50000;
+    utimesSync(repoMarker, mtimeBefore / 1000, mtimeBefore / 1000);
+
+    const res = spawnSync(process.execPath, [CLI,
+      "--repo", f.repo, "--harness", "/", "--promote",
+    ], { encoding: "utf8", timeout: 30000, windowsHide: true });
+
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr + res.stdout, /unusable|REFUSED/i);
+    assert.equal(readFileSync(repoMarker, "utf8"), "marker original\n");
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

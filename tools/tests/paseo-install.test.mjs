@@ -419,3 +419,129 @@ test("install.ps1: succeeds without omp if -SkipPlugins is passed", (t) => {
     rmSync(tmpHome, { recursive: true, force: true });
   }
 });
+
+test("install.ps1: substitutes supplied GITHUB_PERSONAL_ACCESS_TOKEN and POSTGRES_URL into mcp.json (R04)", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
+  const tmpHome = mkdtempSync(join(tmpdir(), "install-mcp-secrets-"));
+  const tmpHarness = join(tmpHome, "omp-workflow");
+  const secretsPath = join(tmpHome, "test-secrets.env");
+  const canaryToken = "ghp_synthetic_canary_secret_token_12345";
+  const canaryPgUrl = "postgresql://synthuser:synthpass@127.0.0.1:5432/synthdb";
+  writeFileSync(secretsPath, `GITHUB_PERSONAL_ACCESS_TOKEN=${canaryToken}\nPOSTGRES_URL=${canaryPgUrl}\n`, "utf8");
+
+  try {
+    const env = { ...process.env, PATH: pathWithoutOmp() };
+    const res = spawnSync(POWERSHELL_PATH, [
+      "-ExecutionPolicy", "Bypass",
+      "-File", INSTALL_PATH,
+      "-UserHome", tmpHome,
+      "-HarnessRoot", tmpHarness,
+      "-SecretsFile", secretsPath,
+      "-SkipPlugins",
+      "-NonInteractive",
+    ], { encoding: "utf8", env });
+
+    assert.equal(res.status, 0, `Installer must succeed: ${res.stderr}\n${res.stdout}`);
+    const output = (res.stdout || "") + (res.stderr || "");
+    assert.ok(!output.includes(canaryToken), "Installer must never print secret token");
+    assert.ok(!output.includes(canaryPgUrl), "Installer must never print database URL with credentials");
+
+    const mcpPath = join(tmpHome, ".omp", "agent", "mcp.json");
+    assert.ok(existsSync(mcpPath), "mcp.json must be written");
+    const rawMcp = readFileSync(mcpPath, "utf8");
+    assert.ok(!rawMcp.includes("__GITHUB_PAT__"), "mcp.json must not retain __GITHUB_PAT__");
+    assert.ok(!rawMcp.includes("__POSTGRES_URL__"), "mcp.json must not retain __POSTGRES_URL__");
+
+    const mcpJson = JSON.parse(rawMcp);
+    assert.ok(mcpJson.mcpServers.github, "github server must be present");
+    assert.equal(mcpJson.mcpServers.github.env?.GITHUB_PERSONAL_ACCESS_TOKEN, canaryToken);
+
+    assert.ok(mcpJson.mcpServers.postgres, "postgres server must be present");
+    assert.ok(
+      Array.isArray(mcpJson.mcpServers.postgres.args) && mcpJson.mcpServers.postgres.args.includes(canaryPgUrl),
+      `postgres server args must include supplied URL: ${JSON.stringify(mcpJson.mcpServers.postgres.args)}`
+    );
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test("install.ps1: drops github and postgres servers when credentials are not supplied (R04)", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
+  const tmpHome = mkdtempSync(join(tmpdir(), "install-mcp-no-secrets-"));
+  const tmpHarness = join(tmpHome, "omp-workflow");
+  const secretsPath = join(tmpHome, "empty-secrets.env");
+  writeFileSync(secretsPath, "# empty secrets file\n", "utf8");
+
+  try {
+    const env = { ...process.env, PATH: pathWithoutOmp() };
+    const res = spawnSync(POWERSHELL_PATH, [
+      "-ExecutionPolicy", "Bypass",
+      "-File", INSTALL_PATH,
+      "-UserHome", tmpHome,
+      "-HarnessRoot", tmpHarness,
+      "-SecretsFile", secretsPath,
+      "-SkipPlugins",
+      "-NonInteractive",
+    ], { encoding: "utf8", env });
+
+    assert.equal(res.status, 0, `Installer must succeed: ${res.stderr}\n${res.stdout}`);
+    const mcpPath = join(tmpHome, ".omp", "agent", "mcp.json");
+    assert.ok(existsSync(mcpPath), "mcp.json must be written");
+    const rawMcp = readFileSync(mcpPath, "utf8");
+    const mcpJson = JSON.parse(rawMcp);
+
+    assert.equal(mcpJson.mcpServers?.github, undefined, "github server must be dropped when token is absent");
+    assert.equal(mcpJson.mcpServers?.postgres, undefined, "postgres server must be dropped when URL is absent");
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test("install.ps1: preserves pre-existing unrelated mcp.json untouched (R04)", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
+  const tmpHome = mkdtempSync(join(tmpdir(), "install-mcp-preserve-"));
+  const tmpHarness = join(tmpHome, "omp-workflow");
+  const agentDir = join(tmpHome, ".omp", "agent");
+  mkdirSync(agentDir, { recursive: true });
+  const mcpPath = join(agentDir, "mcp.json");
+  const customMcp = JSON.stringify({
+    mcpServers: {
+      "custom-service": {
+        command: "custom-tool",
+        args: ["--port", "9999"],
+      },
+    },
+  }, null, 2);
+  writeFileSync(mcpPath, customMcp, "utf8");
+
+  try {
+    const env = { ...process.env, PATH: pathWithoutOmp() };
+    const res = spawnSync(POWERSHELL_PATH, [
+      "-ExecutionPolicy", "Bypass",
+      "-File", INSTALL_PATH,
+      "-UserHome", tmpHome,
+      "-HarnessRoot", tmpHarness,
+      "-SkipPlugins",
+      "-NonInteractive",
+    ], { encoding: "utf8", env });
+
+    assert.equal(res.status, 0, `Installer must succeed: ${res.stderr}\n${res.stdout}`);
+    const output = (res.stdout || "") + (res.stderr || "");
+    assert.match(output, /mcp\.json exists -> left untouched/);
+
+    const actualMcp = readFileSync(mcpPath, "utf8");
+    assert.equal(actualMcp, customMcp, "Pre-existing mcp.json must remain identical and untouched");
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});

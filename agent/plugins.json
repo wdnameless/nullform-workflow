@@ -3,7 +3,7 @@
   "note": "OMP plugins for this harness; install with omp plugin install <spec>",
   "plugins": [
     { "name": "@dietrichgebert/ponytail", "spec": "@dietrichgebert/ponytail@4.10.0", "required": false },
-    { "name": "@plannotator/pi-extension", "spec": "@plannotator/pi-extension@0.27.16", "required": false },
+    { "name": "@plannotator/pi-extension", "spec": "@plannotator/pi-extension@0.27.21", "required": false },
     { "name": "oh-my-pi-plugin-grok-build", "spec": "oh-my-pi-plugin-grok-build@0.2.2", "required": false },
     { "name": "oh-my-pi-plugin-morph", "spec": "oh-my-pi-plugin-morph@0.6.0", "required": true },
     { "name": "omp-plugin-duplicate-detector", "spec": "omp-plugin-duplicate-detector@0.3.0", "required": false },
@@ -11,8 +11,8 @@
     { "name": "omp-url-pin", "spec": "omp-url-pin@1.2.0", "required": false },
     { "name": "pi-bar", "spec": "pi-bar@0.3.44", "required": false },
     { "name": "pi-gh-cli", "spec": "pi-gh-cli@0.2.5", "required": false },
-    { "name": "pi-goal-x", "spec": "pi-goal-x@0.31.6", "required": false },
-    { "name": "pi-lens", "spec": "pi-lens@4.2.1", "required": true },
+    { "name": "pi-goal-x", "spec": "pi-goal-x@0.31.9", "required": false },
+    { "name": "pi-lens", "spec": "pi-lens@4.3.0", "required": true },
     { "name": "pi-linter", "spec": "pi-linter@0.2.7", "required": false },
     { "name": "pi-prompt-shelf", "spec": "pi-prompt-shelf@1.1.2", "required": false },
     { "name": "pi-qq", "spec": "pi-qq@0.1.17", "required": false }
