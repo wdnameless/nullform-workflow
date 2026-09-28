@@ -1,0 +1,11 @@
+# Recon — confirmed paths and acceptance checks
+
+Branch: `fix/audit-boundaries-and-intent-review` from `master` `3406bb4`. The only pre-existing untracked path was `backups/`; it is user-owned and out of scope. `CONTEXT.md` defines live tree, repo tree, drift, prompt surface, lane and blind acceptance.
+
+The prior read-only audit exercised the actual code in disposable OS-temp fixtures. `sync --deploy` overwrote an out-of-harness file through a Windows junction; `--promote` left an absolute root before newline. Direct sandbox sync check passed with `--agent-dir` and failed without it. Local T2 `check`/`close` passed with an ACCEPT path while a sibling REJECT existed; Git-backed `check-ci` passed with `oracle-blind-recheck.md: REJECT`; guarded auto closed an out-of-scope 25-line edit with Git unavailable. Static dashboard HTML retained a synthetic marker removed by `sanitizeHttpState`; `/api/diff` loaded an 8 MiB untracked file to report one line. The existing focused suites were 75/75 green, exposing test gaps. Windows `unlinkSync` on a junction succeeded; that rejected audit hypothesis is not a task.
+
+Relevant code and tests: `tools/sync.mjs` and `tools/tests/sync.test.mjs`; `tools/verify.mjs` and `tools/tests/install-harness.test.mjs`; `tools/workflow.mjs` and workflow-gate/suggest tests; `tools/dashboard.mjs` and dashboard tests. The nested CRO SKILL is byte-identical to the root SKILL; its resources differ and stay untouched. No repo schema, external dependency, or new public endpoint is needed.
+
+Video: `https://www.youtube.com/watch?v=Vxw9DQjsrHY` captions 01:00–05:40 (intent, correction, open questions), 06:45–08:00 (human approval and artifact chain), 10:00–10:46 (small pilot). Primary source: `https://academy.claude.com/courses/ai-native-sdlc-playbook/capture-intent`. Existing Wave 0 + manifest already preserve originator words and questions for engineering; optional intake applies only when originators work asynchronously outside the coding session.
+
+Acceptance check: per-slice red-capable fixtures from audit become permanent boundary regressions; parent executes focused suites once after edits, then full suite, sync/verify/audit, code-size/prompt gates, disposable CLI/HTTP smoke and blind Oracle acceptance.
