@@ -714,6 +714,31 @@ function isSecretOrCredentialPath(relPath) {
 function isExcludedFromSnapshot(relPath) {
   return isStructuralExcludedPath(relPath) || isSecretOrCredentialPath(relPath);
 }
+function findGitRoot(startDir) {
+  let curr = resolve(startDir);
+  while (true) {
+    if (existsSync(join(curr, ".git"))) {
+      return curr;
+    }
+    const parent = dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
+  }
+  return null;
+}
+
+function isInsideGitRepo(root) {
+  if (findGitRoot(root)) return true;
+  try {
+    const res = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: root, encoding: "utf8", windowsHide: true, timeout: 5000
+    }).trim();
+    return res === "true";
+  } catch {
+    return false;
+  }
+}
+
 
 function scanWorktree(root) {
   try {
@@ -798,8 +823,8 @@ function scanWorktree(root) {
     return { isGit: false, files };
   }
 }
-const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict\*{0,2}:\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict\*{0,2}\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
-const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict\*{0,2}:\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict\*{0,2}\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
+const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
+const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
 
 function isOracleEvidenceFilename(f) {
   const b = basename(String(f || "")).trim();
@@ -814,7 +839,7 @@ function isPositiveOracleVerdict(text) {
 /** True when the text states an explicit rejection. Distinct from "states nothing". */
 function isNegativeOracleVerdict(text) {
   if (!text || typeof text !== "string") return false;
-  return NEGATIVE_VERDICT_RE.test(text) && !POSITIVE_VERDICT_RE.test(text);
+  return NEGATIVE_VERDICT_RE.test(text);
 }
 
 
@@ -1175,15 +1200,30 @@ function cmdStatus(root) {
  */
 function getPorcelainEntries(root) {
   try {
-    const statusOut = execFileSync("git", ["status", "--porcelain", "-uall"], {
+    let prefix = "";
+    try {
+      prefix = execFileSync("git", ["rev-parse", "--show-prefix"], {
+        cwd: root, encoding: "utf8", windowsHide: true, timeout: 5000
+      }).trim().replace(/\\/g, "/");
+    } catch {}
+
+    const statusOut = execFileSync("git", ["-c", "core.quotepath=false", "status", "--porcelain", "-z", "-uall", "--", "."], {
       cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
     });
+    const rawItems = statusOut.split("\0");
     const entries = [];
-    for (const line of statusOut.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const code = trimmed.slice(0, 2);
-      const rel = trimmed.slice(2).trim();
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i];
+      if (!item) continue;
+      const code = item.slice(0, 2);
+      let rel = item.slice(3);
+      if ((code[0] === "R" || code[0] === "C") && i + 1 < rawItems.length) {
+        i++;
+      }
+      if (prefix && rel.startsWith(prefix)) {
+        rel = rel.slice(prefix.length);
+      }
+      rel = rel.replace(/\\/g, "/");
       if (!rel || rel.startsWith(".workflow/") || rel === ".workflow" || isStructuralExcludedPath(rel)) continue;
       entries.push({ code, rel });
     }
@@ -1264,7 +1304,7 @@ function findGitStaleness(root, snapshot, current, acceptedAt) {
   const baseSha = snapshot?.commitSha;
   if (baseSha) {
     try {
-      const diffOut = execFileSync("git", ["diff", "--name-only", `${baseSha}..HEAD`], {
+      const diffOut = execFileSync("git", ["diff", "--name-only", "--relative", `${baseSha}..HEAD`], {
         cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
       });
       for (const file of diffOut.split("\n")) {
@@ -1347,7 +1387,7 @@ function pathMatchesAllow(filePath, pattern) {
 }
 
 function measureAutoDiff(root, st) {
-  if (!existsSync(join(root, ".git"))) {
+  if (!isInsideGitRepo(root)) {
     st.autoSkipReason = "non-git environment; skipped tree diff measurement";
     return { ok: true, isGit: false };
   }
@@ -1359,22 +1399,41 @@ function measureAutoDiff(root, st) {
   for (const { code, rel } of porcelain) {
     if (code === "??") {
       changedPaths.add(rel);
-      try { totalLines += readFileSync(join(root, rel), "utf8").split("\n").length; } catch {}
+      try {
+        const content = readFileSync(join(root, rel), "utf8");
+        totalLines += content.split("\n").length;
+      } catch {
+        return { ok: false, error: `failed to read untracked file '${rel}'` };
+      }
     }
   }
 
   try {
-    const numstatOut = execFileSync("git", ["diff", "--numstat", "HEAD"], {
+    const numstatOut = execFileSync("git", ["-c", "core.quotepath=false", "diff", "--numstat", "--relative", "HEAD"], {
       cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
     });
     for (const line of numstatOut.split("\n")) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 3) {
-        const file = parts.slice(2).join(" ");
-        if (!file || file.startsWith(".workflow/")) continue;
-        changedPaths.add(file);
-        totalLines += (Number(parts[0]) || 0) + (Number(parts[1]) || 0);
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let file = "";
+      let added = 0;
+      let deleted = 0;
+      const tabParts = trimmed.split("\t");
+      if (tabParts.length >= 3) {
+        added = Number(tabParts[0]) || 0;
+        deleted = Number(tabParts[1]) || 0;
+        file = tabParts.slice(2).join("\t").trim().replace(/\\/g, "/");
+      } else {
+        const spaceParts = trimmed.split(/\s+/);
+        if (spaceParts.length >= 3) {
+          added = Number(spaceParts[0]) || 0;
+          deleted = Number(spaceParts[1]) || 0;
+          file = spaceParts.slice(2).join(" ").trim().replace(/\\/g, "/");
+        }
       }
+      if (!file || file.startsWith(".workflow/")) continue;
+      changedPaths.add(file);
+      totalLines += added + deleted;
     }
   } catch {
     return { ok: false, error: "git diff failed in git repository" };
@@ -1574,7 +1633,7 @@ function validateCheckCiT1(root, flags, baseRef) {
 }
 
 function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
-  const hasGit = existsSync(join(root, ".git"));
+  const hasGit = isInsideGitRepo(root);
   if (!hasGit) {
     console.log("workflow check-ci: non-git repository; skipping git verification.");
     return 0;
@@ -1610,7 +1669,7 @@ function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
     }
 
     if (oracleCommit) {
-      const postOracleDiff = execFileSync("git", ["diff", "--name-only", `${oracleCommit}..HEAD`], {
+      const postOracleDiff = execFileSync("git", ["diff", "--name-only", "--relative", `${oracleCommit}..HEAD`], {
         cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
       }).trim();
       if (postOracleDiff) {

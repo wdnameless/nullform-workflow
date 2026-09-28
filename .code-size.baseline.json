@@ -46,16 +46,16 @@
       "reason": "Regression tests for the OMP 18.3.3+ plugin-list exit-code tolerance"
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 827,
-      "reason": "Current-change Oracle verdict and guarded-auto Git failure regressions (R04-R05)"
+      "lines": 930,
+      "reason": "Current-change Oracle, Markdown-bold verdict, nested Git and Unicode untracked diff-cap regressions (R04-R05)"
     },
     "tools/verify.mjs": {
       "lines": 1286,
       "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated on macOS"
     },
     "tools/workflow.mjs": {
-      "lines": 1883,
-      "reason": ""
+      "lines": 1935,
+      "reason": "Fail-closed nested Git measurement, NUL porcelain paths and Markdown-bold Oracle verdict integrity (R04-R05)"
     }
   },
   "functions": {

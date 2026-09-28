@@ -824,3 +824,106 @@ test("cmdClose: guarded-auto refuses close when git status succeeds but diff fai
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("cmdClose: guarded-auto refuses out-of-scope edit when project root is nested inside Git repository", () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), "wf-gate-nested-git-"));
+  const git = (...args) => spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  try {
+    git("init", "-q", ".");
+    mkdirSync(join(repoRoot, "sub", "src"), { recursive: true });
+    writeFileSync(join(repoRoot, "sub", "src", "app.ts"), "console.log(1);\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+
+    const projectRoot = join(repoRoot, "sub");
+    assert.equal(cmdStart(projectRoot, { tier: "T0", auto: true, allow: "src/**", "max-diff": 5, task: "nested-auto-test" }), 0);
+
+    writeFileSync(join(projectRoot, "outside.txt"), "out-of-scope\n", "utf8");
+    assert.equal(cmdClose(projectRoot, {}), 1, "nested project auto close must refuse out-of-scope edit");
+
+    const st = load(projectRoot);
+    assert.equal(st.status, "open", "task must remain open");
+    assert.equal(st.autoSkipReason, undefined, "must not skip measurement for nested git root");
+
+    rmSync(join(projectRoot, "outside.txt"));
+    writeFileSync(join(projectRoot, "src", "app.ts"), "console.log(1);\nconsole.log(2);\n", "utf8");
+    assert.equal(cmdClose(projectRoot, {}), 0, "nested project auto close must accept in-scope edit");
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("cmdClose: guarded-auto refuses untracked non-ASCII filename exceeding diff cap", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-unicode-diff-"));
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  try {
+    git("init", "-q", ".");
+    writeFileSync(join(root, "init.txt"), "init\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+
+    assert.equal(cmdStart(root, { tier: "T0", auto: true, allow: "**", "max-diff": 1, task: "unicode-diff-cap" }), 0);
+
+    const hundredLines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}\n`).join("");
+    writeFileSync(join(root, "é.txt"), hundredLines, "utf8");
+
+    assert.equal(cmdClose(root, {}), 1, "untracked unicode file exceeding maxDiff must refuse auto close");
+
+    const st = load(root);
+    assert.equal(st.status, "open", "task must remain open when diff exceeds cap");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: local check/close and CI refuse Markdown-bold **Verdict:** REJECT sibling verdict", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-bold-reject-"));
+  const git = (...args) => spawnSync("git", args, {
+    cwd: root, encoding: "utf8", windowsHide: true,
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+  });
+  try {
+    git("init", "-q", ".");
+    setupT2(root);
+    cmdStart(root, { tier: "T2", task: "bold-reject-test" });
+    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" });
+    cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" });
+    cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" });
+    cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+
+    const changeDir = join(root, "openspec", "changes", "feat-x");
+    rmSync(join(changeDir, "oracle.md"), { force: true });
+    writeT2Files(changeDir, { oracle: false });
+    writeFileSync(join(changeDir, "oracle-1.md"), "# Oracle 1\nVerdict: ACCEPT\n", "utf8");
+    writeFileSync(join(changeDir, "oracle-2.md"), "# Oracle 2\n**Verdict:** REJECT\n", "utf8");
+    cmdArtifact(root, {
+      kind: "oracle",
+      path: "openspec/changes/feat-x/oracle-1.md",
+      detail: "ACCEPT: passed primary verification",
+    });
+
+    assert.equal(cmdCheck(root), 1, "sibling **Verdict:** REJECT must fail local check");
+    assert.equal(cmdClose(root, {}), 1, "sibling **Verdict:** REJECT must fail local close");
+
+    // Also test CI path with actual commit fixture
+    git("add", "-A");
+    git("commit", "-qm", "commit bold reject evidence");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: "feat-x" }), 1, "committed **Verdict:** REJECT must fail check-ci");
+
+    // Turning sibling into ACCEPT and refreshing oracle-1 passes both local and CI
+    writeFileSync(join(changeDir, "oracle-2.md"), "# Oracle 2\n**Verdict:** ACCEPT\n", "utf8");
+    writeFileSync(join(changeDir, "oracle-1.md"), "# Oracle 1\n**Verdict:** ACCEPT\nFresh verification: sibling resolved\n", "utf8");
+    cmdArtifact(root, {
+      kind: "oracle",
+      path: "openspec/changes/feat-x/oracle-1.md",
+      detail: "ACCEPT: passed primary verification refreshed",
+    });
+    git("add", "-A");
+    git("commit", "-qm", "commit all-accept evidence");
+    assert.equal(cmdCheck(root), 0, "all-positive evidence must pass local check");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: "feat-x" }), 0, "all-positive evidence must pass check-ci");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
