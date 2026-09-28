@@ -32,7 +32,7 @@
  */
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";
-import { join, dirname, resolve, relative, isAbsolute } from "node:path";
+import { join, dirname, resolve, relative, isAbsolute, basename } from "node:path";
 import { createHash } from "node:crypto";
 
 const DIR = ".workflow";
@@ -801,6 +801,11 @@ function scanWorktree(root) {
 const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict\*{0,2}:\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict\*{0,2}\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
 const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict\*{0,2}:\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict\*{0,2}\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
 
+function isOracleEvidenceFilename(f) {
+  const b = basename(String(f || "")).trim();
+  return /^oracle(-+[A-Za-z0-9]+)*\.md$/i.test(b) || b.toLowerCase() === "acceptance.md";
+}
+
 function isPositiveOracleVerdict(text) {
   if (!text || typeof text !== "string") return false;
   return POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text);
@@ -856,43 +861,39 @@ function validateOracleArtifact(root, a, st, invalid) {
   } else if (!isPositiveOracleVerdict(detail)) {
     invalid.push("oracle: note states no verdict — expected an explicit ACCEPT line");
   }
-  const oraclePaths = [];
-  if (a.path) {
-    oraclePaths.push(a.path);
-  } else if (st.artifacts?.openspec?.path) {
-    const specDir = join(root, st.artifacts.openspec.path);
-    if (existsSync(specDir)) {
-      try {
-        for (const f of readdirSync(specDir)) {
-          if (/^oracle(-[A-Za-z0-9]+)?\.md$/i.test(f) || f.toLowerCase() === "acceptance.md") {
-            oraclePaths.push(join(st.artifacts.openspec.path, f));
-          }
-        }
-      } catch {}
+  const changeOraclePaths = [];
+  const registeredChangePath = st.artifacts?.openspec?.path;
+  if (registeredChangePath) {
+    try {
+      for (const f of readdirSync(join(root, registeredChangePath))) {
+        if (isOracleEvidenceFilename(f)) changeOraclePaths.push(join(registeredChangePath, f));
+      }
+    } catch {}
+  }
+  if (changeOraclePaths.length === 0) invalid.push("oracle: missing oracle evidence file (oracle*.md or acceptance.md)");
+  const oraclePaths = [...changeOraclePaths];
+  if (a.path && !changeOraclePaths.some((p) => resolve(root, p) === resolve(root, a.path))) oraclePaths.push(a.path);
+  const registeredChangeAbs = registeredChangePath ? resolve(root, registeredChangePath) : null;
+  let hasAccept = false;
+  for (const oPath of oraclePaths) {
+    const fullPath = join(root, oPath);
+    if (!existsSync(fullPath)) {
+      invalid.push(`oracle: file '${oPath}' does not exist on disk`);
+      continue;
+    }
+    if (!isRealPathInsideRoot(root, oPath) || !statSync(fullPath).isFile()) {
+      invalid.push(`oracle: file '${oPath}' resolves outside project root or is not a file`);
+      continue;
+    }
+    let body = "";
+    try { body = readFileSync(fullPath, "utf8"); } catch {}
+    if (isNegativeOracleVerdict(body) || NEGATIVE_VERDICT_RE.test(body)) {
+      invalid.push(`oracle: verdict in '${oPath}' is REJECT`);
+    } else if (isPositiveOracleVerdict(body) && registeredChangeAbs && resolve(root, dirname(oPath)) === registeredChangeAbs && isOracleEvidenceFilename(basename(oPath))) {
+      hasAccept = true;
     }
   }
-  if (oraclePaths.length === 0) {
-    invalid.push("oracle: missing oracle evidence file (oracle*.md or acceptance.md)");
-  } else {
-    let hasAccept = false;
-    for (const oPath of oraclePaths) {
-      const fullPath = join(root, oPath);
-      if (!existsSync(fullPath)) {
-        invalid.push(`oracle: file '${oPath}' does not exist on disk`);
-        continue;
-      }
-      let body = "";
-      try { body = readFileSync(fullPath, "utf8"); } catch {}
-      if (isNegativeOracleVerdict(body) || NEGATIVE_VERDICT_RE.test(body)) {
-        invalid.push(`oracle: verdict in '${oPath}' is REJECT`);
-      } else if (isPositiveOracleVerdict(body)) {
-        hasAccept = true;
-      }
-    }
-    if (!hasAccept && oraclePaths.length > 0) {
-      invalid.push("oracle: oracle evidence must state an explicit anchored positive ACCEPT verdict");
-    }
-  }
+  if (!hasAccept && changeOraclePaths.length > 0) invalid.push("oracle: oracle evidence must state an explicit anchored positive ACCEPT verdict");
 }
 
 function validateArtifacts(root, st) {
@@ -1346,21 +1347,19 @@ function pathMatchesAllow(filePath, pattern) {
 }
 
 function measureAutoDiff(root, st) {
-  const porcelain = getPorcelainEntries(root);
-  if (!porcelain) {
+  if (!existsSync(join(root, ".git"))) {
     st.autoSkipReason = "non-git environment; skipped tree diff measurement";
     return { ok: true, isGit: false };
   }
+  const porcelain = getPorcelainEntries(root);
+  if (!porcelain) return { ok: false, error: "git status failed in git repository" };
   const changedPaths = new Set();
   let totalLines = 0;
 
   for (const { code, rel } of porcelain) {
     if (code === "??") {
       changedPaths.add(rel);
-      try {
-        const body = readFileSync(join(root, rel), "utf8");
-        totalLines += body.split("\n").length;
-      } catch {}
+      try { totalLines += readFileSync(join(root, rel), "utf8").split("\n").length; } catch {}
     }
   }
 
@@ -1371,28 +1370,24 @@ function measureAutoDiff(root, st) {
     for (const line of numstatOut.split("\n")) {
       const parts = line.trim().split(/\s+/);
       if (parts.length >= 3) {
-        const added = Number(parts[0]) || 0;
-        const deleted = Number(parts[1]) || 0;
         const file = parts.slice(2).join(" ");
         if (!file || file.startsWith(".workflow/")) continue;
         changedPaths.add(file);
-        totalLines += added + deleted;
+        totalLines += (Number(parts[0]) || 0) + (Number(parts[1]) || 0);
       }
     }
-  } catch {}
+  } catch {
+    return { ok: false, error: "git diff failed in git repository" };
+  }
 
   if (st.auto?.allow) {
     for (const p of changedPaths) {
-      if (!pathMatchesAllow(p, st.auto.allow)) {
-        return { ok: false, error: `changed file '${p}' escapes allow pattern '${st.auto.allow}'` };
-      }
+      if (!pathMatchesAllow(p, st.auto.allow)) return { ok: false, error: `changed file '${p}' escapes allow pattern '${st.auto.allow}'` };
     }
   }
 
   const cap = st.auto?.maxDiff ?? 20;
-  if (totalLines > cap) {
-    return { ok: false, error: `measured diff lines (${totalLines}) exceed cap of ${cap}` };
-  }
+  if (totalLines > cap) return { ok: false, error: `measured diff lines (${totalLines}) exceed cap of ${cap}` };
   return { ok: true, isGit: true, totalLines };
 }
 
@@ -1447,8 +1442,6 @@ function cmdClose(root, flags) {
     console.error(`workflow: cannot close ${st.tier} — retained evidence invalid:\n  ${invalid.join('\n  ')}`);
     return 1;
   }
-
-
 
   // Acceptance staleness: an ACCEPT verdict is evidence only for the tree it was
   // rendered against. Editing code after the oracle ran and then closing is the
@@ -1779,7 +1772,7 @@ function cmdCheckCi(root, flags) {
 
   // 6. Oracle evidence (consider ALL matching files: any explicit REJECT blocks)
   const entries = readdirSync(changeDir);
-  const oracleEntries = entries.filter((e) => /^oracle(-[A-Za-z0-9]+)?\.md$/i.test(e) || e.toLowerCase() === "acceptance.md");
+  const oracleEntries = entries.filter(isOracleEvidenceFilename);
   if (oracleEntries.length === 0) {
     console.error(`workflow check-ci: missing oracle evidence in '${changeDir}' or resolves outside project root.`);
     return 1;

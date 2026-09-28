@@ -247,6 +247,7 @@ test("workflow guarded auto: close verifies diff lines cap", () => {
     const st = load(tempDir);
     assert.equal(st.status, "closed");
     assert.equal(st.diffLines, 8);
+    assert.equal(st.autoSkipReason, "non-git environment; skipped tree diff measurement");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
