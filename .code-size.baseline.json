@@ -22,8 +22,8 @@
       "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
     "tools/dashboard.mjs": {
-      "lines": 2939,
-      "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated"
+      "lines": 2949,
+      "reason": "realpathSync entry guard and flushed JSON; bounded untracked diff reads and sanitized static snapshots (R06-R07)"
     },
     "tools/doctor.mjs": {
       "lines": 1513,
@@ -38,12 +38,16 @@
       "reason": ""
     },
     "tools/tests/dashboard.test.mjs": {
-      "lines": 1145,
-      "reason": ""
+      "lines": 1238,
+      "reason": "Behavioral regressions for static snapshot redaction and bounded untracked diff reads"
     },
     "tools/tests/doctor.test.mjs": {
       "lines": 1587,
       "reason": "Regression tests for the OMP 18.3.3+ plugin-list exit-code tolerance"
+    },
+    "tools/tests/workflow-gate.test.mjs": {
+      "lines": 827,
+      "reason": "Current-change Oracle verdict and guarded-auto Git failure regressions (R04-R05)"
     },
     "tools/verify.mjs": {
       "lines": 1286,
@@ -154,11 +158,11 @@
       "reason": ""
     },
     "tools/sync.mjs:main": {
-      "lines": 272,
+      "lines": 301,
       "file": "tools/sync.mjs",
       "name": "main",
-      "line": 232,
-      "reason": ""
+      "line": 345,
+      "reason": "Preflight all manifest and OMP law paths before sync mutation to prevent junction/symlink data loss"
     },
     "tools/usage-audit.mjs:auditUsage": {
       "lines": 316,
