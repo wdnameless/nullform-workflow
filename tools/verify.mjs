@@ -210,31 +210,23 @@ function checkSyncDrift(repoRoot, harnessRoot, userHome) {
     return { ok: true, detail: "n/a (standalone install)" };
   }
 
-  // Pin the agents root to the user home being verified: without it the sync
-  // scripts compare against the MACHINE's ~/.agents, so verifying a sandbox or a
-  // second harness reports drift that belongs to an unrelated install.
+  // Pin the agents root and agent dir to the user home being verified: without
+  // it the sync scripts compare against the host ~/.agents and ~/.omp/agent.
   const agentsRoot = userHome ? join(userHome, ".agents") : "";
-  const env = agentsRoot ? { ...process.env, AGENTS_ROOT: agentsRoot } : undefined;
+  const agentDir = userHome ? join(userHome, ".omp", "agent") : "";
+  const env = userHome ? { ...process.env, ...(agentsRoot ? { AGENTS_ROOT: agentsRoot } : {}), ...(agentDir ? { AGENT_DIR: agentDir } : {}) } : undefined;
   const envOpt = env ? { env } : {};
-
   let r;
   if (isWin) {
-    r = runProc(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        syncScript,
-        "-HarnessRoot",
-        harnessRoot,
-        ...(agentsRoot ? ["-AgentsRoot", agentsRoot] : []),
-      ],
-      envOpt
-    );
+    r = runProc("powershell.exe", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", syncScript, "-HarnessRoot", harnessRoot,
+      ...(agentsRoot ? ["-AgentsRoot", agentsRoot] : []), ...(agentDir ? ["-AgentDir", agentDir] : []),
+    ], envOpt);
   } else {
-    r = runProc(syncScript, ["--harness-root", harnessRoot], envOpt);
+    r = runProc(syncScript, [
+      "--harness-root", harnessRoot,
+      ...(agentsRoot ? ["--agents-root", agentsRoot] : []), ...(agentDir ? ["--agent-dir", agentDir] : []),
+    ], envOpt);
   }
   const text = (r.stdout || "") + (r.stderr || "");
   if (/sync:\s*clean/.test(text)) {
