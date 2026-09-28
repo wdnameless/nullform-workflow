@@ -8,7 +8,7 @@ Use the manifest's declared repo/live roots as trust boundaries. Before reading 
 
 ## Workflow evidence
 
-Use one internal oracle-evidence filename predicate for local and CI scanning. A positive verdict must come from a matching file inside the registered OpenSpec change; an explicit `--path` outside that scope cannot satisfy acceptance or hide a sibling REJECT. Preserve the existing anchored ACCEPT/REJECT parsing and symlink containment. For guarded auto, an initialized Git tree with failed status/diff inspection is an error; never record an `autoSkipReason` and close green for that failure. Avoid changing unrelated non-Git lane behavior.
+Use one internal oracle-evidence filename predicate for local and CI scanning. A positive verdict must come from a matching file inside the registered OpenSpec change; an explicit `--path` outside that scope cannot satisfy acceptance or hide a sibling REJECT. Parse both plain and conventional Markdown-bold `Verdict:` labels with negative precedence, without accepting prose mentions. For guarded auto, discover Git membership from the actual worktree, including subdirectories; failed status/diff inspection is an error, never `autoSkipReason`. Parse NUL-delimited porcelain paths so Git's C quoting cannot turn an untracked read/count into zero; refuse a read failure. Keep paths and allow-list measurements relative to the selected project root. Preserve genuinely non-Git behavior.
 
 ## Dashboard
 
