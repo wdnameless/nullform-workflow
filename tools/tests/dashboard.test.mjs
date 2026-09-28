@@ -6,7 +6,8 @@ delete process.env.OMP_SESSION_ID;
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import fs, { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -1139,6 +1140,98 @@ test("R07: две разные сессии получают разные сер
       }
     }
     await new Promise((r) => setTimeout(r, 400));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R06: генерация статического snapshot дашборда использует проекцию sanitizeHttpState и не раскрывает маркер задачи", () => {
+  const tmp = createTempDir();
+  try {
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    const MARKER = "SECRET_PRIVATE_TASK_DESCRIPTION_98765";
+    writeFileSync(
+      join(wfDir, "state.json"),
+      JSON.stringify({
+        tier: "T2",
+        task: `Confidential Task: ${MARKER}`,
+        status: "open",
+        startedAt: new Date().toISOString(),
+        artifacts: {
+          lane: { at: new Date().toISOString(), detail: "T2" },
+        },
+      }),
+      "utf8"
+    );
+
+    const outPath = join(tmp, "out-dashboard.html");
+    const run = spawnSync(
+      process.execPath,
+      [CLI_PATH, "--root", tmp, "--output", outPath],
+      { encoding: "utf8", env: { ...process.env, NF_NO_OPEN: "1" }, timeout: 15000 }
+    );
+    assert.equal(run.status, 0, `CLI завершился с ошибкой: ${run.stderr}`);
+
+    const html = readFileSync(outPath, "utf8");
+    assert.ok(!html.includes(MARKER), "статический snapshot дашборда не должен содержать сырой текст задачи");
+    assert.ok(html.includes("Задача T2"), "страница содержит санитизированный заголовок задачи с ярусом");
+    assert.ok(html.includes("open"), "страница содержит статус задачи");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R07: /api/diff для мегабайтного неотслеживаемого файла без перевода строк читает чанками без readFileSync и отдаёт метаданные", async () => {
+  const tmp = createTempDir();
+  let bound = null;
+  const origReadFileSync = fs.readFileSync;
+  let readFileSyncCalled = false;
+  try {
+    git(tmp, ["init", "-q"]);
+    git(tmp, ["config", "user.name", "Workflow Tester"]);
+    git(tmp, ["config", "user.email", "workflow@nullform.io"]);
+
+    const readme = join(tmp, "README.md");
+    writeFileSync(readme, "# Test\n", "utf8");
+    git(tmp, ["add", "README.md"]);
+    git(tmp, ["commit", "-q", "-m", "init"]);
+
+    const RAW_SECRET = "SECRET_UNTRACKED_PAYLOAD_CHUNK_4455";
+    const fileName = "large-untracked.txt";
+    const bigFile = join(tmp, fileName);
+    const buf = Buffer.alloc(2 * 1024 * 1024, 0x61);
+    buf.write(RAW_SECRET, 0, "utf8");
+    writeFileSync(bigFile, buf);
+
+    // Scoped failure injection: перехватываем readFileSync для целевого файла
+    fs.readFileSync = function (path, ...args) {
+      if (typeof path === "string" && (path.includes(fileName) || resolve(path) === resolve(bigFile))) {
+        readFileSyncCalled = true;
+        throw new Error("ERR_UNBOUNDED_READ: readFileSync called on untracked file");
+      }
+      return Reflect.apply(origReadFileSync, this, [path, ...args]);
+    };
+    syncBuiltinESMExports();
+
+    const port = await getFreePort();
+    bound = await startLiveServer(tmp, port, { maxAttempts: 10 });
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/diff?file=${fileName}`);
+    assert.equal(res.status, 200);
+    const body = await res.text();
+
+    assert.equal(readFileSyncCalled, false, "поточный подсчёт строк не должен вызывать readFileSync для неотслеживаемого файла");
+    assert.ok(!body.includes(RAW_SECRET), "/api/diff не должен содержать сырой контент неотслеживаемого файла");
+    assert.ok(body.includes("+ добавлено строк: 1"), "файл без перевода строк считается как 1 добавленная строка");
+    assert.ok(body.includes("- удалено строк: 0"), "для неотслеживаемого файла удалено строк: 0");
+    assert.ok(body.includes("Сводка: 1 изменённых строк"), "сводка указывает 1 изменённую строку");
+    assert.ok(body.includes("(Метаданные: исходный патч скрыт политикой безопасности R05)"), "сохранено сообщение о скрытии патча");
+  } finally {
+    fs.readFileSync = origReadFileSync;
+    syncBuiltinESMExports();
+    if (bound) {
+      await new Promise((r) => bound.server.close(r));
+    }
     rmSync(tmp, { recursive: true, force: true });
   }
 });

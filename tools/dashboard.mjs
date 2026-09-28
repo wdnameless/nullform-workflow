@@ -2621,11 +2621,21 @@ function handleRequest(req, res, absRoot, session = null) {
         const st = (statusRes.stdout || "").trim();
         if (st.startsWith("??")) {
           found = true;
+          let fd = null;
           try {
-            const content = readFileSync(join(absRoot, safe), "utf8");
-            added = content.split("\n").length;
+            fd = openSync(join(absRoot, safe), "r");
+            const buf = Buffer.alloc(65536);
+            let n = 0, nl = 0;
+            while ((n = readSync(fd, buf, 0, buf.length, null)) > 0) {
+              for (let i = 0; i < n; i++) if (buf[i] === 10) nl++;
+            }
+            added = nl + 1;
           } catch {
             added = 0;
+          } finally {
+            if (fd !== null) {
+              try { closeSync(fd); } catch {}
+            }
           }
         }
       }
@@ -2884,7 +2894,7 @@ export async function main(argv = process.argv.slice(2)) {
   const dir = dirname(outPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  writeFileSync(outPath, generateDashboardHtml(data), "utf8");
+  writeFileSync(outPath, generateDashboardHtml(sanitizeHttpState(data)), "utf8");
   process.stdout.write(`Дашборд сгенерирован: ${outPath}\n`);
 
   if (opts.serve) {
