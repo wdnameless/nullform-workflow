@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +24,20 @@ function fixture() {
     ], { encoding: "utf8", timeout: 30000, windowsHide: true }),
   };
 }
+function makeDirLink(target, linkPath) {
+  symlinkSync(target, linkPath, "junction");
+}
+
+function makeFileLink(target, linkPath) {
+  try {
+    symlinkSync(target, linkPath, "file");
+    return true;
+  } catch (err) {
+    if (err.code !== "EPERM") throw err;
+    return false;
+  }
+}
+
 
 test("refused promote leaves earlier files unchanged even when a later file is newer in repo", () => {
   const f = fixture();
@@ -181,6 +195,143 @@ test("an unusable root is refused non-zero without touching files", () => {
     assert.notEqual(res.status, 0);
     assert.match(res.stderr + res.stdout, /unusable|REFUSED/i);
     assert.equal(readFileSync(repoMarker, "utf8"), "marker original\n");
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("destination directory junction escaping harness fails preflight and leaves earlier drifted file unchanged", () => {
+  const f = fixture();
+  try {
+    const outside = join(f.root, "outside");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "sentinel.txt"), "outside sentinel\n");
+
+    // Earlier file in manifest: agent/AGENTS.md
+    writeFileSync(join(f.repo, "agent", "AGENTS.md"), "repo new\n");
+    writeFileSync(join(f.harness, "agent", "AGENTS.md"), "live old\n");
+
+    // Later destination's parent: agent/agents is junction to outside
+    makeDirLink(outside, join(f.harness, "agent", "agents"));
+    mkdirSync(join(f.repo, "agent", "agents"), { recursive: true });
+    writeFileSync(join(f.repo, "agent", "agents", "orchestrator.md"), "repo orchestrator\n");
+
+    const res = f.run("--deploy", "--only", "agent/");
+    assert.notEqual(res.status, 0, "must fail nonzero on escaping junction");
+    assert.match(res.stderr + res.stdout, /REFUSED/i);
+
+    // Earlier file remains unchanged (no partial writes)
+    assert.equal(readFileSync(join(f.harness, "agent", "AGENTS.md"), "utf8"), "live old\n");
+    // External sentinel unchanged
+    assert.equal(readFileSync(join(outside, "sentinel.txt"), "utf8"), "outside sentinel\n");
+    // External dir did not receive deployed file
+    assert.equal(existsSync(join(outside, "orchestrator.md")), false);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("promotion source junction escaping live root is refused before copying into repo", () => {
+  const f = fixture();
+  try {
+    const outside = join(f.root, "outside");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "orchestrator.md"), "sensitive outside content\n");
+
+    mkdirSync(join(f.repo, "agent", "agents"), { recursive: true });
+    writeFileSync(join(f.repo, "agent", "agents", "orchestrator.md"), "original repo\n");
+    const now = Date.now() / 1000;
+    utimesSync(join(f.repo, "agent", "agents", "orchestrator.md"), now - 120, now - 120);
+
+    // Live agents dir points to outside
+    makeDirLink(outside, join(f.harness, "agent", "agents"));
+
+    const res = f.run("--promote", "--only", "orchestrator.md");
+    assert.notEqual(res.status, 0, "must fail nonzero on promote source escaping live root");
+    assert.match(res.stderr + res.stdout, /REFUSED/i);
+
+    assert.equal(readFileSync(join(f.repo, "agent", "agents", "orchestrator.md"), "utf8"), "original repo\n");
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("dangling destination link refuses without creating external target or updating earlier drifted file", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.repo, "agent", "AGENTS.md"), "repo new\n");
+    writeFileSync(join(f.harness, "agent", "AGENTS.md"), "live old\n");
+
+    mkdirSync(join(f.repo, "agent", "agents"), { recursive: true });
+    writeFileSync(join(f.repo, "agent", "agents", "orchestrator.md"), "repo orchestrator\n");
+
+    const outsideTarget = join(f.root, "outside-dangling");
+    const outsideMissingFile = join(outsideTarget, "orchestrator.md");
+
+    const destFile = join(f.harness, "agent", "agents", "orchestrator.md");
+    mkdirSync(join(f.harness, "agent", "agents"), { recursive: true });
+    const fileLinkOk = makeFileLink(outsideMissingFile, destFile);
+    if (!fileLinkOk) {
+      rmSync(join(f.harness, "agent", "agents"), { recursive: true, force: true });
+      mkdirSync(outsideTarget, { recursive: true });
+      makeDirLink(outsideTarget, join(f.harness, "agent", "agents"));
+      rmSync(outsideTarget, { recursive: true, force: true });
+    }
+
+    const res = f.run("--deploy", "--only", "agent/");
+    assert.notEqual(res.status, 0, "must refuse nonzero on dangling destination link");
+    assert.match(res.stderr + res.stdout, /REFUSED/i);
+
+    assert.equal(readFileSync(join(f.harness, "agent", "AGENTS.md"), "utf8"), "live old\n");
+    assert.equal(existsSync(outsideMissingFile), false);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("missing child under out-of-root junction fails preflight on check and deploy", () => {
+  const f = fixture();
+  try {
+    const outside = join(f.root, "outside");
+    mkdirSync(outside, { recursive: true });
+    makeDirLink(outside, join(f.harness, "agent", "agents"));
+
+    mkdirSync(join(f.repo, "agent", "agents"), { recursive: true });
+    writeFileSync(join(f.repo, "agent", "agents", "orchestrator.md"), "repo content\n");
+
+    const checkRes = f.run("--check", "--only", "orchestrator.md");
+    assert.notEqual(checkRes.status, 0, "--check must fail on out-of-root junction");
+    assert.match(checkRes.stderr + checkRes.stdout, /REFUSED/i);
+
+    const deployRes = f.run("--deploy", "--only", "orchestrator.md");
+    assert.notEqual(deployRes.status, 0, "--deploy must fail on out-of-root junction");
+    assert.match(deployRes.stderr + deployRes.stdout, /REFUSED/i);
+    assert.equal(existsSync(join(outside, "orchestrator.md")), false);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("promote substitutes harness root at CR/LF boundary while leaving unrelated prefixes unchanged", () => {
+  const f = fixture();
+  try {
+    const slashHarness = f.harness.replace(/\\/g, "/");
+    const liveFile = join(f.harness, "agent", "AGENTS.md");
+    const repoFile = join(f.repo, "agent", "AGENTS.md");
+
+    const liveContent = `Root: ${slashHarness}\nnext line\nWindows: ${slashHarness}\r\nnext line\nPrefix: ${slashHarness}-other\nUnrelated: ${slashHarness}.\n`;
+    writeFileSync(liveFile, liveContent);
+    writeFileSync(repoFile, "old repo\n");
+    const now = Date.now() / 1000;
+    utimesSync(repoFile, now - 120, now - 120);
+    utimesSync(liveFile, now, now);
+
+    const res = f.run("--promote", "--only", "AGENTS.md");
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+
+    const promoted = readFileSync(repoFile, "utf8");
+    const expected = `Root: <HARNESS>\nnext line\nWindows: <HARNESS>\nnext line\nPrefix: ${slashHarness}-other\nUnrelated: <HARNESS>.\n`;
+    assert.equal(promoted, expected);
   } finally {
     rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }

@@ -1,0 +1,7 @@
+# Tasks — audit boundaries and intent assessment
+
+- [x] R01–R03 Sync/verify worktree: write regressions for destination junction/source symlink preflight, root-at-newline promotion, and sandbox `.omp/agent` drift selection; repair the existing sync/verify paths without a new dependency. Parent ran focused tests and isolated CLI smoke.
+- [ ] R04–R05 Workflow worktree: retain local/CI split-verdict and Git-failure regressions; additionally reject Markdown-bold negative verdicts, detect nested Git worktrees and count Unicode untracked paths without lossy quoting. Parent will rerun focused tests and CLI smoke.
+- [x] R06–R08 Dashboard worktree: write static snapshot privacy and large untracked-file HTTP regressions; reuse existing sanitizer and bounded Node file reads. Delete only the exact duplicate `skills/cro/cro/SKILL.md`; preserve canonical skill and other resources. Parent ran focused tests and HTTP/browser smoke.
+- [x] R09 Parent: compare linked video captions and Claude Academy primary lesson against Wave 0/manifest/OpenSpec; include a conservative optional-intake recommendation and adoption trigger in delivery, no video-driven prompt/code changes.
+- [ ] R01–R09 Integration: reconcile isolated worktrees; execute full Node suites, install sandbox verification, `sync --check`, `verify`/`audit`, prompt/code-size/OpenSpec gates and representative CLI/HTTP scenarios; perform one simplify pass without changing tests; obtain blind Oracle acceptance against `manifest.md` and observed behavior before commit/PR.

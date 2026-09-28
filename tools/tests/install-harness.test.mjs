@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rmSync, readFileSync, existsSync, readdirSync, symlinkSync } from "node:fs";
+import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -556,5 +556,101 @@ test("nested --root inside repository is refused before filesystem mutation", ()
     if (existsSync(nestedDir)) {
       rmSync(nestedDir, { recursive: true, force: true });
     }
+  }
+});
+
+test("verifier with --user-home inspects sandbox .omp/agent and ignores external stale law", () => {
+  const temp = createTempDir("omp-verify-userhome-");
+  const root = join(temp, "live");
+  const userHome = join(temp, "home");
+  const externalHome = join(temp, "external-home");
+  try {
+    const installed = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(installed.status, 0, installed.stderr);
+
+    const externalAgentDir = join(externalHome, ".omp", "agent");
+    mkdirSync(externalAgentDir, { recursive: true });
+    writeFileSync(join(externalAgentDir, "AGENTS.md"), "stale divergent law that should be ignored\n");
+
+    const verified = spawnSync(process.execPath, [
+      join(root, "tools", "verify.mjs"),
+      "--profile", "verify", "--root", REPO_ROOT, "--harness", root,
+      "--user-home", userHome, "--json",
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, AGENT_DIR: externalAgentDir, AGENTS_ROOT: join(externalHome, ".agents") },
+    });
+
+    let report;
+    try {
+      report = JSON.parse(verified.stdout);
+    } catch (err) {
+      throw new Error(`verify --json failed to parse: ${err.message}; stdout: ${verified.stdout}`);
+    }
+
+    const driftResult = report.results.find((r) => r.label.includes("drift"));
+    assert.ok(driftResult, "drift check must be present in verify report");
+    assert.equal(driftResult.status, "PASS", `sandbox law matching harness must pass drift: ${JSON.stringify(driftResult)}`);
+
+    writeFileSync(join(userHome, ".omp", "agent", "AGENTS.md"), "corrupted sandbox law\n");
+    const verifiedDrifted = spawnSync(process.execPath, [
+      join(root, "tools", "verify.mjs"),
+      "--profile", "verify", "--root", REPO_ROOT, "--harness", root,
+      "--user-home", userHome, "--json",
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, AGENT_DIR: externalAgentDir, AGENTS_ROOT: join(externalHome, ".agents") },
+    });
+    let reportDrifted;
+    try {
+      reportDrifted = JSON.parse(verifiedDrifted.stdout);
+    } catch (err) {
+      throw new Error(`verify --json failed to parse: ${err.message}; stdout: ${verifiedDrifted.stdout}`);
+    }
+    const driftDrifted = reportDrifted.results.find((r) => r.label.includes("drift"));
+    assert.ok(driftDrifted, "drift check must be present in verify report");
+    assert.equal(driftDrifted.status, "FAIL", "must detect drift when sandbox law itself is modified");
+
+    // OMP law copy containment assertion: sync preflight refuses when law copy escapes declared root
+    const syncScript = join(REPO_ROOT, "tools", "sync.mjs");
+    const sandboxAgentDir = join(userHome, ".omp", "agent");
+    const outsideLaw = join(temp, "outside-law.md");
+    writeFileSync(outsideLaw, "escaped law\n");
+
+    let fileLinkOk = false;
+    try {
+      rmSync(join(sandboxAgentDir, "AGENTS.md"), { force: true });
+      symlinkSync(outsideLaw, join(sandboxAgentDir, "AGENTS.md"), "file");
+      fileLinkOk = true;
+    } catch (err) {
+      if (err.code !== "EPERM") throw err;
+    }
+
+    if (fileLinkOk) {
+      const resEscaped = spawnSync(process.execPath, [
+        syncScript, "--repo", REPO_ROOT, "--harness", root,
+        "--agent-dir", sandboxAgentDir, "--check", "--only", "AGENTS.md",
+      ], { encoding: "utf8" });
+      assert.notEqual(resEscaped.status, 0, "sync must refuse when agent law copy escapes declared agentDir");
+      assert.match(resEscaped.stderr + resEscaped.stdout, /REFUSED.*agent law path/i);
+      rmSync(join(sandboxAgentDir, "AGENTS.md"), { force: true });
+      writeFileSync(join(sandboxAgentDir, "AGENTS.md"), "restored clean law\n");
+    }
+
+    const outsideAgent = join(temp, "outside-agent");
+    mkdirSync(outsideAgent, { recursive: true });
+    writeFileSync(join(outsideAgent, "AGENTS.md"), "escaped harness law\n");
+    rmSync(join(root, "agent"), { recursive: true, force: true });
+    symlinkSync(outsideAgent, join(root, "agent"), "junction");
+    const resHarnessEscaped = spawnSync(process.execPath, [
+      syncScript, "--repo", REPO_ROOT, "--harness", root,
+      "--agent-dir", sandboxAgentDir, "--check", "--only", "agentsX",
+    ], { encoding: "utf8" });
+    assert.notEqual(resHarnessEscaped.status, 0, "sync must refuse when harness law copy escapes declared root");
+    assert.match(resHarnessEscaped.stderr + resHarnessEscaped.stdout, /REFUSED.*harness law path/i);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
   }
 });
