@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  OMP workflow harness - one-command installer.
+  NULLFORM WORKFLOW harness - one-command installer.
 
 .DESCRIPTION
   Installs an orchestration harness for OMP: agent definitions, rules, skills,
@@ -120,7 +120,7 @@ function WriteText([string]$path, [string]$text) {
   [System.IO.File]::WriteAllText($path, $text, $Utf8NoBom)   # a BOM makes the first YAML/JSON key unparsable
 }
 
-Write-Host "`n=== OMP workflow installer ===`n"
+Write-Host "`n=== NULLFORM WORKFLOW installer ===`n"
 Write-Host "  user home    : $UserHome"
 Write-Host "  harness root : $HarnessRoot"
 Write-Host "  source       : $PSScriptRoot`n"

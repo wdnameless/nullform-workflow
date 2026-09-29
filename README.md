@@ -1,527 +1,112 @@
-# Nullform Workflow
+# NULLFORM WORKFLOW
 
-> **Один промпт — и агент работает по инженерному процессу:** гейты вместо обещаний, тесты вместо «готово», наблюдаемость вместо догадок.
+[![CI](https://github.com/wdnameless/nullform-workflow/actions/workflows/repo-gate.yml/badge.svg)](https://github.com/wdnameless/nullform-workflow/actions/workflows/repo-gate.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-Переносимый инженерный каркас разработки для ИИ-агентов: четырёхуровневый классификатор задач (T0–T3), 4-волновой процесс разработки по спецификациям (SDD/OpenSpec) с трассировкой требований `R##`, парк специализированных ролей, 69 навыков, строгий контроль дрейфа и живой дашборд наблюдаемости.
+**Portable engineering workflow harness for AI coding agents — hard gates over promises, verified tests over "done", live observability over guesswork.**  
+**Переносимый инженерный каркас разработки для ИИ-агентов: строгие гейты вместо обещаний, проверенные тесты вместо «готово», наблюдаемость вместо догадок.**
 
-Разработан для Oh My Pi (OMP) и Paseo с переносимыми спецификациями и генераторами адаптеров инструкций (Claude Code, Codex, OpenCode, Cursor) на Windows, Linux, macOS.
+Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for **Claude Code**, **Codex**, **OpenCode**, and **Cursor** on Windows, Linux, and macOS. Zero external npm dependencies (Node.js 18+ stdlib only) · 8 specialized roles · 69 skills · 33 CLI tools · 29 install & 15 audit checks.
 
-| | |
-|---|---|
-| **29** проверок установки · **15** проверок аудита | один раннер `tools/verify.mjs`, обёртки под каждую ОС |
-| **69** навыков · **8** ролей · **33** инструмента | без единой внешней npm-зависимости |
-| **Юнит-тесты** | `node --test tools/tests/*.test.mjs` |
-| **0** внешних npm-пакетов | только стандартная библиотека Node.js 18+ |
-
-![Дашборд: граф зависимостей проекта](docs/assets/dashboard-graph.jpg)
-
-<sub>Дашборд наблюдения: граф зависимостей модулей, стоимость и токены сессии, этапы 4-Wave SDD, логи агента, диффы, вердикты Оракула, техдолг.</sub>
+![NULLFORM WORKFLOW Live Dashboard](docs/assets/dashboard-graph.jpg)
 
 ---
 
-## Содержание
+## English
 
-- [Что внутри](#что-внутри)
-- [Установка](#установка)
-  - [Вариант 1 — одной командой](#вариант-1--одной-командой)
-  - [Вариант 2 — одним промптом](#вариант-2--одним-промптом)
-  - [Адаптеры харнессов](#адаптеры-харнессов)
-  - [Куда что ставится](#куда-что-ставится)
-- [Быстрая проверка после установки](#быстрая-проверка-после-установки)
-- [Принцип работы](#принцип-работы)
-  - [Ярусы T0–T3](#ярусы-t0t3)
-  - [Законы](#законы)
-- [Контроль качества](#контроль-качества)
-  - [4-Wave SDD](#4-wave-sdd)
-  - [Приёмка](#приёмка)
-  - [Бережливая разработка](#бережливая-разработка)
-- [Инструменты](#инструменты)
-  - [Гейт ярусов](#гейт-ярусов--workflowmjs)
-  - [Бюджеты и подсказка тира](#бюджеты-и-подсказка-тира)
-  - [Кеш нейросетей](#кеш-нейросетей-качество-прежде-экономии)
-  - [Дашборд наблюдаемости](#дашборд-наблюдаемости)
-  - [Проверка установки (doctor)](#проверка-установки-doctor)
-  - [Суммаризатор тестов (test-lens)](#суммаризатор-тестов-test-lens)
-  - [Реестр техдолга (debt-ledger)](#реестр-техдолга-debt-ledger)
-  - [Замеры ценности (benchmark)](#замеры-ценности-benchmark)
-  - [Аудит использования](#аудит-использования)
-  - [Плагины OMP](#плагины-omp)
-- [Сопровождение и синхронизация](#сопровождение-и-синхронизация)
-- [CI и авто-ревью](#ci-и-авто-ревью)
-- [Лицензия](#лицензия)
+### Quickstart (3 Steps)
 
----
-
-## Что внутри
-
-| Слой | Что даёт |
-|---|---|
-| **Гейт ярусов** (`tools/workflow.mjs`) | Задача классифицируется T0–T3; агент физически не может закрыть её без обязательных артефактов (exit 1) |
-| **4-Wave SDD** | Бриф с интервью → манифест требований `R##` → спецификация → параллельная сборка → **слепая приёмка Оракула** |
-| **Коридор качества** | TDD → `test-lens` (шум тестов) → мутационное тестирование → BDD Gherkin → независимая приёмка |
-| **Роли** | `orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic` — у каждой свой фокус и права |
-| **Дашборд** | Сервер поднимается при старте задачи, URL выдаётся после HTTP health-проверки; в Paseo агент открывает вкладку через `browser_new_tab`, при недоступном браузерном хосте отдаёт URL пользователю |
-| **Контроль дрейфа** | `tools/verify.mjs` — единый раннер: профиль `verify` (29 проверок) и `audit` (15 проверок); обёртки `.sh` и `.ps1` под каждую ОС; `sync.mjs` с манифестом через `sync.sh` / `sync.ps1`; `doctor.mjs` проверяет обязательные инструменты, роли, плагины и конфиги |
-| **Рост кода** | `tools/code-size.mjs check` блокирует новые превышения и рост относительно `.code-size.baseline.json`; `defer:` в заголовке — явное, видимое в отчёте исключение |
-| **Экономия контекста** | Бюджеты промптов, `prompt-lint`, кеш-бейзлайн, аудит использования плагинов и навыков |
-
----
-
-## Установка
-
-### Вариант 1 — одной командой
-
+**1. Clone the repository**
 ```bash
-git clone https://github.com/wdnameless/omp-paseo-nullform-workflow.git "$HOME/nullform-src"
+git clone https://github.com/wdnameless/nullform-workflow.git "$HOME/nullform-src"
 cd "$HOME/nullform-src"
+```
 
-# Linux / macOS / Git Bash — установщик сам найдёт ваш харнесс:
-./install.sh --harness auto --root .
-
-# Windows или любой Node-рантайм:
+**2. Install the adapter for your harness** (`omp|claude|codex|opencode|cursor|all` or `auto`)
+```bash
 node tools/install-harness.mjs --harness auto --root .
+# Or full OMP + Paseo + MCP fleet setup on Windows:
+# powershell -ExecutionPolicy Bypass -File install.ps1 -SecretsFile secrets.env
 ```
 
-Явный выбор харнесса: `--harness omp|claude|codex|opencode|cursor|all`.
-
-CI проверяет установку OMP в отдельном каталоге на Windows, Linux и macOS
-(Node 20; Node 18 дополнительно на Linux). Установщику нужен только Node 18+;
-без настроенного провайдера модельные проверки помечаются `SETUP`, а отсутствующие
-`openspec`/`omp` — честный `FAIL` в профиле `verify`, а не дефект установки.
-
-Для OMP есть расширенный установщик — с плагинами, MCP-флотом, профилями Paseo и провайдером моделей:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1 -SecretsFile secrets.env
-```
-
-### Вариант 2 — одним промптом
-
-Отправьте это своему агенту (Claude Code, Codex, OpenCode, Cursor, OMP):
-
-```text
-Установи и подключи агентный каркас разработки из репозитория
-https://github.com/wdnameless/omp-paseo-nullform-workflow в текущее окружение:
-
-1. Склонируй репозиторий:
-   git clone https://github.com/wdnameless/omp-paseo-nullform-workflow.git "$HOME/nullform-src"
-2. Запусти установщик адаптера для нашего харнесса в текущий проект:
-   node "$HOME/nullform-src/tools/install-harness.mjs" --harness auto --root .
-3. Подтверди, что создан файл инструкций (CLAUDE.md для Claude Code, AGENTS.md для
-   Codex/OpenCode, .cursor/rules/00-workflow.mdc для Cursor) и что пути внутри него
-   указывают на склонированный каталог, а не на чужую машину.
-4. С этого момента работай по процессу каркаса: перед изменениями вызывай
-   node "<путь>/tools/workflow.mjs" start --tier <T0|T1|T2|T3> --task "<описание>",
-   закрывай задачу через close и не заявляй о готовности без выполненной проверки.
-```
-
-### Адаптеры харнессов
-
-Полностью поставляется и верифицирован адаптер для Oh My Pi (OMP) и профили Paseo. Для остальных сред генератор адаптеров формирует базовые файлы инструкций вызова инструментов (без глубокой интеграции специфичного жизненного цикла):
-
-| Харнесс | Файл инструкций | Статус |
-|---|---|---|
-| OMP | `~/.omp/agent/AGENTS.md` | Проверен и поставляется |
-| Paseo | `paseo/profiles.json` | Проверен и поставляется |
-| Claude Code | `CLAUDE.md` | Базовый шаблон инструкций |
-| Codex | `AGENTS.md` | Базовый шаблон инструкций |
-| OpenCode | `AGENTS.md` + `opencode.json` | Базовый шаблон инструкций |
-| Cursor | `.cursor/rules/00-workflow.mdc` | Базовый шаблон инструкций |
-### Куда что ставится
-
-```text
-<HarnessRoot>/agent/agents/     роли (orchestrator, fixer, oracle, ...)
-<HarnessRoot>/tools/            инструменты: verify, workflow, dashboard, sync, ...
-<HarnessRoot>/core/PORTABLE.md  спецификация процесса, независимая от харнесса
-~/.omp/agent/AGENTS.md          свод законов, читается каждый сеанс
-~/.omp/agent/rules/*.md          правила, адресуемые как rule://
-~/.agents/skills/*/SKILL.md      реестр навыков
-```
-
-Переустановка идемпотентна — запускайте её после `git pull`, чтобы обновить каркас. Установка **не трогает** ваш Paseo: интеграция профилей выполняется только явным шагом (`paseo/setup-paseo.ps1` или `install.ps1 -SetupPaseo`).
-
----
-
-## Быстрая проверка после установки
-
+**3. Verify environment & run your first gated task**
 ```bash
-node tools/doctor.mjs --harness .          # окружение: инструменты, роли, плагины, конфиги
-node tools/workflow.mjs start --tier T1 --task "проба"   # гейт ярусов + автозапуск дашборда
-node tools/workflow.mjs artifact --kind recon --detail "быстрая проверка установки и доступности инструментов"
+node tools/doctor.mjs --harness .
+node tools/workflow.mjs start --tier T1 --task "smoke check"
+node tools/workflow.mjs artifact --kind recon --detail "environment verified"
 node tools/workflow.mjs close
-node tools/dashboard.mjs --url             # адрес живого дашборда
-```
-Полная верификация — тот же раннер, что гоняет CI:
-
-```bash
-node tools/verify.mjs --profile verify     # 29 проверок установки
-node tools/verify.mjs --profile audit      # 15 проверок здоровья
-node tools/code-size.mjs check             # рост кода относительно baseline
 ```
 
----
+### Work Tiers (T0–T3)
 
-## Принцип работы
-
-**Порядок и есть продукт:** код пишется в предпоследней фазе. Всё до неё — выяснение, что именно строить; всё после — доказательство, что построено именно это.
-
-### Ярусы T0–T3
-
-| Ярус | Когда | Что обязательно |
+| Tier | Scope / When to Use | Required Gates & Artifacts (`tools/workflow.mjs`) |
 |---|---|---|
-| **T0** | 1–2 известных файла | ничего, кроме объявленного яруса |
-| **T1** | 3+ файла или незнакомая область | рекогносцировка |
-| **T2** | архитектура, новый модуль | манифест `R##`, OpenSpec, интерфейсы, слепая приёмка |
-| **T3** | программа из нескольких фич | T2 на каждый срез |
+| **T0** | 1–2 known files, trivial local fix | Declared tier (`start --tier T0` → `close`); supports guarded `--auto` (`--max-diff <= 20`) |
+| **T1** | 3+ files or unfamiliar area | Reconnaissance (`recon` artifact) before edits + verification before `close` |
+| **T2** | Architecture change or new module | 4-Wave SDD: `manifest.md` (`R##`), OpenSpec `proposal/tasks/specs`, `interfaces.md`, blind `oracle` ACCEPT |
+| **T3** | Multi-feature program or cross-cutting epic | Full T2 contract and blind Oracle acceptance per vertical slice |
 
-### Законы
+### Key Commands & Architecture Links
 
-- **Честность** — нет доказательства, нет «готово».
-- **Анализ до правок** — сначала инвентаризация существующего кода: переиспользовать → расширить → создать.
-- **Минимализм** — лестница решений вместо самого привычного инструмента.
-- **Один владелец на файл** — параллельные исполнители никогда не пишут в один файл.
-
----
-
-## Контроль качества
-
-### 4-Wave SDD
-
-1. **Wave 0 — интервью.** Скрытые ограничения и развилки выявляются до спецификации и кода.
-2. **Wave 1 — контекст.** Манифест требований `R##` с дословными цитатами заказчика; публичные сигнатуры в `interfaces.md`.
-3. **Wave 2 — спецификация.** Декомпозиция на атомарные задачи в OpenSpec.
-4. **Wave 3 — сборка.** Параллельные изолированные исполнители строго в рамках выделенных файлов.
-5. **Wave 4 — приёмка.** Слепой Оракул проверяет результат **против исходного брифа**, а не против нашей же спецификации.
-
-### Приёмка
-
-- **Двойная приёмка:** если разрешённая модель Оракула относится к flash-классу (имя содержит `flash` либо это настроенный фоллбэк), одной проверки недостаточно — выполняются два независимых прохода, и вердикт ACCEPT выносится только при их согласии. Любой `REJECT` запускает раунд правок, после которого пара проходов повторяется. Это защищает приёмку от нестабильности дешёвой модели.
-- **Oracle-lite:** сокращённый единственный проход допускается только для малого среза (≤2 файла и ≤~80 строк диффа) и следует тому же протоколу доказательств, что полный Оракул (раздел EVIDENCE PROTOCOL в `agent/agents/oracle.md`): дословные цитаты путь+строка, сырой вывод команд, явный cwd, `NOT PROVEN` вместо догадки.
-- **Disabled skill:** навык, перечисленный оператором в `~/.agents/.skills-disabled.json`; `tools/skills-doctor.mjs` сообщает о нём как `disabled by operator` и не считает его сиротой или расхождением паритета.
-- **Prune:** `tools/sync.sh --prune` (или `tools/sync.ps1 -Prune`) перечисляет файлы каркаса, отсутствующие в репозитории, в пределах каталогов, покрытых манифестом. Удаление выполняется только с `--confirm`; по умолчанию это dry-run. Очистка никогда не трогает `.prompt-lint`, `.workflow`, `.archmap`, `node_modules`, `worktrees`, сессионные и конфигурационные файлы.
-
-### Бережливая разработка
-
-Практика предотвращения переинженеринга и контроля осознанного технического долга.
-
-**Лестница решений.** Применяется исполнителями (`fixer`, `designer`) строго после понимания задачи:
-
-1. **Нужно ли вообще?** Может, задачу решает отказ от фичи или документация существующего поведения?
-2. **Переиспользовать** уже имеющееся в кодовой базе.
-3. **Стандартная библиотека** рантайма (`node:fs`, `node:path`, Python stdlib).
-4. **Нативная фича платформы** (`<dialog>`, `<input type="date">`, CSS-анимации вместо JS).
-5. **Уже установленная зависимость** проекта — без добавления новых пакетов.
-6. **Однострочник** или простое решение.
-7. **Минимальный рабочий код** — ровно столько, сколько нужно для требований.
-
-Если работают два варианта — выбирается высшая ступень.
-
-> **Никогда не урезается (never-cut):** валидация на trust boundaries, обработка ошибок с риском потери данных, безопасность, доступность (a11y) и явно заказанные пользователем требования.
-
-**Маркер отложенных упрощений.** Когда намеренно выбирается простое решение с известным ограничением, в код добавляется однострочный маркер:
-
-```ts
-// defer: in-memory Map instead of SQLite | ceiling: 10k items | upgrade: persistent store when scaling
-```
-
-Грамматика: `defer: <что упрощено> | ceiling: <потолок> | upgrade: <триггер пересмотра>`. Отсутствие поля `upgrade:` трактуется как no-trigger (замечание при аудите). Маркер распознаётся только в начале содержимого комментария (сразу после префикса `//`, `#`, `--`, `;`, `/*`, `*`, `<!--` и опциональных пробелов); упоминания `defer:` в середине строк маркерами не считаются.
-
-**Тегированное ревью.** Агент `@reviewer` оценивает код через Lean-линзу с обязательными тегами:
-
-- `delete:` мёртвый код или неиспользуемая гибкость (замена: «nothing»).
-- `stdlib:` замена самописного хелпера на функцию стандартной библиотеки.
-- `native:` замена библиотеки на нативную возможность платформы.
-- `yagni:` абстракция с одной реализацией или неиспользуемая конфигурация.
-- `shrink:` сокращение логики без потери ясности и безопасности (с демонстрацией более короткой формы).
-
-Каждый пункт обязан назвать замену. Секция завершается метрикой: `net: -N lines possible` либо `Lean already.`
-
-**Стадия B: упрощение перед приёмкой.** Вторая фаза рабочего цикла (ритм **A→B→A**), выполняемая после того, как все требования реализованы и тесты стадии A зелёные:
-
-1. **Стадия A:** разработка решения по спецификации, регрессионные и юнит-тесты.
-2. **Стадия B (упрощение):** рефакторинг на сжатие — ликвидация дублирования, замена рукописных велосипедов на `stdlib`/`native`, устранение промежуточных обёрток и мёртвого кода.
-3. **Стадия A (повторная верификация):** контрольный прогон тестов без изменения их состава и логики.
-
-**Инвариант тестов:** на стадии B тесты — абсолютный инвариант. Запрещено удалять, комментировать, ослаблять или подгонять ассерты под упрощённый код.
-
-**Метрика результата:** баланс строк по задаче обязан быть нейтральным или отрицательным (`net: -N lines` либо нулевой прирост при добавлении тестов). Раздувание кодовой базы без бизнес-необходимости бракуется.
+- **Core Protocol & 4-Wave SDD**: [`core/PORTABLE.md`](core/PORTABLE.md) — harness-agnostic specification, roles (`orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic`), Lean A→B→A stage rhythm, and evidence protocol.
+- **Domain Glossary & Topology**: [`CONTEXT.md`](CONTEXT.md) — definitions of live/repo trees, `<HARNESS>` substitution, Oracle-lite, dual-pass flash-class acceptance, prompt budgets, `defer:` debt markers, and sync/prune semantics.
+- **Documentation & Visual Assets**: [`docs/`](docs/) — dashboard overview and visual artifacts (`node tools/dashboard.mjs --url`).
+- **Always-On Agent Laws & Roles**: [`agent/AGENTS.md`](agent/AGENTS.md) · [`agent/agents/orchestrator.md`](agent/agents/orchestrator.md) · [`agent/plugins.json`](agent/plugins.json).
+- **Verification, Sync & Quality Gates**:
+  - `node tools/verify.mjs --profile verify` (29 install checks) · `--profile audit` (15 health checks)
+  - `node tools/sync.mjs --check | --promote | --deploy | --prune` (wrapper scripts: `tools/sync.sh`, `tools/sync.ps1`)
+  - `node tools/code-size.mjs check` · `node tools/debt-ledger.mjs scan --check` · `node tools/prompt-lint.mjs sizes --check`
+  - `node tools/test-lens.mjs` · `node tools/benchmark.mjs` · `node tools/usage-audit.mjs` · `node tools/auto-review.mjs --root .`
+  - CI template: [`templates/ci/workflow-gate.yml`](templates/ci/workflow-gate.yml) · Unit tests: `node --test tools/tests/*.test.mjs`
 
 ---
 
-## Инструменты
+## Русский
 
-### Гейт ярусов — `workflow.mjs`
+### Быстрый старт (3 шага)
 
+**1. Склонируйте репозиторий**
 ```bash
-node tools/workflow.mjs start --tier <T0|T1|T2|T3> --task "<описание>"
-node tools/workflow.mjs check      # exit 1 — не хватает обязательных артефактов
-node tools/workflow.mjs artifact --kind manifest --path openspec/changes/x/manifest.md
-node tools/workflow.mjs close      # откажется закрывать незавершённый ярус
+git clone https://github.com/wdnameless/nullform-workflow.git "$HOME/nullform-src"
+cd "$HOME/nullform-src"
 ```
 
-Для T2/T3 `manifest`, `openspec` и `interfaces` требуют путь внутри проекта; `check` и `close` повторно проверяют содержимое. `REJECT` не закрывает задачу. Приёмка привязана к снимку исходников: последующие изменения, добавления и удаления делают её устаревшей. `close --force --reason "<причина>"` фиксирует допустимое отклонение, но не превращает отрицательный вердикт в `ACCEPT`.
-
-### Бюджеты и подсказка тира
-
-**Подсказка тира** — эвристика по списку файлов и описанию задачи:
-
+**2. Установите адаптер под ваш харнесс** (`omp|claude|codex|opencode|cursor|all` или `auto`)
 ```bash
-node tools/workflow.mjs suggest --files src/app.ts,src/util.ts [--task "fix typing"]
+./install.sh --harness auto --root .
+# Или на любой ОС через Node.js:
+node tools/install-harness.mjs --harness auto --root .
+# Полная установка OMP (плагины, MCP-флот, Paseo) на Windows:
+# powershell -ExecutionPolicy Bypass -File install.ps1 -SecretsFile secrets.env
 ```
 
-Возвращает JSON: `tier` (T0–T3), `confidence` (0.0–1.0 — доля сработавших правил) и `reasons` (обоснования по каждому правилу).
-
-**Бюджеты вызовов инструментов** задаются в `.workflow/budgets.json` рядом с `state.json`:
-
-```json
-{ "T0": 10, "T1": 25, "T2": 45, "T3": 45 }
-```
-
-При `start` печатается `budget: N tool calls for <TIER>`; `status` показывает текущий бюджет. При приближении к лимиту субагенты формируют `HANDOFF` для передачи контекста.
-
-**Защищённый автономный режим** для тривиальных правок:
-
+**3. Проверьте установку и запустите первую задачу**
 ```bash
-node tools/workflow.mjs start --tier T0 --auto --allow "src/**" --max-diff 5 --task "fix typo"
+node tools/doctor.mjs --harness .
+node tools/workflow.mjs start --tier T1 --task "проба"
+node tools/workflow.mjs artifact --kind recon --detail "проверка окружения и инструментов"
+node tools/workflow.mjs close
 ```
 
-- Разрешён **только** для `T0`: с тиром T1+ команда завершается с exit 1 и фиксирует `autoRefusal` в состоянии.
-- Обязательны `--allow "<маска>"` и `--max-diff <N>`, где `1 <= N <= 20`.
-- Закрытие `close --auto --diff-lines <N>` сверяет фактический объём diff со значением `maxDiff`.
-- Каркас **не редактирует файлы сам**: флаг — это строгий гейт-контракт. Оркестратор вправе применять правки T0 автономно только при зафиксированном состоянии `auto`.
+### Ярусы задач (T0–T3)
 
-### Кеш нейросетей: качество прежде экономии
-
-Workflow измеряет prompt cache, но не меняет модель и не урезает контекст:
-
-```bash
-python tools/session_cost.py --cache-report session.jsonl
-node tools/cache-doctor.mjs session.jsonl
-node tools/prompt-lint.mjs fingerprint --root . --json
-node tools/cache-policy.mjs check --root . --policy templates/workflow/cache-policy.example.json
-node tools/return-contract.mjs check agent-result.md
-```
-
-`cacheReadShare = cacheRead / (input + cacheRead)` — наблюдаемая доля повторно прочитанного ввода, а не универсальный provider hit-rate. Cache Doctor называет причину только когда она присутствует в транскрипте (model_change, fallback, compaction, fingerprint drift); иначе возвращает `UNKNOWN`.
-
-Пороговые значения моделей, compaction и объёма вывода — **только advisory**. Инструменты кеша никогда не меняют `modelRoles`, не компактифицируют историю, не обрезают ответы, не пропускают тесты и не редактируют проектный код.
-
-**Бюджет промптов.** Контроль объёма промпт-поверхностей защищает окно контекста и снижает расходы на кеширование:
-
-```bash
-node tools/prompt-lint.mjs sizes          # размеры и проверка лимитов
-node tools/prompt-lint.mjs sizes --check  # строгий гейт (exit 1 при превышении)
-```
-
-| Группа | Что входит | Байты | Строки |
-|---|---|---|---|
-| `always` | `agent/AGENTS.md` — свод законов, читается каждый сеанс | 16384 (16 KB) | 200 |
-| `role-defs` | все `agent/agents/*.md` — **суммарно по каталогу** | 65536 (64 KB) | 1200 |
-| `rules` | `rules/*.md` (или `~/.agents/rules/*.md`) | 16384 (16 KB) | 250 |
-| `skills` | только frontmatter (`name` + `description`) каждого `skills/*/SKILL.md` | 32768 (32 KB) | 400 |
-
-Лимиты любой группы переопределяются в `.prompt-lint/budget.json` ключами `maxBytes` / `maxLines`. Неизвестная группа или некорректное значение не игнорируются молча — команда печатает предупреждение и завершается кодом 2. При превышении лимита `--check` возвращает код 1 и помечает группу как `EXCEEDED`, печатая фактические значения.
-
-### Дашборд наблюдаемости
-
-Интерактивный дашборд: открывается **сам** при старте задачи и обновляется на месте каждые 3 секунды.
-
-- **Автозапуск:** `node tools/workflow.mjs start --tier T1 --task "..."` поднимает фоновый сервер и открывает страницу. Отключается флагом `--no-dashboard` или переменной `NF_NO_DASHBOARD=1`.
-- **Приоритет — браузер среды разработки:** внутри рабочего пространства Paseo (`PASEO_AGENT_ID`) системный браузер не открывается — адрес печатается, и агент открывает страницу в браузере Paseo. Вне Paseo CLI открывает системный браузер сам.
-- **Адрес для агента:** `node tools/dashboard.mjs --url` печатает только URL живого дашборда (идемпотентно поднимая его).
-- **Живой режим:** страница опрашивает `/api/state` и перерисовывает секции без перезагрузки; изменившиеся блоки подсвечиваются; индикатор `LIVE` в шапке подтверждает связь с сервером.
-- **Что видно:** прогресс и покрытие брифа (R##), этапы 4-Wave SDD, модули и граф зависимостей, имена изменённых файлов и число строк изменений, статусы приёмки и историю задач. HTTP-вкладка логов показывает только тип события, время, имя инструмента и статус: тексты сообщений, аргументы команд и содержимое патчей не передаются.
-
-```bash
-node tools/dashboard.mjs --ensure --root .                  # поднять и открыть (идемпотентно)
-node tools/dashboard.mjs --serve --no-open --port 4300      # живой сервер без открытия браузера
-node tools/dashboard.mjs --checks            # прогнать гейты
-node tools/dashboard.mjs --json              # машинные данные
-node tools/dashboard.mjs --open              # открыть статичный файл
-```
-
-### Проверка установки (doctor)
-
-```bash
-node tools/doctor.mjs                                                        # диагностика окружения
-node tools/doctor.mjs --harness <root> --agent-dir "$HOME/.omp/agent" --agents-home "$HOME/.agents"
-```
-
-**Что проверяет:**
-
-- Наличие исполняемых файлов рантайма (Node.js 18+, git, powershell/pwsh).
-- Корректность структуры каталогов (`~/.omp/`, `~/.agents/`, системные файлы и шаблоны).
-- Отсутствие повреждённых символических ссылок и мусорных файлов от прерванных сессий.
-- Доступность и валидность конфигураций (`config.yml`, `models.yml`, `mcp.json`).
-- Плагины `pi-lens` и `oh-my-pi-plugin-morph` обязательны: отсутствие или несовпадение версии с `agent/plugins.json` даёт `FAIL`. Остальные плагины дают `WARN`; `--require-plugins` делает обязательными все. Явный `install.ps1 -SkipPlugins` отключает проверку плагинов только на время этой установки.
-
-**Проверка провайдеров (`--probe`, опционально, требует сети):**
-
-- Опрашивает провайдеров из `models.yml` и проверяет, что каждая роль из `config.yml` указывает на достижимую модель. Недостижимый провайдер даёт `WARN` со списком затронутых ролей — никогда не `FAIL`: машина может быть офлайн.
-- Без `--probe` сеть не трогается: диагностика остаётся полностью локальной.
-- `node tools/oracle-model.mjs ensure --probe` не выберет модель провайдера, не прошедшего проверку доступности.
-
-**Интеграция с установщиком:** `install.ps1` вызывает `doctor.mjs` финальным шагом. Если проверка выявляет ошибки, установщик завершается аварийно (exit 1), предотвращая работу в повреждённом окружении.
-
-### Суммаризатор тестов (test-lens)
-
-`tools/test-lens.mjs` прогоняет тесты и сжимает вывод до компактного JSON-свода — чтобы агент не тратил контекст на километры логов раннера:
-
-```bash
-node tools/test-lens.mjs run -- npx vitest run --reporter=json
-node tools/test-lens.mjs parse test-output.txt
-cat test-output.txt | node tools/test-lens.mjs parse
-```
-
-- **Свод:** `total` / `passed` / `failed` / `failures` (только упавшие кейсы с сообщениями).
-- **Распознаёт:** `node --test` (spec reporter), Jest/Vitest JSON, pytest, cargo test; для остальных — `rawSummary` (отфильтрованные строки с `fail|error|exception`) вместо выдуманных чисел.
-- **Коды выхода режима `run`:** совпадают с кодом команды; `2` — команда не стартовала (`spawnError`); `1` — процесс убит сигналом. Ошибка инструмента никогда не выглядит как зелёный тест.
-
-### Реестр техдолга (debt-ledger)
-
-```bash
-node tools/debt-ledger.mjs scan                  # сканирование комментариев на маркеры defer
-node tools/debt-ledger.mjs scan --check          # проверка формата и триггеров в CI/verify
-node tools/debt-ledger.mjs scan --write DEBT-LEDGER.md   # отчёт в Markdown
-```
-
-### Замеры ценности (benchmark)
-
-`tools/benchmark.mjs` объективно измеряет отдачу от разных конфигураций разработки («армов») на фиксированном наборе задач.
-
-**Что измеряется:**
-
-- **LOC:** добавленные (`+`) и удалённые (`-`) строки по `git diff --cached --numstat HEAD`, количество затронутых файлов.
-- **Время:** wall-clock time работы агента и проверок в миллисекундах.
-- **Проверки:** доля и статус прохождения детерминированных проверок (unit-тесты, сборка, линтеры) — без ненадёжных LLM-судей.
-- **Стоимость:** расход токенов и расчётная стоимость в USD — вычисляется **только при передаче флага `--transcript`** через `tools/session_cost.py`; без транскрипта харнесс честно фиксирует отсутствие данных.
-
-> **Важное разграничение:** харнесс **не запускает модели напрямую** и не привязан к конкретному движку агента. Команду запуска задаёт пользователь через шаблон в конфигурации арма. Харнесс отвечает за изолированное окружение, подстановку параметров, замер метрик и верификацию.
-
-**Ключевые концепции:**
-
-- **Task:** изолированная формулировка проблемы в `bench/tasks.json` (промпт, необязательный setup, таймаут, детерминированные проверки).
-- **Arm:** именованный вариант («плечо») — например `baseline` против `with-sdd` — со своим шаблоном команды раннера.
-- **Run:** единичный запуск задачи на арме, выполняется в **чистом локальном клоне** (`git clone --quiet --local`), поэтому армы и повторные прогоны гарантированно изолированы.
-- **Check:** детерминированная верификационная команда (код возврата 0 = pass).
-
-**Плейсхолдеры и переменные окружения:**
-
-| Плейсхолдер | Переменная | Описание |
+| Ярус | Когда применяется | Обязательные гейты и артефакты (`tools/workflow.mjs`) |
 |---|---|---|
-| `{prompt_file}` | `BENCH_TASK_PROMPT` | Путь к файлу с текстом промпта задачи |
-| `{run_dir}` | `BENCH_RUN_DIR` | Директория изолированного прогона (свежий git-клон) |
-| `{task_id}` | *(нет)* | Идентификатор задачи (например, `calc-eval`) |
-| `{arm}` | `BENCH_ARM` | Имя тестируемого арма (например, `baseline`) |
-| *(нет)* | `BENCH_RUN_ID` | Уникальный идентификатор прогона (timestamp + rand) |
+| **T0** | 1–2 известных файла, локальная правка | Объявленный ярус (`start --tier T0` → `close`); доступен защищённый `--auto` (`--max-diff <= 20`) |
+| **T1** | 3+ файлов или незнакомая область | Рекогносцировка (`recon`) до правок и верификация перед `close` |
+| **T2** | Архитектура или новый модуль | 4-Wave SDD: `manifest.md` (`R##`), OpenSpec `proposal/tasks/specs`, `interfaces.md`, слепая приёмка `oracle` (ACCEPT) |
+| **T3** | Программа из нескольких фич | Полный цикл T2 и слепая приёмка Оракула на каждый вертикальный срез |
 
-```bash
-node tools/benchmark.mjs init                                            # 1. каркас бенчмарка
-node tools/benchmark.mjs run --task add-feature --arm baseline --dry-run  # 2. пробный прогон
-node tools/benchmark.mjs run --task add-feature --arm baseline --yes      # 3. реальный прогон
-node tools/benchmark.mjs report                                          # 4. сводка по прогонам
-node tools/benchmark.mjs compare --baseline baseline --candidate omp-workflow  # 5. сравнение
-```
+### Документация, канон и инструменты
 
-### Аудит использования
-
-`tools/usage-audit.mjs` анализирует частоту и паттерны вызовов инструментов, MCP-серверов и навыков по локальным логам сессий:
-
-```bash
-node tools/usage-audit.mjs            # за последние 30 дней
-node tools/usage-audit.mjs --days 30
-node tools/usage-audit.mjs --json
-```
-
-**Что показывает:** сводную статистику по запускам встроенных тулов, MCP-серверов и навыков, распределение по дням и долю неиспользуемых возможностей для оптимизации профилей агентов.
-
-**Что НЕ печатает:** утилита соблюдает строгую гигиену данных — она никогда не выводит аргументы вызовов, переданный код, пути к приватным файлам, токены авторизации или payload-ы промптов.
-
-### Плагины OMP
-
-Каркас ставит набор сторонних OMP-плагинов из манифеста `agent/plugins.json` — **14 записей**: `@dietrichgebert/ponytail`, `@plannotator/pi-extension`, `oh-my-pi-plugin-grok-build`, `oh-my-pi-plugin-morph`, `omp-plugin-duplicate-detector`, `omp-typescript-complexity-evaluator`, `omp-url-pin`, `pi-bar`, `pi-gh-cli`, `pi-goal-x`, `pi-lens`, `pi-linter`, `pi-prompt-shelf`, `pi-qq`.
-
-- **Автоматически:** `install.ps1` ставит точные версии из манифеста. Неудача обязательного плагина останавливает установку; опциональный даёт предупреждение. `-SkipPlugins` — явный обход для офлайн-установки: проверка плагинов в завершающем doctor пропускается, но обычный запуск doctor по-прежнему проверяет обязательные.
-- **Вручную** (команда идемпотентна — повторный запуск ничего не ломает):
-
-  ```powershell
-  omp plugin install "<spec>"   # по каждой строке agent/plugins.json
-  omp plugin list --json        # проверка: {npm:[{name,version,path,manifest,enabledFeatures,enabled}]}
-  ```
-
-- **Проверка доктором:** `node tools/doctor.mjs` сверяет имена и версии с манифестом. Отсутствующий или неверной версии обязательный плагин — `FAIL`, опциональный — `WARN`; `--require-plugins` требует все. Сеть не требуется.
+- **Портативное ядро и 4-Wave SDD**: [`core/PORTABLE.md`](core/PORTABLE.md) — независимая от среды спецификация процесса, роли (`orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic`), бережливый цикл A→B→A и протокол доказательств.
+- **Глоссарий домена и топология**: [`CONTEXT.md`](CONTEXT.md) — устройство live/repo-деревьев, подстановка `<HARNESS>`, двойная приёмка на flash-моделях, Oracle-lite, бюджеты промптов, маркеры техдолга `defer:` и правила синхронизации.
+- **Материалы и дашборд**: [`docs/`](docs/) — живой дашборд наблюдаемости (`node tools/dashboard.mjs --url`, автозапуск при `workflow.mjs start`).
+- **Законы агентов и шаблоны CI**: [`agent/AGENTS.md`](agent/AGENTS.md) · [`agent/agents/orchestrator.md`](agent/agents/orchestrator.md) · [`templates/ci/workflow-gate.yml`](templates/ci/workflow-gate.yml).
+- **Проверка и сопровождение**: `node tools/verify.mjs --profile verify` (29 проверок) · `node tools/verify.mjs --profile audit` (15 проверок) · `node --test tools/tests/*.test.mjs`.
 
 ---
 
-## Сопровождение и синхронизация
-
-**Верификация и аудит — один кросс-платформенный раннер** (`tools/verify.mjs`) с тонкими обёртками под каждую ОС: `verify.sh` / `tools/audit.sh` на Linux и macOS, `verify.ps1` / `tools/audit.ps1` на Windows. Все четыре запускают одну и ту же реализацию, поэтому результат не зависит от платформы.
-
-```bash
-node tools/verify.mjs --profile verify     # 29 проверок установки
-node tools/verify.mjs --profile audit      # сводный аудит (15 проверок)
-./verify.sh                                # POSIX-обёртка профиля verify
-./tools/audit.sh                           # POSIX-обёртка профиля audit
-
-./tools/sync.sh --check                    # дрейф между репозиторием и установкой
-./tools/sync.sh --promote                  # перенос изменений: рабочая папка → репозиторий
-./tools/sync.sh --deploy                   # перенос изменений: репозиторий → рабочая папка
-./tools/sync.sh --prune                    # кандидаты на удаление (dry-run; удаление только с --confirm)
-
-node tools/prompt-lint.mjs baseline --root .   # обновление базовой линии кэша промптов
-python3 tools/session_cost.py <transcript.jsonl>
-```
-
-На Windows те же операции доступны в PowerShell:
-
-```powershell
-powershell -File verify.ps1
-powershell -File tools/audit.ps1
-powershell -File tools/sync.ps1 -Promote
-powershell -File tools/sync.ps1 -Deploy
-```
-
-**Коды выхода раннера:** `0` — всё прошло, `1` — есть хотя бы один `FAIL`, `2` — запуск невозможен. Нечего проверять (нет провайдера, нет базовой линии) — это `SETUP`, а не `FAIL`: чистая установка не должна выглядеть сломанной.
-
----
-
-## CI и авто-ревью
-
-Каркас предоставляет готовый шаблон GitHub Actions и утилиту авто-ревью:
-
-**Шаблон CI** — `templates/ci/workflow-gate.yml`:
-
-- Настраивает Node.js 20. Внешних npm-зависимостей нет: инструменты работают на стандартной библиотеке Node.
-- Запускает валидацию спецификаций OpenSpec (`@fission-ai/openspec validate --strict`) для изменённых предложений.
-- Выполняет регрессионные и модульные тесты (`node --test tools/tests/*.test.mjs`).
-- На PR требует ровно одну метку `workflow:T0`, `workflow:T1`, `workflow:T2` или `workflow:T3`; изменение метки перезапускает проверку. Для T2/T3 проверяет закоммиченные `manifest.md`, `proposal.md`, `tasks.md`, `specs/`, `interfaces.md` и положительный `oracle.md` в изменённом `openspec/changes/<id>/`. Игнорируемый `.workflow/state.json` не используется как доказательство CI; T0/T1 сохраняют обычные проверки кода и тестов.
-
-**Авто-ревью** — `tools/auto-review.mjs`:
-
-```bash
-node tools/auto-review.mjs --root .
-```
-
-- Локальный и CI-гейт архитектуры: формирует отчёт по категориям и критичности.
-- Блокирует сборку (exit 1) при критических (`critical`) или высоких (`high`) проблемах и при новых циклических зависимостях.
-- При наличии `tsconfig.json` выполняет проверку типов (`tsc --noEmit`); при наличии `.eslintrc*` запускает линтер в режиме отчёта.
-- Запускает `npm test` проекта и фиксирует количество успешных и упавших тестов.
-- Не модифицирует файлы проекта и не требует сторонних зависимостей.
-
----
-
-## Разработка
-
-```bash
-node --test tools/tests/*.test.mjs    # юнит-тесты
-node tools/verify.mjs --profile audit # аудит репозитория
-node tools/auto-review.mjs --root .   # архитектурный гейт
-```
-
-Полный свод правил: `core/PORTABLE.md`, `agent/AGENTS.md`, `agent/agents/orchestrator.md`.
-
----
-
-## Лицензия
+## License / Лицензия
 
 MIT
