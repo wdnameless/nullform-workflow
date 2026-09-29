@@ -2,9 +2,9 @@
 
 ## ADDED Requirements
 
-### Requirement: Oracle ships separately from code
+### Requirement: Oracle MUST ship separately from code
 
-Первый коммит с oracle-файлом не должен содержать других файлов change-каталога.
+Первый коммит с oracle-файлом MUST NOT содержать других файлов change-каталога.
 
 #### Scenario: All-in-one commit
 - **WHEN** `oracle.md ACCEPT` и `evil.js` в одном коммите
@@ -16,7 +16,7 @@
 
 ### Requirement: Binary diffs MUST refuse auto-close
 
-Любая строка numstat с `-` в счётчиках обязана давать отказ guarded-auto: бинарный объём неизмерим строками.
+The system MUST refuse guarded-auto close on any numstat `-` counter: бинарный объём неизмерим строками.
 
 #### Scenario: Binary under allow
 - **WHEN** T0 `--auto --allow 'bin/**' --max-diff 100`, изменён 5-МБ бинарь
@@ -24,7 +24,7 @@
 
 ### Requirement: Renames MUST check both ends
 
-Парсер numstat обязан разбирать `{old => new}` и `old => new` и проверять оба конца через allow-паттерн.
+The system MUST parse `{old => new}` and `old => new` and allow-check both ends.
 
 #### Scenario: Rename escapes allow
 - **WHEN** `git mv src/ok lib/evil` при `--allow 'src/**'`
@@ -36,7 +36,7 @@
 
 ### Requirement: Dirty-check MUST use NUL parsing
 
-Проверка незакоммиченных изменений обязана использовать NUL-разбор и точный сегментный фильтр `.workflow/`.
+The system MUST use NUL-разбор и точный сегментный фильтр `.workflow/`.
 
 #### Scenario: Newline in filename
 - **WHEN** untracked файл с `\n` в имени
