@@ -46,8 +46,8 @@
       "reason": "Regression tests for the OMP 18.3.3+ plugin-list exit-code tolerance"
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 930,
-      "reason": "Current-change Oracle, Markdown-bold verdict, nested Git and Unicode untracked diff-cap regressions (R04-R05)"
+      "lines": 1089,
+      "reason": "Same-commit oracle, binary/rename numstat, NUL dirty-check regressions (R03-R05, R07)"
     },
     "tools/verify.mjs": {
       "lines": 1286,

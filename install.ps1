@@ -90,6 +90,26 @@ if ([string]::IsNullOrWhiteSpace($HarnessRoot)) {
   $HarnessRoot = Join-Path $UserHome 'omp-workflow'
 }
 
+# Resolve HarnessRoot early and guard against installing into repo root or repo subdirectories (R06)
+$HarnessRoot = [System.IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($HarnessRoot))
+$scriptRootResolved = [System.IO.Path]::GetFullPath($PSScriptRoot)
+
+$normHarness = $HarnessRoot.TrimEnd('\', '/')
+$normSource  = $scriptRootResolved.TrimEnd('\', '/')
+
+$sep = [System.IO.Path]::DirectorySeparatorChar
+$isEqual = [string]::Equals($normHarness, $normSource, [System.StringComparison]::OrdinalIgnoreCase)
+$isInside = $normHarness.StartsWith("$normSource$sep", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $normHarness.StartsWith("$normSource/", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $normHarness.StartsWith("$normSource\", [System.StringComparison]::OrdinalIgnoreCase)
+
+if ($isEqual) {
+  Die "Cannot install harness into the repository root (`"$HarnessRoot`"). Use in-place install with `"--root .`" or specify a destination outside `"$scriptRootResolved`"."
+}
+if ($isInside) {
+  Die "Cannot install harness into a subdirectory of the repository root (`"$HarnessRoot`"). Use in-place install with `"--root .`" or specify a destination outside `"$scriptRootResolved`"."
+}
+
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 function WriteText([string]$path, [string]$text) {
   # .NET treats "\" as a literal char on Linux/macOS, not a separator; use "/"
