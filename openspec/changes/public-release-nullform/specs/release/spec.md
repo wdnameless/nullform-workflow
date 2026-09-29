@@ -14,9 +14,7 @@ The system MUST NOT track `.db` backups, secret values, or personal machine path
 - **WHEN** скан `sk-|ghp_|AKIA|password\s*=` по треку (кроме примеров)
 - **THEN** совпадений нет.
 
-## ADDED Requirements (brand + readme)
-
-### Requirement: README MUST be short bilingual
+### Requirement: README MUST be short bilingual (brand + readme)
 
 The README MUST present NULLFORM WORKFLOW in EN+RU under ~120 lines with quickstart and tier table.
 
