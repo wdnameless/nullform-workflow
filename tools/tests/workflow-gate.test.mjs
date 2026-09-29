@@ -328,11 +328,12 @@ test("check-ci: rejects manifest modified in commits after oracle acceptance", (
     writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task\n", "utf8");
     writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
     writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
-    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "spec artifacts");
 
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
     git("add", "-A");
     git("commit", "-qm", "oracle accepted");
-
     // Check passes immediately after oracle commit
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "clean commit passes check-ci");
 
@@ -670,9 +671,13 @@ test("check-ci: base-ref intersection stops false merge failure from unrelated b
     git("commit", "-qm", "base commit");
     git("checkout", "-qb", "feature");
     const changeDir = join(root, "openspec", "changes", "feat-merge");
-    writeT2Files(changeDir);
+    writeT2Files(changeDir, { oracle: false });
+    writeFileSync(join(root, "feature.txt"), "feature code\n", "utf8");
     git("add", "-A");
-    git("commit", "-qm", "feature with oracle");
+    git("commit", "-qm", "feature code");
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "oracle only");
     git("checkout", "main");
     writeFileSync(join(root, "unrelated.txt"), "unrelated change on main\n", "utf8");
     git("add", "unrelated.txt");
@@ -922,6 +927,160 @@ test("gate: local check/close and CI refuse Markdown-bold **Verdict:** REJECT si
     git("commit", "-qm", "commit all-accept evidence");
     assert.equal(cmdCheck(root), 0, "all-positive evidence must pass local check");
     assert.equal(cmdCheckCi(root, { tier: "T2", change: "feat-x" }), 0, "all-positive evidence must pass check-ci");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: R03 rejects oracle and code/non-oracle files in same commit", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-r03-"));
+  const git = (...args) => spawnSync("git", args, {
+    cwd: root, encoding: "utf8", windowsHide: true,
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+  });
+  try {
+    git("init", "-q", ".");
+    const changeId = "r03-mixed";
+    const changeDir = join(root, "openspec", "changes", changeId);
+    writeT2Files(changeDir, { oracle: false });
+    writeFileSync(join(root, "evil.js"), "console.log('evil');\n", "utf8");
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+
+    // All-in-one commit: oracle.md ACCEPT and evil.js together
+    git("add", "-A");
+    git("commit", "-qm", "oracle and evil together");
+
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "mixed oracle commit must fail check-ci");
+
+    // Honest separate commits in a clean repo
+    const root2 = mkdtempSync(join(tmpdir(), "wf-gate-r03-clean-"));
+    const git2 = (...args) => spawnSync("git", args, {
+      cwd: root2, encoding: "utf8", windowsHide: true,
+      env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+    });
+    try {
+      git2("init", "-q", ".");
+      const changeDir2 = join(root2, "openspec", "changes", changeId);
+      writeT2Files(changeDir2, { oracle: false });
+      writeFileSync(join(root2, "evil.js"), "console.log('honest code');\n", "utf8");
+      git2("add", "-A");
+      git2("commit", "-qm", "spec and code");
+
+      writeFileSync(join(changeDir2, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+      git2("add", "-A");
+      git2("commit", "-qm", "oracle separate");
+
+      assert.equal(cmdCheckCi(root2, { tier: "T2", change: changeId }), 0, "separate honest oracle commit must pass check-ci");
+    } finally {
+      rmSync(root2, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cmdClose: R04 guarded-auto refuses binary file modifications", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-r04-"));
+  const git = (...args) => spawnSync("git", args, {
+    cwd: root, encoding: "utf8", windowsHide: true,
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+  });
+  try {
+    git("init", "-q", ".");
+    mkdirSync(join(root, "bin"), { recursive: true });
+    writeFileSync(join(root, "bin", "app.bin"), Buffer.from([0, 1, 2, 3, 255, 0]));
+    git("add", "-A");
+    git("commit", "-qm", "initial binary");
+
+    cmdStart(root, { tier: "T0", task: "binary-mod", auto: true, allow: "bin/**", "max-diff": 10 });
+
+    // Modify binary file so numstat outputs '-' counters
+    writeFileSync(join(root, "bin", "app.bin"), Buffer.from([255, 254, 1, 2, 3, 0, 5, 6]));
+
+    const closeCode = cmdClose(root, { auto: true });
+    assert.equal(closeCode, 1, "close must return 1 on binary diff in numstat");
+
+    const st = load(root);
+    assert.equal(st.status, "open", "task must remain open after refusal");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cmdClose: R05 guarded-auto checks both ends of file renames against allow pattern", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-r05-"));
+  const git = (...args) => spawnSync("git", args, {
+    cwd: root, encoding: "utf8", windowsHide: true,
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+  });
+  try {
+    git("init", "-q", ".");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "ok.txt"), "hello\nworld\n");
+    git("add", "-A");
+    git("commit", "-qm", "initial source");
+
+    // Case 1: Rename escapes allow (src/ok.txt -> lib/evil.txt under allow 'src/**')
+    cmdStart(root, { tier: "T0", task: "rename-escape", auto: true, allow: "src/**", "max-diff": 20 });
+    mkdirSync(join(root, "lib"), { recursive: true });
+    git("mv", "src/ok.txt", "lib/evil.txt");
+
+    assert.equal(cmdClose(root, { auto: true }), 1, "rename escaping allow must fail close");
+    assert.equal(load(root).status, "open", "task remains open when rename escapes allow");
+
+    // Reset and test Case 2: Rename inside allow (src/ok.txt -> src/renamed.txt)
+    git("reset", "--hard", "HEAD");
+    git("clean", "-fdq");
+    cmdStart(root, { tier: "T0", task: "rename-inside", auto: true, allow: "src/**", "max-diff": 20, force: true, reason: "reset" });
+    git("mv", "src/ok.txt", "src/renamed.txt");
+
+    assert.equal(cmdClose(root, { auto: true }), 0, "rename inside allow must pass close");
+    assert.equal(load(root).status, "closed", "task is closed when rename is inside allow");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("check-ci: R07 dirty-check uses NUL porcelain and exact .workflow segment filter", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-r07-"));
+  const git = (...args) => spawnSync("git", args, {
+    cwd: root, encoding: "utf8", windowsHide: true,
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+  });
+  try {
+    git("init", "-q", ".");
+    const changeId = "r07-dirty";
+    const changeDir = join(root, "openspec", "changes", changeId);
+    writeT2Files(changeDir, { oracle: false });
+    git("add", "-A");
+    git("commit", "-qm", "specs");
+
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "oracle accepted");
+
+    // Clean worktree passes
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "clean worktree passes check-ci");
+
+    // my.workflow/x is NOT excluded by .workflow/ segment filter
+    mkdirSync(join(root, "my.workflow"), { recursive: true });
+    writeFileSync(join(root, "my.workflow", "x.txt"), "leak\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "my.workflow/x must not be hidden by dirty check");
+    rmSync(join(root, "my.workflow"), { recursive: true, force: true });
+
+    // Exact .workflow/ is ignored by dirty check
+    mkdirSync(join(root, ".workflow"), { recursive: true });
+    writeFileSync(join(root, ".workflow", "state.json"), "{}\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, ".workflow/ must be ignored by dirty check");
+
+    // Newline in filename (POSIX only; Windows filesystem rejects newlines in paths)
+    if (process.platform !== "win32") {
+      try {
+        writeFileSync(join(root, "untracked\nfile.txt"), "content\n", "utf8");
+        assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "untracked file with newline fails dirty check");
+        rmSync(join(root, "untracked\nfile.txt"), { force: true });
+      } catch {}
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

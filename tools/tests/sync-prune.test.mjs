@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -252,4 +252,31 @@ test("CLI: без --harness/--repo — код 2 и ничего не скани�
   const res = spawnSync(process.execPath, [PRUNE_PATH, "--harness", "."], { encoding: "utf8" });
   assert.equal(res.status, 2);
   assert.match(res.stderr, /нужны --harness/);
+});
+
+test("deletePruneCandidates: junctioned tools directory escapes harness root and is refused", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "prune-junction-"));
+  try {
+    const harness = join(tmp, "harness");
+    const outside = join(tmp, "outside");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+
+    const victimPath = join(outside, "victim.mjs");
+    writeFileSync(victimPath, "export const victim = true;\n");
+
+    const toolsLink = join(harness, "tools");
+    symlinkSync(outside, toolsLink, "junction");
+
+    const res = deletePruneCandidates(harness, ["tools/victim.mjs"]);
+
+    assert.deepEqual(res.deleted, [], "must not delete files outside canonical harness root");
+    assert.equal(res.failed.length, 1, "mismatch must be reported as failed");
+    assert.equal(res.failed[0].path, "tools/victim.mjs");
+    assert.match(res.failed[0].error, /outside canonical harness root/i);
+    assert.ok(existsSync(victimPath), "external victim file must remain intact");
+    assert.equal(readFileSync(victimPath, "utf8"), "export const victim = true;\n");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

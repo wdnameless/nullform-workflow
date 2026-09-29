@@ -169,6 +169,18 @@ export function findPruneCandidates({ harness, repo, dirs = MANIFEST_DIRS } = {}
  * @returns {{deleted: string[], failed: Array<{path: string, error: string}>}}
  */
 export function deletePruneCandidates(harness, candidates) {
+  let realHarnessRoot;
+  try {
+    const raw = realpathSync(harness);
+    realHarnessRoot = raw.startsWith("\\\\?\\") ? raw.slice(4) : raw;
+  } catch (err) {
+    return {
+      deleted: [],
+      failed: candidates.map((rel) => ({ path: rel, error: err.message })),
+    };
+  }
+  const rootLower = process.platform === "win32" ? realHarnessRoot.toLowerCase() : realHarnessRoot;
+  const rootPrefix = rootLower.endsWith(sep) ? rootLower : rootLower + sep;
   const harnessRoot = resolve(harness);
   const deleted = [];
   const failed = [];
@@ -185,6 +197,13 @@ export function deletePruneCandidates(harness, candidates) {
       }
       if (!statSync(full).isFile()) {
         failed.push({ path: rel, error: "not a regular file" });
+        continue;
+      }
+      const rawCand = realpathSync(full);
+      const realCand = rawCand.startsWith("\\\\?\\") ? rawCand.slice(4) : rawCand;
+      const candLower = process.platform === "win32" ? realCand.toLowerCase() : realCand;
+      if (candLower !== rootLower && !candLower.startsWith(rootPrefix)) {
+        failed.push({ path: rel, error: "resolves outside canonical harness root" });
         continue;
       }
       rmSync(full, { force: true });

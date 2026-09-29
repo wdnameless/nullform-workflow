@@ -252,13 +252,7 @@ function getCanonicalPath(targetPath) {
         return normalizePath(path.join(real, ...tail));
       }
       if (stat.isSymbolicLink()) {
-        try {
-          const linkTarget = fs.readlinkSync(curr);
-          const resolved = path.resolve(path.dirname(curr), linkTarget);
-          return normalizePath(path.join(resolved, ...tail));
-        } catch {
-          return null;
-        }
+        return null;
       }
       return normalizePath(path.join(curr, ...tail));
     }
@@ -273,9 +267,23 @@ function getCanonicalPath(targetPath) {
 
 function validatePathWithinRoot(targetPath, declaredRoot) {
   const normDeclared = normalizePath(declaredRoot);
+  let declStat = null;
+  try {
+    declStat = fs.lstatSync(normDeclared);
+  } catch (err) {
+    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
+      return false;
+    }
+  }
+  if (declStat && declStat.isSymbolicLink()) {
+    const realRoot = resolveRealPath(normDeclared);
+    if (!realRoot) {
+      return false;
+    }
+  }
+
   const canonicalRoot = getCanonicalPath(normDeclared);
   if (!canonicalRoot) return false;
-
   const normTarget = normalizePath(targetPath);
   const rel = path.relative(normDeclared, normTarget);
   if (rel.startsWith('..') || path.isAbsolute(rel)) {

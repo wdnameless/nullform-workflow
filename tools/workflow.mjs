@@ -830,16 +830,24 @@ function isOracleEvidenceFilename(f) {
   const b = basename(String(f || "")).trim();
   return /^oracle(-+[A-Za-z0-9]+)*\.md$/i.test(b) || b.toLowerCase() === "acceptance.md";
 }
+const isWorkflowPath = (p) => String(p || "").replace(/\\/g, "/").split("/").includes(".workflow");
+
+function parseRenamePaths(filePath) {
+  const norm = String(filePath || "").replace(/\\/g, "/");
+  const b = norm.match(/^(.*?)\{(.*?)\s*=>\s*(.*?)\}(.*)$/);
+  if (b) return [(b[1] + b[2] + b[4]).replace(/\/\/+/g, "/"), (b[1] + b[3] + b[4]).replace(/\/\/+/g, "/")];
+  const a = norm.match(/^(.*?)\s*=>\s*(.*)$/);
+  if (a) return [a[1].replace(/\/\/+/g, "/"), a[2].replace(/\/\/+/g, "/")];
+  return [norm];
+}
 
 function isPositiveOracleVerdict(text) {
-  if (!text || typeof text !== "string") return false;
-  return POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text);
+  return typeof text === "string" && POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text);
 }
 
 /** True when the text states an explicit rejection. Distinct from "states nothing". */
 function isNegativeOracleVerdict(text) {
-  if (!text || typeof text !== "string") return false;
-  return NEGATIVE_VERDICT_RE.test(text);
+  return typeof text === "string" && NEGATIVE_VERDICT_RE.test(text);
 }
 
 
@@ -1224,7 +1232,7 @@ function getPorcelainEntries(root) {
         rel = rel.slice(prefix.length);
       }
       rel = rel.replace(/\\/g, "/");
-      if (!rel || rel.startsWith(".workflow/") || rel === ".workflow" || isStructuralExcludedPath(rel)) continue;
+      if (!rel || isWorkflowPath(rel) || isStructuralExcludedPath(rel)) continue;
       entries.push({ code, rel });
     }
     return entries;
@@ -1415,25 +1423,15 @@ function measureAutoDiff(root, st) {
     for (const line of numstatOut.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      let file = "";
-      let added = 0;
-      let deleted = 0;
-      const tabParts = trimmed.split("\t");
-      if (tabParts.length >= 3) {
-        added = Number(tabParts[0]) || 0;
-        deleted = Number(tabParts[1]) || 0;
-        file = tabParts.slice(2).join("\t").trim().replace(/\\/g, "/");
-      } else {
-        const spaceParts = trimmed.split(/\s+/);
-        if (spaceParts.length >= 3) {
-          added = Number(spaceParts[0]) || 0;
-          deleted = Number(spaceParts[1]) || 0;
-          file = spaceParts.slice(2).join(" ").trim().replace(/\\/g, "/");
-        }
-      }
-      if (!file || file.startsWith(".workflow/")) continue;
-      changedPaths.add(file);
-      totalLines += added + deleted;
+      const parts = trimmed.includes("\t") ? trimmed.split("\t") : trimmed.split(/\s+/);
+      if (parts.length < 3) continue;
+      const [addStr, delStr] = parts;
+      const file = parts.slice(2).join(trimmed.includes("\t") ? "\t" : " ").trim();
+      const paths = parseRenamePaths(file);
+      if (paths.every(isWorkflowPath)) continue;
+      if (addStr === "-" || delStr === "-") return { ok: false, error: `binary file '${file}' not measurable: binary not measurable` };
+      for (const p of paths) if (!isWorkflowPath(p)) changedPaths.add(p);
+      totalLines += (Number(addStr) || 0) + (Number(delStr) || 0);
     }
   } catch {
     return { ok: false, error: "git diff failed in git repository" };
@@ -1639,49 +1637,49 @@ function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
     return 0;
   }
 
-  try {
-    const gitStatus = execFileSync("git", ["status", "--porcelain", "-uall"], {
-      cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-    });
-    const dirty = gitStatus.split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l && !l.endsWith(".workflow") && !l.includes("/.workflow/") && !l.includes(".workflow/"));
-    if (dirty.length > 0) {
-      console.error(`workflow check-ci: uncommitted changes detected in worktree after acceptance:\n  ${dirty.slice(0, 5).join("\n  ")}`);
-      return 1;
-    }
-  } catch (err) {
-    console.error(`workflow check-ci: git error while verifying worktree status: ${err.message}`);
+  const porcelain = getPorcelainEntries(root);
+  if (!porcelain) {
+    console.error("workflow check-ci: git error while verifying worktree status: git status failed");
+    return 1;
+  }
+  if (porcelain.length > 0) {
+    console.error(`workflow check-ci: uncommitted changes detected in worktree after acceptance:\n  ${porcelain.map((e) => `${e.code} ${e.rel}`).slice(0, 5).join("\n  ")}`);
     return 1;
   }
 
   try {
     let oracleCommit = "";
+    const relNorm = String(oracleRelForCommit || "").replace(/\\/g, "/");
     try {
-      oracleCommit = execFileSync("git", ["rev-list", "-1", "HEAD", "--", oracleRelForCommit], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-      }).trim();
+      oracleCommit = execFileSync("git", ["rev-list", "-1", "HEAD", "--", relNorm], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000 }).trim();
     } catch {
-      const logOut = execFileSync("git", ["log", "-1", "--oneline", "--", oracleRelForCommit], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-      }).trim();
-      oracleCommit = logOut.split(/\s+/)[0];
+      oracleCommit = (execFileSync("git", ["log", "-1", "--oneline", "--", relNorm], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000 }).trim().split(/\s+/)[0]) || "";
     }
 
     if (oracleCommit) {
+      const commitFilesRaw = execFileSync("git", ["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "--relative", oracleCommit], {
+        cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
+      }).trim();
+      if (commitFilesRaw) {
+        const nonOracle = commitFilesRaw.split("\n")
+          .map((f) => f.trim().replace(/\\/g, "/"))
+          .filter((f) => f && !isWorkflowPath(f) && !isOracleEvidenceFilename(f));
+        if (nonOracle.length > 0) {
+          console.error(`workflow check-ci: oracle acceptance commit (${oracleCommit.slice(0, 8)}) contains non-oracle changes (mixed commit):\n  ${nonOracle.slice(0, 5).join("\n  ")}`);
+          return 1;
+        }
+      }
+
       const postOracleDiff = execFileSync("git", ["diff", "--name-only", "--relative", `${oracleCommit}..HEAD`], {
         cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
       }).trim();
       if (postOracleDiff) {
         let changedFiles = postOracleDiff.split("\n")
-          .map((f) => f.trim())
-          .filter((f) => f && !f.startsWith(".workflow/"));
+          .map((f) => f.trim().replace(/\\/g, "/"))
+          .filter((f) => f && !isWorkflowPath(f));
         if (baseRef) {
           const res = resolveChangedFilesAgainstBase(root, baseRef);
-          if (res.ok) {
-            const prFiles = new Set(res.changedFiles);
-            changedFiles = changedFiles.filter((f) => prFiles.has(f));
-          }
+          if (res.ok) changedFiles = changedFiles.filter((f) => new Set(res.changedFiles).has(f));
         }
         if (changedFiles.length > 0) {
           console.error(`workflow check-ci: files modified in commits after oracle acceptance (${oracleCommit.slice(0, 8)}):\n  ${changedFiles.slice(0, 5).join("\n  ")}`);

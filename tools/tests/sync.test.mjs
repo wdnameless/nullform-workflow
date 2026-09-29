@@ -336,3 +336,32 @@ test("promote substitutes harness root at CR/LF boundary while leaving unrelated
     rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+test("dangling harness root link refuses on --check and --deploy without creating target", () => {
+  const f = fixture();
+  try {
+    const danglingHarness = join(f.root, "dangling-harness");
+    const nonExistentTarget = join(f.root, "does-not-exist");
+    makeDirLink(nonExistentTarget, danglingHarness);
+
+    const checkRes = spawnSync(process.execPath, [CLI,
+      "--repo", f.repo, "--harness", danglingHarness, "--agent-dir", f.agentDir,
+      "--agents-root", f.agentsRoot, "--check",
+    ], { encoding: "utf8", timeout: 30000, windowsHide: true });
+
+    assert.notEqual(checkRes.status, 0, "--check must fail nonzero when harness root is a dangling link");
+    assert.match(checkRes.stderr + checkRes.stdout, /escapes declared root|unresolved link|REFUSED/i);
+    assert.equal(existsSync(nonExistentTarget), false, "target must not be created on --check");
+
+    const deployRes = spawnSync(process.execPath, [CLI,
+      "--repo", f.repo, "--harness", danglingHarness, "--agent-dir", f.agentDir,
+      "--agents-root", f.agentsRoot, "--deploy",
+    ], { encoding: "utf8", timeout: 30000, windowsHide: true });
+
+    assert.notEqual(deployRes.status, 0, "--deploy must fail nonzero when harness root is a dangling link");
+    assert.match(deployRes.stderr + deployRes.stdout, /escapes declared root|unresolved link|REFUSED/i);
+    assert.equal(existsSync(nonExistentTarget), false, "target must not be created on --deploy");
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
