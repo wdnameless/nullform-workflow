@@ -88,7 +88,7 @@ function getDefaultRoot(harness, userHome) {
   }
 }
 
-function getMarkdownAdapter(slashRoot, title = "Workflow & Orchestration Adapter") {
+function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter") {
   return [
     `# ${title}`,
     "",
@@ -128,10 +128,10 @@ function getMarkdownAdapter(slashRoot, title = "Workflow & Orchestration Adapter
 function getCursorAdapter(slashRoot) {
   return [
     "---",
-    "description: Workflow & Orchestration Rules",
+    "description: NULLFORM WORKFLOW Rules",
     "alwaysApply: true",
     "---",
-    getMarkdownAdapter(slashRoot, "Cursor Workflow Adapter"),
+    getMarkdownAdapter(slashRoot, "Cursor NULLFORM WORKFLOW Adapter"),
   ].join("\n");
 }
 
@@ -456,31 +456,31 @@ function installHarness(options = {}) {
     switch (h) {
       case "claude": {
         const rootPath = join(targetRoot, "CLAUDE.md");
-        writeAdapter(rootPath, getMarkdownAdapter(slashRoot, "Claude Code Workflow Adapter"));
+        writeAdapter(rootPath, getMarkdownAdapter(slashRoot, "Claude Code NULLFORM WORKFLOW Adapter"));
         if (shouldWriteHome) {
           const homePath = join(userHome, ".claude", "CLAUDE.md");
-          writeAdapter(homePath, getMarkdownAdapter(slashRoot, "Claude Code Workflow Adapter"));
+          writeAdapter(homePath, getMarkdownAdapter(slashRoot, "Claude Code NULLFORM WORKFLOW Adapter"));
         }
         break;
       }
       case "codex": {
         const rootPath = join(targetRoot, "AGENTS.md");
-        writeAdapter(rootPath, getMarkdownAdapter(slashRoot, "Codex Workflow Adapter"));
+        writeAdapter(rootPath, getMarkdownAdapter(slashRoot, "Codex NULLFORM WORKFLOW Adapter"));
         if (shouldWriteHome) {
           const homePath = join(userHome, ".codex", "AGENTS.md");
-          writeAdapter(homePath, getMarkdownAdapter(slashRoot, "Codex Workflow Adapter"));
+          writeAdapter(homePath, getMarkdownAdapter(slashRoot, "Codex NULLFORM WORKFLOW Adapter"));
         }
         break;
       }
       case "opencode": {
         const rootAgents = join(targetRoot, "AGENTS.md");
         const rootJson = join(targetRoot, "opencode.json");
-        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "OpenCode Workflow Adapter"));
+        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "OpenCode NULLFORM WORKFLOW Adapter"));
         writeAdapter(rootJson, getOpencodeJson(rootJson));
         if (shouldWriteHome) {
           const homeAgents = join(userHome, ".opencode", "AGENTS.md");
           const homeJson = join(userHome, ".opencode", "opencode.json");
-          writeAdapter(homeAgents, getMarkdownAdapter(slashRoot, "OpenCode Workflow Adapter"));
+          writeAdapter(homeAgents, getMarkdownAdapter(slashRoot, "OpenCode NULLFORM WORKFLOW Adapter"));
           writeAdapter(homeJson, getOpencodeJson(homeJson));
         }
         break;
@@ -617,7 +617,7 @@ function runPromptLintBaseline(promptLint, harnessRoot, userHome) {
 
 function printHelp() {
   console.log(`
-Workflow Harness Portable Installer
+NULLFORM WORKFLOW Harness Portable Installer
 
 Usage:
   node tools/install-harness.mjs [options]
@@ -658,7 +658,7 @@ function main() {
     }
 
     if (options.dryRun) {
-      console.log(`[dry-run] Plan for workflow harness installation:`);
+      console.log(`[dry-run] Plan for NULLFORM WORKFLOW harness installation:`);
       console.log(`  Harness:      ${plan.harness}`);
       console.log(`  Install root: ${plan.root}`);
       console.log(`  Files count:  ${plan.filesToCopy.length}`);
@@ -670,7 +670,7 @@ function main() {
       return;
     }
 
-    console.log(`\n=== Workflow Harness Installer ===`);
+    console.log(`\n=== NULLFORM WORKFLOW Installer ===`);
     console.log(`  Harness:      ${plan.harness}`);
     console.log(`  Install root: ${plan.root}`);
     console.log(`  Files copied: ${plan.filesToCopy.length}`);

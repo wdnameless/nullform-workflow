@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  One-command verification for the installed workflow harness.
+  One-command verification for the installed NULLFORM WORKFLOW harness.
 #>
 param(
   [string]$HarnessRoot = '',

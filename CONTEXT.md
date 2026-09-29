@@ -1,6 +1,6 @@
 # CONTEXT.md — Domain Glossary
 
-Terms used in this OMP workflow harness. Definitions say what a term
+Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 **means**, not how it is implemented.
 
 ## Harness topology
