@@ -30,6 +30,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { gunzipSync, brotliDecompressSync, inflateSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,6 +39,7 @@ import { fileURLToPath } from "node:url";
 // Headers that differ every run and would make matching/commit-review noisy.
 const VOLATILE_HEADERS = new Set([
   "date", "connection", "keep-alive", "transfer-encoding", "content-length",
+  "content-encoding",
   "x-request-id", "x-amzn-trace-id", "cf-ray", "set-cookie", "expires",
   "etag", "last-modified", "age", "via", "server-timing",
 ]);
@@ -66,6 +68,17 @@ function redactBody(text) {
 function redactUrl(url) {
   return (url || "").replace(SECRET_QUERY, "$1[REDACTED]");
 }
+function decodeResponseBody(buffer, encoding) {
+  if (!buffer || !buffer.length) return "";
+  const enc = (encoding || "").toLowerCase().trim();
+  try {
+    if (enc === "gzip") return gunzipSync(buffer).toString("utf8");
+    if (enc === "br") return brotliDecompressSync(buffer).toString("utf8");
+    if (enc === "deflate") return inflateSync(buffer).toString("utf8");
+  } catch {}
+  return buffer.toString("utf8");
+}
+
 
 /** Stable identity of a request, ignoring volatile and secret material. */
 function requestKey(method, url, body) {
@@ -126,10 +139,12 @@ async function cmdRecord(cassettePath, port, target, filter) {
   };
   const server = createServer(async (req, res) => {
     const body = await readBody(req);
-    const pathAndQuery = req.url || "/";
+    const u = new URL(req.url || "/", "http://localhost");
+    const pathAndQuery = u.pathname + u.search;
 
+    const isRecorded = !filterRe || filterRe.test(pathAndQuery) || filterRe.test(u.pathname);
     // Pass-through for anything the operator excluded (auth, telemetry).
-    if (filterRe && !filterRe.test(pathAndQuery)) {
+    if (!isRecorded) {
       const headers = { ...req.headers, host: upstreamHost };
       const upstream = upstreamRequest(
         { hostname: base.hostname, port: upstreamPort, path: pathAndQuery, method: req.method, headers },
@@ -148,7 +163,8 @@ async function cmdRecord(cassettePath, port, target, filter) {
         const chunks = [];
         up.on("data", (c) => chunks.push(c));
         up.on("end", () => {
-          const respBody = Buffer.concat(chunks).toString("utf8");
+          const rawBuffer = Buffer.concat(chunks);
+          const respBody = decodeResponseBody(rawBuffer, up.headers["content-encoding"]);
           const key = requestKey(req.method, pathAndQuery, body);
           if (!seen.has(key)) {
             seen.add(key);
@@ -163,7 +179,7 @@ async function cmdRecord(cassettePath, port, target, filter) {
             console.log(`  + ${key}`);
           }
           res.writeHead(up.statusCode || 200, up.headers);
-          res.end(respBody);
+          res.end(rawBuffer);
         });
       },
     );
@@ -227,6 +243,7 @@ function cmdReplay(cassettePath, port, strict) {
     const hit = matches[Math.min(n, matches.length - 1)];
     const headers = { ...hit.response.headers };
     delete headers["content-length"];
+    delete headers["content-encoding"];
     res.writeHead(hit.response.status || 200, headers);
     res.end(hit.response.body ?? "");
     console.log(`  HIT   ${key}`);
@@ -336,6 +353,7 @@ export {
   redactUrl,
   redactHeaders,
   redactBody,
+  decodeResponseBody,
 };
 
 

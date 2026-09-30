@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -203,3 +204,55 @@ test("cmdVerify validates cassette structure and detects unredacted secrets", ()
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer without ZlibError", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "replay-gzip-"));
+  const cassettePath = join(tmpDir, "cassette.json");
+
+  const expectedData = { models: [{ id: "google/gemini-3.1-flash-lite" }] };
+  const upstreamServer = createServer((req, res) => {
+    const compressed = gzipSync(Buffer.from(JSON.stringify(expectedData), "utf8"));
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "content-encoding": "gzip",
+    });
+    res.end(compressed);
+  });
+
+  const upstreamPort = await getFreePort();
+  await new Promise((resolve) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve));
+
+  const proxyPort = await getFreePort();
+  const targetUrl = `http://127.0.0.1:${upstreamPort}`;
+  const proxyServer = await cmdRecord(cassettePath, proxyPort, targetUrl, null);
+
+  try {
+    // Client requests through recorder proxy — fetch will decompress gzip automatically
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/api/v1/models`);
+    assert.equal(res.status, 200);
+    const receivedJson = await res.json();
+    assert.deepEqual(receivedJson, expectedData, "Client must successfully decode gzipped body without ZlibError");
+
+    const cassette = loadCassette(cassettePath);
+    assert.ok(cassette, "Cassette must be recorded");
+    assert.equal(cassette.interactions.length, 1);
+    assert.equal(cassette.interactions[0].response.headers["content-encoding"], undefined, "Cassette must omit content-encoding header");
+    assert.deepEqual(JSON.parse(cassette.interactions[0].response.body), expectedData, "Cassette body must be decompressed text");
+  } finally {
+    proxyServer.close();
+    upstreamServer.close();
+  }
+
+  // Now test strict replay serving
+  const replayPort = await getFreePort();
+  const replayServer = cmdReplay(cassettePath, replayPort, true);
+  try {
+    const replayRes = await fetch(`http://127.0.0.1:${replayPort}/api/v1/models`);
+    assert.equal(replayRes.status, 200);
+    const replayJson = await replayRes.json();
+    assert.deepEqual(replayJson, expectedData, "Replayed response must be parsed cleanly by consumer");
+  } finally {
+    replayServer.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
