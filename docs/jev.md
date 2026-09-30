@@ -25,7 +25,7 @@ Key principles:
 - **Zero Silent Fallback**: If an API error, rate limit, quota exhaustion, or malformed response occurs, the system defaults immediately to baseline execution.
 ### Architecture & Module Graph
 
-- `tools/jev-evidence.mjs`: Pure shared evidence module. Exports `policyFingerprint`, `checkOutcomeMatch` (using Node stdlib `isDeepStrictEqual` for structural JSON comparison), and `evaluateReport` (raw hurdle validator). Zero dependencies on runtime or CLI modules.
+- `tools/jev-evidence.mjs`: Pure shared evidence module. Exports `policyFingerprint`, `checkOutcomeMatch` (using Node stdlib `isDeepStrictEqual` for structural JSON comparison), `loadEvaluationDatasetContext`, and `evaluateReport(report, { datasetContext })` (raw hurdle validator enforcing canonical 64-hex SHA-256 dataset hashes, exact case IDs/gold/safety canary flags, and `unknownSpendUsd === 0`). Zero dependencies on runtime or CLI modules.
 - `tools/jev-evaluation-cases.mjs`: Deep paid case execution helpers. Implements `executeChatCall` (with finish_reason length and usage cost checks), `executeSkillCase` (interleaved skill matching and canary blocking), and `executeRoutingCase` (leaf routing and assisted recovery).
 - `tools/jev-evaluate.mjs`: Paired empirical evaluation CLI, budget reservation orchestrator, and Report v1 builder.
 - `tools/jev-control.mjs`: Local policy lifecycle CLI (`status`, `enable`, `disable`). Pure offline validation.
@@ -130,7 +130,7 @@ JEV-ассистент обеспечивает автоматический п�
 - **Мгновенный fallback**: при сетевых сбоях, таймаутах, лимитах провайдера или некорректных ответах классификатора задача мгновенно возвращается на базовую модель.
 ### Архитектура и граф модулей
 
-- `tools/jev-evidence.mjs`: чистый модуль доказательств. Экспортирует `policyFingerprint`, `checkOutcomeMatch` (структурное сравнение JSON через `isDeepStrictEqual` из Node stdlib) и `evaluateReport` (проверка порогов по сырым знаменателям). Не зависит от рантайма и CLI.
+- `tools/jev-evidence.mjs`: чистый модуль доказательств. Экспортирует `policyFingerprint`, `checkOutcomeMatch` (структурное сравнение JSON через `isDeepStrictEqual` из Node stdlib), `loadEvaluationDatasetContext` и `evaluateReport(report, { datasetContext })` (проверка порогов по сырым знаменателям, канонических 64-символьных SHA-256 хэшей набора, ID кейсов/эталонных ответов/флагов канареек и `unknownSpendUsd === 0`). Не зависит от рантайма и CLI.
 - `tools/jev-evaluation-cases.mjs`: хелперы выполнения платных кейсов (`executeChatCall`, `executeSkillCase`, `executeRoutingCase` с обработкой канареек и recovery).
 - `tools/jev-evaluate.mjs`: CLI парного бенчмарка, контроль лимита расходов и построитель Report v1.
 - `tools/jev-control.mjs`: локальное управление политикой (`status`, `enable`, `disable`) без обращения к сети.

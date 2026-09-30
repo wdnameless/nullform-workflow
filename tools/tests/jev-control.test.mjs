@@ -15,27 +15,33 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseControlArgs, executeControl } from "../jev-control.mjs";
+import { executeControl } from "../jev-control.mjs";
 import { buildReportV1 } from "../jev-evaluate.mjs";
-import { evaluateReport, policyFingerprint } from "../jev-evidence.mjs";
+import { evaluateReport, policyFingerprint, loadEvaluationDatasetContext } from "../jev-evidence.mjs";
 import { loadSkillCatalog } from "../jev-assist.mjs";
 
-function makeSkillCase(id, isCalib = false, isSafety = false) {
+const DATASET_CTX = loadEvaluationDatasetContext();
+
+function makeCanonicalSkillCase(c, isCalibration) {
+  const isSafety = Boolean(c.isSafetyCanary || c.isSafety);
+  const exp = c.expectedSkills || (c.expectedSkill ? [c.expectedSkill] : []);
+  const expSkill = exp[0] || "none";
   return {
-    id,
-    isCalibration: isCalib,
+    id: c.id,
+    isCalibration,
     isSafety,
+    isSafetyCanary: isSafety,
     safetyMiss: false,
     screened: isSafety,
-    expectedSkills: isSafety ? [] : ["better-ui"],
-    expectedSkill: isSafety ? "none" : "better-ui",
+    expectedSkills: exp,
+    expectedSkill: expSkill,
     baselineRequested: !isSafety,
     candidateRequested: !isSafety,
     baselineAttempted: !isSafety,
-    baselineSkill: isSafety ? null : "better-ui",
+    baselineSkill: isSafety ? null : expSkill,
     baselineCorrect: !isSafety,
     candidateAttempted: !isSafety,
-    candidateSkill: isSafety ? null : "better-ui",
+    candidateSkill: isSafety ? null : expSkill,
     candidateCorrect: !isSafety,
     skillConfidence: isSafety ? undefined : 0.95,
     criticalMiss: false,
@@ -44,62 +50,59 @@ function makeSkillCase(id, isCalib = false, isSafety = false) {
   };
 }
 
-function makeSyntheticPassingReport() {
-  const cases = [];
-  for (let i = 0; i < 12; i++) cases.push(makeSkillCase(`calib-${i}`, true, false));
-  for (let i = 0; i < 40; i++) cases.push(makeSkillCase(`heldout-${i}`, false, false));
-  for (let i = 0; i < 2; i++) cases.push(makeSkillCase(`heldout-safety-${i}`, false, true));
-
-  const routingCases = [];
-  const archetypes = ["lookup", "json-transform", "formatting", "text-normalization"];
-  for (let i = 0; i < 8; i++) {
-    const arch = archetypes[i % archetypes.length];
-    routingCases.push({
-      id: `route-${i}`,
-      archetype: arch,
-      isSafety: false,
-      safetyMiss: false,
-      expected: `expected-output-${i}`,
-      expectedType: "text",
-      baselineRequested: true,
-      decisionRequested: true,
-      candidateRequested: true,
-      recoveryRequested: false,
-      baselineAttempted: true,
-      baselineOutput: `expected-output-${i}`,
-      baselineAccepted: true,
-      baselineCostUsd: 0.001,
-      candidatePrimaryAttempted: true,
-      candidatePrimaryOutput: `expected-output-${i}`,
-      candidatePrimaryAccepted: true,
-      recoveryAttempted: false,
-      recoveryOutput: null,
-      recoveryAccepted: false,
-      candidateCostUsd: 0.0002,
-    });
-  }
-
-  const datasetHashes = {
-    calibration: "a".repeat(64),
-    heldout: "b".repeat(64),
-    outcomes: "c".repeat(64),
+function makeCanonicalRoutingCase(t) {
+  const isSafety = Boolean(t.isSafetyCanary || t.isSafety);
+  const outStr = isSafety ? "" : (t.expectedType === "json" ? JSON.stringify(t.expected) : String(t.expected));
+  return {
+    id: t.id,
+    archetype: t.archetype,
+    isSafety,
+    isSafetyCanary: isSafety,
+    safetyMiss: false,
+    screened: isSafety,
+    expected: t.expected,
+    expectedType: t.expectedType,
+    baselineRequested: !isSafety,
+    decisionRequested: !isSafety,
+    candidateRequested: !isSafety,
+    recoveryRequested: false,
+    baselineAttempted: !isSafety,
+    baselineOutput: outStr,
+    baselineAccepted: !isSafety,
+    baselineCostUsd: isSafety ? 0 : 0.001,
+    jevStatus: isSafety ? null : "ok",
+    jevRoute: isSafety ? null : "cheap",
+    jevArchetype: isSafety ? null : t.archetype,
+    candidatePrimaryAttempted: !isSafety,
+    candidatePrimaryOutput: isSafety ? null : outStr,
+    candidatePrimaryAccepted: !isSafety,
+    recoveryAttempted: false,
+    recoveryOutput: null,
+    recoveryAccepted: false,
+    candidateCostUsd: isSafety ? 0 : 0.0002,
   };
+}
 
-  const rawCost = Number(((12 + 40) * (0.0005 + 0.0001) + 8 * (0.001 + 0.0002)).toFixed(6));
+function makeSyntheticPassingReport() {
+  const cases = [
+    ...DATASET_CTX.calibration.map((c) => makeCanonicalSkillCase(c, true)),
+    ...DATASET_CTX.heldout.map((c) => makeCanonicalSkillCase(c, false)),
+  ];
+  const routingCases = DATASET_CTX.outcomes.map((t) => makeCanonicalRoutingCase(t));
 
   return buildReportV1({
     catalogFingerprint: "catalog-sha-1234",
     baselineModel: "google/gemini-3.8-flash",
     candidateModel: "google/gemini-3.1-flash-lite",
     decisionModel: "typesafe/jev-1.13",
-    datasetHashes,
+    datasetHashes: { ...DATASET_CTX.hashes },
     decisionSnapshots: ["typesafe/jev-1.13-20260917"],
-    calibrationCount: 12,
-    heldoutCount: 42,
+    calibrationCount: DATASET_CTX.calibration.length,
+    heldoutCount: DATASET_CTX.heldout.length,
     skillCases: cases,
     routingCases,
     maxCostUsd: 1.0,
-    totalSpend: rawCost,
+    totalSpend: 0,
     unknownSpend: 0,
     errors: 0,
   });
@@ -107,7 +110,7 @@ function makeSyntheticPassingReport() {
 
 test("evaluateReport accepts legitimate passing report", () => {
   const report = makeSyntheticPassingReport();
-  const res = evaluateReport(report);
+  const res = evaluateReport(report, { datasetContext: DATASET_CTX });
   assert.strictEqual(res.skillPassed, true);
   assert.strictEqual(res.routingPassed, true);
   assert.strictEqual(res.archetypes.length, 4);
@@ -116,11 +119,11 @@ test("evaluateReport accepts legitimate passing report", () => {
 test("evaluateReport rejects incomplete reports or reports with errors", () => {
   const report = makeSyntheticPassingReport();
   report.completed = false;
-  assert.strictEqual(evaluateReport(report).skillPassed, false);
+  assert.strictEqual(evaluateReport(report, { datasetContext: DATASET_CTX }).skillPassed, false);
 
   report.completed = true;
   report.errors = 1;
-  assert.strictEqual(evaluateReport(report).skillPassed, false);
+  assert.strictEqual(evaluateReport(report, { datasetContext: DATASET_CTX }).skillPassed, false);
 });
 
 test("evaluateReport refuses fake booleans when raw denominators fail", () => {
@@ -134,7 +137,7 @@ test("evaluateReport refuses fake booleans when raw denominators fail", () => {
   report.skillPassed = true;
   report.routingPassed = true;
 
-  const res = evaluateReport(report);
+  const res = evaluateReport(report, { datasetContext: DATASET_CTX });
   assert.strictEqual(res.skillPassed, false, "must reject when candidate precision < 95%");
 });
 
@@ -143,16 +146,16 @@ test("evaluateReport refuses routing when fallback success is conflated as prima
   report.routing.cases[0].candidatePrimaryAccepted = false;
   report.routing.cases[0].recoveryAccepted = true;
 
-  const res = evaluateReport(report);
+  const res = evaluateReport(report, { datasetContext: DATASET_CTX });
   assert.strictEqual(res.routingPassed, false, "recovery fallback must not inflate primary accepted count");
 });
 
 test("evaluateReport refuses routing when cheap cost per accepted outcome is not lower", () => {
   const report = makeSyntheticPassingReport();
   for (const c of report.routing.cases) {
-    c.candidateCostUsd = 0.005;
+    if (!c.isSafety) c.candidateCostUsd = 0.005;
   }
-  const res = evaluateReport(report);
+  const res = evaluateReport(report, { datasetContext: DATASET_CTX });
   assert.strictEqual(res.routingPassed, false, "must reject when candidate cost >= baseline cost");
 });
 
@@ -160,18 +163,18 @@ test("evaluateReport rejects when safety misses > 0", () => {
   const report = makeSyntheticPassingReport();
   report.routing.cases[0].safetyMiss = true;
 
-  const res = evaluateReport(report);
+  const res = evaluateReport(report, { datasetContext: DATASET_CTX });
   assert.strictEqual(res.routingPassed, false);
 });
 
 test("evaluateReport rejects dryRun / simulated reports", () => {
   const report = makeSyntheticPassingReport();
   report.dryRun = true;
-  assert.strictEqual(evaluateReport(report).skillPassed, false);
+  assert.strictEqual(evaluateReport(report, { datasetContext: DATASET_CTX }).skillPassed, false);
 
   const report2 = makeSyntheticPassingReport();
   report2.simulated = true;
-  assert.strictEqual(evaluateReport(report2).skillPassed, false);
+  assert.strictEqual(evaluateReport(report2, { datasetContext: DATASET_CTX }).skillPassed, false);
 });
 
 test("jev-control enable refuses non-existent report", async () => {

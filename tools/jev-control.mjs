@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { sha256 } from "./jev-evaluate.mjs";
 import { loadSkillCatalog, readPolicy } from "./jev-assist.mjs";
-import { policyFingerprint, evaluateReport } from "./jev-evidence.mjs";
+import { policyFingerprint, evaluateReport, loadEvaluationDatasetContext } from "./jev-evidence.mjs";
 
 const POLICY_FILENAME = "jev-policy.json";
 const REPORT_FILENAME = "jev-evaluation.json";
@@ -161,11 +161,20 @@ function handleEnable({
     return { success: false, message: "Failed to read or parse evaluation report JSON." };
   }
 
-  const hurdles = evaluateReport(report);
+  const datasetContext = loadEvaluationDatasetContext({ root });
+  if (!datasetContext) {
+    return {
+      success: false,
+      message: "Activation rejected: failed to load evaluation dataset context from installed fixtures.",
+    };
+  }
+
+  const hurdles = evaluateReport(report, { datasetContext });
   if (!hurdles.skillPassed && !hurdles.routingPassed) {
     return {
       success: false,
-      message: "Activation rejected: evaluation report hurdles failed (no passing capabilities meeting quality and cost requirements).",
+      message:
+        "Activation rejected: evaluation report hurdles failed (no passing capabilities meeting quality and cost requirements).",
       hurdles,
     };
   }

@@ -335,7 +335,7 @@ export function buildReportV1({
     spendUsd: Number((effectiveTotalSpend + effectiveUnknownSpend).toFixed(6)),
     unknownSpendUsd: effectiveUnknownSpend,
     maxCostUsd,
-    completed: errors === 0,
+    completed: errors === 0 && effectiveUnknownSpend === 0,
   };
 }
 
@@ -527,7 +527,14 @@ export async function runEvaluation(optionsInput = parseEvalArgs()) {
   });
 
   const report = writeCheckpoint(true, null, state);
-  const hurdleEval = evaluateReport(report);
+  const hurdleEval = evaluateReport(report, {
+    datasetContext: {
+      hashes: datasetHashes,
+      calibration: calibCases,
+      heldout: heldoutCases,
+      outcomes: outcomeTasks,
+    },
+  });
 
   console.log("=== JEV Paired Evaluation Report ===");
   console.log(`Report written to: ${options.output}`);
