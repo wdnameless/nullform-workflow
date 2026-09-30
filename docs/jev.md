@@ -23,6 +23,14 @@ Key principles:
   - `formatting` (markdown lists, dates, normalized tables)
   - `text-normalization` (slugification, whitespace cleanup, identifier normalization)
 - **Zero Silent Fallback**: If an API error, rate limit, quota exhaustion, or malformed response occurs, the system defaults immediately to baseline execution.
+### Architecture & Module Graph
+
+- `tools/jev-evidence.mjs`: Pure shared evidence module. Exports `policyFingerprint`, `checkOutcomeMatch` (using Node stdlib `isDeepStrictEqual` for structural JSON comparison), and `evaluateReport` (raw hurdle validator). Zero dependencies on runtime or CLI modules.
+- `tools/jev-evaluation-cases.mjs`: Deep paid case execution helpers. Implements `executeChatCall` (with finish_reason length and usage cost checks), `executeSkillCase` (interleaved skill matching and canary blocking), and `executeRoutingCase` (leaf routing and assisted recovery).
+- `tools/jev-evaluate.mjs`: Paired empirical evaluation CLI, budget reservation orchestrator, and Report v1 builder.
+- `tools/jev-control.mjs`: Local policy lifecycle CLI (`status`, `enable`, `disable`). Pure offline validation.
+- `tools/jev-assist.mjs`: Core runtime assistance module (`readCredential`, `loadSkillCatalog`, `screenTask`, `decide`, `readPolicy`, `appendEvent`).
+- `agent/extensions/nullform-jev.ts`: Native OMP extension hooks for turn suggestions and subagent routing.
 
 ### Paired Empirical Evaluation (`tools/jev-evaluate.mjs`)
 
@@ -94,9 +102,9 @@ node tools/jev-control.mjs disable
 ### Measured Scope, Opt-Out & Non-Claims
 
 - **Measured Benefit**: Cost reductions and skill precision are proven solely for the evaluated model pair (`google/gemini-3.8-flash` vs `google/gemini-3.1-flash-lite`) and the 4 declared leaf archetypes.
+- **Default Inactive & Safe Failure**: JEV assistance is inactive by default (`unconfigured`). An interrupted, partial, or failed evaluation run (e.g., transport fault or quota error mid-flight) leaves assistance disabled and does not constitute evidence of utility. Activation strictly requires a completed evaluation report passing all hurdles.
 - **Immediate Opt-Out**: Disabling assistance via `node tools/jev-control.mjs disable` sets `enabled: false` in `~/.omp/agent/jev-policy.json`. OMP hooks immediately bypass JEV routing and execute baseline prompts without restarting the agent or altering project files.
-- **No Blanket Claims**: This evaluation does NOT claim whole-workflow speedups, human productivity gains, or cost savings on flat-rate subscription models.
-
+- **No Blanket Claims**: This evaluation does NOT claim whole-workflow speedups, human productivity gains, or cost savings on flat-rate subscription models. No utility is claimed prior to live proof validation.
 ---
 
 ## Русский
@@ -120,6 +128,14 @@ JEV-ассистент обеспечивает автоматический п�
   - `formatting` (форматирование таблиц, списков markdown, дат)
   - `text-normalization` (слаги, нормализация пробелов, идентификаторов)
 - **Мгновенный fallback**: при сетевых сбоях, таймаутах, лимитах провайдера или некорректных ответах классификатора задача мгновенно возвращается на базовую модель.
+### Архитектура и граф модулей
+
+- `tools/jev-evidence.mjs`: чистый модуль доказательств. Экспортирует `policyFingerprint`, `checkOutcomeMatch` (структурное сравнение JSON через `isDeepStrictEqual` из Node stdlib) и `evaluateReport` (проверка порогов по сырым знаменателям). Не зависит от рантайма и CLI.
+- `tools/jev-evaluation-cases.mjs`: хелперы выполнения платных кейсов (`executeChatCall`, `executeSkillCase`, `executeRoutingCase` с обработкой канареек и recovery).
+- `tools/jev-evaluate.mjs`: CLI парного бенчмарка, контроль лимита расходов и построитель Report v1.
+- `tools/jev-control.mjs`: локальное управление политикой (`status`, `enable`, `disable`) без обращения к сети.
+- `tools/jev-assist.mjs`: базовый модуль содействия (`readCredential`, `loadSkillCatalog`, `screenTask`, `decide`, `readPolicy`, `appendEvent`).
+- `agent/extensions/nullform-jev.ts`: нативные хуки расширения OMP для подсказки навыков и выбора моделей подзадач.
 
 ### Парный бенчмарк (`tools/jev-evaluate.mjs`)
 
@@ -190,5 +206,6 @@ node tools/jev-control.mjs disable
 ### Границы применимости и отказ от использования
 
 - **Измеренная польза**: доказанная экономия и точность относятся строго к протестированной паре моделей (`google/gemini-3.8-flash` и `google/gemini-3.1-flash-lite`) и четырём заявленным листовым архетипам.
+- **Отключён по умолчанию и безопасный отказ**: ассистент по умолчанию не активен (`unconfigured`). Прерванный, частичный или завершившийся ошибкой прогон оставляет ассистента отключённым и не является доказательством пользы. Для активации необходим полностью завершённый отчёт, прошедший все барьеры качества.
 - **Мгновенный отказ (Opt-Out)**: команда `node tools/jev-control.mjs disable` устанавливает `enabled: false` в файле политики. Хуки OMP немедленно направляют все задачи на базовую модель без перезапуска системы.
-- **Без необоснованных утверждений**: отчёт не делает заявлений об ускорении всего сквозного процесса разработки или об экономии на подписочных тарифах с фиксированной платой.
+- **Без необоснованных утверждений**: отчёт не делает заявлений об ускорении всего сквозного процесса разработки или об экономии на подписочных тарифах с фиксированной платой. До живого подтверждения отчётом польза не декларируется.
