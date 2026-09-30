@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import {
   requestKey,
   redactHeaders,
   redactUrl,
+  redactBody,
 } from "../replay.mjs";
 
 function getFreePort() {
@@ -70,10 +71,7 @@ test("cmdRecord sets upstream Host header to base.host and records cassette", as
   try {
     const res = await fetch(`http://127.0.0.1:${proxyPort}/api/test`, {
       method: "POST",
-      headers: {
-        authorization: "Bearer secret-test-token",
-        "content-type": "application/json",
-      },
+      headers: { authorization: "Bearer secret-test-token", "content-type": "application/json" },
       body: JSON.stringify({ ping: "pong" }),
     });
 
@@ -112,21 +110,16 @@ test("cmdRecord filter pass-through routes without recording and preserves upstr
 
   const proxyPort = await getFreePort();
   const targetUrl = `http://127.0.0.1:${upstreamPort}`;
-  // Filter matches only /recorded paths; /passthrough will be passed through without recording
   const proxyServer = await cmdRecord(cassettePath, proxyPort, targetUrl, "^/recorded");
 
   try {
-    const res = await fetch(`http://127.0.0.1:${proxyPort}/passthrough/auth`, {
-      method: "GET",
-    });
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/passthrough/auth`, { method: "GET" });
     assert.equal(res.status, 200);
-    const text = await res.text();
-    assert.equal(text, "filtered-passthrough");
+    assert.equal(await res.text(), "filtered-passthrough");
     assert.equal(filterReceivedHost, `127.0.0.1:${upstreamPort}`, "Filtered pass-through must set upstream Host header");
 
     const cassette = loadCassette(cassettePath);
-    const count = cassette?.interactions?.length || 0;
-    assert.equal(count, 0, "Pass-through request must not be recorded in cassette");
+    assert.equal(cassette?.interactions?.length || 0, 0, "Pass-through request must not be recorded in cassette");
   } finally {
     proxyServer.close();
     upstreamServer.close();
@@ -143,13 +136,11 @@ test("cmdReplay serves recorded responses deterministically without upstream", a
     version: 1,
     recordedAt: "2026-09-30",
     target: "https://api.openrouter.ai",
-    interactions: [
-      {
-        key: interactionKey,
-        request: { method: "GET", url: "/mock/resource", headers: {}, body: null },
-        response: { status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ cached: true }) },
-      },
-    ],
+    interactions: [{
+      key: interactionKey,
+      request: { method: "GET", url: "/mock/resource", headers: {}, body: null },
+      response: { status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ cached: true }) },
+    }],
   };
   writeFileSync(cassettePath, JSON.stringify(cassetteContent, null, 2));
 
@@ -159,8 +150,7 @@ test("cmdReplay serves recorded responses deterministically without upstream", a
   try {
     const res = await fetch(`http://127.0.0.1:${replayPort}/mock/resource`);
     assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.deepEqual(body, { cached: true });
+    assert.deepEqual(await res.json(), { cached: true });
 
     const unmatched = await fetch(`http://127.0.0.1:${replayPort}/not/recorded`);
     assert.equal(unmatched.status, 501, "Unmatched request must return 501");
@@ -176,9 +166,7 @@ test("cmdVerify validates cassette structure and detects unredacted secrets", ()
   const leakPath = join(tmpDir, "leak.json");
 
   writeFileSync(validPath, JSON.stringify({
-    version: 1,
-    recordedAt: "2026-09-30",
-    target: "https://example.com",
+    version: 1, recordedAt: "2026-09-30", target: "https://example.com",
     interactions: [{
       key: "GET / 00000000",
       request: { method: "GET", url: "/", headers: {}, body: null },
@@ -187,9 +175,7 @@ test("cmdVerify validates cassette structure and detects unredacted secrets", ()
   }));
 
   writeFileSync(leakPath, JSON.stringify({
-    version: 1,
-    recordedAt: "2026-09-30",
-    target: "https://example.com",
+    version: 1, recordedAt: "2026-09-30", target: "https://example.com",
     interactions: [{
       key: "GET / 00000000",
       request: { method: "GET", url: "/", headers: { authorization: "Bearer sk-live-secret" }, body: null },
@@ -204,6 +190,7 @@ test("cmdVerify validates cassette structure and detects unredacted secrets", ()
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
 test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer without ZlibError", async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), "replay-gzip-"));
   const cassettePath = join(tmpDir, "cassette.json");
@@ -211,10 +198,7 @@ test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer
   const expectedData = { models: [{ id: "google/gemini-3.1-flash-lite" }] };
   const upstreamServer = createServer((req, res) => {
     const compressed = gzipSync(Buffer.from(JSON.stringify(expectedData), "utf8"));
-    res.writeHead(200, {
-      "content-type": "application/json",
-      "content-encoding": "gzip",
-    });
+    res.writeHead(200, { "content-type": "application/json", "content-encoding": "gzip" });
     res.end(compressed);
   });
 
@@ -226,11 +210,9 @@ test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer
   const proxyServer = await cmdRecord(cassettePath, proxyPort, targetUrl, null);
 
   try {
-    // Client requests through recorder proxy — fetch will decompress gzip automatically
     const res = await fetch(`http://127.0.0.1:${proxyPort}/api/v1/models`);
     assert.equal(res.status, 200);
-    const receivedJson = await res.json();
-    assert.deepEqual(receivedJson, expectedData, "Client must successfully decode gzipped body without ZlibError");
+    assert.deepEqual(await res.json(), expectedData, "Client must successfully decode gzipped body without ZlibError");
 
     const cassette = loadCassette(cassettePath);
     assert.ok(cassette, "Cassette must be recorded");
@@ -242,17 +224,68 @@ test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer
     upstreamServer.close();
   }
 
-  // Now test strict replay serving
   const replayPort = await getFreePort();
   const replayServer = cmdReplay(cassettePath, replayPort, true);
   try {
     const replayRes = await fetch(`http://127.0.0.1:${replayPort}/api/v1/models`);
     assert.equal(replayRes.status, 200);
-    const replayJson = await replayRes.json();
-    assert.deepEqual(replayJson, expectedData, "Replayed response must be parsed cleanly by consumer");
+    assert.deepEqual(await replayRes.json(), expectedData, "Replayed response must be parsed cleanly by consumer");
   } finally {
     replayServer.close();
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
+test("redactBody preserves valid JSON with signature and escaped quotes", () => {
+  const original = JSON.stringify({
+    id: "gen-123",
+    choices: [{ message: { role: "assistant", content: "hello world" } }],
+    signature: 'sig_secret_key_12345"with\\"escaped\\"quotes_and_tail',
+    api_key: "sk-or-v1-secret987654321",
+    nested: { secret: "super-secret-token" },
+  });
+
+  const redacted = redactBody(original);
+  assert.doesNotMatch(redacted, /sig_secret_key_12345/);
+  assert.doesNotMatch(redacted, /sk-or-v1-secret987654321/);
+  assert.doesNotMatch(redacted, /super-secret-token/);
+  assert.doesNotMatch(redacted, /escaped/);
+
+  const parsed = JSON.parse(redacted);
+  assert.equal(parsed.id, "gen-123");
+  assert.equal(parsed.signature, "[REDACTED]");
+  assert.equal(parsed.api_key, "[REDACTED]");
+  assert.equal(parsed.nested.secret, "[REDACTED]");
+  assert.equal(parsed.choices[0].message.content, "hello world");
+});
+
+test("cmdVerify catches malformed JSON body when content-type is application/json", () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "replay-malformed-json-"));
+  const malformedPath = join(tmpDir, "malformed.json");
+  const ssePath = join(tmpDir, "sse.json");
+
+  writeFileSync(malformedPath, JSON.stringify({
+    version: 1, recordedAt: "2026-09-30", target: "https://example.com",
+    interactions: [{
+      key: "POST /v1/chat/completions 00000000",
+      request: { method: "POST", url: "/v1/chat/completions", headers: {}, body: "{}" },
+      response: { status: 200, headers: { "content-type": "application/json" }, body: '{"signature": [REDACTED]}' },
+    }],
+  }));
+
+  writeFileSync(ssePath, JSON.stringify({
+    version: 1, recordedAt: "2026-09-30", target: "https://example.com",
+    interactions: [{
+      key: "POST /v1/chat/completions 00000000",
+      request: { method: "POST", url: "/v1/chat/completions", headers: {}, body: "{}" },
+      response: { status: 200, headers: { "content-type": "text/event-stream" }, body: "data: {\"model\":\"test\"}\n\ndata: [DONE]\n\n" },
+    }],
+  }));
+
+  try {
+    assert.equal(cmdVerify(malformedPath), 1, "Malformed JSON body must fail cmdVerify");
+    assert.equal(cmdVerify(ssePath), 0, "Valid SSE stream must pass cmdVerify");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

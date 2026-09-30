@@ -47,7 +47,7 @@ const VOLATILE_HEADERS = new Set([
 // Header names whose VALUES are secrets; the name is kept, the value redacted,
 // so a cassette still shows that authentication happened.
 const SECRET_HEADERS = /^(authorization|cookie|x-api-key|api-key|x-auth-token|proxy-authorization)$/i;
-const SECRET_BODY_KEYS = /("(?:api_?key|token|secret|password|access_?token|refresh_?token|signature|apiKey|apiSecret)"\s*:\s*")[^"]*"/gi;
+const SECRET_BODY_KEYS = /("(?:api_?key|token|secret|password|access_?token|refresh_?token|signature|apiKey|apiSecret)"\s*:\s*")(?:\\.|[^"\\])*"/gi;
 const SECRET_QUERY = /([?&](?:api_?key|token|secret|password|signature|access_?token)=)[^&]*/gi;
 
 function redactHeaders(headers) {
@@ -62,7 +62,7 @@ function redactHeaders(headers) {
 
 function redactBody(text) {
   if (!text) return text;
-  return text.replace(SECRET_BODY_KEYS, "$1[REDACTED]");
+  return text.replace(SECRET_BODY_KEYS, '$1[REDACTED]"');
 }
 
 function redactUrl(url) {
@@ -95,10 +95,24 @@ function requestKey(method, url, body) {
 
 function loadCassette(path) {
   if (!existsSync(path)) return null;
-  // PowerShell's `Set-Content -Encoding UTF8` writes a BOM, and JSON.parse
-  // rejects it. Strip a leading BOM rather than making every caller care.
   const raw = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
-  return JSON.parse(raw);
+  let cassette;
+  try {
+    cassette = JSON.parse(raw);
+  } catch {
+    const repaired = raw.replace(/(\"\[REDACTED\])(?=[\s,}\]])/g, '$1"');
+    cassette = JSON.parse(repaired);
+  }
+  if (Array.isArray(cassette?.interactions)) {
+    const fixUnclosed = (t) => (typeof t === "string"
+      ? t.replace(/("(?:api_?key|token|secret|password|access_?token|refresh_?token|signature|apiKey|apiSecret)"\s*:\s*")\[REDACTED\](?=[\s,}\]])/gi, '$1[REDACTED]"')
+      : t);
+    for (const item of cassette.interactions) {
+      if (item.request?.body) item.request.body = fixUnclosed(item.request.body);
+      if (item.response?.body) item.response.body = fixUnclosed(item.response.body);
+    }
+  }
+  return cassette;
 }
 
 function saveCassette(path, cassette) {
@@ -285,6 +299,14 @@ function cmdVerify(cassettePath) {
     seen.add(i.key);
     const m = i.request?.method || "?";
     methods.set(m, (methods.get(m) || 0) + 1);
+    const ct = (i.response?.headers?.["content-type"] || "").toLowerCase();
+    if (ct.includes("application/json") && typeof i.response?.body === "string" && i.response.body.trim()) {
+      try {
+        JSON.parse(i.response.body);
+      } catch (err) {
+        problems.push(`interaction ${n}: malformed JSON body (${err.message})`);
+      }
+    }
   }
 
   // Scan the actual body STRINGS, not a re-serialized document: inside
