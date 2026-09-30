@@ -27,9 +27,11 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { createServer, request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /* --------------------------------------------------------------- normalising */
 
@@ -104,8 +106,11 @@ function readBody(req) {
 async function cmdRecord(cassettePath, port, target, filter) {
   if (!target) { console.error("replay: --target is required for record"); return 2; }
   const base = new URL(target);
+  const isHttps = base.protocol === "https:";
+  const upstreamPort = base.port ? Number(base.port) : (isHttps ? 443 : 80);
+  const upstreamRequest = isHttps ? httpsRequest : httpRequest;
+  const upstreamHost = base.host;
   const filterRe = filter ? new RegExp(filter) : null;
-
   const existing = loadCassette(cassettePath);
   const interactions = existing?.interactions ?? [];
   const seen = new Set(interactions.map((i) => i.key));
@@ -125,8 +130,9 @@ async function cmdRecord(cassettePath, port, target, filter) {
 
     // Pass-through for anything the operator excluded (auth, telemetry).
     if (filterRe && !filterRe.test(pathAndQuery)) {
-      const upstream = httpRequest(
-        { hostname: base.hostname, port: base.port || 80, path: pathAndQuery, method: req.method, headers: req.headers },
+      const headers = { ...req.headers, host: upstreamHost };
+      const upstream = upstreamRequest(
+        { hostname: base.hostname, port: upstreamPort, path: pathAndQuery, method: req.method, headers },
         (up) => { res.writeHead(up.statusCode || 502, up.headers); up.pipe(res); },
       );
       upstream.on("error", () => { res.writeHead(502); res.end(); });
@@ -135,8 +141,9 @@ async function cmdRecord(cassettePath, port, target, filter) {
       return;
     }
 
-    const upstream = httpRequest(
-      { hostname: base.hostname, port: base.port || 80, path: pathAndQuery, method: req.method, headers: req.headers },
+    const headers = { ...req.headers, host: upstreamHost };
+    const upstream = upstreamRequest(
+      { hostname: base.hostname, port: upstreamPort, path: pathAndQuery, method: req.method, headers },
       async (up) => {
         const chunks = [];
         up.on("data", (c) => chunks.push(c));
@@ -147,7 +154,7 @@ async function cmdRecord(cassettePath, port, target, filter) {
             seen.add(key);
             const entry = {
               key,
-              request: { method: req.method, url: redactUrl(pathAndQuery), headers: redactHeaders(req.headers), body: redactBody(body) || null },
+              request: { method: req.method, url: redactUrl(pathAndQuery), headers: redactHeaders(headers), body: redactBody(body) || null },
               response: { status: up.statusCode, headers: redactHeaders(up.headers), body: redactBody(respBody) },
             };
             interactions.push(entry);
@@ -181,7 +188,7 @@ async function cmdRecord(cassettePath, port, target, filter) {
   process.on("SIGTERM", finish);
   // On Windows a hard kill does not deliver signals, so also flush on exit.
   process.on("exit", () => { try { flush(); } catch { /* best effort */ } });
-  return 0;
+  return server;
 }
 
 /* -------------------------------------------------------------------- replay */
@@ -237,7 +244,7 @@ function cmdReplay(cassettePath, port, strict) {
     server.close();
     process.exit(unmatched.length && strict ? 1 : 0);
   });
-  return 0;
+  return server;
 }
 
 /* -------------------------------------------------------------------- verify */
@@ -318,10 +325,32 @@ function cmdShow(cassettePath) {
   }
   return 0;
 }
+export {
+  cmdRecord,
+  cmdReplay,
+  cmdVerify,
+  cmdShow,
+  loadCassette,
+  saveCassette,
+  requestKey,
+  redactUrl,
+  redactHeaders,
+  redactBody,
+};
+
 
 /* ---------------------------------------------------------------------- main */
 
-const argv = process.argv.slice(2);
+const isMain = process.argv[1] && (() => {
+  try {
+    return fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  const argv = process.argv.slice(2);
 const opts = { _: [] };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -350,3 +379,4 @@ switch (cmd) {
 }
 if (cmd === "record" || cmd === "replay") { /* servers keep the loop alive */ }
 else process.exit(code);
+}

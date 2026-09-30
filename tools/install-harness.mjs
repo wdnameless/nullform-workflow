@@ -554,22 +554,9 @@ function installHarness(options = {}) {
               options.dryRun
             )
           );
-          plan.filesToCopy.push(
-            ...copyDirRecursive(
-              join(targetRoot, "rules"),
-              join(homeAgentDir, "rules"),
-              slashRoot,
-              options.dryRun
-            )
-          );
-          plan.filesToCopy.push(
-            ...copyDirRecursive(
-              join(targetRoot, "rules"),
-              join(agentsHome, "rules"),
-              slashRoot,
-              options.dryRun
-            )
-          );
+          for (const dst of [join(homeAgentDir, "rules"), join(agentsHome, "rules")]) {
+            plan.filesToCopy.push(...copyDirRecursive(join(targetRoot, "rules"), dst, slashRoot, options.dryRun));
+          }
           plan.filesToCopy.push(
             ...installSkills(
               join(targetRoot, "skills"),
@@ -580,16 +567,14 @@ function installHarness(options = {}) {
             )
           );
           // Native OMP extension for automatic JEV assistance: installed idempotently
-          // under ~/.omp/agent/extensions without overwriting unrelated user extensions.
-          const homeExtensionsDir = join(homeAgentDir, "extensions");
-          const jevExtSource = join(REPO_ROOT, "agent", "extensions", "nullform-jev.ts");
-          const jevExtDest = join(homeExtensionsDir, "nullform-jev.ts");
-          if (existsSync(jevExtSource)) {
+          const jevSource = join(REPO_ROOT, "agent", "extensions", "nullform-jev.ts");
+          const jevDest = join(homeAgentDir, "extensions", "nullform-jev.ts");
+          if (existsSync(jevSource)) {
             if (!options.dryRun) {
-              mkdirSync(homeExtensionsDir, { recursive: true });
-              copyFileSync(jevExtSource, jevExtDest);
+              mkdirSync(dirname(jevDest), { recursive: true });
+              copyFileSync(jevSource, jevDest);
             }
-            plan.filesToCopy.push(jevExtDest);
+            plan.filesToCopy.push(jevDest);
           }
         }
         break;

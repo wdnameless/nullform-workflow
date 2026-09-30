@@ -130,6 +130,12 @@
     "rel": "tools/jev-control.mjs"
   },
   {
+    "rel": "tools/jev-evidence.mjs"
+  },
+  {
+    "rel": "tools/jev-evaluation-cases.mjs"
+  },
+  {
     "rel": "tools/fix-plugin-windows.cjs"
   },
   {

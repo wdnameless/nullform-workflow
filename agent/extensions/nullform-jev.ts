@@ -19,25 +19,9 @@ import type {
   ToolCallEvent,
   BeforeSubagentSpawnEvent,
   BeforeSubagentSpawnEventResult,
-  ProviderConfig,
   ProviderModelConfig,
 } from "@oh-my-pi/pi-coding-agent";
 
-export type {
-  ExtensionAPI,
-  ExtensionContext,
-  BeforeAgentStartEvent,
-  BeforeAgentStartEventResult,
-  ToolCallEvent,
-  BeforeSubagentSpawnEvent,
-  BeforeSubagentSpawnEventResult,
-  ProviderConfig,
-  ProviderModelConfig,
-};
-
-// ---------------------------------------------------------------------------
-// Type Definitions (OMP 18.4.4 compatible)
-// ---------------------------------------------------------------------------
 
 export interface JevDecision {
   status: "ok" | "fallback";
@@ -60,10 +44,7 @@ export interface JevCore {
     home?: string;
     roots?: string[];
     effectiveSkills?: Array<{ name: string; description: string; path?: string }>;
-  }): Promise<{
-    skills: Array<{ name: string; description: string; path?: string }>;
-    fingerprint: string;
-  }>;
+  }): Promise<{ skills: Array<{ name: string; description: string; path?: string }>; fingerprint: string }>;
   screenTask(text: string): { allowed: boolean; reason: string };
   decide(params: {
     task: string;
@@ -74,17 +55,6 @@ export interface JevCore {
     timeoutMs?: number;
     model?: string;
   }): Promise<JevDecision>;
-  policyFingerprint(params: {
-    catalogFingerprint: string;
-    candidateModel: string;
-    baselineModel: string;
-    decisionModel: string;
-  }): string;
-  evaluateReport(report: unknown): {
-    skillPassed: boolean;
-    routingPassed: boolean;
-    archetypes: string[];
-  };
   readPolicy(options: { home?: string; cwd?: string; fingerprint?: string }): {
     version: number;
     enabled: boolean;
@@ -117,7 +87,6 @@ export interface JevExtensionOptions {
   cwd?: string;
 }
 
-
 interface CachedDecision {
   decision: JevDecision;
   role: string;
@@ -135,9 +104,6 @@ interface TaskItemInput {
   [key: string]: unknown;
 }
 
-// ---------------------------------------------------------------------------
-// Constants & Static Lookup Tables (ts-set-map compliance)
-// ---------------------------------------------------------------------------
 
 const PROTECTED_ROLES: Record<string, true> = {
   oracle: true,
@@ -163,9 +129,6 @@ const LEAF_ARCHETYPES: Record<string, true> = {
   "text-normalization": true,
 };
 
-// ---------------------------------------------------------------------------
-// Core Resolver
-// ---------------------------------------------------------------------------
 
 async function resolveCoreModule(
   cwd: string,
@@ -173,12 +136,8 @@ async function resolveCoreModule(
   override?: JevCore
 ): Promise<JevCore | null> {
   if (override) return override;
+  const currentDir = typeof __dirname !== "undefined" ? __dirname : dirname(fileURLToPath(import.meta.url));
 
-  const currentDir = typeof __dirname !== "undefined"
-    ? __dirname
-    : dirname(fileURLToPath(import.meta.url));
-
-  // 1. Pointer check via .harness-root
   const pointerCandidates = [
     process.env.AGENT_DIR ? join(process.env.AGENT_DIR, ".harness-root") : null,
     join(userHome, ".omp", "agent", ".harness-root"),
@@ -189,51 +148,51 @@ async function resolveCoreModule(
   for (const ptrPath of pointerCandidates) {
     if (existsSync(ptrPath)) {
       try {
-        const harnessRoot = readFileSync(ptrPath, "utf8").trim();
-        const corePath = join(harnessRoot, "tools", "jev-assist.mjs");
+        const corePath = join(readFileSync(ptrPath, "utf8").trim(), "tools", "jev-assist.mjs");
         if (existsSync(corePath)) {
-          // Dynamic import required: core module path is determined at runtime via harness root pointer
-          const mod: unknown = await import(pathToFileURL(corePath).href);
-          return mod as JevCore;
+          return (await import(pathToFileURL(corePath).href)) as JevCore;
         }
       } catch {}
     }
   }
 
-  // 2. Source fallback relative to extension location and process.cwd()
-  const fallbackCandidates = [
-    resolve(currentDir, "../../tools/jev-assist.mjs"),
-    join(cwd, "tools", "jev-assist.mjs"),
-  ];
-
-  for (const fbPath of fallbackCandidates) {
+  const fallbacks = [resolve(currentDir, "../../tools/jev-assist.mjs"), join(cwd, "tools", "jev-assist.mjs")];
+  for (const fbPath of fallbacks) {
     if (existsSync(fbPath)) {
       try {
-        // Dynamic import required: source fallback path resolved at runtime
-        const mod: unknown = await import(pathToFileURL(fbPath).href);
-        return mod as JevCore;
+        return (await import(pathToFileURL(fbPath).href)) as JevCore;
       } catch {}
     }
   }
-
   return null;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function safeErrorMessage(err: unknown): string {
   if (!err) return "unknown";
   if (err instanceof Error) {
-    if (err.name === "AbortError") return "timeout";
-    if (err.name === "TypeError") return "type_error";
-    if (err.name === "RangeError") return "range_error";
-    if (err.name === "SyntaxError") return "syntax_error";
-    return err.name || "error";
+    const n = err.name;
+    if (n === "AbortError") return "timeout";
+    if (n === "TypeError") return "type_error";
+    if (n === "RangeError") return "range_error";
+    if (n === "SyntaxError") return "syntax_error";
+    return n || "error";
   }
   return "internal_error";
 }
+
+const isAllowedSnapshot = (model: string | null | undefined, snapshots?: string[]): boolean =>
+  Boolean(model && (!Array.isArray(snapshots) || snapshots.length === 0 || snapshots.includes(model)));
+
+const hasValidCost = (m?: { cost?: { input?: unknown; output?: unknown } }): boolean =>
+  Boolean(
+    m?.cost &&
+    typeof m.cost.input === "number" &&
+    typeof m.cost.output === "number" &&
+    Number.isFinite(m.cost.input) &&
+    Number.isFinite(m.cost.output) &&
+    m.cost.input > 0 &&
+    m.cost.output > 0
+  );
 
 /**
  * Extracts authoritative active skills directly from native session commands.
@@ -271,9 +230,444 @@ export function getEffectiveNativeSkills(
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Extension Factory
-// ---------------------------------------------------------------------------
+
+class JevRuntime {
+  private resolvedCore: JevCore | null = null;
+  private readonly pendingDecisions = new Map<string, CachedDecision>();
+  private toolCallGeneration = 0;
+  private providerRegistered = false;
+  private readonly userHome: string;
+
+  constructor(
+    private readonly pi: ExtensionAPI,
+    private readonly options: JevExtensionOptions,
+    private readonly counters: JevCounters
+  ) {
+    this.userHome = options.home || process.env.USERPROFILE || process.env.HOME || homedir();
+    this.resolvedCore = options.core || null;
+  }
+
+  resolveCwd(ctx?: ExtensionContext): string {
+    return this.options.cwd || ctx?.cwd || process.cwd();
+  }
+
+  clearTurnState(): void {
+    this.pendingDecisions.clear();
+    this.toolCallGeneration++;
+  }
+
+  async getCore(ctx?: ExtensionContext): Promise<JevCore | null> {
+    if (!this.resolvedCore) {
+      this.resolvedCore = await resolveCoreModule(this.resolveCwd(ctx), this.userHome, this.options.core);
+    }
+    return this.resolvedCore;
+  }
+
+  async getPolicy(ctx?: ExtensionContext) {
+    const core = await this.getCore(ctx);
+    if (!core) return null;
+
+    const effectiveSkills = getEffectiveNativeSkills(this.pi);
+    if (!effectiveSkills || effectiveSkills.length === 0) return null;
+
+    const currentCwd = this.resolveCwd(ctx);
+    const catalog = await core.loadSkillCatalog({ cwd: currentCwd, home: this.userHome, effectiveSkills });
+    if (!catalog.skills || catalog.skills.length === 0) return null;
+
+    const policy = core.readPolicy({ home: this.userHome, cwd: currentCwd });
+    if (!policy || !policy.enabled) return null;
+    if (policy.catalogFingerprint && policy.catalogFingerprint !== catalog.fingerprint) return null;
+
+    return { core, policy, catalog, cwd: currentCwd };
+  }
+
+  async getRoutingPolicy(ctx?: ExtensionContext) {
+    const pair = await this.getPolicy(ctx);
+    if (!pair || !pair.policy.routingPassed) return null;
+    if (!Array.isArray(pair.policy.archetypes) || pair.policy.archetypes.length === 0) return null;
+    return pair;
+  }
+
+  async getSkillPolicy(ctx?: ExtensionContext) {
+    const pair = await this.getPolicy(ctx);
+    if (!pair || !pair.policy.skillPassed) return null;
+    return pair;
+  }
+
+  async ensureCandidateProvider(ctx?: ExtensionContext): Promise<void> {
+    if (this.providerRegistered || this.options.candidateProvider === false) return;
+    if (typeof this.pi.registerProvider !== "function") return;
+
+    const routing = await this.getRoutingPolicy(ctx);
+    if (!routing || !routing.policy.candidateModel) return;
+    const { core, policy } = routing;
+
+    if (!policy.routingPassed || !Array.isArray(policy.archetypes) || policy.archetypes.length === 0) return;
+
+    const apiKey = await core.readCredential();
+    if (!apiKey) return;
+
+    const candidateID = policy.candidateModel.startsWith("nullform-openrouter/")
+      ? policy.candidateModel.slice("nullform-openrouter/".length)
+      : policy.candidateModel;
+
+    if (ctx?.models?.resolve && hasValidCost(ctx.models.resolve(candidateID))) {
+      return;
+    }
+
+    const baseID = policy.baselineModel?.startsWith("nullform-openrouter/")
+      ? policy.baselineModel.slice("nullform-openrouter/".length)
+      : (policy.baselineModel || "google/gemini-3.8-flash");
+
+    const candPrices = policy.modelPrices?.[policy.candidateModel] || policy.modelPrices?.[candidateID];
+    const basePrices = policy.modelPrices?.[policy.baselineModel] || policy.modelPrices?.[baseID];
+
+    const toCostM = (val: unknown, fallback: number): number => {
+      const n = typeof val === "number" && Number.isFinite(val) ? val : fallback;
+      return (n > 0 && n < 0.01) ? Number((n * 1_000_000).toFixed(4)) : n;
+    };
+
+    const makeModelConfig = (id: string, name: string, inCost: number, outCost: number): ProviderModelConfig => ({
+      id,
+      name,
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: inCost, output: outCost, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1048576,
+      maxTokens: 65536,
+    });
+
+    const models: ProviderModelConfig[] = [
+      makeModelConfig(
+        candidateID,
+        candidateID === "google/gemini-3.1-flash-lite" ? "Google Gemini 3.1 Flash Lite" : candidateID,
+        toCostM(candPrices?.prompt, 0.25),
+        toCostM(candPrices?.completion, 1.5)
+      ),
+    ];
+
+    if (baseID && baseID !== candidateID) {
+      models.push(
+        makeModelConfig(
+          baseID,
+          baseID === "google/gemini-3.8-flash" ? "Google Gemini 3.8 Flash" : baseID,
+          toCostM(basePrices?.prompt, 0.75),
+          toCostM(basePrices?.completion, 3.75)
+        )
+      );
+    }
+
+    this.pi.registerProvider("nullform-openrouter", {
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey,
+      api: "openai-completions",
+      models,
+    });
+
+    this.providerRegistered = true;
+  }
+
+  async handleBeforeAgentStart(
+    event: BeforeAgentStartEvent,
+    ctx: ExtensionContext
+  ): Promise<BeforeAgentStartEventResult | void> {
+    try {
+      if (ctx.agent?.kind === "sub") return;
+      this.clearTurnState();
+
+      const skillPair = await this.getSkillPolicy(ctx);
+      if (!skillPair) return;
+      const { core, policy, catalog, cwd } = skillPair;
+
+      const promptText = typeof event.prompt === "string" ? event.prompt : "";
+      if (!promptText.trim() || !core.screenTask(promptText).allowed) return;
+
+      const apiKey = await core.readCredential();
+      if (!apiKey) return;
+
+      const decision = await core.decide({ task: promptText, skills: catalog.skills, apiKey });
+      if (decision && decision.status === "ok" && decision.skill) {
+        if (!isAllowedSnapshot(decision.model, policy.decisionSnapshots)) return;
+
+        const skillConf = decision.skillConfidence;
+        if (typeof skillConf !== "number" || !Number.isFinite(skillConf) || skillConf < 0.80) {
+          return;
+        }
+
+        const matchedSkill = catalog.skills.find(s => s.name === decision.skill);
+        if (!matchedSkill) return;
+
+        this.counters.skillRecommendations++;
+        core.appendEvent(cwd, {
+          event: "skill_recommendation",
+          skill: matchedSkill.name,
+          archetype: decision.archetype,
+          confidence: decision.confidence,
+          route: decision.route,
+          costUsd: decision.usage?.costUsd,
+        });
+
+        const archetypeHint = decision.archetype && decision.archetype !== "none" ? ` (${decision.archetype})` : "";
+        return {
+          message: {
+            customType: "jev-skill-suggestion",
+            content: `[JEV Assistance] Recommended skill: ${matchedSkill.name}${archetypeHint}`,
+            display: true,
+          },
+        };
+      }
+    } catch (err) {
+      this.pi.logger?.warn?.(`[nullform-jev] before_agent_start error: ${safeErrorMessage(err)}`);
+      return;
+    }
+  }
+
+  async handleToolCall(event: ToolCallEvent, ctx: ExtensionContext): Promise<void> {
+    try {
+      if (ctx.agent?.kind === "sub") return;
+      if (event.toolName !== "task" || !event.input) return;
+
+      const currentGeneration = ++this.toolCallGeneration;
+
+      const routing = await this.getRoutingPolicy(ctx);
+      if (!routing || currentGeneration !== this.toolCallGeneration) return;
+      const { core, policy } = routing;
+
+      const input = event.input;
+      if (!input || typeof input !== "object") return;
+
+      const rawContext = (input as { context?: unknown }).context;
+      const sharedContextText = typeof rawContext === "string" ? rawContext : (rawContext ? JSON.stringify(rawContext) : "");
+      if (sharedContextText.trim() && !core.screenTask(sharedContextText).allowed) {
+        this.clearTurnState();
+        return;
+      }
+
+      const rawTasks: TaskItemInput[] = Array.isArray((input as { tasks?: unknown }).tasks)
+        ? ((input as { tasks: unknown[] }).tasks.filter(t => t && typeof t === "object") as TaskItemInput[])
+        : [input as TaskItemInput];
+
+      const nameCounts = new Map<string, number>();
+      for (const t of rawTasks) {
+        const name = typeof t.name === "string" ? t.name.trim() : "";
+        if (name) nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+      }
+      for (const [name, count] of nameCounts.entries()) {
+        if (count > 1) this.pendingDecisions.delete(name);
+      }
+
+      const apiKey = await core.readCredential();
+      if (!apiKey || currentGeneration !== this.toolCallGeneration) return;
+
+      await this.ensureCandidateProvider(ctx);
+      if (currentGeneration !== this.toolCallGeneration) return;
+
+      for (const t of rawTasks) {
+        const name = typeof t.name === "string" ? t.name.trim() : "";
+        if (!name || (nameCounts.get(name) || 0) > 1) {
+          if (name) this.pendingDecisions.delete(name);
+          continue;
+        }
+
+        const role = (typeof t.agent === "string" ? t.agent.trim() : "task").toLowerCase();
+        if (PROTECTED_ROLES[role] || !QUALIFYING_ROLES[role]) {
+          this.pendingDecisions.delete(name);
+          continue;
+        }
+
+        const taskText = typeof t.task === "string"
+          ? t.task
+          : (typeof t.prompt === "string" ? t.prompt : (typeof t.description === "string" ? t.description : ""));
+
+        if (!taskText.trim() || !core.screenTask(taskText).allowed) {
+          this.pendingDecisions.delete(name);
+          continue;
+        }
+
+        const decision = await core.decide({ task: taskText, skills: [], apiKey });
+        if (currentGeneration !== this.toolCallGeneration) return;
+
+        if (!isAllowedSnapshot(decision?.model, policy.decisionSnapshots)) {
+          this.pendingDecisions.delete(name);
+          continue;
+        }
+
+        const eligibleScore = decision?.eligibleScore;
+        const routingConf = decision?.routingConfidence;
+
+        if (
+          decision &&
+          decision.status === "ok" &&
+          decision.route === "cheap" &&
+          typeof eligibleScore === "number" &&
+          Number.isFinite(eligibleScore) &&
+          eligibleScore >= 0.95 &&
+          typeof routingConf === "number" &&
+          Number.isFinite(routingConf) &&
+          routingConf >= 0.90 &&
+          LEAF_ARCHETYPES[decision.archetype] &&
+          Array.isArray(policy.archetypes) &&
+          policy.archetypes.includes(decision.archetype)
+        ) {
+          if (currentGeneration === this.toolCallGeneration) {
+            this.pendingDecisions.set(name, {
+              decision,
+              role,
+              name,
+              generation: currentGeneration,
+              timestamp: Date.now(),
+            });
+          }
+        } else {
+          this.pendingDecisions.delete(name);
+        }
+      }
+    } catch (err) {
+      this.pi.logger?.warn?.(`[nullform-jev] tool_call error: ${safeErrorMessage(err)}`);
+    }
+  }
+
+  async handleBeforeSubagentSpawn(
+    event: BeforeSubagentSpawnEvent,
+    ctx: ExtensionContext
+  ): Promise<BeforeSubagentSpawnEventResult | void> {
+    try {
+      if (ctx.agent?.kind === "sub" || event.invocationKind === "eval" || event.modelRole === undefined) return;
+
+      const spawnAgent = typeof event.agent === "string" ? event.agent.toLowerCase() : "";
+      const spawnRole = typeof event.modelRole === "string" ? event.modelRole.toLowerCase() : "";
+
+      if (PROTECTED_ROLES[spawnAgent] || PROTECTED_ROLES[spawnRole]) {
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      const spawnKey = typeof event.spawnKey === "string" ? event.spawnKey.trim() : "";
+      if (!spawnKey) {
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      const cached = this.pendingDecisions.get(spawnKey);
+      if (!cached) {
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      if (cached.generation !== this.toolCallGeneration) {
+        this.pendingDecisions.delete(spawnKey);
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      if (spawnAgent !== cached.role && spawnRole !== cached.role) {
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      if (Date.now() - cached.timestamp > 120000) {
+        this.pendingDecisions.delete(spawnKey);
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      const routing = await this.getRoutingPolicy(ctx);
+      if (!routing) {
+        this.counters.baselineRetained++;
+        return;
+      }
+      const { core, policy, cwd } = routing;
+
+      if (
+        !policy.candidateModel ||
+        !Array.isArray(policy.archetypes) ||
+        !policy.archetypes.includes(cached.decision.archetype) ||
+        !LEAF_ARCHETYPES[cached.decision.archetype] ||
+        !isAllowedSnapshot(cached.decision.model, policy.decisionSnapshots)
+      ) {
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      await this.ensureCandidateProvider(ctx);
+
+      const candidateID = policy.candidateModel.startsWith("nullform-openrouter/")
+        ? policy.candidateModel.slice("nullform-openrouter/".length)
+        : policy.candidateModel;
+      const fullCandidateSelector = "nullform-openrouter/" + candidateID;
+
+      const resolveModel = (id: string) =>
+        ctx.models?.resolve?.(id) || ctx.models?.list?.().find(m => m.id === id);
+
+      const targetModel =
+        resolveModel(fullCandidateSelector) ||
+        resolveModel(policy.candidateModel) ||
+        resolveModel(candidateID);
+
+      if (!hasValidCost(targetModel)) {
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      const baselineModel = policy.baselineModel ? resolveModel(policy.baselineModel) : undefined;
+
+      if (
+        baselineModel?.cost?.input &&
+        typeof baselineModel.cost.input === "number" &&
+        Number.isFinite(baselineModel.cost.input) &&
+        baselineModel.cost.input > 0 &&
+        (targetModel!.cost!.input as number) >= baselineModel.cost.input
+      ) {
+        this.counters.baselineRetained++;
+        return;
+      }
+
+      this.pendingDecisions.delete(spawnKey);
+      this.counters.actualRoutes++;
+
+      core.appendEvent(cwd, {
+        event: "subagent_routed",
+        agent: event.agent,
+        spawnKey,
+        candidateModel: fullCandidateSelector,
+        archetype: cached.decision.archetype,
+        costUsd: cached.decision.usage?.costUsd,
+      });
+
+      const originalPatterns = Array.isArray(event.patterns) ? event.patterns : [];
+      const replacementModels = [
+        fullCandidateSelector,
+        ...originalPatterns.filter(p => p !== fullCandidateSelector),
+      ];
+
+      return {
+        model: replacementModels,
+        note: `jev: routed archetype=${cached.decision.archetype} to ${fullCandidateSelector}`,
+      };
+    } catch (err) {
+      this.counters.baselineRetained++;
+      this.pi.logger?.warn?.(`[nullform-jev] before_subagent_spawn error: ${safeErrorMessage(err)}`);
+      return;
+    }
+  }
+
+  async init(): Promise<void> {
+    try {
+      await this.ensureCandidateProvider();
+    } catch (err) {
+      this.pi.logger?.warn?.(`[nullform-jev] candidate provider registration error: ${safeErrorMessage(err)}`);
+    }
+
+    this.pi.on("turn_start", () => this.clearTurnState());
+    this.pi.on("turn_end", () => this.clearTurnState());
+    this.pi.on("agent_end", () => this.clearTurnState());
+
+    this.pi.on("before_agent_start", (event, ctx) => this.handleBeforeAgentStart(event, ctx));
+    this.pi.on("tool_call", (event, ctx) => this.handleToolCall(event, ctx));
+    this.pi.on("before_subagent_spawn", (event, ctx) => this.handleBeforeSubagentSpawn(event, ctx));
+  }
+}
+
 
 export function createJevExtension(options: JevExtensionOptions = {}) {
   const counters: JevCounters = {
@@ -283,539 +677,8 @@ export function createJevExtension(options: JevExtensionOptions = {}) {
   };
 
   return async function jevExtension(pi: ExtensionAPI): Promise<void> {
-    const userHome = options.home || process.env.USERPROFILE || process.env.HOME || homedir();
-    const cwd = options.cwd || process.cwd();
-
-    let resolvedCore: JevCore | null = options.core || null;
-    const getCore = async (): Promise<JevCore | null> => {
-      if (!resolvedCore) {
-        resolvedCore = await resolveCoreModule(cwd, userHome, options.core);
-      }
-      return resolvedCore;
-    };
-
-    // State per turn: keyed by unique task name
-    const pendingDecisions = new Map<string, CachedDecision>();
-    let toolCallGeneration = 0;
-
-    function clearTurnState(): void {
-      pendingDecisions.clear();
-      toolCallGeneration++;
-    }
-
-    const getPolicy = async () => {
-      const core = await getCore();
-      if (!core) return null;
-
-      const effectiveSkills = getEffectiveNativeSkills(pi);
-      if (!effectiveSkills || effectiveSkills.length === 0) return null;
-
-      const catalog = await core.loadSkillCatalog({ cwd, home: userHome, effectiveSkills });
-      if (!catalog.skills || catalog.skills.length === 0) return null;
-
-      const policy = core.readPolicy({ home: userHome, cwd });
-      if (!policy || !policy.enabled) return null;
-      if (policy.catalogFingerprint && policy.catalogFingerprint !== catalog.fingerprint) return null;
-
-      return { core, policy, catalog };
-    };
-
-    const getRoutingPolicy = async () => {
-      const pair = await getPolicy();
-      if (!pair || !pair.policy.routingPassed) return null;
-      if (!Array.isArray(pair.policy.archetypes) || pair.policy.archetypes.length === 0) return null;
-      return pair;
-    };
-
-    const getSkillPolicy = async () => {
-      const pair = await getPolicy();
-      if (!pair || !pair.policy.skillPassed) return null;
-      return pair;
-    };
-
-    let providerRegistered = false;
-
-    // Automatic in-memory candidate provider registration:
-    // Only registered when candidateProvider !== false, credential + policy exist,
-    // and candidate native model is unavailable.
-    async function ensureCandidateProvider(ctx?: ExtensionContext): Promise<void> {
-      if (providerRegistered) return;
-      if (options.candidateProvider === false) return;
-      if (typeof pi.registerProvider !== "function") return;
-
-      const routing = await getRoutingPolicy();
-      if (!routing || !routing.policy.candidateModel) return;
-      const { core, policy } = routing;
-
-      if (!policy.routingPassed || !Array.isArray(policy.archetypes) || policy.archetypes.length === 0) return;
-
-      const apiKey = await core.readCredential();
-      if (!apiKey) return;
-
-      const candidateID = policy.candidateModel.startsWith("nullform-openrouter/")
-        ? policy.candidateModel.slice("nullform-openrouter/".length)
-        : policy.candidateModel;
-
-      // Check if candidate native model is already available in session registry with valid positive cost
-      if (ctx?.models?.resolve) {
-        const existingNative = ctx.models.resolve(candidateID);
-        if (
-          existingNative &&
-          existingNative.cost &&
-          typeof existingNative.cost.input === "number" &&
-          typeof existingNative.cost.output === "number" &&
-          Number.isFinite(existingNative.cost.input) &&
-          Number.isFinite(existingNative.cost.output) &&
-          existingNative.cost.input > 0 &&
-          existingNative.cost.output > 0
-        ) {
-          return;
-        }
-      }
-
-      const baseID = policy.baselineModel?.startsWith("nullform-openrouter/")
-        ? policy.baselineModel.slice("nullform-openrouter/".length)
-        : (policy.baselineModel || "google/gemini-3.8-flash");
-
-      // Extract observed prices from policy.modelPrices in memory (no repeated network fetches)
-      const candPrices = policy.modelPrices?.[policy.candidateModel] || policy.modelPrices?.[candidateID];
-      const basePrices = policy.modelPrices?.[policy.baselineModel] || policy.modelPrices?.[baseID];
-
-      const toCostM = (val: unknown, fallback: number): number => {
-        const n = typeof val === "number" && Number.isFinite(val) ? val : fallback;
-        if (n > 0 && n < 0.01) {
-          return Number((n * 1_000_000).toFixed(4));
-        }
-        return n;
-      };
-
-      const candInputCost = toCostM(candPrices?.prompt, 0.25);
-      const candOutputCost = toCostM(candPrices?.completion, 1.5);
-      const baseInputCost = toCostM(basePrices?.prompt, 0.75);
-      const baseOutputCost = toCostM(basePrices?.completion, 3.75);
-
-      const models: ProviderModelConfig[] = [
-        {
-          id: candidateID,
-          name: candidateID === "google/gemini-3.1-flash-lite" ? "Google Gemini 3.1 Flash Lite" : candidateID,
-          reasoning: false,
-          input: ["text", "image"],
-          cost: { input: candInputCost, output: candOutputCost, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 1048576,
-          maxTokens: 65536,
-        },
-      ];
-
-      if (baseID && baseID !== candidateID) {
-        models.push({
-          id: baseID,
-          name: baseID === "google/gemini-3.8-flash" ? "Google Gemini 3.8 Flash" : baseID,
-          reasoning: false,
-          input: ["text", "image"],
-          cost: { input: baseInputCost, output: baseOutputCost, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 1048576,
-          maxTokens: 65536,
-        });
-      }
-
-      pi.registerProvider("nullform-openrouter", {
-        baseUrl: "https://openrouter.ai/api/v1",
-        apiKey,
-        api: "openai-completions",
-        models,
-      });
-
-      providerRegistered = true;
-    }
-
-    // Default runtime automatic provider registration
-    try {
-      await ensureCandidateProvider();
-    } catch (err) {
-      pi.logger?.warn?.(`[nullform-jev] candidate provider registration error: ${safeErrorMessage(err)}`);
-    }
-
-    // Lifecycle turn cleanup
-    pi.on("turn_start", () => clearTurnState());
-    pi.on("turn_end", () => clearTurnState());
-    pi.on("agent_end", () => clearTurnState());
-
-    // 1. before_agent_start: Appends skill suggestion without rewriting systemPrompt
-    pi.on("before_agent_start", async (event: BeforeAgentStartEvent, ctx: ExtensionContext) => {
-      try {
-        if (ctx.agent?.kind === "sub") return;
-        clearTurnState();
-
-        const skillPair = await getSkillPolicy();
-        if (!skillPair) return;
-        const { core, policy, catalog } = skillPair;
-
-        const promptText = typeof event.prompt === "string" ? event.prompt : "";
-        if (!promptText.trim()) return;
-
-        const screened = core.screenTask(promptText);
-        if (!screened.allowed) return;
-
-        const apiKey = await core.readCredential();
-        if (!apiKey) return;
-
-        const decision = await core.decide({
-          task: promptText,
-          skills: catalog.skills,
-          apiKey,
-        });
-
-        if (decision && decision.status === "ok" && decision.skill) {
-          // Re-evaluate decision snapshot against policy
-          if (
-            !decision.model ||
-            (Array.isArray(policy.decisionSnapshots) &&
-             policy.decisionSnapshots.length > 0 &&
-             !policy.decisionSnapshots.includes(decision.model))
-          ) {
-            return;
-          }
-
-          // Calibrated skill confidence threshold check (independent of cheap-routing eligibleScore)
-          const skillConf = decision.skillConfidence;
-
-          if (
-            typeof skillConf !== "number" ||
-            !Number.isFinite(skillConf) ||
-            skillConf < 0.80
-          ) {
-            return;
-          }
-
-          const matchedSkill = catalog.skills.find(s => s.name === decision.skill);
-          if (!matchedSkill) return;
-
-          counters.skillRecommendations++;
-          core.appendEvent(cwd, {
-            event: "skill_recommendation",
-            skill: matchedSkill.name,
-            archetype: decision.archetype,
-            confidence: decision.confidence,
-            route: decision.route,
-            costUsd: decision.usage?.costUsd,
-          });
-
-          // Header skills emit short skill IDs only, with bounded archetype identifier hint
-          const archetypeHint = decision.archetype && decision.archetype !== "none" ? ` (${decision.archetype})` : "";
-          return {
-            message: {
-              customType: "jev-skill-suggestion",
-              content: `[JEV Assistance] Recommended skill: ${matchedSkill.name}${archetypeHint}`,
-              display: true,
-            },
-          };
-        }
-      } catch (err) {
-        pi.logger?.warn?.(`[nullform-jev] before_agent_start error: ${safeErrorMessage(err)}`);
-        return;
-      }
-    });
-
-    // 2. tool_call: Caches decisions for explicit unique names and exact role
-    pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
-      try {
-        if (ctx.agent?.kind === "sub") return;
-        if (event.toolName !== "task" || !event.input) return;
-
-        const currentGeneration = ++toolCallGeneration;
-
-        const routing = await getRoutingPolicy();
-        if (!routing) return;
-        if (currentGeneration !== toolCallGeneration) return;
-        const { core, policy, catalog } = routing;
-
-        const input = event.input;
-        if (!input || typeof input !== "object") return;
-
-        // Screen shared batch context before any candidate registration or classifier decisions
-        const rawContext = (input as { context?: unknown }).context;
-        const sharedContextText = typeof rawContext === "string"
-          ? rawContext
-          : (rawContext ? JSON.stringify(rawContext) : "");
-
-        if (sharedContextText.trim()) {
-          const contextScreened = core.screenTask(sharedContextText);
-          if (!contextScreened.allowed) {
-            clearTurnState();
-            return; // Sensitive shared context retains baseline for entire batch
-          }
-        }
-
-        const rawTasks: TaskItemInput[] = [];
-        if (Array.isArray((input as { tasks?: unknown }).tasks)) {
-          for (const item of (input as { tasks: unknown[] }).tasks) {
-            if (item && typeof item === "object") {
-              rawTasks.push(item as TaskItemInput);
-            }
-          }
-        } else {
-          rawTasks.push(input as TaskItemInput);
-        }
-
-        // Check name uniqueness in batch
-        const nameCounts = new Map<string, number>();
-        for (const t of rawTasks) {
-          const name = typeof t.name === "string" ? t.name.trim() : "";
-          if (name) {
-            nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
-          }
-        }
-
-        // Invalidate prior pending map entries for names that are ambiguous in this batch
-        for (const [name, count] of nameCounts.entries()) {
-          if (count > 1) {
-            pendingDecisions.delete(name);
-          }
-        }
-
-        const apiKey = await core.readCredential();
-        if (!apiKey || currentGeneration !== toolCallGeneration) return;
-
-        await ensureCandidateProvider(ctx);
-        if (currentGeneration !== toolCallGeneration) return;
-        for (const t of rawTasks) {
-          const name = typeof t.name === "string" ? t.name.trim() : "";
-          if (!name) continue; // Unnamed task: never route
-          if ((nameCounts.get(name) || 0) > 1) {
-            pendingDecisions.delete(name);
-            continue; // Ambiguous duplicate names: never route and cleared
-          }
-
-          const role = (typeof t.agent === "string" ? t.agent.trim() : "task").toLowerCase();
-          if (PROTECTED_ROLES[role] || !QUALIFYING_ROLES[role]) {
-            pendingDecisions.delete(name);
-            continue; // Protected or non-qualifying role: never route and clear stale
-          }
-
-          const taskText = typeof t.task === "string"
-            ? t.task
-            : (typeof t.prompt === "string"
-              ? t.prompt
-              : (typeof t.description === "string" ? t.description : ""));
-
-          if (!taskText || !taskText.trim()) continue;
-
-          const screened = core.screenTask(taskText);
-          if (!screened.allowed) {
-            pendingDecisions.delete(name);
-            continue;
-          }
-
-          const decision = await core.decide({
-            task: taskText,
-            skills: [],
-            apiKey,
-          });
-
-          if (currentGeneration !== toolCallGeneration) {
-            return;
-          }
-
-          // Check decision snapshot against policy.decisionSnapshots
-          if (
-            !decision?.model ||
-            (Array.isArray(policy.decisionSnapshots) &&
-             policy.decisionSnapshots.length > 0 &&
-             !policy.decisionSnapshots.includes(decision.model))
-          ) {
-            pendingDecisions.delete(name);
-            continue;
-          }
-
-          // Calibrated eligibleScore and archetype confidence independent of skill confidence
-          const eligibleScore = decision?.eligibleScore;
-          const routingConf = decision?.routingConfidence;
-
-          if (
-            decision &&
-            decision.status === "ok" &&
-            decision.route === "cheap" &&
-            typeof eligibleScore === "number" &&
-            Number.isFinite(eligibleScore) &&
-            eligibleScore >= 0.95 &&
-            typeof routingConf === "number" &&
-            Number.isFinite(routingConf) &&
-            routingConf >= 0.90 &&
-            LEAF_ARCHETYPES[decision.archetype] &&
-            Array.isArray(policy.archetypes) &&
-            policy.archetypes.includes(decision.archetype)
-          ) {
-            if (currentGeneration === toolCallGeneration) {
-              pendingDecisions.set(name, {
-                decision,
-                role,
-                name,
-                generation: currentGeneration,
-                timestamp: Date.now(),
-              });
-            }
-          } else {
-            pendingDecisions.delete(name);
-          }
-        }
-      } catch (err) {
-        pi.logger?.warn?.(`[nullform-jev] tool_call error: ${safeErrorMessage(err)}`);
-      }
-    });
-
-    // 3. before_subagent_spawn: Routes child tasks to candidate model if identity and role correlate
-    pi.on("before_subagent_spawn", async (event: BeforeSubagentSpawnEvent, ctx: ExtensionContext) => {
-      try {
-        if (ctx.agent?.kind === "sub") return;
-        if (event.invocationKind === "eval") return; // Never route eval spawns
-        if (event.modelRole === undefined) return; // Preserve explicit caller selectors
-
-        const spawnAgent = typeof event.agent === "string" ? event.agent.toLowerCase() : "";
-        const spawnRole = typeof event.modelRole === "string" ? event.modelRole.toLowerCase() : "";
-
-        if (PROTECTED_ROLES[spawnAgent] || PROTECTED_ROLES[spawnRole]) {
-          counters.baselineRetained++;
-          return; // Protected roles must retain baseline
-        }
-
-        const spawnKey = typeof event.spawnKey === "string" ? event.spawnKey.trim() : "";
-        if (!spawnKey) {
-          counters.baselineRetained++;
-          return; // Unnamed spawn: retain baseline
-        }
-
-        const cached = pendingDecisions.get(spawnKey);
-        if (!cached) {
-          counters.baselineRetained++;
-          return; // Unknown or consumed decision: retain baseline
-        }
-
-        if (cached.generation !== toolCallGeneration) {
-          pendingDecisions.delete(spawnKey);
-          counters.baselineRetained++;
-          return; // Stale generation decision: retain baseline
-        }
-
-        // Verify exact role match BEFORE consuming
-        if (spawnAgent !== cached.role && spawnRole !== cached.role) {
-          counters.baselineRetained++;
-          return; // Role mismatch retains baseline without consuming
-        }
-
-        // Verify freshness (< 2 minutes old)
-        if (Date.now() - cached.timestamp > 120000) {
-          pendingDecisions.delete(spawnKey);
-          counters.baselineRetained++;
-          return;
-        }
-
-        const routing = await getRoutingPolicy();
-        if (!routing) {
-          counters.baselineRetained++;
-          return;
-        }
-        const { core, policy, catalog } = routing;
-
-        if (
-          !policy.candidateModel ||
-          !Array.isArray(policy.archetypes) ||
-          !policy.archetypes.includes(cached.decision.archetype) ||
-          !LEAF_ARCHETYPES[cached.decision.archetype]
-        ) {
-          counters.baselineRetained++;
-          return;
-        }
-
-        // Re-evaluate decision snapshot against policy.decisionSnapshots
-        if (
-          !cached.decision.model ||
-          (Array.isArray(policy.decisionSnapshots) &&
-           policy.decisionSnapshots.length > 0 &&
-           !policy.decisionSnapshots.includes(cached.decision.model))
-        ) {
-          counters.baselineRetained++;
-          return;
-        }
-
-        await ensureCandidateProvider(ctx);
-
-        const candidateID = policy.candidateModel.startsWith("nullform-openrouter/")
-          ? policy.candidateModel.slice("nullform-openrouter/".length)
-          : policy.candidateModel;
-        const fullCandidateSelector = "nullform-openrouter/" + candidateID;
-
-        // Verify candidate model availability and observed prices via ctx.models
-        const targetModel =
-          (ctx.models?.resolve ? ctx.models.resolve(fullCandidateSelector) : undefined) ||
-          (ctx.models?.resolve ? ctx.models.resolve(policy.candidateModel) : undefined) ||
-          (ctx.models?.resolve ? ctx.models.resolve(candidateID) : undefined) ||
-          (ctx.models?.list ? ctx.models.list().find(m => m.id === fullCandidateSelector || m.id === policy.candidateModel || m.id === candidateID) : undefined);
-
-        if (!targetModel) {
-          counters.baselineRetained++;
-          return; // Candidate model not available in session registry: retain baseline
-        }
-
-        if (
-          !targetModel.cost ||
-          typeof targetModel.cost.input !== "number" ||
-          typeof targetModel.cost.output !== "number" ||
-          !Number.isFinite(targetModel.cost.input) ||
-          !Number.isFinite(targetModel.cost.output) ||
-          targetModel.cost.input <= 0 ||
-          targetModel.cost.output <= 0
-        ) {
-          counters.baselineRetained++;
-          return; // Unobserved or zero price: retain baseline
-        }
-
-        // Measured baseline comparison
-        const baselineModel = policy.baselineModel
-          ? ((ctx.models?.resolve ? ctx.models.resolve(policy.baselineModel) : undefined) ||
-             (ctx.models?.list ? ctx.models.list().find(m => m.id === policy.baselineModel) : undefined))
-          : undefined;
-
-        if (
-          baselineModel?.cost?.input &&
-          typeof baselineModel.cost.input === "number" &&
-          Number.isFinite(baselineModel.cost.input) &&
-          baselineModel.cost.input > 0 &&
-          targetModel.cost.input >= baselineModel.cost.input
-        ) {
-          counters.baselineRetained++;
-          return; // Candidate model not cheaper than measured baseline: retain baseline
-        }
-
-        // All verifications confirmed: consume decision once
-        pendingDecisions.delete(spawnKey);
-
-        counters.actualRoutes++;
-        core.appendEvent(cwd, {
-          event: "subagent_routed",
-          agent: event.agent,
-          spawnKey,
-          candidateModel: fullCandidateSelector,
-          archetype: cached.decision.archetype,
-          costUsd: cached.decision.usage?.costUsd,
-        });
-
-        // Return full selector nullform-openrouter/${candidateID} with original patterns fallback
-        const originalPatterns = Array.isArray(event.patterns) ? event.patterns : [];
-        const replacementModels = [
-          fullCandidateSelector,
-          ...originalPatterns.filter(p => p !== fullCandidateSelector),
-        ];
-
-        return {
-          model: replacementModels,
-          note: `jev: routed archetype=${cached.decision.archetype} to ${fullCandidateSelector}`,
-        };
-      } catch (err) {
-        counters.baselineRetained++;
-        pi.logger?.warn?.(`[nullform-jev] before_subagent_spawn error: ${safeErrorMessage(err)}`);
-        return;
-      }
-    });
+    const runtime = new JevRuntime(pi, options, counters);
+    await runtime.init();
   };
 }
 
