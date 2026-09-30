@@ -27,6 +27,14 @@
     "rel": "agent/agents/sonic.md"
   },
   {
+    "rel": "agent/extensions/nullform-jev.ts"
+  },
+  {
+    "rel": "agent/extensions/nullform-jev.ts",
+    "liveRoot": "@agentdir",
+    "liveRel": "extensions/nullform-jev.ts"
+  },
+  {
     "rel": "rules/enterprise-directives.md"
   },
   {
@@ -111,6 +119,15 @@
   },
   {
     "rel": "tools/dashboard.mjs"
+  },
+  {
+    "rel": "tools/jev-assist.mjs"
+  },
+  {
+    "rel": "tools/jev-evaluate.mjs"
+  },
+  {
+    "rel": "tools/jev-control.mjs"
   },
   {
     "rel": "tools/fix-plugin-windows.cjs"

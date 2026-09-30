@@ -579,6 +579,18 @@ function installHarness(options = {}) {
               options.dryRun
             )
           );
+          // Native OMP extension for automatic JEV assistance: installed idempotently
+          // under ~/.omp/agent/extensions without overwriting unrelated user extensions.
+          const homeExtensionsDir = join(homeAgentDir, "extensions");
+          const jevExtSource = join(REPO_ROOT, "agent", "extensions", "nullform-jev.ts");
+          const jevExtDest = join(homeExtensionsDir, "nullform-jev.ts");
+          if (existsSync(jevExtSource)) {
+            if (!options.dryRun) {
+              mkdirSync(homeExtensionsDir, { recursive: true });
+              copyFileSync(jevExtSource, jevExtDest);
+            }
+            plan.filesToCopy.push(jevExtDest);
+          }
         }
         break;
       }

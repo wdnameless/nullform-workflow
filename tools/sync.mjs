@@ -393,7 +393,8 @@ function main() {
   for (const entry of manifest) {
     if (!isApplicable(entry.rel)) continue;
     const liveRoot = entry.liveRoot === '@agents' ? agentsRoot : (entry.liveRoot === '@agentdir' ? agentDir : harnessRoot);
-    const livePath = path.join(liveRoot, ...entry.rel.split('/'));
+    const targetLiveRel = entry.liveRel || entry.rel;
+    const livePath = path.join(liveRoot, ...targetLiveRel.split('/'));
     const repoPath = path.join(repoRoot, ...entry.rel.split('/'));
 
     if (!validatePathWithinRoot(livePath, liveRoot)) {
@@ -436,7 +437,8 @@ function main() {
       continue;
     }
 
-    const livePath = path.join(liveRoot, ...rel.split('/'));
+    const targetLiveRel = entry.liveRel || rel;
+    const livePath = path.join(liveRoot, ...targetLiveRel.split('/'));
     const repoPath = path.join(repoRoot, ...rel.split('/'));
     checked++;
 

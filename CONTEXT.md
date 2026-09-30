@@ -180,6 +180,15 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Codemap state** — `.codemap/state.json`. Gitignored; scan config persists
   inside it so `changes`/`update` need no repeated flags.
 
+## JEV assistance and routing
+
+- **JEV assistance** — automatic, native OMP turn assistance and bounded subagent model routing powered by OpenRouter Decisions (`typesafe/jev-1.13`), preserving canonical prompts, permissions, and Oracle gates.
+- **JEV evaluation** — paired reproducible evaluation comparing a pinned baseline chat model and candidate classifier over separate calibration, held-out RU/EN cases, and deterministic leaf-task outcomes, accounting for actual token usage, latencies, provider errors, and fallback costs.
+- **JEV policy** — validated local policy JSON (`~/.omp/agent/jev-policy.json`) storing SHA-256 fingerprint, catalog hash, model pair, expiry, and passed capability flags verified against an immutable evaluation report.
+- **Policy fingerprint** — deterministic SHA-256 hash derived from catalog fingerprint, candidate model, baseline model, and decision model version; invalidates outdated routing automatically.
+- **Leaf archetype** — narrow, self-contained subagent task shapes evaluated for cheaper execution: `lookup`, `json-transform`, `formatting`, and `text-normalization`. Complex, multi-file, or high-risk tasks are ineligible.
+- **Assisted recovery** — fallback execution where a primary cheap attempt failed and baseline model was invoked to complete the task; reported separately with full fallback costs and never counted as primary cheap success.
+
 ## Flagged
 
 Terms with real but non-blocking ambiguity, recorded so they are not re-derived:

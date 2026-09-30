@@ -365,3 +365,41 @@ test("dangling harness root link refuses on --check and --deploy without creatin
     rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+test("stale user extension detects drift via liveRel and converges on deploy", () => {
+  const f = fixture();
+  try {
+    const extRel = join("agent", "extensions", "nullform-jev.ts");
+    const repoExt = join(f.repo, extRel);
+    const harnessExt = join(f.harness, extRel);
+    const userExt = join(f.agentDir, "extensions", "nullform-jev.ts");
+
+    mkdirSync(join(f.repo, "agent", "extensions"), { recursive: true });
+    mkdirSync(join(f.harness, "agent", "extensions"), { recursive: true });
+    mkdirSync(join(f.agentDir, "extensions"), { recursive: true });
+
+    const currentExtContent = "// nullform-jev current repo code\nexport default () => {};\n";
+    const staleExtContent = "// nullform-jev stale user code\nexport default () => {};\n";
+
+    writeFileSync(repoExt, currentExtContent);
+    writeFileSync(harnessExt, currentExtContent);
+    writeFileSync(userExt, staleExtContent);
+
+    // 1. --check detects drift on the stale user extension
+    const checkRes = f.run("--check", "--only", "nullform-jev.ts");
+    assert.equal(checkRes.status, 1, checkRes.stderr || checkRes.stdout);
+    assert.match(checkRes.stdout, /DRIFT\s+agent\/extensions\/nullform-jev\.ts/);
+
+    // 2. --deploy copies current repo extension to user directory
+    const deployRes = f.run("--deploy", "--only", "nullform-jev.ts");
+    assert.equal(deployRes.status, 0, deployRes.stderr || deployRes.stdout);
+    assert.equal(readFileSync(userExt, "utf8"), currentExtContent);
+
+    // 3. --check succeeds with 0 drift after deployment
+    const checkAfter = f.run("--check", "--only", "nullform-jev.ts");
+    assert.equal(checkAfter.status, 0, checkAfter.stderr || checkAfter.stdout);
+    assert.doesNotMatch(checkAfter.stdout, /DRIFT/);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

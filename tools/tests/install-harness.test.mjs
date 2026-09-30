@@ -654,3 +654,40 @@ test("verifier with --user-home inspects sandbox .omp/agent and ignores external
     rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test("install-harness installs nullform-jev.ts into user .omp/agent/extensions idempotently and preserves unrelated extensions", () => {
+  const temp = createTempDir("omp-install-jev-ext-");
+  const root = join(temp, "harness");
+  const userHome = join(temp, "home");
+  const customExtDir = join(userHome, ".omp", "agent", "extensions");
+  mkdirSync(customExtDir, { recursive: true });
+  const unrelatedExtPath = join(customExtDir, "unrelated-custom.ts");
+  writeFileSync(unrelatedExtPath, "// custom extension\nexport default () => {};\n", "utf8");
+
+  try {
+    const firstRun = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(firstRun.status, 0, `First install run failed: ${firstRun.stderr}`);
+
+    const installedExt = join(customExtDir, "nullform-jev.ts");
+    assert.ok(existsSync(installedExt), "nullform-jev.ts must be installed in user .omp/agent/extensions");
+    assert.ok(existsSync(unrelatedExtPath), "Unrelated pre-existing extension must be preserved");
+    assert.equal(readFileSync(unrelatedExtPath, "utf8"), "// custom extension\nexport default () => {};\n");
+
+    // Harness root pointer must be present so core resolves
+    const harnessPointer = join(userHome, ".omp", "agent", ".harness-root");
+    assert.ok(existsSync(harnessPointer), ".harness-root pointer must exist");
+    assert.equal(readFileSync(harnessPointer, "utf8").trim(), root);
+
+    // Idempotency: second install run succeeds and leaves files intact
+    const secondRun = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(secondRun.status, 0, `Second install run failed: ${secondRun.stderr}`);
+    assert.ok(existsSync(installedExt), "nullform-jev.ts must remain after second install");
+    assert.ok(existsSync(unrelatedExtPath), "Unrelated extension must remain intact");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
