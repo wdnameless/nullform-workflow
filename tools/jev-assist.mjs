@@ -39,11 +39,10 @@ const SECRET_PATTERNS = [
   /\bgithub_pat_[A-Za-z0-9_]{30,}\b/,
   /\bAIza[0-9A-Za-z-_]{35}\b/,
   /\bxox[baprs]-[0-9A-Za-z-_]{10,}\b/,
-  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+  /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]+\b/,
   /\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b/,
-  /(?:aws_secret_access_key|aws_session_token)\s*[:=]\s*["']?[A-Za-z0-9/+=]{40}["']?/i,
   /(?:authorization\s*:\s*)?bearer\s+[A-Za-z0-9._~+/-]{16,}/i,
-  /\b(?:api[_-]?key|secret|token|password|passwd|bearer|пароль)\s*[:=]\s*["']?[A-Za-z0-9_\-\.]{8,}["']?/i,
+  /(?<=^|[^\p{L}\p{N}_])(?:(?:[a-zA-Z0-9_]*_)?(?:secret[_-]?access[_-]?key|session[_-]?token|access[_-]?key(?:[_-]?id)?|api[_-]?key|api[_-]?secret|client[_-]?secret|secret[_-]?key|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|bearer|credential|пароль|токен))["'`]?\s*[:=]\s*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s,;"'`]+)/iu,
   /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/\s:@]+:[^/\s:@]+@/i,
 ];
 

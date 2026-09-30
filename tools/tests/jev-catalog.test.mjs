@@ -235,6 +235,19 @@ test("screenTask: privacy extensions (password URLs, AWS secrets, GitHub PATs, A
   assert.equal(screenTask("JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c").allowed, false);
 });
 
+test("screenTask: detects short claim JWTs and generic explicit credential assignments while allowing semantic discussion", () => {
+  // Short claim JWT (e.g. empty/small payload e30)
+  assert.equal(screenTask("Use token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-ae9MIDmPCD directly").allowed, false);
+  // Generic credential variable assignments (AWS, opaque references, quoted with spaces)
+  assert.equal(screenTask("AWS_SECRET_ACCESS_KEY=$$AWS_SECRET_1KLE01V8T588:L$$").allowed, false);
+  assert.equal(screenTask('Config: password="prod secret with spaces"').allowed, false);
+  assert.equal(screenTask("Параметр: пароль='сложный секрет'").allowed, false);
+  // Semantic discussion without assignment/token must remain allowed
+  const discussion = screenTask("We need to document AWS_SECRET_ACCESS_KEY rotation in our security runbook.");
+  assert.equal(discussion.allowed, true);
+  assert.equal(discussion.reason, "ok");
+});
+
 test("screenTask: detects PII", () => {
   assert.equal(screenTask("Customer card is 4111-2222-3333-4444 please charge").allowed, false);
   assert.equal(screenTask("User SSN: 123-45-6789").allowed, false);
