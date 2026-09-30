@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 
 import { readPolicy } from "../jev-assist.mjs";
 import { policyFingerprint } from "../jev-evidence.mjs";
-import { createTempDir, makeValidReportFixture } from "./jev-test-helpers.mjs";
+import { createTempDir, makeCanonicalValidReportFixture } from "./jev-test-helpers.mjs";
 
 test("readPolicy: returns validated policy with decisionSnapshots when report sha256, fingerprint and hurdles match", () => {
   const tmp = createTempDir("policy-valid-");
@@ -28,7 +28,7 @@ test("readPolicy: returns validated policy with decisionSnapshots when report sh
       decisionModel,
     });
 
-    const reportObj = makeValidReportFixture();
+    const reportObj = makeCanonicalValidReportFixture();
     reportObj.modelPrices = { "cand": { inputRate: 0.042 } };
     reportObj.decisionSnapshots = ["typesafe/jev-1.13-20260917"];
 
@@ -48,7 +48,7 @@ test("readPolicy: returns validated policy with decisionSnapshots when report sh
       skillPassed: true,
       routingPassed: true,
       reportSha256,
-      archetypes: ["lookup"],
+      archetypes: reportObj.routing.archetypes,
     };
     writeFileSync(join(agentDir, "jev-policy.json"), JSON.stringify(policyObj, null, 2), "utf8");
 
@@ -57,7 +57,7 @@ test("readPolicy: returns validated policy with decisionSnapshots when report sh
     assert.equal(policy.enabled, true);
     assert.equal(policy.skillPassed, true);
     assert.equal(policy.routingPassed, true);
-    assert.deepEqual(policy.archetypes, ["lookup"]);
+    assert.deepEqual(policy.archetypes, reportObj.routing.archetypes);
     assert.deepEqual(policy.decisionSnapshots, ["typesafe/jev-1.13-20260917"]);
     assert.deepEqual(policy.modelPrices, { "cand": { inputRate: 0.042 } });
   } finally {

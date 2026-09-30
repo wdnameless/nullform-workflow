@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { policyFingerprint, evaluateReport } from "./jev-evidence.mjs";
+import { policyFingerprint, evaluateReport, loadEvaluationDatasetContext } from "./jev-evidence.mjs";
 
 const DECISION_MODEL = "typesafe/jev-1.13";
 const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
@@ -612,7 +612,9 @@ export function readPolicy({ home, cwd = process.cwd(), fingerprint } = {}) {
     return null;
   }
 
-  const evalResult = evaluateReport(report);
+  const datasetContext = loadEvaluationDatasetContext({ root: cwd });
+  if (!datasetContext) return null;
+  const evalResult = evaluateReport(report, { datasetContext });
   const skillPassed = Boolean(policy.skillPassed && evalResult.skillPassed);
   const routingPassed = Boolean(policy.routingPassed && evalResult.routingPassed);
 

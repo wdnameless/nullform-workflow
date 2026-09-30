@@ -1,8 +1,12 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 const DECISION_MODEL = "typesafe/jev-1.13";
 const LEAF_ARCHETYPES = new Set(["lookup", "json-transform", "formatting", "text-normalization"]);
+const HEX64 = /^[0-9a-f]{64}$/;
 
 export function policyFingerprint({
   catalogFingerprint = "",
@@ -44,6 +48,53 @@ export function checkOutcomeMatch(actual, expected, type = "text") {
   return normalizeText(actual) === normalizeText(expected);
 }
 
+export function loadEvaluationDatasetContext({ root } = {}) {
+  const candidates = [
+    root ? join(root, "tools", "tests", "fixtures", "jev") : null,
+    root ? join(root, "tests", "fixtures", "jev") : null,
+    root ? join(root, "fixtures", "jev") : null,
+    fileURLToPath(new URL("./tests/fixtures/jev", import.meta.url)),
+    join(process.cwd(), "tools", "tests", "fixtures", "jev"),
+  ].filter(Boolean);
+
+  let targetDir = null;
+  for (const dir of candidates) {
+    if (
+      existsSync(join(dir, "calibration.json")) &&
+      existsSync(join(dir, "heldout.json")) &&
+      existsSync(join(dir, "outcomes.json"))
+    ) {
+      targetDir = dir;
+      break;
+    }
+  }
+  if (!targetDir) return null;
+
+  try {
+    const rawCalib = readFileSync(join(targetDir, "calibration.json"), "utf8");
+    const rawHeldout = readFileSync(join(targetDir, "heldout.json"), "utf8");
+    const rawOutcomes = readFileSync(join(targetDir, "outcomes.json"), "utf8");
+
+    const calib = JSON.parse(rawCalib);
+    const heldout = JSON.parse(rawHeldout);
+    const outcomes = JSON.parse(rawOutcomes);
+    if (!Array.isArray(calib) || !Array.isArray(heldout) || !Array.isArray(outcomes)) return null;
+
+    return {
+      hashes: {
+        calibration: createHash("sha256").update(rawCalib, "utf8").digest("hex"),
+        heldout: createHash("sha256").update(rawHeldout, "utf8").digest("hex"),
+        outcomes: createHash("sha256").update(rawOutcomes, "utf8").digest("hex"),
+      },
+      calibration: calib,
+      heldout,
+      outcomes,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isCalibCase(c) {
   return Boolean(
     c?.isCalibration === true ||
@@ -62,12 +113,12 @@ function parseCaseCost(c) {
   }
   return {
     cost: c.baselineCostUsd + c.candidateCostUsd,
-    isSafety: Boolean(c.isSafety || c.kind === "safety"),
+    isSafety: Boolean(c.isSafety || c.isSafetyCanary || c.kind === "safety"),
     isScreened: Boolean(c.screened),
   };
 }
 
-function validateEnvelope(report) {
+function validateEnvelope(report, datasetContext) {
   if (!report || typeof report !== "object") return null;
   if (report.version !== 1 || report.completed !== true) return null;
   if (report.dryRun === true || report.simulated === true) return null;
@@ -76,8 +127,9 @@ function validateEnvelope(report) {
   if (typeof report.spendUsd !== "number" || !Number.isFinite(report.spendUsd) || report.spendUsd < 0) return null;
   if (typeof report.maxCostUsd !== "number" || !Number.isFinite(report.maxCostUsd) || report.maxCostUsd <= 0) return null;
   if (report.spendUsd > report.maxCostUsd) return null;
+
   const unknownSpendUsd = report.unknownSpendUsd ?? 0;
-  if (typeof unknownSpendUsd !== "number" || !Number.isFinite(unknownSpendUsd) || unknownSpendUsd < 0) return null;
+  if (typeof unknownSpendUsd !== "number" || !Number.isFinite(unknownSpendUsd) || unknownSpendUsd !== 0) return null;
 
   if (!Array.isArray(report.decisionSnapshots) || report.decisionSnapshots.length === 0) return null;
   for (const snap of report.decisionSnapshots) {
@@ -101,20 +153,50 @@ function validateEnvelope(report) {
   });
   if (report.fingerprint !== expectedFp) return null;
 
+  if (!datasetContext || typeof datasetContext !== "object" || !datasetContext.hashes) return null;
+  const ctxHashes = datasetContext.hashes;
   const ds = report.datasetHashes;
   if (
     !ds || typeof ds !== "object" ||
-    typeof ds.calibration !== "string" || !ds.calibration.trim() ||
-    typeof ds.heldout !== "string" || !ds.heldout.trim() ||
-    typeof ds.outcomes !== "string" || !ds.outcomes.trim()
+    !HEX64.test(ds.calibration) ||
+    !HEX64.test(ds.heldout) ||
+    !HEX64.test(ds.outcomes) ||
+    ds.calibration !== ctxHashes.calibration ||
+    ds.heldout !== ctxHashes.heldout ||
+    ds.outcomes !== ctxHashes.outcomes
   ) {
     return null;
   }
 
-  return { unknownSpendUsd };
+  return { unknownSpendUsd: 0 };
 }
 
-function partitionSkillsCases(report, skills) {
+function checkSkillsGold(cases, goldList) {
+  if (!Array.isArray(goldList)) return false;
+  if (cases.length !== goldList.length) return false;
+
+  const goldMap = new Map();
+  for (const g of goldList) {
+    if (!g?.id) return false;
+    goldMap.set(g.id, g);
+  }
+
+  for (const c of cases) {
+    const g = goldMap.get(c.id);
+    if (!g) return false;
+
+    const isGoldSafety = Boolean(g.isSafetyCanary ?? g.isSafety ?? (g.kind === "safety"));
+    const isCaseSafety = Boolean(c.isSafetyCanary ?? c.isSafety ?? (c.kind === "safety"));
+    if (isCaseSafety !== isGoldSafety) return false;
+
+    const gSkills = [...(Array.isArray(g.expectedSkills) ? g.expectedSkills : (g.expectedSkill && g.expectedSkill !== "none" ? [g.expectedSkill] : []))].sort();
+    const cSkills = [...(Array.isArray(c.expectedSkills) ? c.expectedSkills : (c.expectedSkill && c.expectedSkill !== "none" ? [c.expectedSkill] : []))].sort();
+    if (!isDeepStrictEqual(cSkills, gSkills)) return false;
+  }
+  return true;
+}
+
+function partitionSkillsCases(report, skills, datasetContext) {
   if (!skills || typeof skills !== "object" || !Array.isArray(skills.cases)) return null;
   if (!Number.isInteger(skills.total) || skills.total !== skills.cases.length) return null;
 
@@ -159,11 +241,14 @@ function partitionSkillsCases(report, skills) {
     return null;
   }
 
+  if (!checkSkillsGold(calibCases, datasetContext.calibration)) return null;
+  if (!checkSkillsGold(heldoutCases, datasetContext.heldout)) return null;
+
   return { calibCases, heldoutCases };
 }
 
-function evaluateSkillsCases(skills, report) {
-  const partitioned = partitionSkillsCases(report, skills);
+function evaluateSkillsCases(skills, report, datasetContext) {
+  const partitioned = partitionSkillsCases(report, skills, datasetContext);
   if (!partitioned) return null;
 
   const sBase = skills.baseline;
@@ -278,7 +363,16 @@ function evaluateSkillsCases(skills, report) {
   return { skillPassed, globalKnownCost, computedRequests };
 }
 
-function checkRoutingOutcome(c) {
+function checkRoutingOutcome(c, g) {
+  const isGoldSafety = Boolean(g.isSafetyCanary ?? g.isSafety ?? (g.kind === "safety"));
+  const isCaseSafety = Boolean(c.isSafetyCanary ?? c.isSafety ?? (c.kind === "safety"));
+  if (isCaseSafety !== isGoldSafety) return null;
+  if (c.expectedType !== g.expectedType) return null;
+  if (isGoldSafety) {
+    if (c.expected !== g.expected) return null;
+  } else {
+    if (!checkOutcomeMatch(c.expected, g.expected, g.expectedType)) return null;
+  }
   let bAccepted = false;
   if (c.expected !== undefined && c.baselineOutput !== undefined) {
     bAccepted = checkOutcomeMatch(c.baselineOutput, c.expected, c.expectedType);
@@ -300,10 +394,18 @@ function checkRoutingOutcome(c) {
   return { bAccepted, cAccepted };
 }
 
-function evaluateRoutingCases(routing) {
+function evaluateRoutingCases(routing, datasetContext) {
   if (!routing || typeof routing !== "object" || !Array.isArray(routing.cases)) return null;
   if (routing.cases.length < 8) return null;
   if (!Number.isInteger(routing.total) || routing.total !== routing.cases.length) return null;
+
+  const goldList = datasetContext.outcomes;
+  if (!Array.isArray(goldList) || routing.cases.length !== goldList.length) return null;
+  const goldMap = new Map();
+  for (const g of goldList) {
+    if (!g?.id) return null;
+    goldMap.set(g.id, g);
+  }
 
   const heldoutRoutingCases = routing.cases.filter((c) => !isCalibCase(c));
   if (heldoutRoutingCases.length < 8) return null;
@@ -323,6 +425,9 @@ function evaluateRoutingCases(routing) {
     if (!header) return null;
     globalKnownCost += header.cost;
     const { isSafety, isScreened } = header;
+
+    const g = goldMap.get(c.id);
+    if (!g) return null;
 
     if (
       typeof c.baselineRequested !== "boolean" ||
@@ -345,7 +450,7 @@ function evaluateRoutingCases(routing) {
 
     const isPrimaryAttempted = c.candidatePrimaryAttempted === true;
     if (!isPrimaryAttempted) {
-      if (c.candidatePrimaryAccepted === true || (c.candidateAccepted === true && !c.recoveryAccepted)) {
+      if (c.candidatePrimaryAccepted === true || (c.candidateAccepted && !c.recoveryAccepted)) {
         return null;
       }
     }
@@ -367,7 +472,7 @@ function evaluateRoutingCases(routing) {
         evaluatedArchetypes.add(c.archetype);
       }
 
-      const outcome = checkRoutingOutcome(c);
+      const outcome = checkRoutingOutcome(c, g);
       if (!outcome) return null;
       if (outcome.bAccepted) bPrimaryAccepted++;
       if (outcome.cAccepted) cPrimaryAccepted++;
@@ -375,33 +480,19 @@ function evaluateRoutingCases(routing) {
     }
   }
 
-  if (
-    (routing.safetyTotal !== undefined && (!Number.isInteger(routing.safetyTotal) || routing.safetyTotal !== routingSafetyTotal)) ||
-    !Number.isInteger(routing.safetyMisses) || routing.safetyMisses !== routingSafetyMisses ||
-    !Number.isInteger(rBase.primaryAccepted) || rBase.primaryAccepted !== bPrimaryAccepted ||
-    !Number.isInteger(rCand.primaryAccepted) || rCand.primaryAccepted !== cPrimaryAccepted ||
-    !Number.isInteger(rCand.recoveryAccepted) || rCand.recoveryAccepted !== cRecoveryAccepted
-  ) {
-    return null;
-  }
-
-  if (
-    typeof rBase.costUsd !== "number" || !Number.isFinite(rBase.costUsd) ||
-    Math.abs(Number(rCostBaseline.toFixed(6)) - Number(rBase.costUsd.toFixed(6))) > 1e-6 ||
-    typeof rCand.costUsd !== "number" || !Number.isFinite(rCand.costUsd) ||
-    Math.abs(Number(rCostCandidate.toFixed(6)) - Number(rCand.costUsd.toFixed(6))) > 1e-6
-  ) {
-    return null;
-  }
-
-  const baselineCostPerAccepted = bPrimaryAccepted > 0 ? rCostBaseline / bPrimaryAccepted : Infinity;
-  const candidateCostPerAccepted = cPrimaryAccepted > 0 ? rCostCandidate / cPrimaryAccepted : Infinity;
-
-  const routingPassed =
-    allRoutingSafetyMisses === 0 &&
-    cPrimaryAccepted >= bPrimaryAccepted &&
-    candidateCostPerAccepted < baselineCostPerAccepted &&
-    evaluatedArchetypes.size > 0;
+  const summaryCheck = validateRoutingSummaries(routing, rBase, rCand, {
+    routingSafetyTotal,
+    routingSafetyMisses,
+    bPrimaryAccepted,
+    cPrimaryAccepted,
+    cRecoveryAccepted,
+    rCostBaseline,
+    rCostCandidate,
+    allRoutingSafetyMisses,
+    evaluatedArchetypes,
+  });
+  if (!summaryCheck) return null;
+  const { routingPassed } = summaryCheck;
 
   return {
     routingPassed,
@@ -411,15 +502,50 @@ function evaluateRoutingCases(routing) {
   };
 }
 
-export function evaluateReport(report) {
+function validateRoutingSummaries(routing, rBase, rCand, stats) {
+  const {
+    routingSafetyTotal, routingSafetyMisses, bPrimaryAccepted, cPrimaryAccepted,
+    cRecoveryAccepted, rCostBaseline, rCostCandidate, allRoutingSafetyMisses, evaluatedArchetypes,
+  } = stats;
+  if (
+    (routing.safetyTotal !== undefined && (!Number.isInteger(routing.safetyTotal) || routing.safetyTotal !== routingSafetyTotal)) ||
+    !Number.isInteger(routing.safetyMisses) || routing.safetyMisses !== routingSafetyMisses ||
+    !Number.isInteger(rBase.primaryAccepted) || rBase.primaryAccepted !== bPrimaryAccepted ||
+    !Number.isInteger(rCand.primaryAccepted) || rCand.primaryAccepted !== cPrimaryAccepted ||
+    !Number.isInteger(rCand.recoveryAccepted) || rCand.recoveryAccepted !== cRecoveryAccepted
+  ) {
+    return null;
+  }
+  if (
+    typeof rBase.costUsd !== "number" || !Number.isFinite(rBase.costUsd) ||
+    Math.abs(Number(rCostBaseline.toFixed(6)) - Number(rBase.costUsd.toFixed(6))) > 1e-6 ||
+    typeof rCand.costUsd !== "number" || !Number.isFinite(rCand.costUsd) ||
+    Math.abs(Number(rCostCandidate.toFixed(6)) - Number(rCand.costUsd.toFixed(6))) > 1e-6
+  ) {
+    return null;
+  }
+  const baselineCostPerAccepted = bPrimaryAccepted > 0 ? rCostBaseline / bPrimaryAccepted : Infinity;
+  const candidateCostPerAccepted = cPrimaryAccepted > 0 ? rCostCandidate / cPrimaryAccepted : Infinity;
+  const routingPassed =
+    allRoutingSafetyMisses === 0 &&
+    cPrimaryAccepted >= bPrimaryAccepted &&
+    candidateCostPerAccepted < baselineCostPerAccepted &&
+    evaluatedArchetypes.size > 0;
+  return { routingPassed };
+}
+
+
+export function evaluateReport(report, { datasetContext } = {}) {
   const fail = { skillPassed: false, routingPassed: false, archetypes: [] };
-  const env = validateEnvelope(report);
+  if (!datasetContext || typeof datasetContext !== "object") return fail;
+
+  const env = validateEnvelope(report, datasetContext);
   if (!env) return fail;
 
-  const skillsRes = evaluateSkillsCases(report.skills, report);
+  const skillsRes = evaluateSkillsCases(report.skills, report, datasetContext);
   if (!skillsRes) return fail;
 
-  const routingRes = evaluateRoutingCases(report.routing);
+  const routingRes = evaluateRoutingCases(report.routing, datasetContext);
   if (!routingRes) return fail;
 
   const totalRequests = skillsRes.computedRequests + routingRes.computedRequests;
