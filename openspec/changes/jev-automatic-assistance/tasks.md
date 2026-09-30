@@ -1,0 +1,6 @@
+# Tasks
+
+- [ ] R01,R03,R04,R06,R07 CoreRuntime isolated worktree: implement pure Decisions client, effective skill metadata, privacy screening, strict typed answer validation, bound budgets, native credential lookup, immutable fingerprints and validated activation evidence. Consumer boundary regressions, no external dependency.
+- [ ] R01,R02,R04,R07,R08 NativeIntegration isolated worktree: native OMP event handlers, exact task-spawn correlation, protected model preservation, runtime-only candidate provider, installer parity/sync manifest and real native smoke affordance. Keep canonical prompts unchanged.
+- [ ] R05,R06 Evaluation isolated worktree: independent calibration/held-out/outcome fixtures, real paired model requests and full cost/latency/outcome report; CLI validates benefit before local enable; empty env example and docs. No API key or API call in fixtures.
+- [ ] R01–R08 Parent: strict spec validation and independent G2 scope check before build; reconcile writers; focused/full tests and live <=$1 compare; actual OMP automatic hook/subagent smoke; sanitized network replay; one simplification pass; blind double Oracle acceptance; document evidence and safe activation state without broad unproven savings claims.
