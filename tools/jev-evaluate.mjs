@@ -14,13 +14,9 @@ import { policyFingerprint, evaluateReport, checkOutcomeMatch } from "./jev-evid
 import {
   LEAF_ARCHETYPES,
   OPENROUTER_FALLBACK_RATES,
-  estimateCallCost,
-  executeChatCall,
   executeSkillCase,
   executeRoutingCase,
 } from "./jev-evaluation-cases.mjs";
-
-export { OPENROUTER_FALLBACK_RATES, estimateCallCost, executeChatCall };
 
 const DEFAULT_BASELINE = "google/gemini-3.8-flash";
 const DEFAULT_CANDIDATE = "google/gemini-3.1-flash-lite";

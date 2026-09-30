@@ -18,11 +18,13 @@ import { fileURLToPath } from "node:url";
 
 import {
   parseEvalArgs,
+  runEvaluation,
+} from "../jev-evaluate.mjs";
+import {
+  OPENROUTER_FALLBACK_RATES,
   estimateCallCost,
   executeChatCall,
-  runEvaluation,
-  OPENROUTER_FALLBACK_RATES,
-} from "../jev-evaluate.mjs";
+} from "../jev-evaluation-cases.mjs";
 import { checkOutcomeMatch } from "../jev-evidence.mjs";
 import { loadSkillCatalog } from "../jev-assist.mjs";
 
