@@ -304,9 +304,7 @@ test("appendEvent: writes allow-listed aggregate fields and redacts raw prompts/
     appendEvent(tmp, {
       event: "decision",
       ts: "2026-09-30T12:00:00.000Z",
-      route: "cheap",
       skill: "lookup",
-      archetype: "lookup",
       confidence: 0.95,
       status: "ok",
       reason: "failed on sample-person@private-example.invalid with key sk-or-v1-abcdef012345",
@@ -328,10 +326,11 @@ test("appendEvent: writes allow-listed aggregate fields and redacts raw prompts/
 
     const record = JSON.parse(lines[0]);
     assert.equal(record.event, "decision");
-    assert.equal(record.route, "cheap");
     assert.equal(record.skill, "lookup");
     assert.equal(record.confidence, 0.95);
     assert.equal(record.inputTokens, 350);
+    assert.equal(record.route, undefined);
+    assert.equal(record.archetype, undefined);
 
     assert.equal(record.prompt, undefined);
     assert.equal(record.apiKey, undefined);

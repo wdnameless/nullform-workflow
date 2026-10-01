@@ -18,10 +18,11 @@ test("decide: returns fallback and zero traffic on screened task (secret canary)
 
   assert.equal(fetchCalled, false, "Must not make outbound request for screened task");
   assert.equal(res.status, "fallback");
-  assert.equal(res.route, "baseline");
   assert.ok(res.reason.startsWith("screened:"));
   assert.equal(res.skill, null);
-  assert.equal(res.archetype, "none");
+  assert.equal(res.confidence, 0);
+  assert.equal(res.route, undefined);
+  assert.equal(res.archetype, undefined);
 });
 
 test("decide: returns fallback on missing API key with zero traffic", async () => {
@@ -40,10 +41,11 @@ test("decide: returns fallback on missing API key with zero traffic", async () =
   assert.equal(fetchCalled, false);
   assert.equal(res.status, "fallback");
   assert.equal(res.reason, "missing-key");
-  assert.equal(res.route, "baseline");
+  assert.equal(res.skill, null);
+  assert.equal(res.confidence, 0);
 });
 
-test("decide: handles successful API decision with valid skill and cheap leaf archetype", async () => {
+test("decide: handles successful API decision with valid skill", async () => {
   let requestedUrl = "";
   let requestHeaders = null;
   let requestBody = null;
@@ -69,13 +71,6 @@ test("decide: handles successful API decision with valid skill and cheap leaf ar
               choice: "agent-browser",
               confidence: 0.96,
             },
-            eligible: {
-              noul: 0.98,
-            },
-            archetype: {
-              choice: "lookup",
-              confidence: 0.92,
-            },
           },
         }),
     };
@@ -97,21 +92,25 @@ test("decide: handles successful API decision with valid skill and cheap leaf ar
   assert.equal(requestHeaders["Authorization"], "Bearer test-key-12345");
   assert.equal(requestHeaders["User-Agent"], "nullform-workflow/jev-assist");
   assert.equal(requestBody.model, "typesafe/jev-1.13");
+  assert.equal(Object.keys(requestBody.questions).length, 1, "Must ask only skill question");
   assert.ok(requestBody.questions.skill.criteria["agent-browser"]);
   assert.ok(requestBody.questions.skill.criteria["none"]);
+  assert.equal(requestBody.questions.eligible, undefined);
+  assert.equal(requestBody.questions.archetype, undefined);
 
   assert.equal(res.status, "ok");
   assert.equal(res.skill, "agent-browser");
-  assert.equal(res.route, "cheap");
-  assert.equal(res.archetype, "lookup");
+  assert.equal(res.confidence, 0.96);
   assert.equal(res.model, "typesafe/jev-1.13-20260917");
   assert.equal(res.usage.inputTokens, 150);
   assert.equal(res.usage.outputTokens, 30);
   assert.equal(res.usage.costUsd, 0.000025);
   assert.equal(res.usage.costKnown, true);
+  assert.equal(res.route, undefined);
+  assert.equal(res.archetype, undefined);
 });
 
-test("decide: choice 'none' maps skill to null", async () => {
+test("decide: choice 'none' maps skill to null with validated confidence", async () => {
   const mockFetch = async () => ({
     status: 200,
     ok: true,
@@ -120,14 +119,12 @@ test("decide: choice 'none' maps skill to null", async () => {
       usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
       answers: {
         skill: { choice: "none", confidence: 0.99 },
-        eligible: { noul: 0.98 },
-        archetype: { choice: "formatting", confidence: 0.95 },
       },
     }),
   });
 
   const res = await decide({
-    task: "Format code indentation in config.json",
+    task: "Write a long essay about ancient Rome",
     skills: [{ name: "some-skill", description: "irrelevant" }],
     apiKey: "key",
     fetchImpl: mockFetch,
@@ -135,8 +132,8 @@ test("decide: choice 'none' maps skill to null", async () => {
 
   assert.equal(res.status, "ok");
   assert.equal(res.skill, null);
-  assert.equal(res.route, "cheap");
-  assert.equal(res.archetype, "formatting");
+  assert.equal(res.confidence, 0.99);
+  assert.equal(res.route, undefined);
 });
 
 test("decide: invented skill from provider is rejected as invalid response", async () => {
@@ -148,8 +145,6 @@ test("decide: invented skill from provider is rejected as invalid response", asy
       usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
       answers: {
         skill: { choice: "hallucinated-invented-skill", confidence: 0.99 },
-        eligible: { noul: 0.98 },
-        archetype: { choice: "lookup", confidence: 0.95 },
       },
     }),
   });
@@ -163,7 +158,8 @@ test("decide: invented skill from provider is rejected as invalid response", asy
 
   assert.equal(res.status, "fallback");
   assert.equal(res.reason, "invalid-response");
-  assert.equal(res.route, "baseline");
+  assert.equal(res.skill, null);
+  assert.equal(res.confidence, 0);
 });
 
 test("decide: provider error falls back safely without leaking response body", async () => {
@@ -181,13 +177,12 @@ test("decide: provider error falls back safely without leaking response body", a
 
   assert.equal(res.status, "fallback");
   assert.equal(res.reason, "http-500");
-  assert.equal(res.route, "baseline");
   assert.ok(!JSON.stringify(res).includes("sk-or-v1-secret"));
 });
 
-test("decide: confirmed repro - rejects out-of-bounds noul, confidence, empty usage, and unknown archetype", async () => {
-  const resBadNoul = await decide({
-    task: "Sort this json list",
+test("decide: rejects out-of-bounds confidence, non-number confidence, and malformed answers", async () => {
+  const resBadConfHigh = await decide({
+    task: "Sort this list",
     apiKey: "key",
     fetchImpl: async () => ({
       status: 200,
@@ -196,18 +191,16 @@ test("decide: confirmed repro - rejects out-of-bounds noul, confidence, empty us
         model: "typesafe/jev-1.13",
         usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
         answers: {
-          skill: { choice: "none", confidence: 0.95 },
-          eligible: { noul: 2.0 },
-          archetype: { choice: "json-transform", confidence: 0.95 },
+          skill: { choice: "none", confidence: 1.5 },
         },
       }),
     }),
   });
-  assert.equal(resBadNoul.status, "fallback");
-  assert.equal(resBadNoul.reason, "invalid-response");
+  assert.equal(resBadConfHigh.status, "fallback");
+  assert.equal(resBadConfHigh.reason, "invalid-response");
 
-  const resBadConf = await decide({
-    task: "Sort this json list",
+  const resBadConfLow = await decide({
+    task: "Sort this list",
     apiKey: "key",
     fetchImpl: async () => ({
       status: 200,
@@ -217,17 +210,15 @@ test("decide: confirmed repro - rejects out-of-bounds noul, confidence, empty us
         usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
         answers: {
           skill: { choice: "none", confidence: -0.1 },
-          eligible: { noul: 0.95 },
-          archetype: { choice: "json-transform", confidence: 0.95 },
         },
       }),
     }),
   });
-  assert.equal(resBadConf.status, "fallback");
-  assert.equal(resBadConf.reason, "invalid-response");
+  assert.equal(resBadConfLow.status, "fallback");
+  assert.equal(resBadConfLow.reason, "invalid-response");
 
   const resBadUsage = await decide({
-    task: "Sort this json list",
+    task: "Sort this list",
     apiKey: "key",
     fetchImpl: async () => ({
       status: 200,
@@ -237,8 +228,6 @@ test("decide: confirmed repro - rejects out-of-bounds noul, confidence, empty us
         usage: null,
         answers: {
           skill: { choice: "none", confidence: 0.95 },
-          eligible: { noul: 0.95 },
-          archetype: { choice: "json-transform", confidence: 0.95 },
         },
       }),
     }),
@@ -246,8 +235,8 @@ test("decide: confirmed repro - rejects out-of-bounds noul, confidence, empty us
   assert.equal(resBadUsage.status, "fallback");
   assert.equal(resBadUsage.reason, "invalid-response");
 
-  const resBadArch = await decide({
-    task: "Sort this json list",
+  const resNonObjAnswers = await decide({
+    task: "Sort this list",
     apiKey: "key",
     fetchImpl: async () => ({
       status: 200,
@@ -255,62 +244,15 @@ test("decide: confirmed repro - rejects out-of-bounds noul, confidence, empty us
       json: async () => ({
         model: "typesafe/jev-1.13",
         usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
-        answers: {
-          skill: { choice: "none", confidence: 0.95 },
-          eligible: { noul: 0.95 },
-          archetype: { choice: "full-autonomous-rewrite", confidence: 0.95 },
-        },
+        answers: "not-an-object",
       }),
     }),
   });
-  assert.equal(resBadArch.status, "fallback");
-  assert.equal(resBadArch.reason, "invalid-response");
-});
-
-test("decide: conservative thresholds - low eligibility or low archetype confidence retains baseline route", async () => {
-  const resLowElig = await decide({
-    task: "Format code indentation in config.json",
-    apiKey: "key",
-    fetchImpl: async () => ({
-      status: 200,
-      ok: true,
-      json: async () => ({
-        model: "typesafe/jev-1.13",
-        usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
-        answers: {
-          skill: { choice: "none", confidence: 0.99 },
-          eligible: { noul: 0.94 },
-          archetype: { choice: "formatting", confidence: 0.99 },
-        },
-      }),
-    }),
-  });
-  assert.equal(resLowElig.status, "ok");
-  assert.equal(resLowElig.route, "baseline");
-
-  const resLowArchConf = await decide({
-    task: "Format code indentation in config.json",
-    apiKey: "key",
-    fetchImpl: async () => ({
-      status: 200,
-      ok: true,
-      json: async () => ({
-        model: "typesafe/jev-1.13",
-        usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
-        answers: {
-          skill: { choice: "none", confidence: 0.99 },
-          eligible: { noul: 0.99 },
-          archetype: { choice: "formatting", confidence: 0.89 },
-        },
-      }),
-    }),
-  });
-  assert.equal(resLowArchConf.status, "ok");
-  assert.equal(resLowArchConf.route, "baseline");
+  assert.equal(resNonObjAnswers.status, "fallback");
+  assert.equal(resNonObjAnswers.reason, "invalid-response");
 });
 
 test("decide: timer covers response body read and caller abort listener is cleaned up in finally", async () => {
-  const callerController = new AbortController();
   let listenerCount = 0;
   const trackedSignal = {
     aborted: false,
@@ -335,8 +277,6 @@ test("decide: timer covers response body read and caller abort listener is clean
         model: "typesafe/jev-1.13",
         answers: {
           skill: { choice: "lookup", confidence: 0.95 },
-          eligible: { noul: 0.96 },
-          archetype: { choice: "lookup", confidence: 0.92 },
         },
         usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
       }),
@@ -344,6 +284,8 @@ test("decide: timer covers response body read and caller abort listener is clean
   });
 
   assert.equal(res.status, "ok");
+  assert.equal(res.skill, "lookup");
+  assert.equal(res.confidence, 0.95);
   assert.equal(listenerCount, 0, "Abort listener must be removed in finally");
 });
 
@@ -351,9 +293,7 @@ test("decide: works with real Response-like fixture", async () => {
   const payload = JSON.stringify({
     model: "typesafe/jev-1.13-20260917",
     answers: {
-      skill: { choice: "none", confidence: 0.99 },
-      eligible: { noul: 0.98 },
-      archetype: { choice: "lookup", confidence: 0.96 },
+      skill: { choice: "none", confidence: 0.96 },
     },
     usage: {
       input_tokens: 100,
@@ -371,8 +311,7 @@ test("decide: works with real Response-like fixture", async () => {
   });
 
   assert.equal(res.status, "ok");
-  assert.equal(res.route, "cheap");
-  assert.equal(res.archetype, "lookup");
+  assert.equal(res.skill, null);
   assert.equal(res.confidence, 0.96);
   assert.equal(res.model, "typesafe/jev-1.13-20260917");
   assert.equal(res.usage.costUsd, 0.00001);
@@ -442,16 +381,16 @@ test("decide boundary: unknown usage and missing cost sets costKnown false, pres
         usage: { input_tokens: 120, output_tokens: 30, cost: 0.00002 },
         answers: {
           skill: { choice: "formatting", confidence: 0.98 },
-          eligible: { noul: 0.97 },
-          archetype: { choice: "formatting", confidence: 0.95 },
         },
       }),
     }),
   });
   assert.equal(resSuccess.status, "ok");
-  assert.equal(resSuccess.eligibleScore, 0.97);
-  assert.equal(resSuccess.skillConfidence, 0.98);
-  assert.equal(resSuccess.routingConfidence, 0.95);
-  assert.equal(resSuccess.eligibility, undefined, "Must not expose eligibility alias");
+  assert.equal(resSuccess.skill, "formatting");
+  assert.equal(resSuccess.confidence, 0.98);
   assert.equal(resSuccess.usage.costKnown, true);
+  assert.equal(resSuccess.route, undefined);
+  assert.equal(resSuccess.archetype, undefined);
+  assert.equal(resSuccess.eligibleScore, undefined);
+  assert.equal(resSuccess.skillConfidence, undefined);
 });

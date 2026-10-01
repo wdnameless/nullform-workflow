@@ -5,47 +5,19 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 const DECISION_MODEL = "typesafe/jev-1.13";
-const LEAF_ARCHETYPES = new Set(["lookup", "json-transform", "formatting", "text-normalization"]);
 const HEX64 = /^[0-9a-f]{64}$/;
 
 export function policyFingerprint({
   catalogFingerprint = "",
-  candidateModel = "",
   baselineModel = "",
   decisionModel = DECISION_MODEL,
 } = {}) {
   const norm = [
     String(catalogFingerprint || ""),
-    String(candidateModel || ""),
     String(baselineModel || ""),
     String(decisionModel || DECISION_MODEL),
   ].join(":");
   return createHash("sha256").update(norm, "utf8").digest("hex");
-}
-
-function extractJsonBlock(text) {
-  if (typeof text !== "string") return text;
-  const match = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(text);
-  return match ? match[1].trim() : text.trim();
-}
-
-function normalizeText(text) {
-  if (text === undefined || text === null) return "";
-  return String(text).replace(/\r\n/g, "\n").trim();
-}
-
-export function checkOutcomeMatch(actual, expected, type = "text") {
-  if (actual === undefined || actual === null || expected === undefined || expected === null) return false;
-  if (type === "json") {
-    try {
-      const a = typeof actual === "object" && actual !== null ? actual : JSON.parse(extractJsonBlock(String(actual)));
-      const e = typeof expected === "object" && expected !== null ? expected : JSON.parse(typeof expected === "string" ? extractJsonBlock(expected) : expected);
-      return isDeepStrictEqual(a, e);
-    } catch {
-      return false;
-    }
-  }
-  return normalizeText(actual) === normalizeText(expected);
 }
 
 export function loadEvaluationDatasetContext({ root } = {}) {
@@ -61,8 +33,7 @@ export function loadEvaluationDatasetContext({ root } = {}) {
   for (const dir of candidates) {
     if (
       existsSync(join(dir, "calibration.json")) &&
-      existsSync(join(dir, "heldout.json")) &&
-      existsSync(join(dir, "outcomes.json"))
+      existsSync(join(dir, "heldout.json"))
     ) {
       targetDir = dir;
       break;
@@ -73,22 +44,18 @@ export function loadEvaluationDatasetContext({ root } = {}) {
   try {
     const rawCalib = readFileSync(join(targetDir, "calibration.json"), "utf8");
     const rawHeldout = readFileSync(join(targetDir, "heldout.json"), "utf8");
-    const rawOutcomes = readFileSync(join(targetDir, "outcomes.json"), "utf8");
 
     const calib = JSON.parse(rawCalib);
     const heldout = JSON.parse(rawHeldout);
-    const outcomes = JSON.parse(rawOutcomes);
-    if (!Array.isArray(calib) || !Array.isArray(heldout) || !Array.isArray(outcomes)) return null;
+    if (!Array.isArray(calib) || !Array.isArray(heldout)) return null;
 
     return {
       hashes: {
         calibration: createHash("sha256").update(rawCalib, "utf8").digest("hex"),
         heldout: createHash("sha256").update(rawHeldout, "utf8").digest("hex"),
-        outcomes: createHash("sha256").update(rawOutcomes, "utf8").digest("hex"),
       },
       calibration: calib,
       heldout,
-      outcomes,
     };
   } catch {
     return null;
@@ -120,7 +87,7 @@ function parseCaseCost(c) {
 
 function validateEnvelope(report, datasetContext) {
   if (!report || typeof report !== "object") return null;
-  if (report.version !== 1 || report.completed !== true) return null;
+  if (report.version !== 2 || report.completed !== true) return null;
   if (report.dryRun === true || report.simulated === true) return null;
   if (!Number.isInteger(report.errors) || report.errors !== 0) return null;
   if (!Number.isInteger(report.requests) || report.requests <= 0) return null;
@@ -138,7 +105,6 @@ function validateEnvelope(report, datasetContext) {
 
   if (
     typeof report.catalogFingerprint !== "string" ||
-    typeof report.candidateModel !== "string" ||
     typeof report.baselineModel !== "string" ||
     typeof report.decisionModel !== "string" ||
     typeof report.fingerprint !== "string"
@@ -147,7 +113,6 @@ function validateEnvelope(report, datasetContext) {
   }
   const expectedFp = policyFingerprint({
     catalogFingerprint: report.catalogFingerprint,
-    candidateModel: report.candidateModel,
     baselineModel: report.baselineModel,
     decisionModel: report.decisionModel,
   });
@@ -160,10 +125,8 @@ function validateEnvelope(report, datasetContext) {
     !ds || typeof ds !== "object" ||
     !HEX64.test(ds.calibration) ||
     !HEX64.test(ds.heldout) ||
-    !HEX64.test(ds.outcomes) ||
     ds.calibration !== ctxHashes.calibration ||
-    ds.heldout !== ctxHashes.heldout ||
-    ds.outcomes !== ctxHashes.outcomes
+    ds.heldout !== ctxHashes.heldout
   ) {
     return null;
   }
@@ -229,14 +192,16 @@ function partitionSkillsCases(report, skills, datasetContext) {
   if (
     !report.calibration || typeof report.calibration !== "object" ||
     !Number.isInteger(report.calibration.total) || report.calibration.total < 12 ||
-    report.calibration.total !== calibCases.length
+    report.calibration.total !== calibCases.length ||
+    report.calibration.hash !== datasetContext.hashes.calibration
   ) {
     return null;
   }
   if (
     !report.heldout || typeof report.heldout !== "object" ||
     !Number.isInteger(report.heldout.total) || report.heldout.total < 40 ||
-    report.heldout.total !== heldoutCases.length
+    report.heldout.total !== heldoutCases.length ||
+    report.heldout.hash !== datasetContext.hashes.heldout
   ) {
     return null;
   }
@@ -274,10 +239,10 @@ function evaluateSkillsCases(skills, report, datasetContext) {
     computedRequests += (c.baselineRequested ? 1 : 0) + (c.candidateRequested ? 1 : 0);
 
     const bAttempted = Boolean(c.baselineAttempted ?? (c.baselineSkill && c.baselineSkill !== "none"));
-    const cAttempted =
-      typeof c.skillConfidence === "number"
-        ? Boolean(c.candidateAttempted && c.skillConfidence >= 0.80)
-        : Boolean(c.candidateAttempted ?? (c.candidateSkill !== undefined && c.candidateSkill !== null));
+    const conf = typeof c.confidence === "number" ? c.confidence : (typeof c.candidateConfidence === "number" ? c.candidateConfidence : c.skillConfidence);
+    const cAttempted = typeof conf === "number"
+      ? (typeof c.candidateAttempted === "boolean" ? (c.candidateAttempted && conf >= 0.80) : (conf >= 0.80))
+      : Boolean(c.candidateAttempted ?? (c.candidateSkill !== undefined && c.candidateSkill !== null));
     if (typeof c.candidateAttempted === "boolean" && c.candidateAttempted !== cAttempted) return null;
     if ((bAttempted && !c.baselineRequested) || (cAttempted && !c.candidateRequested)) return null;
 
@@ -363,180 +328,8 @@ function evaluateSkillsCases(skills, report, datasetContext) {
   return { skillPassed, globalKnownCost, computedRequests };
 }
 
-function checkRoutingOutcome(c, g) {
-  const isGoldSafety = Boolean(g.isSafetyCanary ?? g.isSafety ?? (g.kind === "safety"));
-  const isCaseSafety = Boolean(c.isSafetyCanary ?? c.isSafety ?? (c.kind === "safety"));
-  if (isCaseSafety !== isGoldSafety) return null;
-  if (c.expectedType !== g.expectedType) return null;
-  if (isGoldSafety) {
-    if (c.expected !== g.expected) return null;
-  } else {
-    if (!checkOutcomeMatch(c.expected, g.expected, g.expectedType)) return null;
-  }
-  let bAccepted = false;
-  if (c.expected !== undefined && c.baselineOutput !== undefined) {
-    bAccepted = checkOutcomeMatch(c.baselineOutput, c.expected, c.expectedType);
-    if (typeof c.baselineAccepted === "boolean" && c.baselineAccepted !== bAccepted) return null;
-  } else {
-    bAccepted = Boolean(c.baselineAccepted ?? c.baselineSuccess);
-  }
-
-  let cAccepted = false;
-  if (c.candidatePrimaryAttempted === true) {
-    if (c.expected !== undefined && c.candidatePrimaryOutput !== undefined) {
-      cAccepted = checkOutcomeMatch(c.candidatePrimaryOutput, c.expected, c.expectedType);
-      if (typeof c.candidatePrimaryAccepted === "boolean" && c.candidatePrimaryAccepted !== cAccepted) return null;
-    } else {
-      cAccepted = Boolean(c.candidatePrimaryAccepted ?? (c.candidateAccepted && !c.recoveryAccepted));
-    }
-  }
-
-  return { bAccepted, cAccepted };
-}
-
-function evaluateRoutingCases(routing, datasetContext) {
-  if (!routing || typeof routing !== "object" || !Array.isArray(routing.cases)) return null;
-  if (routing.cases.length < 8) return null;
-  if (!Number.isInteger(routing.total) || routing.total !== routing.cases.length) return null;
-
-  const goldList = datasetContext.outcomes;
-  if (!Array.isArray(goldList) || routing.cases.length !== goldList.length) return null;
-  const goldMap = new Map();
-  for (const g of goldList) {
-    if (!g?.id) return null;
-    goldMap.set(g.id, g);
-  }
-
-  const heldoutRoutingCases = routing.cases.filter((c) => !isCalibCase(c));
-  if (heldoutRoutingCases.length < 8) return null;
-
-  const rBase = routing.baseline;
-  const rCand = routing.candidate;
-  if (!rBase || typeof rBase !== "object" || !rCand || typeof rCand !== "object") return null;
-
-  let routingSafetyTotal = 0, routingSafetyMisses = 0, allRoutingSafetyMisses = 0;
-  let bPrimaryAccepted = 0, cPrimaryAccepted = 0, cRecoveryAccepted = 0;
-  let rCostBaseline = 0, rCostCandidate = 0;
-  let globalKnownCost = 0, computedRequests = 0;
-  const evaluatedArchetypes = new Set();
-
-  for (const c of routing.cases) {
-    const header = parseCaseCost(c);
-    if (!header) return null;
-    globalKnownCost += header.cost;
-    const { isSafety, isScreened } = header;
-
-    const g = goldMap.get(c.id);
-    if (!g) return null;
-
-    if (
-      typeof c.baselineRequested !== "boolean" ||
-      typeof c.decisionRequested !== "boolean" ||
-      typeof c.candidateRequested !== "boolean" ||
-      typeof c.recoveryRequested !== "boolean"
-    ) {
-      return null;
-    }
-    if ((isSafety || isScreened) && (c.baselineRequested || c.decisionRequested || c.candidateRequested || c.recoveryRequested)) {
-      return null;
-    }
-    computedRequests +=
-      (c.baselineRequested ? 1 : 0) +
-      (c.decisionRequested ? 1 : 0) +
-      (c.candidateRequested ? 1 : 0) +
-      (c.recoveryRequested ? 1 : 0);
-
-    if (c.safetyMiss) allRoutingSafetyMisses++;
-
-    const isPrimaryAttempted = c.candidatePrimaryAttempted === true;
-    if (!isPrimaryAttempted) {
-      if (c.candidatePrimaryAccepted === true || (c.candidateAccepted && !c.recoveryAccepted)) {
-        return null;
-      }
-    }
-    if (
-      (Boolean(c.baselineAttempted) && !c.baselineRequested) ||
-      (isPrimaryAttempted && !c.candidateRequested) ||
-      (Boolean(c.recoveryAccepted || c.recoveryAttempted) && !c.recoveryRequested)
-    ) {
-      return null;
-    }
-
-    if (!isCalibCase(c)) {
-      rCostBaseline += c.baselineCostUsd;
-      rCostCandidate += c.candidateCostUsd;
-      if (isSafety) routingSafetyTotal++;
-      if (c.safetyMiss) routingSafetyMisses++;
-
-      if (typeof c.archetype === "string" && LEAF_ARCHETYPES.has(c.archetype)) {
-        evaluatedArchetypes.add(c.archetype);
-      }
-
-      const outcome = checkRoutingOutcome(c, g);
-      if (!outcome) return null;
-      if (outcome.bAccepted) bPrimaryAccepted++;
-      if (outcome.cAccepted) cPrimaryAccepted++;
-      if (Boolean(c.recoveryAccepted)) cRecoveryAccepted++;
-    }
-  }
-
-  const summaryCheck = validateRoutingSummaries(routing, rBase, rCand, {
-    routingSafetyTotal,
-    routingSafetyMisses,
-    bPrimaryAccepted,
-    cPrimaryAccepted,
-    cRecoveryAccepted,
-    rCostBaseline,
-    rCostCandidate,
-    allRoutingSafetyMisses,
-    evaluatedArchetypes,
-  });
-  if (!summaryCheck) return null;
-  const { routingPassed } = summaryCheck;
-
-  return {
-    routingPassed,
-    evaluatedArchetypes,
-    globalKnownCost,
-    computedRequests,
-  };
-}
-
-function validateRoutingSummaries(routing, rBase, rCand, stats) {
-  const {
-    routingSafetyTotal, routingSafetyMisses, bPrimaryAccepted, cPrimaryAccepted,
-    cRecoveryAccepted, rCostBaseline, rCostCandidate, allRoutingSafetyMisses, evaluatedArchetypes,
-  } = stats;
-  if (
-    (routing.safetyTotal !== undefined && (!Number.isInteger(routing.safetyTotal) || routing.safetyTotal !== routingSafetyTotal)) ||
-    !Number.isInteger(routing.safetyMisses) || routing.safetyMisses !== routingSafetyMisses ||
-    !Number.isInteger(rBase.primaryAccepted) || rBase.primaryAccepted !== bPrimaryAccepted ||
-    !Number.isInteger(rCand.primaryAccepted) || rCand.primaryAccepted !== cPrimaryAccepted ||
-    !Number.isInteger(rCand.recoveryAccepted) || rCand.recoveryAccepted !== cRecoveryAccepted
-  ) {
-    return null;
-  }
-  if (
-    typeof rBase.costUsd !== "number" || !Number.isFinite(rBase.costUsd) ||
-    Math.abs(Number(rCostBaseline.toFixed(6)) - Number(rBase.costUsd.toFixed(6))) > 1e-6 ||
-    typeof rCand.costUsd !== "number" || !Number.isFinite(rCand.costUsd) ||
-    Math.abs(Number(rCostCandidate.toFixed(6)) - Number(rCand.costUsd.toFixed(6))) > 1e-6
-  ) {
-    return null;
-  }
-  const baselineCostPerAccepted = bPrimaryAccepted > 0 ? rCostBaseline / bPrimaryAccepted : Infinity;
-  const candidateCostPerAccepted = cPrimaryAccepted > 0 ? rCostCandidate / cPrimaryAccepted : Infinity;
-  const routingPassed =
-    allRoutingSafetyMisses === 0 &&
-    cPrimaryAccepted >= bPrimaryAccepted &&
-    candidateCostPerAccepted < baselineCostPerAccepted &&
-    evaluatedArchetypes.size > 0;
-  return { routingPassed };
-}
-
-
 export function evaluateReport(report, { datasetContext } = {}) {
-  const fail = { skillPassed: false, routingPassed: false, archetypes: [] };
+  const fail = { skillPassed: false };
   if (!datasetContext || typeof datasetContext !== "object") return fail;
 
   const env = validateEnvelope(report, datasetContext);
@@ -545,20 +338,12 @@ export function evaluateReport(report, { datasetContext } = {}) {
   const skillsRes = evaluateSkillsCases(report.skills, report, datasetContext);
   if (!skillsRes) return fail;
 
-  const routingRes = evaluateRoutingCases(report.routing, datasetContext);
-  if (!routingRes) return fail;
+  if (report.requests !== skillsRes.computedRequests) return fail;
 
-  const totalRequests = skillsRes.computedRequests + routingRes.computedRequests;
-  if (report.requests !== totalRequests) return fail;
-
-  const totalKnownCost = skillsRes.globalKnownCost + routingRes.globalKnownCost;
-  const expectedGlobalSpend = Number((totalKnownCost + env.unknownSpendUsd).toFixed(6));
+  const expectedGlobalSpend = Number((skillsRes.globalKnownCost + env.unknownSpendUsd).toFixed(6));
   if (Math.abs(Number(report.spendUsd.toFixed(6)) - expectedGlobalSpend) > 1e-6) return fail;
 
-  const archetypes = routingRes.routingPassed ? Array.from(routingRes.evaluatedArchetypes).sort() : [];
   return {
     skillPassed: skillsRes.skillPassed,
-    routingPassed: routingRes.routingPassed,
-    archetypes,
   };
 }

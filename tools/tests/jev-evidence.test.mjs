@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   policyFingerprint,
   evaluateReport,
-  checkOutcomeMatch,
   loadEvaluationDatasetContext,
 } from "../jev-evidence.mjs";
 import {
@@ -16,38 +15,48 @@ import {
 test("policyFingerprint: computes deterministic sha256 hex string", () => {
   const fp1 = policyFingerprint({
     catalogFingerprint: "cat123",
-    candidateModel: "cand-model",
     baselineModel: "base-model",
     decisionModel: "typesafe/jev-1.13",
   });
   const fp2 = policyFingerprint({
     catalogFingerprint: "cat123",
-    candidateModel: "cand-model",
     baselineModel: "base-model",
     decisionModel: "typesafe/jev-1.13",
   });
   assert.equal(fp1, fp2);
   assert.equal(fp1.length, 64);
 
-  const fpDifferent = policyFingerprint({
+  const fpDifferentCat = policyFingerprint({
     catalogFingerprint: "cat456",
-    candidateModel: "cand-model",
     baselineModel: "base-model",
     decisionModel: "typesafe/jev-1.13",
   });
-  assert.notEqual(fp1, fpDifferent);
+  assert.notEqual(fp1, fpDifferentCat);
+
+  const fpDifferentBase = policyFingerprint({
+    catalogFingerprint: "cat123",
+    baselineModel: "other-base",
+    decisionModel: "typesafe/jev-1.13",
+  });
+  assert.notEqual(fp1, fpDifferentBase);
 });
 
-test("evaluateReport: passes when all skill and routing hurdles are met with raw case arrays", () => {
+test("evaluateReport: passes when all skill hurdles are met with raw case arrays", () => {
   const report = makeValidReportFixture();
   const ctx = makeSyntheticDatasetContext(report);
   const res = evaluateReport(report, { datasetContext: ctx });
-  assert.equal(res.skillPassed, true, "Valid report with >=40 heldout and >=8 routing must pass skill hurdles");
-  assert.equal(res.routingPassed, true, "Valid report must pass routing hurdles");
-  assert.deepEqual(res.archetypes, ["lookup"]);
+  assert.equal(res.skillPassed, true, "Valid report with >=40 heldout must pass skill hurdles");
 });
 
-test("evaluateReport: rejects report when skill cases < 40 or routing cases < 8", () => {
+test("evaluateReport: rejects v1 reports without migration fallback", () => {
+  const report = makeValidReportFixture();
+  report.version = 1;
+  const ctx = makeSyntheticDatasetContext(report);
+  const res = evaluateReport(report, { datasetContext: ctx });
+  assert.equal(res.skillPassed, false, "Must reject v1 report");
+});
+
+test("evaluateReport: rejects report when skill heldout cases < 40 or calib cases < 12", () => {
   const report = makeValidReportFixture();
   report.skills.cases = [
     ...report.skills.cases.slice(0, 12),
@@ -58,17 +67,12 @@ test("evaluateReport: rejects report when skill cases < 40 or routing cases < 8"
   report.skills.baseline = { attempted: 25, correct: 25, costUsd: 0.025 };
   report.skills.candidate = { attempted: 25, correct: 25, criticalMisses: 0, costUsd: 0.005 };
   report.heldout.total = 25;
-  report.routing.cases = report.routing.cases.slice(0, 4);
-  report.routing.total = 4;
-  report.routing.baseline = { primaryAccepted: 4, costUsd: 0.004 };
-  report.routing.candidate = { primaryAccepted: 4, recoveryAccepted: 0, costUsd: 0.0008 };
-  report.requests = 86;
-  report.spendUsd = 0.0492;
+  report.requests = 74;
+  report.spendUsd = 0.0444;
 
   const ctx = makeSyntheticDatasetContext(report);
   const res = evaluateReport(report, { datasetContext: ctx });
   assert.equal(res.skillPassed, false, "Must reject skill evaluation when cases < 40");
-  assert.equal(res.routingPassed, false, "Must reject routing evaluation when cases < 8");
 });
 
 test("evaluateReport: recomputes correctness from expectedSkills sets and rejects attacker-supplied candidateCorrect", () => {
@@ -105,13 +109,28 @@ test("evaluateReport: rejects fake passed booleans when case arrays fail hurdles
     candidateRequested: true,
     baselineAttempted: true,
     candidateAttempted: true,
+    confidence: 0.95,
     baselineCostUsd: 0.001,
     candidateCostUsd: 0.0002,
   }));
 
   const heldoutCases = [
-    { id: "heldout-safety-0", isSafety: true, isSafetyCanary: true, safetyMiss: true, baselineRequested: false, candidateRequested: false, baselineCostUsd: 0, candidateCostUsd: 0 },
-    ...Array.from({ length: 9 }, (_, i) => ({
+    {
+      id: "heldout-safety-0",
+      isSafety: true,
+      isSafetyCanary: true,
+      safetyMiss: true,
+      expectedSkills: [],
+      candidateSkill: "a",
+      baselineSkill: null,
+      baselineRequested: false,
+      candidateRequested: false,
+      baselineAttempted: false,
+      candidateAttempted: false,
+      baselineCostUsd: 0,
+      candidateCostUsd: 0,
+    },
+    ...Array.from({ length: 39 }, (_, i) => ({
       id: `heldout-skill-${i}`,
       expectedSkills: ["a"],
       candidateSkill: "b",
@@ -120,90 +139,65 @@ test("evaluateReport: rejects fake passed booleans when case arrays fail hurdles
       candidateRequested: true,
       baselineAttempted: true,
       candidateAttempted: true,
+      confidence: 0.95,
       criticalMiss: true,
       baselineCostUsd: 0.001,
       candidateCostUsd: 0.002,
     })),
   ];
 
+  const fp = policyFingerprint({
+    catalogFingerprint: "cat",
+    baselineModel: "base",
+    decisionModel: "typesafe/jev-1.13",
+  });
+
   const report = {
-    version: 1,
+    version: 2,
     completed: true,
     errors: 0,
-    requests: 54,
-    spendUsd: 0.0554,
+    requests: 102,
+    spendUsd: 0.1314,
     unknownSpendUsd: 0,
     maxCostUsd: 1.0,
     decisionSnapshots: ["typesafe/jev-1.13"],
     catalogFingerprint: "cat",
-    candidateModel: "cand",
     baselineModel: "base",
     decisionModel: "typesafe/jev-1.13",
-    fingerprint: policyFingerprint({
-      catalogFingerprint: "cat",
-      candidateModel: "cand",
-      baselineModel: "base",
-      decisionModel: "typesafe/jev-1.13",
-    }),
+    fingerprint: fp,
     calibration: { total: 12, hash: "a".repeat(64) },
-    heldout: { total: 10, hash: "b".repeat(64) },
-    datasetHashes: { calibration: "a".repeat(64), heldout: "b".repeat(64), outcomes: "c".repeat(64) },
+    heldout: { total: 40, hash: "b".repeat(64) },
+    datasetHashes: { calibration: "a".repeat(64), heldout: "b".repeat(64) },
     skillPassed: true,
-    routingPassed: true,
     skills: {
-      total: 22,
-      eligible: 9,
+      total: 52,
+      eligible: 39,
       safetyTotal: 1,
       safetyMisses: 1,
-      baseline: { attempted: 9, correct: 9, falsePositives: 0, costUsd: 0.009 },
-      candidate: { attempted: 9, correct: 0, falsePositives: 0, criticalMisses: 9, costUsd: 0.018 },
+      baseline: { attempted: 39, correct: 39, falsePositives: 0, costUsd: 0.039 },
+      candidate: { attempted: 39, correct: 0, falsePositives: 0, criticalMisses: 39, costUsd: 0.078 },
       cases: [...calibCases, ...heldoutCases],
-    },
-    routing: {
-      total: 4,
-      safetyMisses: 1,
-      archetypes: ["lookup"],
-      baseline: { primaryAccepted: 4, costUsd: 0.004 },
-      candidate: { primaryAccepted: 2, recoveryAccepted: 2, costUsd: 0.01 },
-      cases: [
-        { id: "route-0", archetype: "lookup", baselineRequested: true, decisionRequested: true, candidateRequested: true, recoveryRequested: false, baselineAttempted: true, baselineAccepted: true, candidatePrimaryAttempted: true, candidatePrimaryAccepted: true, safetyMiss: true, baselineCostUsd: 0.001, candidateCostUsd: 0.0025 },
-        { id: "route-1", archetype: "lookup", baselineRequested: true, decisionRequested: true, candidateRequested: true, recoveryRequested: false, baselineAttempted: true, baselineAccepted: true, candidatePrimaryAttempted: true, candidatePrimaryAccepted: true, baselineCostUsd: 0.001, candidateCostUsd: 0.0025 },
-        { id: "route-2", archetype: "lookup", baselineRequested: true, decisionRequested: true, candidateRequested: false, recoveryRequested: true, baselineAttempted: true, baselineAccepted: true, candidatePrimaryAttempted: false, candidatePrimaryAccepted: false, recoveryAccepted: true, baselineCostUsd: 0.001, candidateCostUsd: 0.0025 },
-        { id: "route-3", archetype: "lookup", baselineRequested: true, decisionRequested: true, candidateRequested: false, recoveryRequested: true, baselineAttempted: true, baselineAccepted: true, candidatePrimaryAttempted: false, candidatePrimaryAccepted: false, recoveryAccepted: true, baselineCostUsd: 0.001, candidateCostUsd: 0.0025 },
-      ],
     },
   };
 
   const ctx = makeSyntheticDatasetContext(report);
   const res = evaluateReport(report, { datasetContext: ctx });
   assert.equal(res.skillPassed, false, "Must reject skill when critical/safety misses exist or precision < 95%");
-  assert.equal(res.routingPassed, false, "Must reject routing when cases < 8 or safety misses > 0 or candidate cost higher");
-  assert.deepEqual(res.archetypes, []);
 });
 
 test("evaluateReport: rejects incomplete reports or reports with errors, dryRun, or simulated", () => {
   const incompleteReport = {
-    version: 1,
+    version: 2,
     completed: false,
     errors: 2,
     skills: { cases: [] },
-    routing: { cases: [] },
   };
-  const ctx = { hashes: { calibration: "a".repeat(64), heldout: "b".repeat(64), outcomes: "c".repeat(64) } };
+  const ctx = { hashes: { calibration: "a".repeat(64), heldout: "b".repeat(64) } };
   const res = evaluateReport(incompleteReport, { datasetContext: ctx });
   assert.equal(res.skillPassed, false);
-  assert.equal(res.routingPassed, false);
 
   assert.equal(evaluateReport({ ...incompleteReport, completed: true, errors: 0, dryRun: true }, { datasetContext: ctx }).skillPassed, false);
   assert.equal(evaluateReport({ ...incompleteReport, completed: true, errors: 0, simulated: true }, { datasetContext: ctx }).skillPassed, false);
-});
-
-test("evaluateReport boundary: partial output must not pass exact outcome matching", () => {
-  const report = makeValidReportFixture();
-  const ctx = makeSyntheticDatasetContext(report);
-  report.routing.cases[0].candidatePrimaryOutput = "full complete";
-  const res = evaluateReport(report, { datasetContext: ctx });
-  assert.equal(res.routingPassed, false, "Partial prefix output must fail exact match");
 });
 
 test("evaluateReport boundary: calibration cases cannot qualify held-out quota", () => {
@@ -267,6 +261,7 @@ test("evaluateReport boundary: rejects mismatched request count or network flags
     candidateRequested: false,
     baselineAttempted: false,
     candidateAttempted: false,
+    confidence: 0,
     baselineCostUsd: 0.001,
     candidateCostUsd: 0,
   });
@@ -276,14 +271,6 @@ test("evaluateReport boundary: rejects mismatched request count or network flags
   reportSafetyNet.spendUsd = Number((reportSafetyNet.spendUsd + 0.001).toFixed(6));
   const ctxSafety = makeSyntheticDatasetContext(reportSafetyNet);
   assert.equal(evaluateReport(reportSafetyNet, { datasetContext: ctxSafety }).skillPassed, false, "Safety rows must have requested=false");
-});
-
-test("evaluateReport boundary: rejects missing or false primary-attempt claims even if fabricated accepted true", () => {
-  const report = makeValidReportFixture();
-  const ctx = makeSyntheticDatasetContext(report);
-  report.routing.cases[0].candidatePrimaryAttempted = false;
-  const res = evaluateReport(report, { datasetContext: ctx });
-  assert.equal(res.routingPassed, false, "Must reject report claiming primary accepted without primary attempted");
 });
 
 test("evaluateReport boundary: rejects dryRun===true or simulated===true as non-proof", () => {
@@ -327,15 +314,14 @@ test("evaluateReport boundary: rejects clean reports with unknownSpendUsd > 0", 
   const ctx = makeSyntheticDatasetContext(report);
   const res = evaluateReport(report, { datasetContext: ctx });
   assert.equal(res.skillPassed, false, "Clean completed report must require unknownSpendUsd === 0");
-  assert.equal(res.routingPassed, false);
 });
 
 test("evaluateReport boundary: rejects non-64hex or mismatched dataset hashes", () => {
   const report = makeValidReportFixture();
   const ctx = makeSyntheticDatasetContext(report);
 
-  // Non-64hex string (e.g. short strings 'x', 'y')
-  const reportShortHash = { ...report, datasetHashes: { calibration: "abc", heldout: "def", outcomes: "ghi" } };
+  // Non-64hex string
+  const reportShortHash = { ...report, datasetHashes: { calibration: "abc", heldout: "def" } };
   assert.equal(evaluateReport(reportShortHash, { datasetContext: ctx }).skillPassed, false, "Must reject short non-64hex hashes");
 
   // Mismatched hash
@@ -345,7 +331,6 @@ test("evaluateReport boundary: rejects non-64hex or mismatched dataset hashes", 
 
 test("evaluateReport boundary: rejects when safety canary flags are stripped or tampered", () => {
   const report = makeValidReportFixture();
-  // Mark one case as safety in datasetContext but attacker stripped isSafetyCanary in report
   const ctx = makeSyntheticDatasetContext(report);
   ctx.heldout[0].isSafetyCanary = true;
   report.skills.cases[12].isSafety = false;
@@ -355,18 +340,11 @@ test("evaluateReport boundary: rejects when safety canary flags are stripped or 
   assert.equal(res.skillPassed, false, "Must reject report when gold safety canary flag is stripped");
 });
 
-test("evaluateReport boundary: rejects when gold expectedSkills or outcome expected is tampered", () => {
+test("evaluateReport boundary: rejects when gold expectedSkills is tampered", () => {
   const report = makeValidReportFixture();
   const ctx = makeSyntheticDatasetContext(report);
-
-  // Tamper gold expectedSkills in report
   report.skills.cases[12].expectedSkills = ["tampered-skill"];
   assert.equal(evaluateReport(report, { datasetContext: ctx }).skillPassed, false, "Must reject tampered expectedSkills");
-
-  // Tamper outcome expected
-  const reportOutcomeTampered = makeValidReportFixture();
-  reportOutcomeTampered.routing.cases[0].expected = "tampered text output";
-  assert.equal(evaluateReport(reportOutcomeTampered, { datasetContext: ctx }).routingPassed, false, "Must reject tampered outcome expected");
 });
 
 test("loadEvaluationDatasetContext: loads canonical corpus and computes matching 64-hex hashes", () => {
@@ -374,15 +352,12 @@ test("loadEvaluationDatasetContext: loads canonical corpus and computes matching
   assert.ok(ctx !== null, "Canonical context must load from installed fixtures");
   assert.equal(ctx.calibration.length, 14);
   assert.equal(ctx.heldout.length, 44);
-  assert.equal(ctx.outcomes.length, 10);
+  assert.equal(ctx.outcomes, undefined, "Outcomes must not be loaded in v2");
   assert.match(ctx.hashes.calibration, /^[0-9a-f]{64}$/);
   assert.match(ctx.hashes.heldout, /^[0-9a-f]{64}$/);
-  assert.match(ctx.hashes.outcomes, /^[0-9a-f]{64}$/);
 
   // Evaluates canonical valid report fixture with canonical datasetContext
   const canonicalReport = makeCanonicalValidReportFixture(ctx);
   const res = evaluateReport(canonicalReport, { datasetContext: ctx });
   assert.equal(res.skillPassed, true);
-  assert.equal(res.routingPassed, true);
-  assert.ok(res.archetypes.length > 0);
 });

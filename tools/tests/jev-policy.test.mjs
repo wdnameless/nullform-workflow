@@ -8,7 +8,7 @@ import { readPolicy } from "../jev-assist.mjs";
 import { policyFingerprint } from "../jev-evidence.mjs";
 import { createTempDir, makeCanonicalValidReportFixture } from "./jev-test-helpers.mjs";
 
-test("readPolicy: returns validated policy with decisionSnapshots when report sha256, fingerprint and hurdles match", () => {
+test("readPolicy: returns validated v2 policy with decisionSnapshots when report sha256, fingerprint and hurdles match", () => {
   const tmp = createTempDir("policy-valid-");
   try {
     const home = join(tmp, "home");
@@ -18,18 +18,11 @@ test("readPolicy: returns validated policy with decisionSnapshots when report sh
     mkdirSync(cwd, { recursive: true });
 
     const catalogFingerprint = "cat";
-    const candidateModel = "cand";
     const baselineModel = "base";
     const decisionModel = "typesafe/jev-1.13";
-    const fp = policyFingerprint({
-      catalogFingerprint,
-      candidateModel,
-      baselineModel,
-      decisionModel,
-    });
+    const fp = policyFingerprint({ catalogFingerprint, baselineModel, decisionModel });
 
     const reportObj = makeCanonicalValidReportFixture();
-    reportObj.modelPrices = { "cand": { inputRate: 0.042 } };
     reportObj.decisionSnapshots = ["typesafe/jev-1.13-20260917"];
 
     const reportJson = JSON.stringify(reportObj, null, 2);
@@ -37,29 +30,60 @@ test("readPolicy: returns validated policy with decisionSnapshots when report sh
     writeFileSync(join(agentDir, "jev-evaluation.json"), reportJson, "utf8");
 
     const policyObj = {
-      version: 1,
+      version: 2,
       enabled: true,
       expiresAt: new Date(Date.now() + 86400000).toISOString(),
       catalogFingerprint,
-      candidateModel,
       baselineModel,
       decisionModel,
       fingerprint: fp,
-      skillPassed: true,
-      routingPassed: true,
       reportSha256,
-      archetypes: reportObj.routing.archetypes,
     };
     writeFileSync(join(agentDir, "jev-policy.json"), JSON.stringify(policyObj, null, 2), "utf8");
 
     const policy = readPolicy({ home, cwd, fingerprint: policyObj.fingerprint });
     assert.ok(policy !== null);
+    assert.equal(policy.version, 2);
     assert.equal(policy.enabled, true);
-    assert.equal(policy.skillPassed, true);
-    assert.equal(policy.routingPassed, true);
-    assert.deepEqual(policy.archetypes, reportObj.routing.archetypes);
+    assert.equal(policy.catalogFingerprint, catalogFingerprint);
+    assert.equal(policy.baselineModel, baselineModel);
+    assert.equal(policy.decisionModel, decisionModel);
+    assert.equal(policy.fingerprint, fp);
+    assert.equal(policy.reportSha256, reportSha256);
     assert.deepEqual(policy.decisionSnapshots, ["typesafe/jev-1.13-20260917"]);
-    assert.deepEqual(policy.modelPrices, { "cand": { inputRate: 0.042 } });
+    assert.equal(policy.skillPassed, true);
+    assert.equal(policy.candidateModel, undefined);
+    assert.equal(policy.routingPassed, undefined);
+    assert.equal(policy.archetypes, undefined);
+    assert.equal(policy.modelPrices, undefined);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("readPolicy: rejects old v1 policy without migration fallback", () => {
+  const tmp = createTempDir("policy-v1-");
+  try {
+    const home = join(tmp, "home");
+    const cwd = join(tmp, "proj");
+    const agentDir = join(home, ".omp", "agent");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+
+    const policyObj = {
+      version: 1,
+      enabled: true,
+      expiresAt: new Date(Date.now() + 86400000).toISOString(),
+      catalogFingerprint: "cat",
+      candidateModel: "cand",
+      baselineModel: "base",
+      decisionModel: "typesafe/jev-1.13",
+      fingerprint: "fake",
+      reportSha256: "0".repeat(64),
+    };
+    writeFileSync(join(agentDir, "jev-policy.json"), JSON.stringify(policyObj, null, 2), "utf8");
+
+    assert.equal(readPolicy({ home, cwd }), null, "Must reject v1 policy");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -75,15 +99,14 @@ test("readPolicy: returns null on sha256 mismatch, expired policy, or opt-out", 
     mkdirSync(cwd, { recursive: true });
 
     // 1. Report tampered (sha mismatch)
-    writeFileSync(join(agentDir, "jev-evaluation.json"), JSON.stringify({ version: 1 }), "utf8");
+    writeFileSync(join(agentDir, "jev-evaluation.json"), JSON.stringify({ version: 2 }), "utf8");
     writeFileSync(
       join(agentDir, "jev-policy.json"),
       JSON.stringify({
-        version: 1,
+        version: 2,
         enabled: true,
         expiresAt: new Date(Date.now() + 86400000).toISOString(),
         catalogFingerprint: "cat",
-        candidateModel: "cand",
         baselineModel: "base",
         decisionModel: "typesafe/jev-1.13",
         fingerprint: "fake",
@@ -98,7 +121,7 @@ test("readPolicy: returns null on sha256 mismatch, expired policy, or opt-out", 
     writeFileSync(
       join(agentDir, "jev-policy.json"),
       JSON.stringify({
-        version: 1,
+        version: 2,
         enabled: true,
         expiresAt: new Date(Date.now() - 1000).toISOString(),
       }),

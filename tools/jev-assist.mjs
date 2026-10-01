@@ -5,8 +5,6 @@ import { policyFingerprint, evaluateReport, loadEvaluationDatasetContext } from 
 
 const DECISION_MODEL = "typesafe/jev-1.13";
 const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
-const LEAF_ARCHETYPES = new Set(["lookup", "json-transform", "formatting", "text-normalization"]);
-const ALL_ARCHETYPES = new Set(["lookup", "json-transform", "formatting", "text-normalization", "none"]);
 
 export async function readCredential() {
   const envKey = process.env.OPENROUTER_API_KEY || process.env.JEV_API_KEY;
@@ -131,120 +129,88 @@ function readDisabledSkills(cwd, home) {
     join(cwd, ".skills-disabled.json"),
     join(cwd, ".omp", "skills-disabled.json"),
     join(home, ".agents", ".skills-disabled.json"),
+    join(home, ".skills-disabled.json"),
     join(home, ".omp", "skills-disabled.json"),
   ];
 
-  for (const file of candidateFiles) {
-    if (!existsSync(file)) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(file, "utf8"));
-      const list = Array.isArray(parsed?.disabled) ? parsed.disabled : (Array.isArray(parsed) ? parsed : []);
-      for (const item of list) {
-        if (typeof item === "string" && item.trim()) {
-          disabled.add(item.trim());
+  for (const f of candidateFiles) {
+    if (existsSync(f)) {
+      try {
+        const parsed = JSON.parse(readFileSync(f, "utf8"));
+        const list = Array.isArray(parsed) ? parsed : parsed?.disabled || parsed?.skills;
+        if (Array.isArray(list)) {
+          for (const item of list) {
+            if (typeof item === "string" && item.trim()) {
+              disabled.add(item.trim());
+            }
+          }
         }
-      }
-    } catch {
-      // Ignored
+      } catch {}
     }
   }
-
   return disabled;
 }
 
 export function loadSkillCatalog({ cwd = process.cwd(), home = process.env.USERPROFILE || process.env.HOME || "", roots, effectiveSkills } = {}) {
-  const disabledSet = readDisabledSkills(cwd, home);
-  const seenNames = new Set();
+  const disabled = readDisabledSkills(cwd, home);
+  const seen = new Set();
   const collected = [];
 
-  const isValidName = (name) => {
-    if (!name || name.length > 100) return false;
-    return /^[a-zA-Z0-9_.:/@-]+$/.test(name);
+  const addSkill = (name, description) => {
+    if (!name || typeof name !== "string") return;
+    const cleanName = name.trim();
+    if (!cleanName || seen.has(cleanName) || disabled.has(cleanName)) return;
+    const cleanDesc = typeof description === "string" ? description.trim() : "";
+    if (hasRawSecretOrPii(cleanName) || hasRawSecretOrPii(cleanDesc)) return;
+    seen.add(cleanName);
+    collected.push({ name: cleanName, description: cleanDesc });
   };
 
   if (Array.isArray(effectiveSkills)) {
-    for (const s of effectiveSkills) {
-      if (!s || typeof s !== "object") continue;
-      const rawName = typeof s.name === "string" ? s.name.trim() : "";
-      const skillName = rawName.startsWith("skill:") ? rawName.slice(6).trim() : rawName;
-      if (!isValidName(skillName)) continue;
-      if (disabledSet.has(skillName)) continue;
-      if (seenNames.has(skillName)) continue;
-
-      const boundedDesc = (typeof s.description === "string" ? s.description : "").slice(0, 1000);
-      if (hasRawSecretOrPii(skillName) || hasRawSecretOrPii(boundedDesc)) {
-        continue;
+    for (const item of effectiveSkills) {
+      if (!item || typeof item !== "object") continue;
+      const rawName = item.name;
+      if (typeof rawName !== "string" || !rawName.trim()) continue;
+      let name = rawName.trim();
+      if (name.startsWith("skill:")) {
+        name = name.slice(6);
       }
-
-      seenNames.add(skillName);
-      collected.push({
-        name: skillName,
-        description: boundedDesc,
-        path: typeof s.path === "string" ? s.path : "",
-      });
-
-      if (collected.length >= 256) break;
+      addSkill(name, item.description || "");
     }
   } else {
-    const effectiveRoots = Array.isArray(roots) && roots.length > 0
+    const searchRoots = Array.isArray(roots) && roots.length > 0
       ? roots
       : [
           join(cwd, ".agents", "skills"),
-          join(cwd, ".omp", "skills"),
+          join(cwd, ".skills"),
           join(cwd, "skills"),
           join(home, ".agents", "skills"),
+          join(home, ".skills"),
           join(home, ".omp", "skills"),
         ];
 
-    for (const root of effectiveRoots) {
-      if (!root || !existsSync(root)) continue;
-      let entries = [];
+    for (const r of searchRoots) {
+      if (!r || !existsSync(r)) continue;
       try {
-        entries = readdirSync(root, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const skillDirName = entry.name;
-        const candidatePaths = [
-          join(root, skillDirName, "SKILL.md"),
-          join(root, skillDirName, "skill.md"),
-        ];
-
-        let targetPath = null;
-        for (const p of candidatePaths) {
-          if (existsSync(p)) {
-            targetPath = p;
-            break;
+        const entries = readdirSync(r, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const skillDir = join(r, entry.name);
+          const skillMd = join(skillDir, "SKILL.md");
+          if (existsSync(skillMd)) {
+            const meta = parseSkillMetadata(skillMd);
+            const finalName = meta.name || entry.name;
+            addSkill(finalName, meta.description);
+          } else {
+            const readmeMd = join(skillDir, "README.md");
+            if (existsSync(readmeMd)) {
+              const meta = parseSkillMetadata(readmeMd);
+              const finalName = meta.name || entry.name;
+              addSkill(finalName, meta.description);
+            }
           }
         }
-        if (!targetPath) continue;
-
-        const { name: parsedName, description } = parseSkillMetadata(targetPath);
-        const skillName = (parsedName || skillDirName).trim();
-        if (!isValidName(skillName)) continue;
-
-        if (disabledSet.has(skillName)) continue;
-        if (seenNames.has(skillName)) continue;
-
-        const boundedDesc = (description || "").slice(0, 1000);
-
-        if (hasRawSecretOrPii(skillName) || hasRawSecretOrPii(boundedDesc)) {
-          continue;
-        }
-
-        seenNames.add(skillName);
-        collected.push({
-          name: skillName,
-          description: boundedDesc,
-          path: targetPath,
-        });
-
-        if (collected.length >= 256) break;
-      }
-      if (collected.length >= 256) break;
+      } catch {}
     }
   }
 
@@ -313,21 +279,6 @@ function buildDecisionRequest(task, skills, model) {
         instructions: "Which skill should be opened to perform the task from the `task` field? Choose a skill only if the task directly falls within its purpose.",
         criteria: skillCriteria,
       },
-      eligible: {
-        type: "noul",
-        instructions: "Is the task from `task` a self-contained, low-risk, safe leaf task eligible for cheap model routing?",
-      },
-      archetype: {
-        type: "choice",
-        instructions: "Which leaf task archetype best describes the task from `task`?",
-        criteria: {
-          lookup: "Simple search, grep, lookup, read, or status check",
-          "json-transform": "Data manipulation, json parsing, filtering, remapping data structures",
-          formatting: "Text formatting, linting, indentation, markdown layout, style fixes",
-          "text-normalization": "Normalizing strings, text cleaning, unicode normalization, word casing",
-          none: "None of the above or complex multi-file engineering task",
-        },
-      },
     },
   };
 
@@ -376,39 +327,9 @@ function validateAnswers(answers, skillCriteria) {
   }
   const skillChoice = rawSkillChoice === "none" ? null : rawSkillChoice;
 
-  const eligibleAns = answers.eligible;
-  if (!eligibleAns || typeof eligibleAns !== "object") return null;
-  const rawNoul = eligibleAns.noul;
-  if (
-    typeof rawNoul !== "number" ||
-    !Number.isFinite(rawNoul) ||
-    rawNoul < 0 ||
-    rawNoul > 1
-  ) {
-    return null;
-  }
-
-  const archAns = answers.archetype;
-  if (!archAns || typeof archAns !== "object") return null;
-  const rawArchetype = archAns.choice;
-  const rawArchConf = archAns.confidence;
-  if (
-    typeof rawArchetype !== "string" ||
-    !ALL_ARCHETYPES.has(rawArchetype) ||
-    typeof rawArchConf !== "number" ||
-    !Number.isFinite(rawArchConf) ||
-    rawArchConf < 0 ||
-    rawArchConf > 1
-  ) {
-    return null;
-  }
-
   return {
     skillChoice,
-    rawSkillConf,
-    rawNoul,
-    rawArchetype,
-    rawArchConf,
+    confidence: rawSkillConf,
   };
 }
 
@@ -426,8 +347,6 @@ export async function decide({
     status: "fallback",
     reason,
     skill: null,
-    route: "baseline",
-    archetype: "none",
     confidence: 0,
     model: mod,
     usage: {
@@ -511,25 +430,13 @@ export async function decide({
       return fallback("invalid-response", data.model, usage);
     }
 
-    const { skillChoice, rawSkillConf, rawNoul, rawArchetype, rawArchConf } = validated;
-    const isEligible = rawNoul >= 0.95;
-    const isLeaf = LEAF_ARCHETYPES.has(rawArchetype);
-    const isArchConfident = rawArchConf >= 0.90;
-    const route = isEligible && isLeaf && isArchConfident ? "cheap" : "baseline";
-    const confidence = route === "cheap" ? rawArchConf : (skillChoice ? rawSkillConf : rawArchConf);
-
     return {
       status: "ok",
       reason: "ok",
-      skill: skillChoice,
-      route,
-      archetype: rawArchetype,
-      confidence,
+      skill: validated.skillChoice,
+      confidence: validated.confidence,
       model: data.model,
       usage,
-      skillConfidence: rawSkillConf,
-      routingConfidence: rawArchConf,
-      eligibleScore: rawNoul,
     };
   } catch (err) {
     const isTimeout = err?.name === "AbortError" || String(err?.message).includes("timeout");
@@ -572,7 +479,7 @@ export function readPolicy({ home, cwd = process.cwd(), fingerprint } = {}) {
   }
 
   if (!policy || typeof policy !== "object") return null;
-  if (policy.version !== 1 || policy.enabled !== true) return null;
+  if (policy.version !== 2 || policy.enabled !== true) return null;
   if (policy.decisionModel !== DECISION_MODEL) return null;
 
   const exp = new Date(policy.expiresAt).getTime();
@@ -580,7 +487,6 @@ export function readPolicy({ home, cwd = process.cwd(), fingerprint } = {}) {
 
   const expectedFp = policyFingerprint({
     catalogFingerprint: policy.catalogFingerprint,
-    candidateModel: policy.candidateModel,
     baselineModel: policy.baselineModel,
     decisionModel: policy.decisionModel,
   });
@@ -603,9 +509,9 @@ export function readPolicy({ home, cwd = process.cwd(), fingerprint } = {}) {
   }
 
   if (
+    report?.version !== 2 ||
     report?.fingerprint !== policy.fingerprint ||
     report?.catalogFingerprint !== policy.catalogFingerprint ||
-    report?.candidateModel !== policy.candidateModel ||
     report?.baselineModel !== policy.baselineModel ||
     report?.decisionModel !== policy.decisionModel
   ) {
@@ -615,26 +521,19 @@ export function readPolicy({ home, cwd = process.cwd(), fingerprint } = {}) {
   const datasetContext = loadEvaluationDatasetContext({ root: cwd });
   if (!datasetContext) return null;
   const evalResult = evaluateReport(report, { datasetContext });
-  const skillPassed = Boolean(policy.skillPassed && evalResult.skillPassed);
-  const routingPassed = Boolean(policy.routingPassed && evalResult.routingPassed);
-
-  if (!skillPassed && !routingPassed) return null;
+  if (!evalResult || !evalResult.skillPassed) return null;
 
   return {
-    version: 1,
+    version: 2,
     enabled: true,
     expiresAt: policy.expiresAt,
     catalogFingerprint: policy.catalogFingerprint,
-    candidateModel: policy.candidateModel,
     baselineModel: policy.baselineModel,
     decisionModel: DECISION_MODEL,
     fingerprint: policy.fingerprint,
-    skillPassed,
-    routingPassed,
     reportSha256: policy.reportSha256,
-    archetypes: evalResult.archetypes,
     decisionSnapshots: Array.isArray(report.decisionSnapshots) ? report.decisionSnapshots : [],
-    modelPrices: report.modelPrices || null,
+    skillPassed: true,
   };
 }
 
@@ -656,7 +555,7 @@ export function appendEvent(cwd, event) {
     ts: typeof event.ts === "string" ? event.ts : new Date().toISOString(),
     event: typeof event.event === "string" ? redactText(event.event).slice(0, 64) : "unknown",
   };
-  const strFields = [["route", 32], ["archetype", 32], ["status", 32], ["model", 64], ["sessionId", 64], ["subagentRole", 64], ["action", 64]];
+  const strFields = [["status", 32], ["model", 64], ["sessionId", 64], ["subagentRole", 64], ["action", 64]];
   for (const [key, maxLen] of strFields) {
     if (typeof event[key] === "string") record[key] = redactText(event[key]).slice(0, maxLen);
   }
