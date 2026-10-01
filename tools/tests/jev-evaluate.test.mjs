@@ -488,3 +488,53 @@ test("runEvaluation with --dry-run returns plan without emitting activation-elig
     rmSync(tmpHome, { recursive: true, force: true });
   }
 });
+
+test("buildReportV2 preserves deterministic zero latencyMs and non-negative duration under zero timing", () => {
+  const cases = [
+    {
+      id: "calib-01",
+      isCalibration: true,
+      baselineAttempted: true,
+      baselineSkill: "better-ui",
+      candidateAttempted: true,
+      candidateSkill: "better-ui",
+      confidence: 0.95,
+      baselineCostUsd: 0.0001,
+      candidateCostUsd: 0.00005,
+      baselineLatencyMs: 0,
+      candidateLatencyMs: 0,
+      expectedSkills: ["better-ui"],
+    },
+    {
+      id: "heldout-01",
+      isCalibration: false,
+      baselineAttempted: true,
+      baselineSkill: "docker-patterns",
+      candidateAttempted: true,
+      candidateSkill: "docker-patterns",
+      confidence: 0.95,
+      baselineCostUsd: 0.0002,
+      candidateCostUsd: 0.00008,
+      baselineLatencyMs: 0,
+      candidateLatencyMs: 0,
+      expectedSkills: ["docker-patterns"],
+    },
+  ];
+
+  const report = buildReportV2({
+    catalogFingerprint: "catalog-1234",
+    baselineModel: "google/gemini-3.8-flash",
+    decisionModel: "typesafe/jev-1.13",
+    datasetHashes: { calibration: "a".repeat(64), heldout: "b".repeat(64) },
+    decisionSnapshots: ["typesafe/jev-1.13-20260917"],
+    calibrationCount: 1,
+    heldoutCount: 1,
+    skillCases: cases,
+    maxCostUsd: 1.0,
+    runDurationMs: 0,
+  });
+
+  assert.strictEqual(report.skills.baseline.latencyMs, 0, "must preserve numeric 0 latencyMs on baseline");
+  assert.strictEqual(report.skills.candidate.latencyMs, 0, "must preserve numeric 0 latencyMs on candidate");
+  assert.strictEqual(report.runDurationMs, 0, "must preserve numeric 0 runDurationMs");
+});

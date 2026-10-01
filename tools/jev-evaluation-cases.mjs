@@ -5,6 +5,7 @@
  */
 
 import { Buffer } from "node:buffer";
+import { performance } from "node:perf_hooks";
 import { screenTask, decide } from "./jev-assist.mjs";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -37,7 +38,7 @@ export async function executeChatCall({
   ratesTable = OPENROUTER_FALLBACK_RATES,
   fetchImpl = fetch,
 }) {
-  const start = Date.now();
+  const start = performance.now();
   const body = {
     model,
     messages,
@@ -57,7 +58,7 @@ export async function executeChatCall({
       signal: AbortSignal.timeout(30000),
     });
 
-    const latencyMs = Date.now() - start;
+    const latencyMs = Math.round(Math.max(0, performance.now() - start));
     if (!res.ok) {
       return { ok: false, content: "", inputTokens: 0, outputTokens: 0, costUsd: null, latencyMs, error: `http-${res.status}` };
     }
@@ -91,7 +92,7 @@ export async function executeChatCall({
       inputTokens: 0,
       outputTokens: 0,
       costUsd: null,
-      latencyMs: Date.now() - start,
+      latencyMs: Math.round(Math.max(0, performance.now() - start)),
       error: err?.name === "AbortError" ? "timeout" : "network-error",
     };
   }
@@ -176,9 +177,9 @@ export async function executeSkillCase({
 
   const runBaseline = () => executeChatCall({ apiKey, model: options.baseline, messages: baselineMessages, maxTokens: 1024, ratesTable, fetchImpl });
   const runCandidate = async () => {
-    const start = Date.now();
+    const start = performance.now();
     const res = await decide({ task: c.prompt, skills: catalog.skills, apiKey, model: options.decisionModel, fetchImpl });
-    const latencyMs = Date.now() - start;
+    const latencyMs = Math.round(Math.max(0, performance.now() - start));
     return { ...res, latencyMs };
   };
   const [first, second] = isInterleaved

@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
 import { readCredential, loadSkillCatalog } from "./jev-assist.mjs";
@@ -209,7 +210,7 @@ export function buildReportV2({
         correct: skill.baselineCorrect,
         falsePositives: skill.baselineFP,
         costUsd: Number(skill.baselineCost.toFixed(6)),
-        ...(skill.baselineLatencyMs > 0 ? { latencyMs: skill.baselineLatencyMs } : {}),
+        latencyMs: skill.baselineLatencyMs,
       },
       candidate: {
         attempted: skill.candidateAttempted,
@@ -217,7 +218,7 @@ export function buildReportV2({
         falsePositives: skill.candidateFP,
         criticalMisses: skill.criticalMisses,
         costUsd: Number(skill.candidateCost.toFixed(6)),
-        ...(skill.candidateLatencyMs > 0 ? { latencyMs: skill.candidateLatencyMs } : {}),
+        latencyMs: skill.candidateLatencyMs,
       },
       cases: skillCases,
     },
@@ -350,7 +351,7 @@ export async function runEvaluation(optionsInput = parseEvalArgs()) {
   }
   const fetchImpl = options.fetchImpl || fetch;
   const ratesTable = OPENROUTER_FALLBACK_RATES;
-  const runStart = Date.now();
+  const runStart = performance.now();
 
   const state = {
     unknownSpend: 0,
@@ -398,7 +399,8 @@ export async function runEvaluation(optionsInput = parseEvalArgs()) {
     writeCheckpoint(false, "execution-interrupted", state);
     throw err;
   }
-  const report = writeCheckpoint(true, null, { ...state, runDurationMs: Date.now() - runStart });
+  const runDurationMs = Math.round(Math.max(0, performance.now() - runStart));
+  const report = writeCheckpoint(true, null, { ...state, runDurationMs });
   const hurdleEval = evaluateReport(report, {
     datasetContext: {
       hashes: datasetHashes,
