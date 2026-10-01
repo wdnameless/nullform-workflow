@@ -159,10 +159,11 @@ test("Regression: error logs sanitize exception messages and do not dump arbitra
     const mockCore = createMockCore({
       async readCredential() {
         credentialReadCount++;
-        throw new Error("Failed connecting to OpenRouter with key sk-or-v1-abcdef0123456789 and bearer token-9876543210 and https://user:secretpass@api.openrouter.ai");
+        const err = new Error("Failed connecting to OpenRouter with key sk-or-v1-abcdef0123456789 and bearer token-9876543210 and https://user:secretpass@api.openrouter.ai");
+        err.name = "CustomSecretName_sk-or-v1-secretname99";
+        throw err;
       },
     });
-
     await createJevExtension({ core: mockCore })(mockPi);
     const startHandler = handlers.get("before_agent_start");
     const ctx = { agent: { kind: "main" } };
@@ -172,10 +173,13 @@ test("Regression: error logs sanitize exception messages and do not dump arbitra
     assert.equal(result, undefined, "Handler must safely return undefined on credential error");
     assert.equal(credentialReadCount, 1, "Must reach readCredential exactly once");
 
+    assert.ok(warnings.length > 0, "Warning must be logged");
     for (const w of warnings) {
       assert.doesNotMatch(w, /sk-or-v1-abcdef0123456789/, "Must not dump raw API key in warning log");
       assert.doesNotMatch(w, /token-9876543210/, "Must not dump bearer token in warning log");
       assert.doesNotMatch(w, /secretpass/, "Must not dump URL credentials in warning log");
+      assert.doesNotMatch(w, /CustomSecretName/, "Must not dump custom error name in warning log");
+      assert.doesNotMatch(w, /secretname99/, "Must not dump error name secrets in warning log");
     }
   `);
 });

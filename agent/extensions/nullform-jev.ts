@@ -114,7 +114,7 @@ function safeErrorMessage(err: unknown): string {
     if (n === "TypeError") return "type_error";
     if (n === "RangeError") return "range_error";
     if (n === "SyntaxError") return "syntax_error";
-    return n || "error";
+    return "error";
   }
   return "internal_error";
 }
