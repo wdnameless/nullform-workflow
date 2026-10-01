@@ -1,39 +1,39 @@
-# Automatic OMP assistance
+# Automatic OMP skill assistance
 
 ## ADDED Requirements
 
 ### Requirement: Assistance MUST preserve engineering safety
 
-The extension MUST append bounded skill suggestions in turn context and MUST NOT alter the stable system/catalog prefix, main model, task tiers, permissions, tests or protected Oracle/reviewer roles. Named low-risk child tasks MAY use an exact validated cheaper model only for evaluated leaf-task archetypes (`lookup,json-transform,formatting,text-normalization`), when caller selectors, role, task identity and evidence permit it; role membership alone is insufficient.
+The extension MUST append bounded skill suggestions in turn context and MUST NOT alter the stable system/catalog prefix, main or child models, task tiers, permissions, tests or Oracle/reviewer roles. The user selected skills-only: model routing, provider registration, task caches and model-switch hooks MUST be removed rather than left dormant.
 
 #### Scenario: Native skill suggestion
-- **WHEN** an eligible turn begins with credentials and current validated policy
-- **THEN** the native OMP hook automatically supplies only real relevant skill identifiers from the effective registry.
+- **WHEN** an eligible main turn begins with credentials and a current validated v2 policy
+- **THEN** the native OMP hook automatically supplies only relevant real skill identifiers from its effective registry at validated confidence >=0.80.
 
-#### Scenario: Protected or caller-explicit task
-- **WHEN** an Oracle, reviewer, risky/context-dependent task, ambiguous spawn or caller-explicit model is dispatched
-- **THEN** its original model selectors and approval policy remain unchanged.
+#### Scenario: Models remain unchanged
+- **WHEN** any turn or subagent task executes
+- **THEN** original model selectors and approval policies remain unchanged; this assistance never switches models.
 
 ### Requirement: Externalization MUST protect credentials and private input
 
-Credentials MUST come only from environment/native vault; API requests MUST use the live-confirmed OpenRouter Decisions contract with bounded input and response. Secrets, personal data, code dumps, local private content and transcript bodies MUST NOT be transmitted or logged by this assistance.
+Credentials MUST come only from environment/native vault. Requests MUST use the live-confirmed OpenRouter Decisions endpoint and one skill-choice question with bounded input/response. Secrets, personal data, code dumps, local private content and transcript bodies MUST NOT be transmitted or logged by this assistance.
 
 #### Scenario: Credential-shaped prompt
-- **WHEN** a turn or task contains a synthetic credential canary
-- **THEN** no outgoing JEV request occurs and logs contain no canary.
+- **WHEN** a turn contains a credential canary, including short JWT claims or explicit quoted/Unicode/opaque credential assignments
+- **THEN** no JEV request occurs and logs contain no value.
 
 ### Requirement: Failures MUST preserve the baseline
 
-Missing/stale activation evidence, missing credentials, unsupported hooks, timeout, API/auth/quota/TLS errors, malformed decisions and unknown model availability MUST retain the baseline behavior without interrupting the session.
+Missing/stale/v1 activation evidence, no credential, unsupported hooks, opt-out, context-dependent input, timeout, API/auth/quota/TLS errors and malformed decisions MUST retain baseline behavior without interrupting the session.
 
 #### Scenario: Provider unavailable
-- **WHEN** the API times out or returns an invalid response
-- **THEN** the original skill/model path continues with only a redacted diagnostic status.
+- **WHEN** the API times out or returns invalid data
+- **THEN** the original behavior continues with only a redacted diagnostic status.
 
 ### Requirement: Installation MUST make validated assistance automatic
 
-Both OMP installers MUST install the native extension idempotently, without mutating unrelated user configuration or writing API keys to files. This machine MUST have an observed activation state; new sessions load the extension without per-task commands.
+Both OMP installers MUST install the native extension idempotently without changing unrelated profile files, canonical human prompts or writing API keys. The user approved activation in the current OMP profile after positive proof; new sessions load the extension without per-task commands. Do not kill the current daemon for reload.
 
 #### Scenario: Fresh OMP sandbox
 - **WHEN** OMP is installed with an isolated home
-- **THEN** the extension exists, core imports resolve through its harness pointer, and no credential means zero API requests.
+- **THEN** the extension exists, core imports resolve through its harness pointer, and absent credentials/policy cause zero API requests.
