@@ -14,8 +14,6 @@ import jevExtensionFactory, { createJevExtension, getEffectiveNativeSkills } fro
 function createMockPi(handlers, overrides = {}) {
   return {
     on(event, handler) { handlers.set(event, handler); },
-    registerProvider() {},
-    unregisterProvider() {},
     getCommands: () => [
       { source: "skill", name: "skill:test-skill", description: "A very long detailed raw skill description that must not be emitted", path: "/path/test-skill" },
     ],
@@ -38,30 +36,23 @@ function createMockCore(overrides = {}) {
         status: "ok",
         reason: "matched",
         skill: "test-skill",
-        route: "cheap",
-        archetype: "lookup",
         confidence: 0.95,
-        skillConfidence: 0.95,
-        routingConfidence: 0.95,
-        eligibleScore: 1.0,
         model: "typesafe/jev-1.13",
+        usage: { inputTokens: 10, outputTokens: 5, costUsd: 0.0001, costKnown: true },
       };
     },
     readPolicy() {
       return {
-        version: 1,
+        version: 2,
         enabled: true,
         expiresAt: new Date(Date.now() + 86400000).toISOString(),
         catalogFingerprint: "cat-fp-1",
-        candidateModel: "cand-model",
-        baselineModel: "base-model",
+        baselineModel: "google/gemini-3.8-flash",
         decisionModel: "typesafe/jev-1.13",
         fingerprint: "fp-1",
-        skillPassed: true,
-        routingPassed: true,
         reportSha256: "sha-1",
-        archetypes: ["lookup"],
         decisionSnapshots: ["typesafe/jev-1.13"],
+        skillPassed: true,
       };
     },
     appendEvent() {},

@@ -52,8 +52,10 @@ test("Regression: excluded ghost skill and unavailable native roster retain base
       },
       async decide() {
         return {
-          status: "ok", skill: "ghost-skill", route: "cheap", archetype: "lookup",
-          confidence: 0.95, skillConfidence: 0.95, routingConfidence: 0.95, eligibleScore: 1.0,
+          status: "ok",
+          reason: "matched",
+          skill: "ghost-skill",
+          confidence: 0.95,
           model: "typesafe/jev-1.13",
         };
       },
@@ -75,7 +77,7 @@ test("Regression: excluded ghost skill and unavailable native roster retain base
   `);
 });
 
-test("Regression: strict score threshold validation rejects low or missing eligibleScore and routingConfidence", () => {
+test("Regression: strict confidence threshold validation requires confidence >= 0.80 and <= 1.0", () => {
   runBunTest(`
     const handlers = new Map();
     let lastDecision = null;
@@ -89,45 +91,58 @@ test("Regression: strict score threshold validation rejects low or missing eligi
 
     await createJevExtension({ core: mockCore })(mockPi);
     const startHandler = handlers.get("before_agent_start");
-    const toolCallHandler = handlers.get("tool_call");
     const ctx = { agent: { kind: "main" } };
 
-    // 1. before_agent_start: high-confidence safe non-leaf skill hint with baseline route and low eligibleScore is suggested
+    // 1. confidence 0.95 accepted
     lastDecision = {
-      status: "ok", skill: "s1", route: "baseline", archetype: "none",
-      confidence: 0.95, skillConfidence: 0.95, eligibleScore: 0.10, model: "typesafe/jev-1.13",
+      status: "ok",
+      reason: "matched",
+      skill: "s1",
+      confidence: 0.95,
+      model: "typesafe/jev-1.13",
     };
     const hintRes = await startHandler({ type: "before_agent_start", prompt: "task text" }, ctx);
-    assert.ok(hintRes && hintRes.message, "High-confidence skill must be suggested regardless of cheap-route eligibility");
-    assert.match(hintRes.message.content, /Recommended skill: s1/);
+    assert.ok(hintRes && hintRes.message, "High-confidence skill must be suggested");
+    assert.equal(hintRes.message.content, "[JEV Assistance] Recommended skill: s1");
 
-    // 2. before_agent_start: low skillConfidence (< 0.80) rejected
+    // 2. confidence 0.79 rejected (< 0.80)
     lastDecision = {
-      status: "ok", skill: "s1", route: "baseline", archetype: "none",
-      confidence: 0.95, skillConfidence: 0.79, eligibleScore: 1.0, model: "typesafe/jev-1.13",
+      status: "ok",
+      reason: "matched",
+      skill: "s1",
+      confidence: 0.79,
+      model: "typesafe/jev-1.13",
     };
     assert.equal(await startHandler({ type: "before_agent_start", prompt: "task text" }, ctx), undefined);
 
-    // 3. tool_call: eligibleScore < 0.95 rejected
+    // 3. confidence NaN rejected
     lastDecision = {
-      status: "ok", route: "cheap", archetype: "lookup",
-      confidence: 0.95, routingConfidence: 0.95, eligibleScore: 0.94, model: "typesafe/jev-1.13",
+      status: "ok",
+      reason: "matched",
+      skill: "s1",
+      confidence: NaN,
+      model: "typesafe/jev-1.13",
     };
-    await toolCallHandler({ type: "tool_call", toolName: "task", input: { name: "t1", agent: "task", task: "test" } }, ctx);
+    assert.equal(await startHandler({ type: "before_agent_start", prompt: "task text" }, ctx), undefined);
 
-    // 4. tool_call: routingConfidence < 0.90 rejected
+    // 4. confidence > 1.0 rejected
     lastDecision = {
-      status: "ok", route: "cheap", archetype: "lookup",
-      confidence: 0.95, routingConfidence: 0.89, eligibleScore: 0.98, model: "typesafe/jev-1.13",
+      status: "ok",
+      reason: "matched",
+      skill: "s1",
+      confidence: 1.05,
+      model: "typesafe/jev-1.13",
     };
-    await toolCallHandler({ type: "tool_call", toolName: "task", input: { name: "t2", agent: "task", task: "test" } }, ctx);
+    assert.equal(await startHandler({ type: "before_agent_start", prompt: "task text" }, ctx), undefined);
 
-    // 5. tool_call: missing eligibleScore rejected (no status-ok->1.0 fallback)
+    // 5. missing confidence rejected
     lastDecision = {
-      status: "ok", route: "cheap", archetype: "lookup",
-      confidence: 0.95, routingConfidence: 0.95, model: "typesafe/jev-1.13",
+      status: "ok",
+      reason: "matched",
+      skill: "s1",
+      model: "typesafe/jev-1.13",
     };
-    await toolCallHandler({ type: "tool_call", toolName: "task", input: { name: "t3", agent: "task", task: "test" } }, ctx);
+    assert.equal(await startHandler({ type: "before_agent_start", prompt: "task text" }, ctx), undefined);
   `);
 });
 
@@ -137,7 +152,6 @@ test("Regression: error logs sanitize exception messages and do not dump arbitra
     let credentialReadCount = 0;
     const handlers = new Map();
     const mockPi = createMockPi(handlers, {
-      registerProvider: undefined,
       logger: { warn(msg) { warnings.push(msg); } },
       getCommands: () => [{ source: "skill", name: "skill:s1", description: "desc" }],
     });
@@ -166,139 +180,38 @@ test("Regression: error logs sanitize exception messages and do not dump arbitra
   `);
 });
 
-test("Regression: sensitive shared context in tool_call retains baseline without calling classifier", () => {
+test("Regression: opt-out in cwd suppresses before_agent_start without classifier calls", () => {
   runBunTest(`
-    const handlers = new Map();
-    let decideCalled = false;
-    let providerRegistered = false;
-    const mockPi = createMockPi(handlers, {
-      registerProvider() { providerRegistered = true; },
-      getCommands: () => [{ source: "skill", name: "skill:s1", description: "desc" }],
-    });
+    import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+    import { tmpdir } from "node:os";
+    import { join } from "node:path";
 
-    const mockCore = createMockCore({
-      screenTask(text) {
-        if (text.includes("SECRET_KEY_12345")) return { allowed: false, reason: "secret" };
-        return { allowed: true, reason: "" };
-      },
-      async decide() {
-        decideCalled = true;
-        return {
-          status: "ok", route: "cheap", archetype: "lookup",
-          confidence: 0.95, routingConfidence: 0.95, eligibleScore: 1.0, model: "typesafe/jev-1.13",
-        };
-      },
-    });
+    const tmp = mkdtempSync(join(tmpdir(), "jev-optout-test-"));
+    try {
+      writeFileSync(join(tmp, ".jev-optout"), "", "utf8");
 
-    await createJevExtension({ core: mockCore })(mockPi);
-    const toolCallHandler = handlers.get("tool_call");
-    const spawnHandler = handlers.get("before_subagent_spawn");
-    const ctx = {
-      agent: { kind: "main" },
-      models: {
-        resolve: () => ({ id: "nullform-openrouter/cand", cost: { input: 0.1, output: 0.2 } }),
-        list: () => [],
-      },
-    };
+      const handlers = new Map();
+      let decideCalls = 0;
+      const mockPi = createMockPi(handlers, {
+        getCommands: () => [{ source: "skill", name: "skill:s1", description: "desc" }],
+      });
 
-    // Shared context contains secret while individual task is a harmless safe lookup
-    await toolCallHandler({
-      type: "tool_call",
-      toolName: "task",
-      input: {
-        context: "Sensitive environment config: SECRET_KEY_12345=xyz",
-        tasks: [
-          { name: "safe-lookup", agent: "task", task: "Harmless lookup definition" },
-        ],
-      },
-    }, ctx);
+      const mockCore = createMockCore({
+        async decide() {
+          decideCalls++;
+          return { status: "ok", reason: "matched", skill: "s1", confidence: 0.95, model: "typesafe/jev-1.13" };
+        },
+      });
 
-    assert.equal(decideCalled, false, "Classifier must not be called when shared context is sensitive");
+      await createJevExtension({ core: mockCore, cwd: tmp })(mockPi);
+      const startHandler = handlers.get("before_agent_start");
+      const ctx = { agent: { kind: "main" }, cwd: tmp };
 
-    // Spawn handler for safe-lookup must retain baseline
-    const spawnRes = await spawnHandler({
-      type: "before_subagent_spawn",
-      agent: "task",
-      invocationKind: "task",
-      modelRole: "task",
-      patterns: ["base-model"],
-      spawnKey: "safe-lookup",
-    }, ctx);
-
-    assert.equal(spawnRes, undefined, "Sensitive shared context must cause subagent spawn to retain baseline");
-  `);
-});
-
-test("Regression: delayed safe decision cannot repopulate cache after subsequent unsafe batch invalidates generation", () => {
-  runBunTest(`
-    const handlers = new Map();
-    let resolveDelayedDecide;
-    const mockPi = createMockPi(handlers, {
-      getCommands: () => [{ source: "skill", name: "skill:s1", description: "desc" }],
-    });
-
-    const mockCore = createMockCore({
-      screenTask(text) {
-        if (text.includes("SECRET_KEY_12345")) return { allowed: false, reason: "secret" };
-        return { allowed: true, reason: "" };
-      },
-      decide() {
-        return new Promise((resolve) => {
-          resolveDelayedDecide = () => resolve({
-            status: "ok", route: "cheap", archetype: "lookup",
-            confidence: 0.95, routingConfidence: 0.95, eligibleScore: 1.0, model: "typesafe/jev-1.13",
-          });
-        });
-      },
-    });
-
-    await createJevExtension({ core: mockCore })(mockPi);
-    const toolCallHandler = handlers.get("tool_call");
-    const spawnHandler = handlers.get("before_subagent_spawn");
-    const ctx = {
-      agent: { kind: "main" },
-      models: {
-        resolve: (id) => (id === "nullform-openrouter/cand" || id === "cand"
-          ? { id: "nullform-openrouter/cand", cost: { input: 0.1, output: 0.2 } }
-          : { id: "base", cost: { input: 0.5, output: 1.0 } }),
-        list: () => [],
-      },
-    };
-
-    // 1. Start safe first task call with sameName; decide() remains pending
-    const firstCallPromise = toolCallHandler({
-      type: "tool_call",
-      toolName: "task",
-      input: { name: "sameName", agent: "task", task: "Safe lookup" },
-    }, ctx);
-
-    await new Promise(r => setTimeout(r, 10));
-    assert.ok(typeof resolveDelayedDecide === "function", "First decide call must be pending");
-
-    // 2. Second batch with secret shared context invalidates generation and clears state
-    await toolCallHandler({
-      type: "tool_call",
-      toolName: "task",
-      input: {
-        context: "Leaked SECRET_KEY_12345 in shared context",
-        tasks: [{ name: "sameName", agent: "task", task: "Harmless body" }],
-      },
-    }, ctx);
-
-    // 3. Resolve delayed first decide call
-    resolveDelayedDecide();
-    await firstCallPromise;
-
-    // 4. Actual spawn for sameName must retain baseline without model override
-    const spawnRes = await spawnHandler({
-      type: "before_subagent_spawn",
-      agent: "task",
-      invocationKind: "task",
-      modelRole: "task",
-      patterns: ["base"],
-      spawnKey: "sameName",
-    }, ctx);
-
-    assert.equal(spawnRes, undefined, "Delayed stale generation must not route subagent spawn");
+      const res = await startHandler({ type: "before_agent_start", prompt: "safe prompt" }, ctx);
+      assert.equal(res, undefined, "Opt-out in cwd must suppress skill suggestion");
+      assert.equal(decideCalls, 0, "Classifier must not be called when cwd is opted out");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   `);
 });
