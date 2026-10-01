@@ -119,7 +119,9 @@ export function buildScreenedSkillResult(c, safetyMiss, screened) {
       confidence: null,
       criticalMiss: safetyMiss,
       baselineCostUsd: 0,
+      baselineLatencyMs: 0,
       candidateCostUsd: 0,
+      candidateLatencyMs: 0,
       error: null,
     },
     measuredDelta: 0,
@@ -173,8 +175,12 @@ export async function executeSkillCase({
   }
 
   const runBaseline = () => executeChatCall({ apiKey, model: options.baseline, messages: baselineMessages, maxTokens: 1024, ratesTable, fetchImpl });
-  const runCandidate = () => decide({ task: c.prompt, skills: catalog.skills, apiKey, model: options.decisionModel, fetchImpl });
-
+  const runCandidate = async () => {
+    const start = Date.now();
+    const res = await decide({ task: c.prompt, skills: catalog.skills, apiKey, model: options.decisionModel, fetchImpl });
+    const latencyMs = Date.now() - start;
+    return { ...res, latencyMs };
+  };
   const [first, second] = isInterleaved
     ? await Promise.all([runCandidate(), runBaseline()])
     : await Promise.all([runBaseline(), runCandidate()]);
@@ -235,11 +241,13 @@ export async function executeSkillCase({
       baselineSkill: bSkill,
       baselineCorrect: bCorrect,
       baselineCostUsd: bCost,
+      baselineLatencyMs: bRes.latencyMs ?? 0,
       candidateAttempted: cAttempted,
       candidateSkill: cSkill,
       candidateCorrect: cCorrect,
       confidence,
       candidateCostUsd: cCost,
+      candidateLatencyMs: cRes.latencyMs ?? 0,
       criticalMiss: isCritical,
       error: bRes.error || (cRes.status !== "ok" ? cRes.reason : null),
     },

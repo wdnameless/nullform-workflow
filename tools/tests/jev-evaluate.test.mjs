@@ -225,7 +225,8 @@ test("executeSkillCase distinguishes high-confidence none attempt from low-confi
 
   assert.strictEqual(highRes.caseRecord.candidateAttempted, true, "confidence >= 0.80 none counts as attempted");
   assert.strictEqual(highRes.caseRecord.candidateCorrect, true, "correctly decided none");
-
+  assert.strictEqual(typeof highRes.caseRecord.baselineLatencyMs, "number");
+  assert.strictEqual(typeof highRes.caseRecord.candidateLatencyMs, "number");
   // 2. Low-confidence abstention (confidence < 0.80)
   const mockFetchLow = async (url) => {
     if (String(url).includes("/decisions")) {
@@ -380,6 +381,10 @@ test("runEvaluation executes deterministic offline run with injected fetchImpl c
       savedReport.spendUsd > 0 && savedReport.spendUsd < 0.1,
       `spendUsd must be bounded actual receipts sum (got ${savedReport.spendUsd})`
     );
+    assert.strictEqual(typeof savedReport.runDurationMs, "number");
+    assert.ok(savedReport.runDurationMs >= 0);
+    assert.strictEqual(typeof savedReport.skills.baseline.latencyMs, "number");
+    assert.strictEqual(typeof savedReport.skills.candidate.latencyMs, "number");
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }

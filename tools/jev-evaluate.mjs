@@ -98,6 +98,8 @@ function aggregateSkillStats(skillCases) {
     safetyMisses: 0,
     eligible: 0,
     rawSpend: 0,
+    baselineLatencyMs: 0,
+    candidateLatencyMs: 0,
   };
 
   for (const c of skillCases) {
@@ -144,6 +146,8 @@ function aggregateSkillStats(skillCases) {
     if (!isCalib) {
       stats.baselineCost += c.baselineCostUsd || 0;
       stats.candidateCost += c.candidateCostUsd || 0;
+      stats.baselineLatencyMs += c.baselineLatencyMs || 0;
+      stats.candidateLatencyMs += c.candidateLatencyMs || 0;
     }
   }
   return stats;
@@ -173,6 +177,7 @@ export function buildReportV2({
   totalSpend = 0,
   unknownSpend = 0,
   errors = 0,
+  runDurationMs = undefined,
 }) {
   const skill = aggregateSkillStats(skillCases);
   const totalRequests = countTotalRequests(skillCases);
@@ -204,6 +209,7 @@ export function buildReportV2({
         correct: skill.baselineCorrect,
         falsePositives: skill.baselineFP,
         costUsd: Number(skill.baselineCost.toFixed(6)),
+        ...(skill.baselineLatencyMs > 0 ? { latencyMs: skill.baselineLatencyMs } : {}),
       },
       candidate: {
         attempted: skill.candidateAttempted,
@@ -211,6 +217,7 @@ export function buildReportV2({
         falsePositives: skill.candidateFP,
         criticalMisses: skill.criticalMisses,
         costUsd: Number(skill.candidateCost.toFixed(6)),
+        ...(skill.candidateLatencyMs > 0 ? { latencyMs: skill.candidateLatencyMs } : {}),
       },
       cases: skillCases,
     },
@@ -220,6 +227,7 @@ export function buildReportV2({
     unknownSpendUsd: effectiveUnknownSpend,
     maxCostUsd,
     completed: errors === 0 && effectiveUnknownSpend === 0,
+    ...(typeof runDurationMs === "number" ? { runDurationMs } : {}),
   };
 }
 
@@ -290,6 +298,7 @@ function createCheckpointWriter(options, meta) {
         totalSpend: spendData.measuredSpend ?? 0,
         unknownSpend: spendData.unknownSpend ?? 0,
         errors: completed ? (spendData.totalErrors ?? 0) : Math.max(1, spendData.totalErrors ?? 0),
+        runDurationMs: spendData.runDurationMs,
       });
       if (!completed) {
         interimReport.completed = false;
@@ -341,9 +350,9 @@ export async function runEvaluation(optionsInput = parseEvalArgs()) {
   }
   const fetchImpl = options.fetchImpl || fetch;
   const ratesTable = OPENROUTER_FALLBACK_RATES;
+  const runStart = Date.now();
 
   const state = {
-    measuredSpend: 0,
     unknownSpend: 0,
     totalErrors: 0,
     decisionSnapshots: [],
@@ -389,8 +398,7 @@ export async function runEvaluation(optionsInput = parseEvalArgs()) {
     writeCheckpoint(false, "execution-interrupted", state);
     throw err;
   }
-
-  const report = writeCheckpoint(true, null, state);
+  const report = writeCheckpoint(true, null, { ...state, runDurationMs: Date.now() - runStart });
   const hurdleEval = evaluateReport(report, {
     datasetContext: {
       hashes: datasetHashes,
