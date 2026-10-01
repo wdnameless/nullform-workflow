@@ -136,6 +136,12 @@
     "rel": "tools/jev-evaluation-cases.mjs"
   },
   {
+    "rel": "tools/tests/fixtures/jev/calibration.json"
+  },
+  {
+    "rel": "tools/tests/fixtures/jev/heldout.json"
+  },
+  {
     "rel": "tools/fix-plugin-windows.cjs"
   },
   {
