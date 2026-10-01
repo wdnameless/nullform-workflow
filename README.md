@@ -51,7 +51,7 @@ node tools/workflow.mjs close
 - **Core Protocol & 4-Wave SDD**: [`core/PORTABLE.md`](core/PORTABLE.md) — harness-agnostic specification, roles (`orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic`), Lean A→B→A stage rhythm, and evidence protocol.
 - **Domain Glossary & Topology**: [`CONTEXT.md`](CONTEXT.md) — definitions of live/repo trees, `<HARNESS>` substitution, Oracle-lite, dual-pass flash-class acceptance, prompt budgets, `defer:` debt markers, and sync/prune semantics.
 - **Documentation & Visual Assets**: [`docs/`](docs/) — dashboard overview and visual artifacts (`node tools/dashboard.mjs --url`).
-- **JEV Assistance & Evaluation**: [`docs/jev.md`](docs/jev.md) — paired skills evaluation protocol, activation policy, and local control CLI (inactive by default pending empirical proof; model routing dropped after negative experimental evidence).
+- **JEV Assistance & Evaluation**: [`docs/jev.md`](docs/jev.md) — paired skills evaluation protocol, activation policy, and local control CLI (empirical v2 proof PASSED: 104 requests, 0 errors, 90% coverage at 100% precision, $0.0126 vs $0.2069 decision cost, 16.4s vs 79.7s latency; activated in current OMP profile; model routing dropped after negative experimental evidence).
 - **Always-On Agent Laws & Roles**: [`agent/AGENTS.md`](agent/AGENTS.md) · [`agent/agents/orchestrator.md`](agent/agents/orchestrator.md) · [`agent/plugins.json`](agent/plugins.json).
 - **Verification, Sync & Quality Gates**:
   - `node tools/verify.mjs --profile verify` (29 install checks) · `--profile audit` (15 health checks)
@@ -103,7 +103,7 @@ node tools/workflow.mjs close
 - **Портативное ядро и 4-Wave SDD**: [`core/PORTABLE.md`](core/PORTABLE.md) — независимая от среды спецификация процесса, роли (`orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic`), бережливый цикл A→B→A и протокол доказательств.
 - **Глоссарий домена и топология**: [`CONTEXT.md`](CONTEXT.md) — устройство live/repo-деревьев, подстановка `<HARNESS>`, двойная приёмка на flash-моделях, Oracle-lite, бюджеты промптов, маркеры техдолга `defer:` и правила синхронизации.
 - **Материалы и дашборд**: [`docs/`](docs/) — живой дашборд наблюдаемости (`node tools/dashboard.mjs --url`, автозапуск при `workflow.mjs start`).
-- **JEV-ассистент и оценка пользы**: [`docs/jev.md`](docs/jev.md) — парный бенчмарк навыков, политика активации и локальное управление CLI (отключён по умолчанию до подтверждения пользы; маршрутизация моделей удалена после отрицательных результатов).
+- **JEV-ассистент и оценка пользы**: [`docs/jev.md`](docs/jev.md) — парный бенчмарк навыков, политика активации и локальное управление CLI (эмпирическое доказательство v2 ПРОЙДЕНО: 104 запроса, 0 ошибок, 90% покрытие при 100% точности, $0.0126 против $0.2069 стоимость решений, 16.4с против 79.7с задержка; активирован в текущем профиле OMP; маршрутизация моделей удалена после отрицательных результатов).
 - **Законы агентов и шаблоны CI**: [`agent/AGENTS.md`](agent/AGENTS.md) · [`agent/agents/orchestrator.md`](agent/agents/orchestrator.md) · [`templates/ci/workflow-gate.yml`](templates/ci/workflow-gate.yml).
 - **Проверка и сопровождение**: `node tools/verify.mjs --profile verify` (29 проверок) · `node tools/verify.mjs --profile audit` (15 проверок) · `node --test tools/tests/*.test.mjs`.
 

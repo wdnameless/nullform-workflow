@@ -93,13 +93,32 @@ node tools/jev-control.mjs enable \
 node tools/jev-control.mjs disable
 ```
 
+### Empirical Evidence & Current Profile Activation
+
+#### Measured v2 Evaluation Proof (`openspec/changes/jev-automatic-assistance/evidence/live-skills-v2-measured.json`)
+The paired live evaluation completed with all hurdles PASSED:
+- **Requests & Integrity**: 104 requests, 0 errors, 0 unknown spend, $1.00 hard cap respected.
+- **Corpus**: 14 calibration cases + 44 held-out cases (40 eligible held-out cases, 4 safety canaries).
+- **Baseline Arm (`google/gemini-3.8-flash`)**: 37/40 correct on held-out eligible cases, decision cost $0.206936, latency 79,707 ms (prior run: 38/40, $0.206264).
+- **Candidate Arm (`typesafe/jev-1.13`)**: 36/36 attempted decisions (100% precision on attempted, 90% attempt coverage 36/40), 0 safety misses, 0 critical misses, decision cost $0.012637 (16.4x cheaper than baseline chat), latency 16,414 ms (4.8x faster).
+- **Total Run**: Total API spend $0.286911 (within $1 ceiling; prior run: $0.286204), wall clock execution duration 128.54 s.
+
+#### Preserved Negative Experimental Evidence (Model Routing Dropped)
+Previous v1 experiments evaluated cheap subagent model routing (`google/gemini-3.1-flash-lite` on leaf tasks). That arm achieved only 3/8 primary acceptances with 5 recovery calls, higher overall spend ($0.0281 extra/unknown spend, calib-10 HTTP 502), and negative savings. User explicitly dropped model routing; historical v1 reports remain preserved as negative experimental evidence and cannot activate v2 assistance.
+
+#### Current Profile Deployment & Runtime Verification
+- **Targeted Deployment**: 9 manifest files deployed to current OMP profile; `tools/jev-control.mjs enable` validated against the active native catalog (89 skills) and policy verified active via `tools/jev-control.mjs status`.
+- **Native Registry Behavior**: Default 89-skill native registry emits `python-resilience` suggestion on relevant turns without factory overrides, while execution model and prompts remain unchanged.
+- **Full SDK Boundary Verification**: Verified across positive skill suggestion, safety canary (prompt blocked before network), opt-out (`enabled: false`), no-key fallback (injected credential availability test without touching OS native vault), and transport error recovery.
+- **Callback Prefix Audit**: JEV callback preserves system/prefix text unchanged while unrelated SDK dynamic status blocks update.
+- **Daemon Reload Limit**: Running OMP agent processes require session restart or reload to pick up updated extension files; installers do not restart external user daemons.
+
 ### Measured Scope, Opt-Out & Non-Claims
 
 - **Measured Benefit**: Cost reductions and skill precision are proven solely for skill suggestion on the evaluated pair (`google/gemini-3.8-flash` baseline vs `typesafe/jev-1.13` decision classifier).
 - **Default Inactive & Safe Failure**: JEV assistance is inactive by default (`unconfigured`). An interrupted, partial, or failed evaluation run leaves assistance disabled and does not constitute evidence of utility. Activation strictly requires a completed v2 evaluation report passing all hurdles.
 - **Immediate Opt-Out**: Disabling assistance via `node tools/jev-control.mjs disable` sets `enabled: false` in `~/.omp/agent/jev-policy.json`. OMP hooks immediately bypass JEV and execute baseline turns without restarting the agent or altering project files.
 - **No Blanket Claims**: This evaluation does NOT claim whole-workflow speedups, human productivity gains, or cost savings on flat-rate subscription models. No utility is claimed prior to live proof validation.
-
 ---
 
 ## Русский
@@ -192,6 +211,26 @@ node tools/jev-control.mjs enable \
 # Отключить ассистента (мгновенный возврат к стандартному базовому поведению)
 node tools/jev-control.mjs disable
 ```
+
+### Эмпирические результаты и активация в текущем профиле
+
+#### Доказательство оценки v2 (`openspec/changes/jev-automatic-assistance/evidence/live-skills-v2-measured.json`)
+Парный живой запуск успешно ПРОЙДЕН со следующими показателями:
+- **Запросы и целостность**: 104 запроса, 0 ошибок, 0 неопределённых расходов, лимит $1.00 соблюдён.
+- **Выборка**: 14 калибровочных кейсов + 44 отложенных кейса (40 допустимых held-out, 4 канарейки безопасности).
+- **Базовое плечо (`google/gemini-3.8-flash`)**: 37/40 правильных ответов, затраты $0.206936, задержка 79 707 мс (предыдущий прогон: 38/40, $0.206264).
+- **Кандидат (`typesafe/jev-1.13`)**: 36/36 попыток решений (100% точность попыток, 90% покрытие 36/40), 0 пропусков безопасности, 0 критических ошибок, затраты $0.012637 (в 16.4 раза дешевле базовой чат-модели), задержка 16 414 мс (в 4.8 раза быстрее).
+- **Общий прогон**: суммарные расходы $0.286911 (в рамках потолка $1; предыдущий прогон: $0.286204), астрономическое время прогона 128.54 с.
+
+#### Сохранение отрицательных результатов (отказ от маршрутизации)
+Эксперименты v1 проверяли маршрутизацию простых подзадач на дешёвые модели (`google/gemini-3.1-flash-lite`). Они дали лишь 3/8 первичных успешных решений при 5 вызовах восстановления, привели к росту затрат ($0.0281 непредвиденных расходов, ошибка HTTP 502 на calib-10) и отсутствию экономии. Пользователь прямо выбрал отказ от маршрутизации; все отчёты v1 сохранены как свидетельства отрицательного эксперимента и не могут активировать v2.
+
+#### Развёртывание в текущем профиле и проверка рантайма
+- **Целевое развёртывание**: 9 файлов манифеста развёрнуты в текущий профиль OMP; `tools/jev-control.mjs enable` валидирован относительно активного нативного каталога (89 навыков), статус подтверждён как активный через `tools/jev-control.mjs status`.
+- **Поведение нативного реестра**: штатный реестр из 89 навыков выдаёт подсказку `python-resilience` на профильном запросе без переопределений фабрики, модель и системные промпты остаются неизменными.
+- **Проверка границ SDK**: подтверждены сценарии позитивной подсказки навыка, канарейки безопасности (запрос блокируется до сети), opt-out (`enabled: false`), отсутствия ключа (проверка доступности без удаления системных ключей) и сетевых сбоев.
+- **Аудит префикса коллбэка**: префикс промпта и модель остаются неизменными при штатном обновлении динамических блоков SDK.
+- **Ограничение перезагрузки**: запущенные процессы OMP требуют перезапуска сессии для подхвата обновлений расширений; скрипты установки не перезапускают пользовательские демоны принудительно.
 
 ### Границы применимости и отказ от использования
 

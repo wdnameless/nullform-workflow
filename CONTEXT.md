@@ -183,8 +183,11 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 ## JEV assistance
 
 - **JEV assistance** — automatic, native OMP turn assistance with bounded skill prompt suggestions powered by OpenRouter Decisions (`typesafe/jev-1.13`), preserving canonical prompts, permissions, models, and Oracle gates. Model routing was evaluated and dropped after negative experimental evidence showed higher costs and insufficient primary acceptance; release scope is skills-only.
-- **JEV evaluation** — paired reproducible evaluation comparing a pinned baseline chat model and JEV candidate classifier over separate canonical calibration and held-out RU/EN cases, accounting for actual token usage, latencies, provider errors, and receipts.
-- **JEV policy** — validated local policy JSON (`~/.omp/agent/jev-policy.json`) storing version 2 metadata: SHA-256 fingerprint, catalog fingerprint, baseline model, decision model, expiry, report SHA-256, and decision snapshots verified against an immutable evaluation report.
+- **JEV decision (`JevDecision`)** — typed single-question classifier response from OpenRouter Decisions (`typesafe/jev-1.13`) containing `status` (`ok` | `fallback`), `reason`, `skill`, `confidence` (validated $\ge 0.80$), `model`, and `usage` (`inputTokens`, `outputTokens`, `costUsd`, `costKnown`).
+- **JEV policy (`JevPolicy`)** — validated local policy JSON (`~/.omp/agent/jev-policy.json`) storing version 2 metadata: `version: 2`, `enabled: true`, `expiresAt`, `catalogFingerprint`, `baselineModel`, `decisionModel`, `fingerprint`, `reportSha256`, and `decisionSnapshots`.
+- **JEV core (`JevCore`)** — underlying runtime contract interface providing `loadSkillCatalog`, `readCredential`, `screenTask`, `decide`, `readPolicy`, and `appendEvent`.
+- **JEV extension options (`JevExtensionOptions`)** — configuration object for the native OMP extension factory `createJevExtension(options)` accepting `core`, `home`, and `cwd`.
+- **JEV evaluation** — paired reproducible evaluation comparing a pinned baseline chat model and JEV candidate classifier over separate canonical calibration (14 cases) and held-out RU/EN cases (44 cases), accounting for actual token usage, latencies, provider errors, and receipts.
 - **Policy fingerprint** — deterministic SHA-256 hash derived from catalog fingerprint, baseline model, and decision model version; invalidates outdated assistance automatically.
 ## Flagged
 
