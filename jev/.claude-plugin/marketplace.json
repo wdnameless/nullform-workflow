@@ -1,0 +1,14 @@
+{
+  "name": "nick-vels",
+  "description": "Плагины Nick Vels для Claude Code",
+  "owner": {
+    "name": "Nick Vels"
+  },
+  "plugins": [
+    {
+      "name": "jev",
+      "source": "./plugins/jev",
+      "description": "Jev в Claude Code: роутер моделей через субагентов, подсказка скилла, массовые решения по данным"
+    }
+  ]
+}

@@ -20,3 +20,13 @@ archmap-demo/
 Microsoft/
 data/
 backups/
+.deepwork/
+.tmp/
+jev-policy.json
+jev-evaluation.json
+.jev-optout
+jev-optout
+*.cassette.json
+jev-events.jsonl
+.env
+.claude/jev/
