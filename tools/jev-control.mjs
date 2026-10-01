@@ -2,6 +2,7 @@
 /**
  * tools/jev-control.mjs
  * Local control and policy management CLI for JEV automatic assistance (R06).
+ * Skills-only v2: status, enable, disable.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -60,22 +61,29 @@ function handleStatus({ home, root, policyFile, targetReportFile }) {
     };
   }
 
+  if (rawPolicy.version !== 2) {
+    return {
+      success: true,
+      message: "JEV policy is obsolete or unsupported (v1 routing policy rejected).",
+      policy: rawPolicy,
+      status: { state: "invalid", enabled: false, verified: false, version: rawPolicy.version },
+    };
+  }
+
   const verifiedPolicy = readPolicy({ home, cwd: root });
   const reportExists = existsSync(targetReportFile);
 
   return {
     success: true,
     message: verifiedPolicy
-      ? `JEV assistance is active and verified (${verifiedPolicy.skillPassed ? "skills" : ""}${verifiedPolicy.routingPassed ? " routing" : ""}).`
+      ? "JEV assistance is active and verified (skills-only)."
       : "JEV policy exists but is inactive, expired, or invalid against local report proof.",
     policy: rawPolicy,
     status: {
       state: verifiedPolicy ? "active" : rawPolicy.enabled ? "invalid" : "disabled",
       enabled: Boolean(rawPolicy.enabled),
       verified: Boolean(verifiedPolicy),
-      skillPassed: Boolean(rawPolicy.skillPassed),
-      routingPassed: Boolean(rawPolicy.routingPassed),
-      archetypes: rawPolicy.archetypes || [],
+      skillPassed: Boolean(verifiedPolicy?.skillPassed),
       expiresAt: rawPolicy.expiresAt,
       reportPresent: reportExists,
     },
@@ -161,6 +169,13 @@ function handleEnable({
     return { success: false, message: "Failed to read or parse evaluation report JSON." };
   }
 
+  if (report.version !== 2) {
+    return {
+      success: false,
+      message: "Activation rejected: report is not v2 (historical v1 routing reports cannot activate v2).",
+    };
+  }
+
   const datasetContext = loadEvaluationDatasetContext({ root });
   if (!datasetContext) {
     return {
@@ -170,11 +185,11 @@ function handleEnable({
   }
 
   const hurdles = evaluateReport(report, { datasetContext });
-  if (!hurdles.skillPassed && !hurdles.routingPassed) {
+  if (!hurdles.skillPassed) {
     return {
       success: false,
       message:
-        "Activation rejected: evaluation report hurdles failed (no passing capabilities meeting quality and cost requirements).",
+        "Activation rejected: evaluation report hurdles failed (skill selection precision/coverage/cost requirements not met).",
       hurdles,
     };
   }
@@ -196,39 +211,33 @@ function handleEnable({
   const reportSha = sha256(reportRaw);
   const fp = policyFingerprint({
     catalogFingerprint: targetCatalogFp,
-    candidateModel: report.candidateModel,
     baselineModel: report.baselineModel,
     decisionModel: report.decisionModel || "typesafe/jev-1.13",
   });
 
   const expiresAt = new Date(Date.now() + DEFAULT_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const policyV1 = {
-    version: 1,
+  const policyV2 = {
+    version: 2,
     enabled: true,
     expiresAt,
     catalogFingerprint: targetCatalogFp,
-    candidateModel: report.candidateModel,
     baselineModel: report.baselineModel,
     decisionModel: report.decisionModel || "typesafe/jev-1.13",
     fingerprint: fp,
-    skillPassed: hurdles.skillPassed,
-    routingPassed: hurdles.routingPassed,
     reportSha256: reportSha,
-    archetypes: hurdles.archetypes,
     decisionSnapshots: Array.isArray(report.decisionSnapshots) ? report.decisionSnapshots : [],
-    modelPrices: report.modelPrices || undefined,
   };
 
   mkdirSync(policyDir, { recursive: true });
   if (resolve(effectiveReportPath) !== resolve(targetReportFile)) {
     writeFileSync(targetReportFile, reportRaw, "utf8");
   }
-  writeFileSync(policyFile, JSON.stringify(policyV1, null, 2), "utf8");
+  writeFileSync(policyFile, JSON.stringify(policyV2, null, 2), "utf8");
 
   return {
     success: true,
-    message: `JEV automatic assistance enabled successfully (skills: ${hurdles.skillPassed ? "YES" : "NO"}, routing: ${hurdles.routingPassed ? "YES" : "NO"}).`,
-    policy: policyV1,
+    message: "JEV automatic assistance enabled successfully (skills-only).",
+    policy: policyV2,
     hurdles,
   };
 }

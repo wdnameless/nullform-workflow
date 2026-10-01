@@ -1,6 +1,7 @@
 /**
  * tools/tests/jev-evaluate.test.mjs
  * Behavioral and contract tests for JEV paired empirical evaluation runner (R05).
+ * Skills-only v2: baseline chat vs JEV typed classifier.
  */
 
 import test from "node:test";
@@ -19,13 +20,14 @@ import { fileURLToPath } from "node:url";
 import {
   parseEvalArgs,
   runEvaluation,
+  buildReportV2,
 } from "../jev-evaluate.mjs";
 import {
   OPENROUTER_FALLBACK_RATES,
   estimateCallCost,
   executeChatCall,
+  executeSkillCase,
 } from "../jev-evaluation-cases.mjs";
-import { checkOutcomeMatch } from "../jev-evidence.mjs";
 import { loadSkillCatalog } from "../jev-assist.mjs";
 
 const FIXTURES_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "fixtures", "jev");
@@ -84,32 +86,6 @@ test("heldout.json contains >=40 independently constructed RU/EN cases with safe
   assert.ok(noSkillCount >= 6, `expected >=6 non-safety no-skill cases, got ${noSkillCount}`);
 });
 
-test("outcomes.json contains >=8 cases covering all 4 declared leaf archetypes", () => {
-  const filePath = join(FIXTURES_DIR, "outcomes.json");
-  assert.ok(existsSync(filePath), "outcomes.json must exist");
-  const data = JSON.parse(readFileSync(filePath, "utf8"));
-  assert.ok(Array.isArray(data), "outcomes must be an array");
-  assert.ok(data.length >= 8, `expected >=8 outcome cases, got ${data.length}`);
-
-  const requiredArchetypes = new Set(["lookup", "json-transform", "formatting", "text-normalization"]);
-  const seenArchetypes = new Set();
-
-  for (const c of data) {
-    assert.ok(c.id && typeof c.id === "string");
-    assert.ok(c.archetype && typeof c.archetype === "string");
-    assert.ok(c.prompt && typeof c.prompt === "string");
-    if (!c.isSafetyCanary) {
-      assert.ok(c.expected !== undefined, "non-safety outcomes must have expected output");
-      assert.ok(["json", "text"].includes(c.expectedType), "expectedType must be json or text");
-    }
-    seenArchetypes.add(c.archetype);
-  }
-
-  for (const arch of requiredArchetypes) {
-    assert.ok(seenArchetypes.has(arch), `missing required archetype ${arch} in outcomes`);
-  }
-});
-
 test("zero overlap between calibration prompts and heldout prompts", () => {
   const calib = JSON.parse(readFileSync(join(FIXTURES_DIR, "calibration.json"), "utf8"));
   const heldout = JSON.parse(readFileSync(join(FIXTURES_DIR, "heldout.json"), "utf8"));
@@ -124,8 +100,8 @@ test("zero overlap between calibration prompts and heldout prompts", () => {
 test("OPENROUTER_FALLBACK_RATES matches parent observed catalog prices", () => {
   assert.strictEqual(OPENROUTER_FALLBACK_RATES["google/gemini-3.8-flash"].prompt, 0.00000075);
   assert.strictEqual(OPENROUTER_FALLBACK_RATES["google/gemini-3.8-flash"].completion, 0.00000375);
-  assert.strictEqual(OPENROUTER_FALLBACK_RATES["google/gemini-3.1-flash-lite"].prompt, 0.00000025);
-  assert.strictEqual(OPENROUTER_FALLBACK_RATES["google/gemini-3.1-flash-lite"].completion, 0.0000015);
+  assert.strictEqual(OPENROUTER_FALLBACK_RATES["typesafe/jev-1.13"].prompt, 0.000000042);
+  assert.strictEqual(OPENROUTER_FALLBACK_RATES["typesafe/jev-1.13"].completion, 0.000000042);
 });
 
 test("estimateCallCost accounts for promptBytes, max_tokens, and never defaults to 0", () => {
@@ -208,14 +184,82 @@ test("executeChatCall passes valid response and measured cost", async () => {
   assert.strictEqual(res.costUsd, 0.00012);
 });
 
-test("checkOutcomeMatch validates JSON and normalized text strictly", () => {
-  const jsonExpected = { code: 404, text: "Not Found" };
-  assert.strictEqual(checkOutcomeMatch('{"code": 404, "text": "Not Found"}', jsonExpected, "json"), true);
-  assert.strictEqual(checkOutcomeMatch('```json\n{"code": 404, "text": "Not Found"}\n```', jsonExpected, "json"), true);
-  assert.strictEqual(checkOutcomeMatch('{"code": 500, "text": "Error"}', jsonExpected, "json"), false);
+test("executeSkillCase distinguishes high-confidence none attempt from low-confidence abstention", async () => {
+  const catalog = {
+    fingerprint: "test-fp",
+    skills: [{ name: "better-ui", description: "UI polish" }],
+  };
 
-  assert.strictEqual(checkOutcomeMatch("  hello-world-2026-release  \n", "hello-world-2026-release", "text"), true);
-  assert.strictEqual(checkOutcomeMatch("wrong-slug", "hello-world-2026-release", "text"), false);
+  // 1. High-confidence "none" (attempted decision)
+  const mockFetchHighNone = async (url) => {
+    if (String(url).includes("/decisions")) {
+      return {
+        ok: true,
+        json: async () => ({
+          model: "typesafe/jev-1.13",
+          answers: { skill: { choice: "none", confidence: 0.92 } },
+          usage: { input_tokens: 50, output_tokens: 10, cost: 0.000005 },
+        }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "none" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 50, completion_tokens: 10, cost: 0.00002 },
+      }),
+    };
+  };
+
+  const highRes = await executeSkillCase({
+    c: { id: "test-1", prompt: "general question", expectedSkills: [] },
+    idx: 0,
+    options: { baseline: "google/gemini-3.8-flash", decisionModel: "typesafe/jev-1.13", maxCostUsd: 1.0, interleave: false },
+    apiKey: "test-key",
+    catalog,
+    fetchImpl: mockFetchHighNone,
+    catalogSkillsList: "- better-ui: UI polish",
+    measuredSpend: 0,
+    unknownSpend: 0,
+  });
+
+  assert.strictEqual(highRes.caseRecord.candidateAttempted, true, "confidence >= 0.80 none counts as attempted");
+  assert.strictEqual(highRes.caseRecord.candidateCorrect, true, "correctly decided none");
+
+  // 2. Low-confidence abstention (confidence < 0.80)
+  const mockFetchLow = async (url) => {
+    if (String(url).includes("/decisions")) {
+      return {
+        ok: true,
+        json: async () => ({
+          model: "typesafe/jev-1.13",
+          answers: { skill: { choice: "better-ui", confidence: 0.65 } },
+          usage: { input_tokens: 50, output_tokens: 10, cost: 0.000005 },
+        }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "better-ui" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 50, completion_tokens: 10, cost: 0.00002 },
+      }),
+    };
+  };
+
+  const lowRes = await executeSkillCase({
+    c: { id: "test-2", prompt: "polish button", expectedSkills: ["better-ui"] },
+    idx: 1,
+    options: { baseline: "google/gemini-3.8-flash", decisionModel: "typesafe/jev-1.13", maxCostUsd: 1.0, interleave: false },
+    apiKey: "test-key",
+    catalog,
+    fetchImpl: mockFetchLow,
+    catalogSkillsList: "- better-ui: UI polish",
+    measuredSpend: 0,
+    unknownSpend: 0,
+  });
+
+  assert.strictEqual(lowRes.caseRecord.candidateAttempted, false, "confidence < 0.80 must count as abstention");
 });
 
 test("runEvaluation accepts --catalog snapshot metadata without reading bodies", async () => {
@@ -248,22 +292,11 @@ test("runEvaluation accepts --catalog snapshot metadata without reading bodies",
 function createMockEvaluationFetch({ maxCallsBeforeFail = Infinity } = {}) {
   let callCount = 0;
   return async (url, options = {}) => {
-    const urlStr = String(url);
-    if (urlStr.includes("/models")) {
-      return {
-        ok: true,
-        json: async () => ({
-          data: [
-            { id: "google/gemini-3.8-flash", pricing: { prompt: "0.00000075", completion: "0.00000375" } },
-            { id: "google/gemini-3.1-flash-lite", pricing: { prompt: "0.00000025", completion: "0.0000015" } },
-          ],
-        }),
-      };
-    }
     callCount++;
     if (callCount > maxCallsBeforeFail) {
       throw new Error("Simulated network explosion mid-flight");
     }
+    const urlStr = String(url);
     if (urlStr.includes("/decisions")) {
       let reqBody = {};
       try {
@@ -278,8 +311,6 @@ function createMockEvaluationFetch({ maxCallsBeforeFail = Infinity } = {}) {
           model: "typesafe/jev-1.13-20260917",
           answers: {
             skill: { choice: skillChoice, confidence: 0.98 },
-            eligible: { noul: 0.96 },
-            archetype: { choice: "lookup", confidence: 0.95 },
           },
           usage: { input_tokens: 100, output_tokens: 20, cost: 0.00001 },
         }),
@@ -295,7 +326,7 @@ function createMockEvaluationFetch({ maxCallsBeforeFail = Infinity } = {}) {
   };
 }
 
-test("runEvaluation executes deterministic offline run with injected fetchImpl covering full outcomes flow", async () => {
+test("runEvaluation executes deterministic offline run with injected fetchImpl covering full skills-only flow", async () => {
   const tmpHome = mkdtempSync(join(tmpdir(), "jev-eval-offline-"));
   try {
     const catalogPath = join(tmpHome, "catalog-snapshot.json");
@@ -327,25 +358,20 @@ test("runEvaluation executes deterministic offline run with injected fetchImpl c
     assert.ok(existsSync(outputPath), "checkpoint/report file must be written");
 
     const savedReport = JSON.parse(readFileSync(outputPath, "utf8"));
+    assert.strictEqual(savedReport.version, 2, "report must be version 2");
     assert.strictEqual(savedReport.skills.cases.length, 58, "must collect exact full 58 skill cases");
     assert.strictEqual(savedReport.skills.total, 58);
-    assert.strictEqual(savedReport.routing.cases.length, 10, "must collect exact full 10 outcome cases");
-    assert.strictEqual(savedReport.routing.total, 10);
+    assert.strictEqual(savedReport.routing, undefined, "routing field must not exist in v2");
+    assert.strictEqual(savedReport.candidateModel, undefined, "candidateModel must not exist in v2");
+    assert.strictEqual(savedReport.modelPrices, undefined, "modelPrices must not exist in v2");
 
     const calibFixt = JSON.parse(readFileSync(join(FIXTURES_DIR, "calibration.json"), "utf8"));
     const heldFixt = JSON.parse(readFileSync(join(FIXTURES_DIR, "heldout.json"), "utf8"));
-    const outFixt = JSON.parse(readFileSync(join(FIXTURES_DIR, "outcomes.json"), "utf8"));
 
     const skillIds = new Set(savedReport.skills.cases.map((c) => c.id));
     assert.strictEqual(skillIds.size, 58);
     for (const c of [...calibFixt, ...heldFixt]) {
       assert.ok(skillIds.has(c.id), `missing skill case ID: ${c.id}`);
-    }
-
-    const routingIds = new Set(savedReport.routing.cases.map((c) => c.id));
-    assert.strictEqual(routingIds.size, 10);
-    for (const t of outFixt) {
-      assert.ok(routingIds.has(t.id), `missing outcome case ID: ${t.id}`);
     }
 
     assert.strictEqual(savedReport.errors, 0, "errors must be 0 on clean mocked run");
@@ -392,10 +418,10 @@ test("runEvaluation records provider network faults as errors and persists compl
 
     assert.ok(existsSync(outputPath), "checkpoint file must be written");
     const savedReport = JSON.parse(readFileSync(outputPath, "utf8"));
+    assert.strictEqual(savedReport.version, 2);
     assert.strictEqual(savedReport.completed, false);
     assert.ok(savedReport.errors >= 1);
     assert.strictEqual(savedReport.skills.cases.length, 58, "all 58 skill cases must be tracked");
-    assert.strictEqual(savedReport.routing.cases.length, 10, "all 10 outcome cases must be tracked");
 
     const failedCases = savedReport.skills.cases.filter((c) => c.error !== null);
     assert.ok(failedCases.length > 0, "failed cases must record transport errors");

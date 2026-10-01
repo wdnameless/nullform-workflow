@@ -1,18 +1,16 @@
 /**
  * tools/jev-evaluation-cases.mjs
- * Deep paid execution helpers for JEV paired empirical evaluation (R05).
+ * Paid case execution helpers for JEV paired empirical evaluation (R05).
+ * Skills-only: baseline chat model vs JEV typed classifier.
  */
 
 import { Buffer } from "node:buffer";
 import { screenTask, decide } from "./jev-assist.mjs";
-import { checkOutcomeMatch } from "./jev-evidence.mjs";
 
-export const LEAF_ARCHETYPES = new Set(["lookup", "json-transform", "formatting", "text-normalization"]);
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 export const OPENROUTER_FALLBACK_RATES = {
   "google/gemini-3.8-flash": { prompt: 0.00000075, completion: 0.00000375 },
-  "google/gemini-3.1-flash-lite": { prompt: 0.00000025, completion: 0.0000015 },
   "typesafe/jev-1.13": { prompt: 0.000000042, completion: 0.000000042 },
   default: { prompt: 0.00000075, completion: 0.00000375 },
 };
@@ -99,15 +97,16 @@ export async function executeChatCall({
   }
 }
 
-function buildScreenedSkillResult(c, safetyMiss, screened) {
+export function buildScreenedSkillResult(c, safetyMiss, screened) {
+  const exp = c.expectedSkills || (c.expectedSkill && c.expectedSkill !== "none" ? [c.expectedSkill] : []);
   return {
     caseRecord: {
       id: c.id,
       isSafety: true,
       safetyMiss,
       screened,
-      expectedSkills: c.expectedSkills || [],
-      expectedSkill: c.expectedSkills?.[0] || "none",
+      expectedSkills: exp,
+      expectedSkill: exp[0] || "none",
       baselineRequested: false,
       candidateRequested: false,
       baselineAttempted: false,
@@ -117,45 +116,9 @@ function buildScreenedSkillResult(c, safetyMiss, screened) {
       candidateAttempted: false,
       candidateSkill: null,
       candidateCorrect: false,
+      confidence: null,
       criticalMiss: safetyMiss,
       baselineCostUsd: 0,
-      candidateCostUsd: 0,
-      error: null,
-    },
-    measuredDelta: 0,
-    unknownDelta: 0,
-    errorsDelta: 0,
-    decisionModel: null,
-  };
-}
-
-function buildScreenedRoutingResult(t, safetyMiss, screened) {
-  return {
-    caseRecord: {
-      id: t.id,
-      archetype: t.archetype,
-      isSafety: true,
-      safetyMiss,
-      screened,
-      expected: t.expected,
-      expectedType: t.expectedType,
-      baselineRequested: false,
-      decisionRequested: false,
-      candidateRequested: false,
-      recoveryRequested: false,
-      baselineAttempted: false,
-      baselineOutput: "",
-      baselineAccepted: false,
-      baselineCostUsd: 0,
-      jevStatus: null,
-      jevRoute: null,
-      jevArchetype: null,
-      candidatePrimaryAttempted: false,
-      candidatePrimaryOutput: null,
-      candidatePrimaryAccepted: false,
-      recoveryAttempted: false,
-      recoveryOutput: null,
-      recoveryAccepted: false,
       candidateCostUsd: 0,
       error: null,
     },
@@ -172,8 +135,8 @@ export async function executeSkillCase({
   options,
   apiKey,
   catalog,
-  ratesTable,
-  fetchImpl,
+  ratesTable = OPENROUTER_FALLBACK_RATES,
+  fetchImpl = fetch,
   catalogSkillsList,
   measuredSpend,
   unknownSpend,
@@ -248,10 +211,12 @@ export async function executeSkillCase({
     const match = catalog.skills.find((s) => new RegExp(`\\b${s.name}\\b`, "i").test(bRes.content));
     if (match) bSkill = match.name;
   }
-  const expected = c.expectedSkills || [];
+  const expected = Array.isArray(c.expectedSkills) ? c.expectedSkills : (c.expectedSkill && c.expectedSkill !== "none" ? [c.expectedSkill] : []);
   const bCorrect = expected.length === 0 ? bSkill === "none" : expected.includes(bSkill);
-  const cAttempted = cRes.status === "ok" && typeof cRes.skillConfidence === "number" && cRes.skillConfidence >= 0.8;
-  const cSkill = cRes.skill || "none";
+
+  const confidence = typeof cRes.confidence === "number" ? cRes.confidence : (typeof cRes.skillConfidence === "number" ? cRes.skillConfidence : null);
+  const cAttempted = cRes.status === "ok" && typeof confidence === "number" && confidence >= 0.8;
+  const cSkill = (cRes.skill && cRes.skill !== "none") ? cRes.skill : "none";
   const cCorrect = expected.length === 0 ? cSkill === "none" : expected.includes(cSkill);
   const isCritical = Boolean(c.isCritical && !cCorrect);
 
@@ -273,6 +238,7 @@ export async function executeSkillCase({
       candidateAttempted: cAttempted,
       candidateSkill: cSkill,
       candidateCorrect: cCorrect,
+      confidence,
       candidateCostUsd: cCost,
       criticalMiss: isCritical,
       error: bRes.error || (cRes.status !== "ok" ? cRes.reason : null),
@@ -281,153 +247,5 @@ export async function executeSkillCase({
     unknownDelta,
     errorsDelta,
     decisionModel: cRes.model || null,
-  };
-}
-
-export async function executeRoutingCase({
-  t,
-  idx,
-  options,
-  apiKey,
-  ratesTable,
-  fetchImpl,
-  measuredSpend,
-  unknownSpend,
-}) {
-  const screen = screenTask(t.prompt);
-  if (t.isSafetyCanary || !screen.allowed) {
-    return buildScreenedRoutingResult(t, Boolean(t.isSafetyCanary && screen.allowed), !screen.allowed);
-  }
-
-  const outcomeMessages = [{ role: "user", content: t.prompt }];
-  const bReserve = estimateCallCost({
-    model: options.baseline,
-    promptBytes: Buffer.byteLength(JSON.stringify(outcomeMessages), "utf8"),
-    maxTokens: 1024,
-    ratesTable,
-  });
-  const jevReserve = estimateCallCost({
-    model: options.decisionModel,
-    promptBytes: Buffer.byteLength(JSON.stringify({ task: t.prompt, skills: [] }), "utf8"),
-    maxTokens: 256,
-    ratesTable,
-  });
-  const cReserve = estimateCallCost({
-    model: options.candidate,
-    promptBytes: Buffer.byteLength(JSON.stringify(outcomeMessages), "utf8"),
-    maxTokens: 1024,
-    ratesTable,
-  });
-
-  if (measuredSpend + unknownSpend + bReserve + jevReserve + cReserve > options.maxCostUsd) {
-    throw new Error(`Evaluation aborted: pre-call reserve would exceed hard spend cap ($${options.maxCostUsd})`);
-  }
-
-  let measuredDelta = 0;
-  let unknownDelta = 0;
-  let errorsDelta = 0;
-
-  const bCall = await executeChatCall({ apiKey, model: options.baseline, messages: outcomeMessages, maxTokens: 1024, ratesTable, fetchImpl });
-  let bCost = 0;
-  if (!bCall.ok || bCall.costUsd === null) {
-    errorsDelta++;
-    unknownDelta += bReserve;
-  } else {
-    bCost = bCall.costUsd;
-    measuredDelta += bCost;
-  }
-  const bAccepted = bCall.ok && checkOutcomeMatch(bCall.content, t.expected, t.expectedType);
-
-  const jevDecide = await decide({ task: t.prompt, skills: [], apiKey, model: options.decisionModel, fetchImpl });
-  let jevCost = 0;
-  const rawJevCost = jevDecide.usage?.costUsd;
-  const jevCostKnown = Boolean(jevDecide.usage?.costKnown);
-  if (jevDecide.status === "fallback") errorsDelta++;
-  if (!jevCostKnown || rawJevCost === undefined || rawJevCost === null || !Number.isFinite(Number(rawJevCost))) {
-    if (jevDecide.status !== "fallback") errorsDelta++;
-    unknownDelta += jevReserve;
-  } else {
-    jevCost = Math.max(0, Number(rawJevCost));
-    measuredDelta += jevCost;
-  }
-
-  const isCheapEligible = jevDecide.status === "ok" &&
-    jevDecide.route === "cheap" &&
-    LEAF_ARCHETYPES.has(jevDecide.archetype) &&
-    (jevDecide.eligibleScore === undefined || jevDecide.eligibleScore >= 0.7);
-
-  let candidatePrimaryAttempted = false;
-  let candidatePrimaryOutput = null;
-  let candidatePrimaryAccepted = false;
-  let recoveryAttempted = false;
-  let recoveryOutput = null;
-  let recoveryAccepted = false;
-  let cheapCost = 0;
-  let fallbackCost = 0;
-
-  const runRecovery = async () => {
-    const fCall = await executeChatCall({ apiKey, model: options.baseline, messages: outcomeMessages, maxTokens: 1024, ratesTable, fetchImpl });
-    recoveryAttempted = true;
-    recoveryOutput = fCall.content || "";
-    if (!fCall.ok || fCall.costUsd === null) {
-      errorsDelta++;
-      unknownDelta += bReserve;
-    } else {
-      fallbackCost = fCall.costUsd;
-      measuredDelta += fallbackCost;
-    }
-    recoveryAccepted = fCall.ok && checkOutcomeMatch(fCall.content, t.expected, t.expectedType);
-  };
-
-  if (isCheapEligible) {
-    const cCall = await executeChatCall({ apiKey, model: options.candidate, messages: outcomeMessages, maxTokens: 1024, ratesTable, fetchImpl });
-    candidatePrimaryAttempted = true;
-    candidatePrimaryOutput = cCall.content || "";
-    if (!cCall.ok || cCall.costUsd === null) {
-      errorsDelta++;
-      unknownDelta += cReserve;
-    } else {
-      cheapCost = cCall.costUsd;
-      measuredDelta += cheapCost;
-    }
-    candidatePrimaryAccepted = cCall.ok && checkOutcomeMatch(cCall.content, t.expected, t.expectedType);
-    if (!candidatePrimaryAccepted) await runRecovery();
-  } else {
-    await runRecovery();
-  }
-
-  return {
-    caseRecord: {
-      id: t.id,
-      archetype: t.archetype,
-      isSafety: false,
-      safetyMiss: false,
-      screened: false,
-      expected: t.expected,
-      expectedType: t.expectedType,
-      baselineRequested: true,
-      decisionRequested: true,
-      candidateRequested: isCheapEligible,
-      recoveryRequested: recoveryAttempted,
-      baselineAttempted: bCall.ok,
-      baselineOutput: bCall.content || "",
-      baselineAccepted: bAccepted,
-      baselineCostUsd: bCost,
-      jevStatus: jevDecide.status,
-      jevRoute: jevDecide.route,
-      jevArchetype: jevDecide.archetype,
-      candidatePrimaryAttempted,
-      candidatePrimaryOutput,
-      candidatePrimaryAccepted,
-      recoveryAttempted,
-      recoveryOutput,
-      recoveryAccepted,
-      candidateCostUsd: jevCost + cheapCost + fallbackCost,
-      error: bCall.error || null,
-    },
-    measuredDelta,
-    unknownDelta,
-    errorsDelta,
-    decisionModel: jevDecide.model || null,
   };
 }

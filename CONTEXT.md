@@ -180,15 +180,12 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Codemap state** — `.codemap/state.json`. Gitignored; scan config persists
   inside it so `changes`/`update` need no repeated flags.
 
-## JEV assistance and routing
+## JEV assistance
 
-- **JEV assistance** — automatic, native OMP turn assistance and bounded subagent model routing powered by OpenRouter Decisions (`typesafe/jev-1.13`), preserving canonical prompts, permissions, and Oracle gates.
-- **JEV evaluation** — paired reproducible evaluation comparing a pinned baseline chat model and candidate classifier over separate calibration, held-out RU/EN cases, and deterministic leaf-task outcomes, accounting for actual token usage, latencies, provider errors, and fallback costs.
-- **JEV policy** — validated local policy JSON (`~/.omp/agent/jev-policy.json`) storing SHA-256 fingerprint, catalog hash, model pair, expiry, and passed capability flags verified against an immutable evaluation report.
-- **Policy fingerprint** — deterministic SHA-256 hash derived from catalog fingerprint, candidate model, baseline model, and decision model version; invalidates outdated routing automatically.
-- **Leaf archetype** — narrow, self-contained subagent task shapes evaluated for cheaper execution: `lookup`, `json-transform`, `formatting`, and `text-normalization`. Complex, multi-file, or high-risk tasks are ineligible.
-- **Assisted recovery** — fallback execution where a primary cheap attempt failed and baseline model was invoked to complete the task; reported separately with full fallback costs and never counted as primary cheap success.
-
+- **JEV assistance** — automatic, native OMP turn assistance with bounded skill prompt suggestions powered by OpenRouter Decisions (`typesafe/jev-1.13`), preserving canonical prompts, permissions, models, and Oracle gates. Model routing was evaluated and dropped after negative experimental evidence showed higher costs and insufficient primary acceptance; release scope is skills-only.
+- **JEV evaluation** — paired reproducible evaluation comparing a pinned baseline chat model and JEV candidate classifier over separate canonical calibration and held-out RU/EN cases, accounting for actual token usage, latencies, provider errors, and receipts.
+- **JEV policy** — validated local policy JSON (`~/.omp/agent/jev-policy.json`) storing version 2 metadata: SHA-256 fingerprint, catalog fingerprint, baseline model, decision model, expiry, report SHA-256, and decision snapshots verified against an immutable evaluation report.
+- **Policy fingerprint** — deterministic SHA-256 hash derived from catalog fingerprint, baseline model, and decision model version; invalidates outdated assistance automatically.
 ## Flagged
 
 Terms with real but non-blocking ambiguity, recorded so they are not re-derived:
