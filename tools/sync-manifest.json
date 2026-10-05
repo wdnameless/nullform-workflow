@@ -52,6 +52,9 @@
     "rel": "tools/prompt-lint.mjs"
   },
   {
+    "rel": "tools/skill-audit.mjs"
+  },
+  {
     "rel": "tools/skills-doctor.mjs"
   },
   {
