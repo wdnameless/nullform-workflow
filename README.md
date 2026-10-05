@@ -43,8 +43,8 @@ node tools/workflow.mjs close
 |---|---|---|
 | **T0** | 1–2 known files, trivial local fix | Declared tier (`start --tier T0` → `close`); supports guarded `--auto` (`--max-diff <= 20`) |
 | **T1** | 3+ files or unfamiliar area | Reconnaissance (`recon` artifact) before edits + verification before `close` |
-| **T2** | Architecture change or new module | 4-Wave SDD: `manifest.md` (`R##`), OpenSpec `proposal/tasks/specs`, `interfaces.md`, blind `oracle` ACCEPT |
-| **T3** | Multi-feature program or cross-cutting epic | Full T2 contract and blind Oracle acceptance per vertical slice |
+| **T2** | Architecture change or new module | 4-Wave SDD: `manifest.md` (`R##`), OpenSpec `proposal/tasks/specs`, `interfaces.md`, `reviewer` patch/consumer review, Stage-B simplification disposition, blind `oracle` ACCEPT backed by recorded execution evidence (`review-evidence.json`) |
+| **T3** | Multi-feature program or cross-cutting epic | Full T2 contract and blind Oracle acceptance per vertical slice with recorded execution evidence |
 
 ### JEV: automatic skill hints, not model routing
 
@@ -110,7 +110,9 @@ Three habits borrowed from Matt Pocock's Skills v1.3 video ([transcript](https:/
   - `node tools/sync.mjs --check | --promote | --deploy | --prune` (wrapper scripts: `tools/sync.sh`, `tools/sync.ps1`)
   - `node tools/code-size.mjs check` · `node tools/debt-ledger.mjs scan --check` · `node tools/prompt-lint.mjs sizes --check`
   - `node tools/test-lens.mjs` · `node tools/benchmark.mjs` · `node tools/usage-audit.mjs` · `node tools/auto-review.mjs --root .`
+  - `node tools/workflow.mjs review-run --role <reviewer|oracle> --change <id> --model <provider/model> --base-ref <review-base> [--product-command JSON_ARGV] [--redo]` (oracle requires the product command) · `node tools/workflow.mjs stage-b --change <id> --phase before --test-cmd "<cmd>"`, then `--phase after --test-cmd "<same-cmd>" --disposition <lean-already|simplified>`
   - CI template: [`templates/ci/workflow-gate.yml`](templates/ci/workflow-gate.yml) · Unit tests: `node --test tools/tests/*.test.mjs`
+  - Bounded fresh skill comparisons: `node tools/run-skill-benefit-eval.mjs --dry-run --root .` (real SDK setup, no API), then `--yes --ceiling 1`; see [`bench/README.md`](bench/README.md) for native caps, retained scores and fixed-tariff accounting limits.
 
 ---
 
@@ -147,8 +149,8 @@ node tools/workflow.mjs close
 |---|---|---|
 | **T0** | 1–2 известных файла, локальная правка | Объявленный ярус (`start --tier T0` → `close`); доступен защищённый `--auto` (`--max-diff <= 20`) |
 | **T1** | 3+ файлов или незнакомая область | Рекогносцировка (`recon`) до правок и верификация перед `close` |
-| **T2** | Архитектура или новый модуль | 4-Wave SDD: `manifest.md` (`R##`), OpenSpec `proposal/tasks/specs`, `interfaces.md`, слепая приёмка `oracle` (ACCEPT) |
-| **T3** | Программа из нескольких фич | Полный цикл T2 и слепая приёмка Оракула на каждый вертикальный срез |
+| **T2** | Архитектура или новый модуль | 4-Wave SDD: `manifest.md` (`R##`), OpenSpec `proposal/tasks/specs`, `interfaces.md`, ревью патча `reviewer`, фиксация Stage-B и слепая приёмка `oracle` (ACCEPT) с подтверждённым выполнением (`review-evidence.json`) |
+| **T3** | Программа из нескольких фич | Полный цикл T2, отдельное ревью и слепая приёмка Оракула на каждый вертикальный срез с записью выполнения |
 
 ### JEV: автоматический подбор навыков, без переключения моделей
 
@@ -202,6 +204,7 @@ node tools/jev-control.mjs disable
 - **JEV-ассистент и оценка пользы**: [`docs/jev.md`](docs/jev.md) — skills-only реализация, канонический парный бенчмарк, политика активации и CLI; результаты и ограничения приведены выше.
 - **Законы агентов и шаблоны CI**: [`agent/AGENTS.md`](agent/AGENTS.md) · [`agent/agents/orchestrator.md`](agent/agents/orchestrator.md) · [`templates/ci/workflow-gate.yml`](templates/ci/workflow-gate.yml).
 - **Проверка и сопровождение**: `node tools/verify.mjs --profile verify` (29 проверок) · `node tools/verify.mjs --profile audit` (15 проверок) · `node --test tools/tests/*.test.mjs`.
+  - `node tools/workflow.mjs review-run --role <reviewer|oracle> --change <id> --model <provider/model> --base-ref <review-base> [--product-command JSON_ARGV] [--redo]` (oracle требует команду продукта) · `node tools/workflow.mjs stage-b --change <id> --phase before --test-cmd "<cmd>"`, затем `--phase after --test-cmd "<same-cmd>" --disposition <lean-already|simplified>`
 
 ### Привычки workflow (evidence-PR, session-retro, граф задач)
 

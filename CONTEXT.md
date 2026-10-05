@@ -52,6 +52,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Gate** — a mandatory checkpoint (G1–G4). A failed gate sends the phase back.
 - **Blind acceptance** — Wave 4. The oracle judges the product against the
   manifest and the running artifact, never against our own spec.
+- **Implementation review** — Wave 3.5 code and patch review performed by the `reviewer` role using the patch diff, changed files, and consuming-side dispatch points. Emits concrete defect findings and a tagged delete-list for Stage B.
+- **Review execution evidence** — `review-evidence.json`. Mandatory for heavy (T2) and program (T3) workflows. Binds retained native OMP events and the final assistant report (`review-run`) to exact provider/model, session identity, nonzero known-tariff usage, manifest/role hashes and current source bytes; links reviewer A → frozen-test Stage-B A/B → blind oracle B. Reviewer recorded mode returns complete typed JSON; oracle returns per-requirement runtime evidence and an explicit terminal verdict.
 - **Oracle** — the read-only acceptance role. See *Roles*.
 - **Double acceptance** — the Wave 4 rule when the resolved oracle model is flash-class (name matches `*flash*` or is the configured fallback): two independent oracle passes, reconciled. ACCEPT requires the two to agree; either `REJECT` forces a fix round, then a fresh pair.
 - **Oracle-lite** — a single-pass Wave 4 acceptance permitted only for a small slice (≤2 files, ≤~80 diff lines), under the same evidence protocol as a full oracle pass. Anything larger goes through double acceptance.
@@ -85,6 +87,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
   `sonic`).
 - **Read-only role** — a specialist that never edits (`explorer`, `librarian`,
   `reviewer`, `oracle`; built-in `scout`).
+- **Reviewer** — the read-only implementation review specialist. Inspects diffs and consuming-side dispatch points, evaluating correctness, security, cross-boundary routing, and simplest solution (Ponytail/Lean delete-list for Stage B). Distinct from `oracle`.
+- **Oracle role** — the read-only acceptance specialist. Judges completed work in Wave 4 blind to plans and specs, evaluating strictly the requirements manifest (`manifest.md`) and running product/runtime. Distinct from `reviewer`.
 - **Fleet** — the set of specialists dispatched for a task.
 - **Spawn** — creating a specialist run (`task()`). Distinct from **reuse**, which
   continues an existing specialist session that already holds relevant context.
@@ -121,6 +125,7 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Arm** — a named variant or configuration of an agent workflow being evaluated (e.g. `raw-model` vs `omp-workflow`), defined by a runner command template executed inside a fresh local git clone.
 - **Stage B** — the simplifying second phase in the A→B→A delivery rhythm. After meeting specifications and passing tests in Stage A, the agent executes an explicit compression and deduplication pass, preserving test invariance while achieving neutral or negative net lines of code (`net: -N lines`).
 
+- **Skill benefit evaluation** — reproducible, controlled comparison of workflow and review skills using isolated baseline (no skill) and candidate (target skill) sessions with identical real task inputs, measuring actual defect detection, false positives, task satisfaction, duration, and token usage within a hard $1 cost ceiling.
 ## Tooling
 
 - **Codemap** — `CODEMAP.md` per folder plus `.codemap/state.json` (hashes), built
@@ -168,6 +173,15 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Return contract** — `tools/return-contract.mjs`. Validates subagent return contracts against format constraints (≤25 lines, valid status, required sections, numeric test counts).
 - **Session cost** — `tools/session_cost.py`. Aggregates token usage and estimated costs from session transcripts per provider, model, agent, and UTC day.
 - **Sync prune** — `tools/sync-prune.mjs`. Identifies harness-only orphan files absent from the repository manifest before cleanup (`sync.ps1 -Prune` / `doctor.mjs`).
+- **Review execution (`review-run`)** — `tools/workflow.mjs review-run --change ID --role reviewer|oracle --model PROVIDER/MODEL --base-ref BASE [--product-command JSON_ARGV] [--redo]`. Uses `tools/review-evidence.mjs` to record and validate retained native executions, not hand-supplied verdict strings.
+- **Skill audit module (`SkillStructure`)** — `tools/skill-audit.mjs`. Deep implementation module providing `auditSkills`, `extractSkillBody`, `auditSkillFile`, and `checkMarkdownReferences` for structural auditing of skill definitions, body line limits (<500 lines), direct markdown references, and navigation anchors.
+- **Skill structural audit** — `tools/prompt-lint.mjs skills [--check] [--json]`. Audits skill body length separately from discovery metadata budgets, verifies direct local markdown references and anchor navigation in long files (>100 lines), and flags JEV description-selection risks.
+- **Stage-B disposition (`stage-b`)** — captures reviewer-A fixed-test provenance using `--phase before --test-cmd COMMAND`, then records actual B using `--phase after --disposition simplified|lean-already --test-cmd SAME_COMMAND`; unchanged test bytes bind both phases.
+- **Skill benefit evaluation (`runSkillBenefitEval`)** — `tools/run-skill-benefit-eval.mjs`; fresh `baseline-noskill` / `candidate-skill` native sessions under equal constructed fixture inputs and one selected skill body.
+- **Request budget (`createRequestBudget`)** — `tools/bench-budget.mjs`; bounds native context/output and physical request count, durably reserves before every inference HTTP dispatch, settles native usage, and rejects unresolved retries or side calls.
+- **Spend ledger (`spend-ledger.json`)** — version-2 durable request reservations/settlements and cumulative one-USD ceiling in `bench/runs/`; outstanding reservations or `blocked_unknown_spend` prohibit further inference across restarts.
+- **SDK tariff (`computeTariffCost`)** — exact allowlisted installed-catalog pricing applied to strict nonnegative native token buckets; not independently confirmed provider billing.
+- **Terminal findings score (`scoreReview`)** — scores only the final normally stopped assistant's typed findings against known consumer defects and counts unmatched findings as false positives; injection adherence is not automatic skill discovery.
 
 ## Operations
 

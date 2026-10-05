@@ -5,70 +5,82 @@ description: Dispatch code review subagent to catch issues before they cascade. 
 
 # Requesting Code Review
 
-Dispatch code-reviewer subagent to catch issues before they cascade.
+Dispatch the `reviewer` subagent to catch implementation defects, integration drops, and unnecessary complexity before they cascade.
 
-Core principle: Review early, review often.
+Core principle: Review early, review often with diff and consumer context.
+
+## Role Separation: Reviewer vs Oracle
+
+- **`reviewer` (Implementation Review)**: Dispatched during development (Wave 3 / task completion) to inspect code patches, diffs, and consuming-side dispatch points. Evaluates concrete bugs, security issues, cross-boundary routing, and produces a tagged delete-list (`delete:`, `stdlib:`, `native:`, `yagni:`, `shrink:`) for Stage B simplification.
+- **`oracle` (Blind Acceptance)**: Reserved strictly for final acceptance (Wave 4). Operates blind to plans, proposals, and tickets; evaluates only the original requirements manifest (`manifest.md`) and the running product/runtime. Never dispatch `oracle` for patch code-review.
 
 ## When to Request Review
 
 **Mandatory:**
-- After each task in subagent-driven development
-- After completing major feature
-- Before merge to main
+- After each task in subagent-driven development (T2/T3 workflows)
+- Before Stage B simplification (reviewer delete-list is Stage B's input)
+- Before final blind oracle acceptance and merge
 
 **Optional but valuable:**
-- When stuck (fresh perspective)
+- When stuck (fresh perspective on edge cases)
 - Before refactoring (baseline check)
-- After fixing complex bug
+- After fixing complex bug (verifying consumer routing and regression tests)
 
 ## How to Request
 
-1. Get git SHAs:
+1. Identify patch range and consumer context:
 ```bash
-BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
+BASE_SHA=$(git rev-parse HEAD~1)  # or merge-base with target branch
 HEAD_SHA=$(git rev-parse HEAD)
+git diff "$BASE_SHA" "$HEAD_SHA"
 ```
 
-2. Dispatch code-reviewer subagent:
-Use Task tool with oracle subagent type, provide:
-- `{WHAT_WAS_IMPLEMENTED}` - What you just built
-- `{PLAN_OR_REQUIREMENTS}` - What it should do
-- `{BASE_SHA}` - Starting commit
-- `{HEAD_SHA}` - Ending commit
-- `{DESCRIPTION}` - Brief summary
+2. Dispatch `reviewer` subagent (use Task tool with `reviewer` role):
+Provide:
+- `{BASE_SHA}..{HEAD_SHA}` — commit range and patch diff
+- `{MODIFIED_FILES}` — paths of changed files
+- `{CONSUMER_CONTEXT}` — consuming-side dispatch points (routers, switches, handlers receiving new types/variants)
+- `{DESCRIPTION}` — what changed and why
+
+In heavy/program workflows, recorded native review execution is captured via:
+```bash
+node tools/workflow.mjs review-run --role reviewer --change <change-id> --model <provider/model> --base-ref <review-base>
+```
+The reviewed base is explicit; do not guess `HEAD~1` for recorded provenance. The recorded-run tools carry relevant source/patch/manifest; return one terminal assistant JSON object with `findings`, `overall_correctness` (`correct` or `incorrect`), `overall_explanation`, and `overall_confidence_score` (0–1), not incremental yield calls.
 
 3. Act on feedback:
-- Fix **Critical** issues immediately
-- Fix **Important** issues before proceeding
-- Note **Minor** issues for later
-- Push back if reviewer is wrong (with reasoning)
+- **P0 (Blocker) / P1 (High)**: fix immediately
+- **P2 (Medium)**: fix before completing the slice
+- **Lean delete-list**: feed into Stage B simplification (`net: -N lines possible` or `Lean already.`)
+- Push back if reviewer is factually wrong (with reproducible code/tests)
 
 ## Example
 
 ```
-[Just completed Task 2: Add verification function]
+[Just completed Task 2: Add conversation index verification]
 
-You: Let me request code review before proceeding.
+You: Let me dispatch the reviewer subagent to check the patch and consumer dispatch.
 
-BASE_SHA=$(git log --oneline | grep "Task 1" | head -1 | awk '{print $1}')
+BASE_SHA=$(git rev-parse HEAD~1)
 HEAD_SHA=$(git rev-parse HEAD)
 
-[Dispatch oracle subagent]
-  WHAT_WAS_IMPLEMENTED: Verification and repair functions for conversation index
-  PLAN_OR_REQUIREMENTS: Task 2 from docs/plans/deployment-plan.md
-  BASE_SHA: a7981ec
-  HEAD_SHA: 3df7661
+[Dispatch reviewer subagent]
+  DIFF: git diff a7981ec..3df7661
+  MODIFIED_FILES: src/index-verify.ts, src/index-repair.ts
+  CONSUMER_CONTEXT: src/cli-dispatch.ts (routes verification commands)
   DESCRIPTION: Added verifyIndex() and repairIndex() with 4 issue types
 
-[Subagent returns]:
-  Strengths: Clean architecture, real tests
-  Issues:
-    Important: Missing progress indicators
-    Minor: Magic number (100) for reporting interval
-  Assessment: Ready to proceed
+[Reviewer returns]:
+  Findings:
+    - [P1] src/cli-dispatch.ts: line 42 does not route repair action for corrupt-header error variant
+    - [P2] src/index-verify.ts: magic number 100 in progress reporting loop
+  Simplest solution (Lean lens):
+    - stdlib: replace custom string pad in src/index-verify.ts:18 with String.prototype.padStart
+    - net: -8 lines possible
+  Verdict: incorrect (P1 blocks completion)
 
-You: [Fix progress indicators]
-[Continue to Task 3]
+You: [Fix dispatch routing for corrupt-header, replace pad helper, verify tests]
+You: [Proceed to Stage B simplification using reviewer delete-list]
 ```
 ## PR Body (before requesting merge)
 
@@ -88,30 +100,16 @@ evidence protocol (`agent/agents/oracle.md` § EVIDENCE PROTOCOL).
   (public API, data shape) + the affected surfaces by name.
 - Reviewer checks the body: missing/stale evidence = review finding, not a nit.
 
-## Integration with Workflows
+## Operational Boundaries
 
-**Subagent-Driven Development:**
-- Review after EACH task
-- Catch issues before they compound
-- Fix before moving to next task
-
-**Executing Plans:**
-- Review after each batch (3 tasks)
-- Get feedback, apply, continue
-
-**Ad-Hoc Development:**
-- Review before merge
-- Review when stuck
+- **Auditable native provenance**: Review records verify native session execution, nonzero model usage, git revision binding, and manifest hash; they provide auditable execution receipts, not cryptographic attestation or sandbox isolation.
+- **Read-only role**: The reviewer inspects diffs and codebase files using read-only tools; it never applies edits or triggers destructive git actions.
 
 ## Red Flags
 
 **Never:**
-- Skip review because "it's simple"
-- Ignore Critical issues
-- Proceed with unfixed Important issues
-- Argue with valid technical feedback
+- Dispatch `oracle` with implementation plans or tickets (oracle must remain blind).
+- Skip review on heavy/program changes because "it looks simple".
+- Ignore P0/P1 findings or drop consuming-side routing checks.
+- Treat static acceptance markdown as proof of review without recorded native execution evidence.
 
-**If reviewer wrong:**
-- Push back with technical reasoning
-- Show code/tests that prove it works
-- Request clarification
