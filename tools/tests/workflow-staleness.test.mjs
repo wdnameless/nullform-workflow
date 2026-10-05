@@ -18,6 +18,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { cmdStart, cmdArtifact, cmdClose, load } from "../workflow.mjs";
 
+import { writeEvidence } from "./fixtures/review-execution.mjs";
 const _CLI = fileURLToPath(new URL("../workflow.mjs", import.meta.url));
 
 function git(root, args) {
@@ -52,6 +53,13 @@ function completeT2(root) {
   writeFileSync(join(pDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
   writeFileSync(join(pDir, "specs", "spec.md"), "# Spec\n", "utf8");
   writeFileSync(join(pDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
+  const agentDir = join(root, "agent", "agents");
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(join(agentDir, "reviewer.md"), "# Reviewer\n", "utf8");
+  writeFileSync(join(agentDir, "oracle.md"), "# Oracle\n", "utf8");
+  writeFileSync(join(pDir, "manifest.md"), "| R01 | \"user asked for X\" |\n", "utf8");
+
+  writeEvidence(root, pDir, "p");
   const steps = [
     ["recon", null, "recon done: mapped the tree and the acceptance criteria"],
     ["manifest", "m.md", "captured R01 verbatim from the brief"],
@@ -102,6 +110,7 @@ test("staleness: re-recording the oracle on the current tree allows an honest cl
     assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
     touchTracked(root);
     // Re-verify AFTER the edit: this is the honest path the gate pushes toward.
+    writeEvidence(root, join(root, "openspec", "changes", "p"), "p");
     sleepMs(1100);
     assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: re-verified against the current tree" }), 0);
 

@@ -19,6 +19,10 @@
  *   status                           what is done / still required
  *   close  [--force --reason "..."]  finish the task
  *          [--auto] [--diff-lines N] finish guarded auto task
+ *   review-run --change ID --role reviewer|oracle --model PROVIDER/MODEL --base-ref BASE
+ *          [--product-command JSON_ARGV] [--redo]  retained native execution (no prompt bypass)
+ *   stage-b --change ID --phase before|after --test-cmd COMMAND
+ *          [--disposition simplified|lean-already]  freeze Stage-A tests and execute on A/B
  *
  * TIER REQUIREMENTS (a tier requires everything the tiers below it require)
  *   T0  lane only            — trivial, 1-2 known files
@@ -34,6 +38,21 @@ import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, exi
 import { spawnSync, execFileSync } from "node:child_process";
 import { join, dirname, resolve, relative, isAbsolute, basename } from "node:path";
 import { createHash } from "node:crypto";
+import {
+  POSITIVE_VERDICT_RE,
+  NEGATIVE_VERDICT_RE,
+  isPositiveOracleVerdict,
+  isNegativeOracleVerdict,
+  isOracleEvidenceFilename,
+  isAcceptanceArtifactFilename,
+  validateOracleArtifact,
+  getPorcelainStatusRaw,
+  validateReviewEvidence,
+  runReviewRecord,
+  recordStageB,
+  isSupersededOracleArtifact,
+} from "./review-evidence.mjs";
+import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
 
 const DIR = ".workflow";
 const FILE = "state.json";
@@ -645,75 +664,6 @@ function printRemainingArtifacts(tier, st) {
 }
 
 
-function hashFile(fullPath) {
-  try {
-    const buf = readFileSync(fullPath);
-    return createHash("sha256").update(buf).digest("hex");
-  } catch {
-    return null;
-  }
-}
-
-function isPathInsideRoot(root, userPath) {
-  if (!userPath || typeof userPath !== "string") return false;
-  const absRoot = resolve(root);
-  const absTarget = resolve(root, userPath);
-  const rel = relative(absRoot, absTarget);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-}
-function isRealPathInsideRoot(root, userPath) {
-  if (!userPath || typeof userPath !== "string") return false;
-  if (!isPathInsideRoot(root, userPath)) return false;
-  const fullPath = resolve(root, userPath);
-  try {
-    const realRoot = realpathSync(root);
-    const realTarget = realpathSync(fullPath);
-    const rel = relative(realRoot, realTarget);
-    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-  } catch {
-    return false;
-  }
-}
-const GENERATED_DIRS = new Set([".tmp", ".archmap", ".codemap", ".opencode"]);
-function isStructuralExcludedPath(relPath) {
-  if (!relPath) return true;
-  const normalized = relPath.replace(/\\/g, "/");
-  const parts = normalized.split("/");
-  if (parts.some((part) => GENERATED_DIRS.has(part)) ||
-      parts[0] === "cache" || parts[0] === "logs") return true;
-
-  if (
-    normalized === DIR ||
-    normalized.startsWith(`${DIR}/`) ||
-    normalized === ".git" ||
-    normalized.startsWith(".git/") ||
-    normalized.includes("/.git/") ||
-    normalized === "node_modules" ||
-    normalized.startsWith("node_modules/") ||
-    normalized.includes("/node_modules/")
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function isSecretOrCredentialPath(relPath) {
-  if (!relPath) return false;
-  const normalized = relPath.replace(/\\/g, "/");
-  const base = normalized.split("/").pop();
-  return (
-    base === "models.yml" ||
-    base === "models.yaml" ||
-    base === "mcp.json" ||
-    base.startsWith(".env") ||
-    base.startsWith("secrets") ||
-    /credentials|\.secret|secrets\.|\.key$|\.pem$/i.test(base)
-  );
-}
-
-function isExcludedFromSnapshot(relPath) {
-  return isStructuralExcludedPath(relPath) || isSecretOrCredentialPath(relPath);
-}
 function findGitRoot(startDir) {
   let curr = resolve(startDir);
   while (true) {
@@ -740,96 +690,6 @@ function isInsideGitRepo(root) {
 }
 
 
-function scanWorktree(root) {
-  try {
-    let commitSha = null;
-    try {
-      commitSha = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 5000
-      }).trim();
-    } catch {}
-
-    const trackedOut = execFileSync("git", ["ls-files", "-z"], {
-      cwd: root,
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 10000,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    const untrackedOut = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
-      cwd: root,
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 10000,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    function collectFiles(output, isUntracked = false) {
-      const map = {};
-      for (const rel of output.split("\0")) {
-        if (!rel || isStructuralExcludedPath(rel)) continue;
-        if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
-        if (isSecretOrCredentialPath(rel)) {
-          if (!isUntracked) {
-            map[rel] = { hash: null, isSecret: true };
-          }
-          continue;
-        }
-        const full = join(root, rel);
-        const hash = hashFile(full);
-        if (hash !== null) {
-          try {
-            const s = statSync(full);
-            map[rel] = { hash, mtimeMs: s.mtimeMs, size: s.size };
-          } catch {}
-        }
-      }
-      return map;
-    }
-    const tracked = collectFiles(trackedOut, false);
-    const untracked = collectFiles(untrackedOut, true);
-    return { isGit: true, commitSha, tracked, untracked };
-  } catch {
-    const files = {};
-    function walk(dir, relPrefix = "") {
-      let entries;
-      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const entry of entries) {
-        const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
-        if (isStructuralExcludedPath(rel)) continue;
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
-          walk(full, rel);
-        } else if (entry.isFile()) {
-          if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
-          if (isSecretOrCredentialPath(rel)) {
-            try {
-              const s = statSync(full);
-              files[rel] = { hash: null, mtimeMs: s.mtimeMs, size: s.size, isSecret: true };
-            } catch {}
-            continue;
-          }
-          const hash = hashFile(full);
-          if (hash !== null) {
-            try {
-              const s = statSync(full);
-              files[rel] = { hash, mtimeMs: s.mtimeMs, size: s.size };
-            } catch {}
-          }
-        }
-      }
-    }
-    walk(root);
-    return { isGit: false, files };
-  }
-}
-const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
-const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
-
-function isOracleEvidenceFilename(f) {
-  const b = basename(String(f || "")).trim();
-  return /^oracle(-+[A-Za-z0-9]+)*\.md$/i.test(b) || b.toLowerCase() === "acceptance.md";
-}
 const isWorkflowPath = (p) => String(p || "").replace(/\\/g, "/").split("/").includes(".workflow");
 
 function parseRenamePaths(filePath) {
@@ -837,97 +697,23 @@ function parseRenamePaths(filePath) {
   const b = norm.match(/^(.*?)\{(.*?)\s*=>\s*(.*?)\}(.*)$/);
   if (b) return [(b[1] + b[2] + b[4]).replace(/\/\/+/g, "/"), (b[1] + b[3] + b[4]).replace(/\/\/+/g, "/")];
   const a = norm.match(/^(.*?)\s*=>\s*(.*)$/);
-  if (a) return [a[1].replace(/\/\/+/g, "/"), a[2].replace(/\/\/+/g, "/")];
-  return [norm];
+  return a ? [a[1].replace(/\/\/+/g, "/"), a[2].replace(/\/\/+/g, "/")] : [norm];
 }
-
-function isPositiveOracleVerdict(text) {
-  return typeof text === "string" && POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text);
-}
-
-/** True when the text states an explicit rejection. Distinct from "states nothing". */
-function isNegativeOracleVerdict(text) {
-  return typeof text === "string" && NEGATIVE_VERDICT_RE.test(text);
-}
-
-
 function validateOpenspecArtifact(root, a, fullPath, invalid) {
-  const s = statSync(fullPath);
-  if (!s.isDirectory()) {
-    invalid.push(`openspec: path '${a.path}' must be a directory`);
-    return;
-  }
+  if (!statSync(fullPath).isDirectory()) { invalid.push(`openspec: path '${a.path}' must be a directory`); return; }
   let entries = [];
   try { entries = readdirSync(fullPath); } catch {}
-  if (entries.length === 0) {
-    invalid.push(`openspec: directory '${a.path}' is empty`);
-    return;
-  }
+  if (entries.length === 0) { invalid.push(`openspec: directory '${a.path}' is empty`); return; }
   for (const entry of entries) {
     const entryPath = join(a.path, entry);
-    if (!isRealPathInsideRoot(root, entryPath)) {
-      invalid.push(`openspec: entry '${entryPath}' real path must stay inside project root`);
-      return;
-    }
+    if (!isRealPathInsideRoot(root, entryPath)) { invalid.push(`openspec: entry '${entryPath}' real path must stay inside project root`); return; }
   }
-
-  const propPath = join(fullPath, "proposal.md");
-  if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) {
-    invalid.push(`openspec: missing proposal.md in '${a.path}'`);
-  }
-  const tasksPath = join(fullPath, "tasks.md");
-  if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) {
-    invalid.push(`openspec: missing tasks.md in '${a.path}'`);
-  }
-  const specsPath = join(fullPath, "specs");
-  if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) {
-    invalid.push(`openspec: missing specs/ directory in '${a.path}'`);
-  }
+  const propPath = join(fullPath, "proposal.md"), tasksPath = join(fullPath, "tasks.md"), specsPath = join(fullPath, "specs");
+  if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) invalid.push(`openspec: missing proposal.md in '${a.path}'`);
+  if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) invalid.push(`openspec: missing tasks.md in '${a.path}'`);
+  if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) invalid.push(`openspec: missing specs/ directory in '${a.path}'`);
 }
 
-function validateOracleArtifact(root, a, st, invalid) {
-  const detail = a.detail || "";
-  if (!detail.trim()) {
-    invalid.push("oracle: no verdict recorded — pass --detail \"ACCEPT: <evidence>\"");
-  } else if (isNegativeOracleVerdict(detail)) {
-    invalid.push("oracle: verdict is REJECT (must be ACCEPT)");
-  } else if (!isPositiveOracleVerdict(detail)) {
-    invalid.push("oracle: note states no verdict — expected an explicit ACCEPT line");
-  }
-  const changeOraclePaths = [];
-  const registeredChangePath = st.artifacts?.openspec?.path;
-  if (registeredChangePath) {
-    try {
-      for (const f of readdirSync(join(root, registeredChangePath))) {
-        if (isOracleEvidenceFilename(f)) changeOraclePaths.push(join(registeredChangePath, f));
-      }
-    } catch {}
-  }
-  if (changeOraclePaths.length === 0) invalid.push("oracle: missing oracle evidence file (oracle*.md or acceptance.md)");
-  const oraclePaths = [...changeOraclePaths];
-  if (a.path && !changeOraclePaths.some((p) => resolve(root, p) === resolve(root, a.path))) oraclePaths.push(a.path);
-  const registeredChangeAbs = registeredChangePath ? resolve(root, registeredChangePath) : null;
-  let hasAccept = false;
-  for (const oPath of oraclePaths) {
-    const fullPath = join(root, oPath);
-    if (!existsSync(fullPath)) {
-      invalid.push(`oracle: file '${oPath}' does not exist on disk`);
-      continue;
-    }
-    if (!isRealPathInsideRoot(root, oPath) || !statSync(fullPath).isFile()) {
-      invalid.push(`oracle: file '${oPath}' resolves outside project root or is not a file`);
-      continue;
-    }
-    let body = "";
-    try { body = readFileSync(fullPath, "utf8"); } catch {}
-    if (isNegativeOracleVerdict(body) || NEGATIVE_VERDICT_RE.test(body)) {
-      invalid.push(`oracle: verdict in '${oPath}' is REJECT`);
-    } else if (isPositiveOracleVerdict(body) && registeredChangeAbs && resolve(root, dirname(oPath)) === registeredChangeAbs && isOracleEvidenceFilename(basename(oPath))) {
-      hasAccept = true;
-    }
-  }
-  if (!hasAccept && changeOraclePaths.length > 0) invalid.push("oracle: oracle evidence must state an explicit anchored positive ACCEPT verdict");
-}
 
 function validateArtifacts(root, st) {
   const reqs = requiredFor(st.tier);
@@ -986,6 +772,15 @@ function validateArtifacts(root, st) {
 
     if (r.kind === "oracle") {
       validateOracleArtifact(root, a, st, invalid);
+      if (st.tier === "T2" || st.tier === "T3") {
+        const changeId = st.artifacts?.openspec?.path ? basename(st.artifacts.openspec.path) : null;
+        if (changeId) {
+          const revRes = validateReviewEvidence({ root, changeId, tier: st.tier });
+          if (!revRes.ok) {
+            for (const err of revRes.errors) invalid.push(err);
+          }
+        }
+      }
     }
   }
 
@@ -1215,9 +1010,8 @@ function getPorcelainEntries(root) {
       }).trim().replace(/\\/g, "/");
     } catch {}
 
-    const statusOut = execFileSync("git", ["-c", "core.quotepath=false", "status", "--porcelain", "-z", "-uall", "--", "."], {
-      cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-    });
+    const statusOut = getPorcelainStatusRaw(root);
+    if (statusOut === null) return null;
     const rawItems = statusOut.split("\0");
     const entries = [];
     for (let i = 0; i < rawItems.length; i++) {
@@ -1300,30 +1094,7 @@ function findGitStaleness(root, snapshot, current, acceptedAt) {
     }
   }
 
-  const porcelain = getPorcelainEntries(root);
-  if (porcelain) {
-    for (const { code, rel } of porcelain) {
-      if (code !== "??" && isSecretOrCredentialPath(rel) && !newer.includes(rel)) {
-        newer.push(rel);
-      }
-    }
-  }
-
-  const baseSha = snapshot?.commitSha;
-  if (baseSha) {
-    try {
-      const diffOut = execFileSync("git", ["diff", "--name-only", "--relative", `${baseSha}..HEAD`], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-      });
-      for (const file of diffOut.split("\n")) {
-        const rel = file.trim();
-        if (!rel || rel.startsWith(".workflow/") || isStructuralExcludedPath(rel)) continue;
-        if (isSecretOrCredentialPath(rel) && !newer.includes(rel)) {
-          newer.push(rel);
-        }
-      }
-    } catch {}
-  }
+  if (snapshot?.secretDigest !== current.secretDigest) newer.push("tracked credential content");
 
   const reasons = [];
   if (newer.length > 0) {
@@ -1495,8 +1266,12 @@ function cmdClose(root, flags) {
     return 1;
   }
 
-  if (invalid.length) {
+  if (invalid.length && !flags.force) {
     console.error(`workflow: cannot close ${st.tier} — retained evidence invalid:\n  ${invalid.join('\n  ')}`);
+    return 1;
+  }
+  if (invalid.length && flags.force && !flags.reason) {
+    console.error(`workflow: --force requires --reason "<why the invalid evidence is accepted>"`);
     return 1;
   }
 
@@ -1534,6 +1309,11 @@ function cmdClose(root, flags) {
     deviation.forced = true;
     deviation.reason = String(flags.reason);
     deviation.missing = [...missing];
+  }
+  if (invalid.length && flags.force) {
+    deviation.forced = true;
+    deviation.reason = String(flags.reason);
+    deviation.invalid = [...invalid];
   }
   if (staleAcceptance && flags.force) {
     deviation.forced = true;
@@ -1663,7 +1443,7 @@ function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
       if (commitFilesRaw) {
         const nonOracle = commitFilesRaw.split("\n")
           .map((f) => f.trim().replace(/\\/g, "/"))
-          .filter((f) => f && !isWorkflowPath(f) && !isOracleEvidenceFilename(f));
+          .filter((f) => f && !isWorkflowPath(f) && !isAcceptanceArtifactFilename(f));
         if (nonOracle.length > 0) {
           console.error(`workflow check-ci: oracle acceptance commit (${oracleCommit.slice(0, 8)}) contains non-oracle changes (mixed commit):\n  ${nonOracle.slice(0, 5).join("\n  ")}`);
           return 1;
@@ -1692,6 +1472,40 @@ function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
     return 1;
   }
   return 0;
+}
+
+function validateCheckCiOracleFiles(root, relChangeDir) {
+  const changeDir = join(root, relChangeDir);
+  // Consider every retained receipt: any unsuperseded explicit REJECT blocks.
+  const oracleEntries = readdirSync(changeDir).filter(isAcceptanceArtifactFilename);
+  if (oracleEntries.length === 0) {
+    console.error(`workflow check-ci: missing oracle evidence in '${changeDir}' or resolves outside project root.`);
+    return { ok: false };
+  }
+  let hasPositive = false;
+  let oracleRelForCommit = null;
+  for (const entry of oracleEntries) {
+    const oraclePath = join(changeDir, entry);
+    const relOracle = join(relChangeDir, entry);
+    if (!isRealPathInsideRoot(root, relOracle) || !statSync(oraclePath).isFile()) {
+      console.error(`workflow check-ci: oracle file '${entry}' in '${changeDir}' resolves outside project root or is not a file.`);
+      return { ok: false };
+    }
+    const oracleBody = readFileSync(oraclePath, "utf8");
+    if ((isNegativeOracleVerdict(oracleBody) || NEGATIVE_VERDICT_RE.test(oracleBody)) && !isSupersededOracleArtifact(changeDir, oraclePath)) {
+      console.error(`workflow check-ci: oracle evidence in '${entry}' states an explicit REJECT verdict.`);
+      return { ok: false };
+    }
+    if (isPositiveOracleVerdict(oracleBody)) {
+      hasPositive = true;
+      if (!oracleRelForCommit) oracleRelForCommit = relOracle;
+    }
+  }
+  if (!hasPositive && !existsSync(join(changeDir, "review-evidence.json"))) {
+    console.error(`workflow check-ci: oracle evidence in '${changeDir}' must state an explicit anchored positive ACCEPT verdict.`);
+    return { ok: false };
+  }
+  return { ok: true, oracleRelForCommit };
 }
 
 function cmdCheckCi(root, flags) {
@@ -1827,38 +1641,9 @@ function cmdCheckCi(root, flags) {
     return 1;
   }
 
-  // 6. Oracle evidence (consider ALL matching files: any explicit REJECT blocks)
-  const entries = readdirSync(changeDir);
-  const oracleEntries = entries.filter(isOracleEvidenceFilename);
-  if (oracleEntries.length === 0) {
-    console.error(`workflow check-ci: missing oracle evidence in '${changeDir}' or resolves outside project root.`);
-    return 1;
-  }
-
-  let hasPositive = false;
-  let oracleRelForCommit = null;
-  for (const entry of oracleEntries) {
-    const oraclePath = join(changeDir, entry);
-    const relOracle = join(relChangeDir, entry);
-    if (!isRealPathInsideRoot(root, relOracle) || !statSync(oraclePath).isFile()) {
-      console.error(`workflow check-ci: oracle file '${entry}' in '${changeDir}' resolves outside project root or is not a file.`);
-      return 1;
-    }
-    const oracleBody = readFileSync(oraclePath, "utf8");
-    if (isNegativeOracleVerdict(oracleBody) || NEGATIVE_VERDICT_RE.test(oracleBody)) {
-      console.error(`workflow check-ci: oracle evidence in '${entry}' states an explicit REJECT verdict.`);
-      return 1;
-    }
-    if (isPositiveOracleVerdict(oracleBody)) {
-      hasPositive = true;
-      if (!oracleRelForCommit) oracleRelForCommit = relOracle;
-    }
-  }
-
-  if (!hasPositive) {
-    console.error(`workflow check-ci: oracle evidence in '${changeDir}' must state an explicit anchored positive ACCEPT verdict.`);
-    return 1;
-  }
+  const oracleFiles = validateCheckCiOracleFiles(root, relChangeDir);
+  if (!oracleFiles.ok) return 1;
+  let { oracleRelForCommit } = oracleFiles;
 
   // T3 additionally requires worktrees.md
   if (tier === "T3") {
@@ -1874,19 +1659,41 @@ function cmdCheckCi(root, flags) {
       return 1;
     }
   }
+  const revRes = validateReviewEvidence({ root, changeId, tier, baseRef });
+  if (!revRes.ok) {
+    console.error(`workflow check-ci: review execution evidence failed for '${changeId}':\n  ${revRes.errors.join("\n  ")}`);
+    return 1;
+  }
+  if (!oracleRelForCommit && existsSync(join(changeDir, "review-evidence.json"))) {
+    oracleRelForCommit = join(relChangeDir, "review-evidence.json");
+  }
 
   const gitCode = validateCheckCiGit(root, oracleRelForCommit, baseRef);
   if (gitCode !== 0) return gitCode;
+  const nativeGitCode = validateCheckCiGit(root, join(relChangeDir, "review-evidence.json"), baseRef);
+  if (nativeGitCode !== 0) return nativeGitCode;
 
   console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
   return 0;
 }
+function cmdReviewRun(root, flags) {
+  try {
+    const res = runReviewRecord({ root, changeId: flags.change, role: flags.role, model: flags.model, baseRef: flags["base-ref"], prompt: flags.prompt, redo: Boolean(flags.redo), productCommand: flags["product-command"] ? JSON.parse(flags["product-command"]) : null, dryRun: Boolean(flags["dry-run"]) });
+    if (res.ok) { console.log(`workflow review-run: successfully recorded ${flags.role} execution for '${flags.change}'.`); return 0; }
+    return 1;
+  } catch (err) { console.error(`workflow review-run error: ${err.message}`); return 1; }
+}
 
-
-
+function cmdStageB(root, flags) {
+  try {
+    const res = recordStageB({ root, changeId: flags.change, phase: flags.phase || "after", disposition: flags.disposition || "lean-already", testCmd: flags["test-cmd"] || flags.testCmd, summary: flags.summary });
+    if (res.ok) { console.log(`workflow stage-b: recorded ${flags.phase || "after"} execution (${res.stageB.disposition || "frozen baseline"}) for '${flags.change}'.`); return 0; }
+    return 1;
+  } catch (err) { console.error(`workflow stage-b error: ${err.message}`); return 1; }
+}
 /* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB };
 
 import { fileURLToPath } from "node:url";
 
@@ -1910,6 +1717,8 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
     case "escalate": code = cmdEscalate(root, args.flags); break;
     case "metrics":  code = cmdMetrics(root); break;
     case "check-ci": code = cmdCheckCi(root, args.flags); break;
+    case "review-run": code = cmdReviewRun(root, args.flags); break;
+    case "stage-b":    code = cmdStageB(root, args.flags); break;
     default:
       // An unrecognised subcommand is an error, not a help request: exiting 0 on a typo
       // tells every calling script and CI gate that the run succeeded.
@@ -1926,6 +1735,8 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
       console.log("  node workflow.mjs metrics [--root .]");
       console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
       console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
+      console.log("  node workflow.mjs review-run --role <reviewer|oracle> --change <name> --model <provider/model> --base-ref <base> [--product-command <JSON argv>] [--redo]");
+      console.log("  node workflow.mjs stage-b --change <name> --phase <before|after> --test-cmd \"<cmd>\" [--disposition <lean-already|simplified>]");
       if (cmd !== undefined) code = 2;
   }
   process.exitCode = code;
