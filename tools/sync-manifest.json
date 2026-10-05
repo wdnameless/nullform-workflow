@@ -100,6 +100,9 @@
     "rel": "tools/usage-audit.mjs"
   },
   {
+    "rel": "tools/session-retro.mjs"
+  },
+  {
     "rel": "tools/test-lens.mjs"
   },
   {

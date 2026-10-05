@@ -100,6 +100,11 @@ Mandatory lenses to evaluate on every review:
   Conclude the explanation with `net: -N lines possible` or `Lean already.`. This tagged delete-list is the input to Stage B.
   Minimal smoke/self-check test is the floor — NEVER flag as bloat.
   Correctness, security, and performance are evaluated outside this lens.
+- **PR body (evidence gate)**: when the patch is headed for merge, check the PR
+  body (`.github/pull_request_template.md` shape: Summary → Evidence →
+  Merge danger → Blast radius). Missing evidence, evidence older than the diff,
+  or a one-way door declared two-way = finding (P1 minimum). A claim without
+  a pasted command + raw output is not evidence.
 </lenses>
 
 <cross-boundary>

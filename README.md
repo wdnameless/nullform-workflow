@@ -6,7 +6,7 @@
 **Portable engineering workflow harness for AI coding agents — hard gates over promises, verified tests over "done", live observability over guesswork.**  
 **Переносимый инженерный каркас разработки для ИИ-агентов: строгие гейты вместо обещаний, проверенные тесты вместо «готово», наблюдаемость вместо догадок.**
 
-Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for **Claude Code**, **Codex**, **OpenCode**, and **Cursor** on Windows, Linux, and macOS. Zero external npm dependencies (Node.js 18+ stdlib only) · 8 specialized roles · 69 skills · 33 CLI tools · 29 install & 15 audit checks.
+Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for **Claude Code**, **Codex**, **OpenCode**, and **Cursor** on Windows, Linux, and macOS. Zero external npm dependencies (Node.js 18+ stdlib only) · 8 specialized roles · 70 skills · 34 CLI tools · 29 install & 15 audit checks.
 
 ![NULLFORM WORKFLOW Live Dashboard](docs/assets/dashboard-graph.jpg)
 
@@ -89,6 +89,14 @@ Credentials come from the native OS vault or `OPENROUTER_API_KEY` / `JEV_API_KEY
 
 Model routing was explicitly removed after negative results. The [`jev/`](jev/) directory is the user-provided **Claude-plugin reference**, not the active OMP extension and not part of automatic OMP installation. Implementation, evaluation and control details: [docs/jev.md](docs/jev.md).
 
+
+### Agent Workflow Habits (evidence PRs, session retro, task graph)
+
+Three habits borrowed from Matt Pocock's Skills v1.3 video ([transcript](https://www.youtube.com/watch?v=BsJGo1wFTvQ)):
+
+- **Evidence PRs** ([`requesting-code-review`](skills/requesting-code-review/SKILL.md)): every PR body follows [`.github/pull_request_template.md`](.github/pull_request_template.md) — Summary → Evidence (before → after, exact command + raw output) → Merge danger (one-way/two-way door) → Blast radius. The reviewer rejects evidence-free PRs as P1+, same bar as the oracle evidence protocol.
+- **Session retro** ([`session-retro`](skills/session-retro/SKILL.md), `node tools/session-retro.mjs scan`): retrospective over real `.jsonl` session logs — ranks sessions with hidden waste (errors/retries, heavy reads, long sessions, repeated commands) for human-led review. Findings apply manually through normal lanes; auto-fix loops are banned (they spiral on false positives).
+- **Task graph + integration branch** ([`nullform-workflow-full`](skills/nullform-workflow-full/SKILL.md), Wave 2–3): tasks carry `blocked-by` edges, each build wave launches the ready frontier, ticket work merges into `feat/<name>-integration` for whole-branch review. Uniform tickets go through a deterministic script loop, not an agent loop.
 
 ### Key Commands & Architecture Links
 
@@ -194,6 +202,14 @@ node tools/jev-control.mjs disable
 - **JEV-ассистент и оценка пользы**: [`docs/jev.md`](docs/jev.md) — skills-only реализация, канонический парный бенчмарк, политика активации и CLI; результаты и ограничения приведены выше.
 - **Законы агентов и шаблоны CI**: [`agent/AGENTS.md`](agent/AGENTS.md) · [`agent/agents/orchestrator.md`](agent/agents/orchestrator.md) · [`templates/ci/workflow-gate.yml`](templates/ci/workflow-gate.yml).
 - **Проверка и сопровождение**: `node tools/verify.mjs --profile verify` (29 проверок) · `node tools/verify.mjs --profile audit` (15 проверок) · `node --test tools/tests/*.test.mjs`.
+
+### Привычки workflow (evidence-PR, session-retro, граф задач)
+
+Три привычки из видео Matt Pocock о Skills v1.3 (https://www.youtube.com/watch?v=BsJGo1wFTvQ):
+
+- **Evidence-PR** ([`requesting-code-review`](skills/requesting-code-review/SKILL.md)): тело каждого PR — по [`.github/pull_request_template.md`](.github/pull_request_template.md): Summary → Evidence (before → after, точная команда + сырой вывод) → Merge danger (one-way/two-way door) → Blast radius. Ревьюер отклоняет PR без evidence как P1+ — та же планка, что протокол доказательств оракула.
+- **Session-retro** ([`session-retro`](skills/session-retro/SKILL.md), `node tools/session-retro.mjs scan`): ретроспектива по реальным `.jsonl`-логам сессий — ранжирует сессии со скрытыми потерями (ошибки/ретраи, тяжёлые чтения, длинные сессии, повторы команд) для ручного разбора. Находки применяются вручную через обычные лейны; автофиксы запрещены (уходят в петлю на ложных срабатываниях).
+- **Граф задач + integration-ветка** ([`nullform-workflow-full`](skills/nullform-workflow-full/SKILL.md), Wave 2–3): у задач рёбра `blocked-by`, каждая волна сборки запускает готовый фронт, работа тикетов сливается в `feat/<name>-integration` для ревью ветки целиком. Однородные тикеты — детерминированным скрипт-циклом, а не агент-циклом.
 
 ---
 

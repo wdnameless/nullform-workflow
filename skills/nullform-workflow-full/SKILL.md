@@ -27,12 +27,25 @@ When active or triggered, the lead agent acts STRICTLY as an Orchestrator.
 - Clearly divide tasks into UI/Frontend slice vs Logic/Backend slice.
 - Decide cross-slice contracts (interfaces, schemas, file ownership) UP FRONT in the batch `context`.
 
+- Tasks are a graph, not a list: record blocking edges (`blocked-by: <task-id>`)
+  in `tasks.md`. Every wave launches the ready FRONTIER (all unblocked,
+  disjoint tasks) — never the whole list at once.
+- Open an integration branch for the change (`feat/<name>-integration`);
+  per-ticket work lands there via merge, never straight to `main`.
 ## 4. Wave 3: Subagent Spawning — native `task()` ONLY
-- ONE `task()` batch with all independent slices. Never serialize concurrent slices.
+- ONE `task()` batch per FRONTIER (all currently unblocked, disjoint tickets).
+  Never serialize frontier-mates; when one returns, launch the next unblocked
+  ticket, then reconcile. A wave is not a barrier.
 - UI/Design slice → `agent: "designer"` (`isolated: true` ONLY if cwd is git repository). Executes its 8-phase pipeline (refero-design → design-taste-frontend → … → BEFORE/AFTER screenshots).
 - Logic/Backend slice → `agent: "fixer"` (`isolated: true` ONLY if cwd is git repository). TDD: failing test first, then fix.
 - Writers isolated (when in git repo), one owner per file; read-only roles (`scout`, `reviewer`, `oracle`) never edit.
 - Every spawn: bounded scope + acceptance criteria + return contract (STATUS | FILES paths-only | TESTS `было→стало` counts | INTERFACES public signatures | REQUIREMENTS R## mapping | CONCERNS/BLOCKERS; ≤25 lines). `tests_passed: true` without executed command/counts is not evidence and must be rejected at parent reconciliation.
+- Implement-subagents merge to the integration branch when their ticket is green
+  (reviewed diff + full suite counts read by the parent); the reviewer then
+  reads the integration branch as a whole before Wave 4.
+- Deterministic loop beats agent loop: when tickets are uniform (same shape,
+  same tests), prefer a script that feeds tickets one by one over an agent
+  babysitting subagents — same result every run, no babysitter tokens.
 - NEVER use slash-commands like `/paseo-handoff` — they are skills, not commands. Delegation = native `task()` tool.
 
 ## 5. Wave 4: Oracle Verification Gate

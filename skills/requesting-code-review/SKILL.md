@@ -70,6 +70,23 @@ HEAD_SHA=$(git rev-parse HEAD)
 You: [Fix progress indicators]
 [Continue to Task 3]
 ```
+## PR Body (before requesting merge)
+
+Every PR going to `main` carries a body in `.github/pull_request_template.md` shape:
+Summary → Evidence (before → after) → Merge danger → Blast radius.
+A PR without runtime evidence is not ready for review — same bar as the oracle
+evidence protocol (`agent/agents/oracle.md` § EVIDENCE PROTOCOL).
+
+- **Summary**: 2-5 sentences, what + why. Refactors name the merged concepts.
+- **Evidence**: exact command + raw output/counts on a real path
+  (e.g. `node --test tools/tests/<name>.test.mjs` → `pass 12, fail 0`).
+  Requiring evidence makes the author run the extra test instead of claiming
+  "probably works, I read the code".
+- **Merge danger**: `two-way door` (plain revert restores state) or `one-way door`
+  (data migration, irreversible public action, external side effect — name it).
+- **Blast radius**: small (isolated module) / medium (shared contract) / large
+  (public API, data shape) + the affected surfaces by name.
+- Reviewer checks the body: missing/stale evidence = review finding, not a nit.
 
 ## Integration with Workflows
 

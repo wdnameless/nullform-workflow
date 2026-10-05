@@ -163,7 +163,7 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Cache policy** — `tools/cache-policy.mjs`. Enforces prompt-cache observability gates (volatile literal scan, prompt fingerprint determinism, return-contract validation) while keeping model thresholds advisory.
 - **Context inbox** — `tools/context-inbox.mjs`. Manages the context intake pipeline (`context/REQUESTS.md`) across categories (`init`, `request`, `list`, `resolve`, `check`).
 - **Domain context** — `tools/domain-context.mjs`. Collects domain-scoped context from matching paths, git history, codemap state, and related issues without external dependencies.
-- **Fix plugin windows** — `tools/fix-plugin-windows.cjs`. Eliminates flashing console windows on Windows for installed OMP plugins by adding `windowsHide: true` to child process calls.
+- **Session retro** — `tools/session-retro.mjs` + `skill://session-retro`. Scans `.jsonl` session logs for inefficiency signals (errors/retries, heavy reads, long sessions, repeated commands) and ranks candidates for human-led retrospective; findings apply manually, never auto-fixed.
 - **Oracle model** — `tools/oracle-model.mjs`. Autoselects the highest-priority model from `models.yml` for the oracle role and updates `config.yml` while preserving comments and layout.
 - **Return contract** — `tools/return-contract.mjs`. Validates subagent return contracts against format constraints (≤25 lines, valid status, required sections, numeric test counts).
 - **Session cost** — `tools/session_cost.py`. Aggregates token usage and estimated costs from session transcripts per provider, model, agent, and UTC day.
