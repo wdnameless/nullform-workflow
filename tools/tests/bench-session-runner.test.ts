@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -35,7 +35,7 @@ test("native workflow reaches guarded transport, executes a write and records fi
       const write = { i: "Implementing multiplication", path: "src/calc.mjs", content: "export const add = (a,b) => a+b; export const multiply = (a,b) => a*b;\n" };
       const finalText = "STATUS: DONE\nFILES: src/calc.mjs\nTESTS: not-run(parent-owned)\nINTERFACES: multiply(a,b)\nREQUIREMENTS: R01 product, R02 frozen tests\nCONCERNS: offline transport seam";
       const choice = calls === 1
-        ? { index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "offline-write", type: "function", function: { name: "write", arguments: JSON.stringify(write) } }] }, finish_reason: null }
+        ? { index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "offline-write", type: "function", function: { name: "write", arguments: JSON.stringify(write) } }, { index: 1, id: "offline-frozen-write", type: "function", function: { name: "write", arguments: JSON.stringify({ i: "Trying frozen test mutation", path: "tests/calc.test.mjs", content: "// weakened tests\n" }) } }] }, finish_reason: null }
         : { index: 0, delta: { role: "assistant", content: finalText }, finish_reason: null };
       const chunk = { id: `offline-${calls}`, object: "chat.completion.chunk", created: 1, model: body.model };
       const packets = [{ ...chunk, choices: [choice] }, { ...chunk, choices: [{ index: 0, delta: {}, finish_reason: calls === 1 ? "tool_calls" : "stop" }] }, { ...chunk, choices: [], usage: { prompt_tokens: 1000, completion_tokens: 100, total_tokens: 1100, prompt_tokens_details: { cached_tokens: 0 } } }];
@@ -50,6 +50,10 @@ test("native workflow reaches guarded transport, executes a write and records fi
     assert.match(native.finalText, /^STATUS: DONE/);
     const { add, multiply } = await import(pathToFileURL(join(repo, "src", "calc.mjs")).href);
     assert.equal(multiply(-2,5), -10); assert.equal(add(3,4), 7);
+    const toolResults = JSON.parse(readFileSync(join(runDir, "tool-results.json"), "utf8"));
+    assert.equal(toolResults.find(result => result.toolCallId === "offline-write")?.isError, false);
+    assert.equal(toolResults.find(result => result.toolCallId === "offline-frozen-write")?.isError, true);
+    assert.equal(readFileSync(join(repo, "tests", "calc.test.mjs"), "utf8"), "// Frozen fixture input for the transport seam\n");
     const ledger = loadSpendLedger(root);
     assert.equal(ledger.status, "ok");
     assert.equal(ledger.requests.every(r => r.status === "settled"), true);

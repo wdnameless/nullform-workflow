@@ -91,9 +91,9 @@ export async function run({ fetchImpl }: { fetchImpl?: (input: RequestInfo | URL
   if (!tariff || model.api !== "openai-completions" || Object.keys(tariff).some(k => model.cost?.[k] !== tariff[k])) throw new Error("Model lacks supported transport/fixed SDK tariff");
   const endpoint = `${model.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const wireModel = model.thinking?.effortRouting?.off ?? model.requestModelId ?? model.id;
-  const commonOptions = { cwd: root, model, authStorage, modelRegistry, settings, thinkingLevel: "off", skills: [], rules: [], contextFiles: [], promptTemplates: [], slashCommands: [], disableExtensionDiscovery: true, enableMCP: false, enableIrc: false, enableLsp: false, skipPythonPreflight: true, cacheWarming: false, bindProcessState: false, requireYieldTool: false, spawns: "", sessionManager: sdk.SessionManager.inMemory(), systemPrompt: "Complete the supplied constructed fixture task using only the supplied inputs and available tools. Do not access credentials or network. Follow the requested output contract." };
+  const commonOptions = { cwd: root, model, authStorage, modelRegistry, settings, thinkingLevel: "off", skills: [], rules: [], contextFiles: [], promptTemplates: [], slashCommands: [], disableExtensionDiscovery: true, enableMCP: false, enableIrc: false, enableLsp: false, skipPythonPreflight: true, cacheWarming: false, bindProcessState: false, requireYieldTool: false, spawns: "", systemPrompt: "Complete the supplied constructed fixture task using only the supplied inputs and available tools. Do not access credentials or network. Follow the requested output contract." };
   if (options.setupOnly) {
-    const { session } = await sdk.createAgentSession({ ...commonOptions, toolNames: [], restrictToolNames: true });
+    const { session } = await sdk.createAgentSession({ ...commonOptions, sessionManager: sdk.SessionManager.inMemory(root), toolNames: [], restrictToolNames: true });
     if (`${session.model?.provider}/${session.model?.id}` !== options.model) throw new Error("Session rebound model");
     await session.dispose();
     console.log(JSON.stringify({ setup: "ready", sdkVersion: JSON.parse(readFileSync(join(pkg, "package.json"))).version, selector: options.model, transport: model.api, authConfigured: true, caps: CAPS, tariffSource: "installed SDK fixed catalog; not independent provider billing" }));
@@ -112,13 +112,15 @@ export async function run({ fetchImpl }: { fetchImpl?: (input: RequestInfo | URL
   if (workflow) writeFileSync(join(runDir, "frozen-tests.json"), JSON.stringify({ file: "tests/calc.test.mjs", sha256: createHash("sha256").update(readFileSync(join(repo, "tests", "calc.test.mjs"))).digest("hex") }));
   const budget = createRequestBudget({ root, selector: options.model, endpoint, wireModel, runId: process.env.BENCH_RUN_ID || runDir, maxRequests: workflow ? CAPS.workflowRequests : 1, ceiling: options.ceiling, fetchImpl: fetchImpl ?? originalFetch });
   globalThis.fetch = budget.fetch;
-  const { session } = await sdk.createAgentSession({ ...commonOptions, cwd: repo, toolNames: workflow ? ["read", "write"] : [], restrictToolNames: true });
+  // Native tool cwd comes from the supplied SessionManager, not the SDK's cwd option.
+  const { session } = await sdk.createAgentSession({ ...commonOptions, cwd: repo, sessionManager: sdk.SessionManager.inMemory(repo), autoApprove: workflow, toolNames: workflow ? ["read", "write"] : [], restrictToolNames: true });
   // Native tools may touch fixture inputs only, never the ledger/transcript/checker or credential paths.
   if (workflow) for (const tool of session.agent.state.tools) {
     const execute = tool.execute.bind(tool);
     tool.execute = (id, params, ...rest) => {
       const path = params.path;
-      if (typeof path !== "string" || !["src/calc.mjs", "tests/calc.test.mjs"].some(file => resolve(repo, file) === resolve(repo, path))) throw new Error("Tool path outside bounded fixture");
+      const allowed = tool.name === "write" ? ["src/calc.mjs"] : ["src/calc.mjs", "tests/calc.test.mjs"];
+      if (typeof path !== "string" || !allowed.some(file => resolve(repo, file) === resolve(repo, path))) throw new Error("Tool path outside bounded fixture or write to frozen tests");
       return execute(id, params, ...rest);
     };
   }
@@ -129,6 +131,7 @@ export async function run({ fetchImpl }: { fetchImpl?: (input: RequestInfo | URL
   const record = message => { events.push({ type: "message", message: { role: message.role, provider: message.provider, model: message.model, timestamp: message.timestamp, stopReason: message.stopReason, content: message.content, usage: message.usage } }); persist(); };
   let success = false, streamCalls = 0, contextBytes = 0;
   try {
+    if (resolve(session.sessionManager.getCwd()) !== repo) throw new Error("Native session cwd outside bounded fixture");
     if (workflow) {
       const originalStream = session.agent.streamFn;
       if (typeof originalStream !== "function") throw new Error("SDK StreamFn unavailable");
@@ -170,6 +173,8 @@ export async function run({ fetchImpl }: { fetchImpl?: (input: RequestInfo | URL
     throw error;
   } finally {
     if (!success) budget.fail();
+    const toolResults = session.agent.state.messages.filter(message => message.role === "toolResult").map(message => ({ toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError === true, timestamp: message.timestamp, resolvedPath: message.details?.resolvedPath, content: message.content.map(part => part.type === "text" ? { type: "text", text: redactFailure(part.text) } : { type: part.type }) }));
+    writeFileSync(join(runDir, "tool-results.json"), JSON.stringify(toolResults, null, 2) + "\n");
     events.push({ type: "session_end", sessionId: session.sessionId, completed: success, timestamp: Date.now() }); persist();
     await session.dispose();
     globalThis.fetch = originalFetch;
