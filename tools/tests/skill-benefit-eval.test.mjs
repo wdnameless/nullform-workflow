@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEFAULT_MODEL, CAPS, REQUEST_RESERVE_USD, createRequestBudget, computeTariffCost, validateNativeMessage, loadSpendLedger, saveSpendLedger, assertBudgetReady } from "../bench-budget.mjs";
-import { readSession, scoreReview, verifyFrozenTests } from "../../bench/checks/common.mjs";
+import { readSession, scoreReview, verifyFrozenTests } from "../bench-results.mjs";
 import { parseArgs, runSkillBenefitEval } from "../run-skill-benefit-eval.mjs";
 
 // Fabricated native messages below are deterministic boundary seams, never paid-run evidence.
@@ -169,4 +171,17 @@ test("test-byte digest stays frozen despite editable digest file or commit-shape
     assert.equal(verifyFrozenTests(root,snapshot),false);
     assert.throws(() => verifyFrozenTests(root,{ file:"../outside", sha256:snapshot.sha256 }));
   } finally { rmSync(root, { recursive:true,force:true }); }
+});
+
+test("installed tools-only tree imports evaluation without repository bench files", () => {
+  const root = temp();
+  try {
+    const tools = join(root, "tools");
+    mkdirSync(tools);
+    for (const file of ["benchmark.mjs", "bench-budget.mjs", "bench-results.mjs", "run-skill-benefit-eval.mjs"]) {
+      cpSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), join(tools, file));
+    }
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(join(tools, "run-skill-benefit-eval.mjs")).href)})`], { cwd: root, encoding: "utf8", shell: false, timeout: 10000 });
+    assert.equal(result.status, 0, result.stderr);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

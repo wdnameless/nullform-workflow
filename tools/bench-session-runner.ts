@@ -5,7 +5,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { CAPS, DEFAULT_MODEL, FIXED_TARIFFS, createRequestBudget } from "./bench-budget.mjs";
-import { readSession } from "../bench/checks/common.mjs";
+import { readSession } from "./bench-results.mjs";
 
 function exportedPath(root, subpath = ".") {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -63,7 +63,14 @@ function fixtureInput(repo, task) {
   return files.join("\n\n");
 }
 
-export async function run() {
+function redactFailure(value) {
+  return String(value ?? "").replace(/(?:https?:\/\/)[^\s"'<>]+/gi, "[REDACTED:URL]")
+    .replace(/\b(?:Bearer\s+\S+|sk-[\w-]+|gh[pousr]_[\w]+|AIza[\w-]+|AKIA[A-Z0-9]+|xox[baprs]-[\w-]+|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/gi, "[REDACTED:CREDENTIAL]")
+    .replace(/\b(?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*[^\s,;}]+/gi, "[REDACTED:CREDENTIAL]")
+    .replace(/[A-Za-z0-9+/_=-]{32,}/g, "[REDACTED:OPAQUE]");
+}
+
+export async function run({ fetchImpl }: { fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> } = {}) {
   const options = args();
   const root = resolve(options.root);
   const originalFetch = globalThis.fetch.bind(globalThis);
@@ -103,7 +110,7 @@ export async function run() {
   mkdirSync(join(runDir, "session"), { recursive: true });
   writeFileSync(join(runDir, "input.json"), JSON.stringify({ task: options.task, arm: options.arm, selector: options.model, fixtureHash: createHash("sha256").update(fixture).digest("hex"), skillHash: skill ? createHash("sha256").update(skill).digest("hex") : null, caps: CAPS }, null, 2));
   if (workflow) writeFileSync(join(runDir, "frozen-tests.json"), JSON.stringify({ file: "tests/calc.test.mjs", sha256: createHash("sha256").update(readFileSync(join(repo, "tests", "calc.test.mjs"))).digest("hex") }));
-  const budget = createRequestBudget({ root, selector: options.model, endpoint, wireModel, runId: process.env.BENCH_RUN_ID || runDir, maxRequests: workflow ? CAPS.workflowRequests : 1, ceiling: options.ceiling, fetchImpl: originalFetch });
+  const budget = createRequestBudget({ root, selector: options.model, endpoint, wireModel, runId: process.env.BENCH_RUN_ID || runDir, maxRequests: workflow ? CAPS.workflowRequests : 1, ceiling: options.ceiling, fetchImpl: fetchImpl ?? originalFetch });
   globalThis.fetch = budget.fetch;
   const { session } = await sdk.createAgentSession({ ...commonOptions, cwd: repo, toolNames: workflow ? ["read", "write"] : [], restrictToolNames: true });
   // Native tools may touch fixture inputs only, never the ledger/transcript/checker or credential paths.
@@ -120,18 +127,22 @@ export async function run() {
   const persist = () => writeFileSync(transcript, events.map(e => JSON.stringify(e)).join("\n") + "\n");
   persist();
   const record = message => { events.push({ type: "message", message: { role: message.role, provider: message.provider, model: message.model, timestamp: message.timestamp, stopReason: message.stopReason, content: message.content, usage: message.usage } }); persist(); };
-  let success = false;
+  let success = false, streamCalls = 0, contextBytes = 0;
   try {
     if (workflow) {
       const originalStream = session.agent.streamFn;
       if (typeof originalStream !== "function") throw new Error("SDK StreamFn unavailable");
       session.agent.streamFn = (streamModel, context, streamOptions) => {
-        if (`${streamModel.provider}/${streamModel.id}` !== options.model || Buffer.byteLength(JSON.stringify(context)) > CAPS.contextBytes) throw new Error("Model/context cap violation before stream dispatch");
+        streamCalls++;
+        // Native normalized tools retain executable/session fields; those are NOT provider input.
+        const providerContext = { systemPrompt: context.systemPrompt, messages: context.messages, tools: context.tools?.map(({ name, description, parameters, strict }) => ({ name, description, parameters, strict })) };
+        contextBytes = Buffer.byteLength(JSON.stringify(providerContext));
+        if (`${streamModel.provider}/${streamModel.id}` !== options.model || contextBytes > CAPS.contextBytes) throw new Error("Model/context cap violation before stream dispatch");
         budget.begin();
         const output = new AssistantMessageEventStream();
         void (async () => {
           try {
-            const inner = await originalStream(streamModel, context, { ...streamOptions, maxTokens: CAPS.outputTokens, disableReasoning: true, fetch: budget.fetch, preferWebsockets: false });
+            const inner = await originalStream(streamModel, context, { ...streamOptions, maxTokens: CAPS.outputTokens, disableReasoning: true, forceReasoningOff: true, fetch: budget.fetch, preferWebsockets: false });
             for await (const event of inner) {
               if (event.type === "done" || event.type === "error") { const message = event.message ?? event.error; budget.settle(message); record(message); }
               output.push(event);
@@ -148,8 +159,15 @@ export async function run() {
       budget.settle(result.assistantMessage); record(result.assistantMessage);
     }
     const final = [...events].reverse().find(e => e.type === "message")?.message;
-    if (final?.stopReason !== "stop" || final.content.some(p => p.type === "toolCall")) throw new Error("No normal final assistant completion");
+    if (final?.stopReason !== "stop" || final.content.some(p => p.type === "toolCall")) {
+      const native = [...session.agent.state.messages].reverse().find(message => message.role === "assistant");
+      throw new Error(`No normal final assistant completion: ${redactFailure(native?.errorMessage || native?.stopReason || "no native assistant message")}`);
+    }
     success = true;
+  } catch (error) {
+    const native = [...session.agent.state.messages].reverse().find(message => message.role === "assistant");
+    writeFileSync(join(runDir, "failure.json"), JSON.stringify({ sessionId: session.sessionId, selector: options.model, error: redactFailure(error.message), streamCalls, contextBytes, physicalRequests: budget.requests, recordedAssistantTurns: events.filter(e => e.type === "message").length, nativeMessageCount: session.agent.state.messages.length, nativeTerminal: native ? { provider: native.provider, model: native.model, stopReason: native.stopReason, errorMessage: redactFailure(native.errorMessage), usage: native.usage, recorded: events.some(e => e.type === "message" && e.message.timestamp === native.timestamp) } : null }, null, 2) + "\n");
+    throw error;
   } finally {
     if (!success) budget.fail();
     events.push({ type: "session_end", sessionId: session.sessionId, completed: success, timestamp: Date.now() }); persist();
@@ -160,4 +178,4 @@ export async function run() {
   process.stdout.write(result.finalText + "\n");
 }
 
-if (import.meta.main) run().catch(error => { console.error(`Benchmark runner failed: ${error.message}`); process.exitCode = 1; });
+if (import.meta.main) run().catch(error => { console.error(`Benchmark runner failed: ${redactFailure(error.message)}`); process.exitCode = 1; });

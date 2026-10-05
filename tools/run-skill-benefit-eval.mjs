@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { runBenchmark, loadTasks, summarizeRuns, compareArms } from "./benchmark.mjs";
 import { DEFAULT_MODEL, CAPS, FIXED_TARIFFS, REQUEST_RESERVE_USD, LEDGER_FILE, loadSpendLedger, assertBudgetReady } from "./bench-budget.mjs";
-import { readSession } from "../bench/checks/common.mjs";
+import { readSession } from "./bench-results.mjs";
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const args = { root: ".", model: DEFAULT_MODEL, ceiling: 1, dryRun: false, yes: false, json: false };

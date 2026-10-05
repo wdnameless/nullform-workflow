@@ -16,6 +16,8 @@ node tools/benchmark.mjs compare --baseline baseline-noskill --candidate candida
 
 The direct adapter surface is `bun tools/bench-session-runner.ts --root ROOT --task ID --arm baseline-noskill|candidate-skill --prompt-file FILE --run-dir DIR --model PROVIDER/MODEL --ceiling 1 [--skill NAME]`; `--setup-only --root ROOT --model PROVIDER/MODEL` does no inference.
 
+Installed harnesses deploy the runtime modules under `tools/`, including `bench-results.mjs`; they do not need a copied `bench/` tree to import the evaluator. Point `--root` at the committed source repository containing task fixtures/checks and keep its existing spend ledger. Sync manifest additions include the runtime helpers; never deploy generated runs.
+
 ## Cases and honest measurement
 
 Four constructed code examples represent repository consumer-routing and frozen-test patterns; they are **not a production dataset**:
@@ -34,7 +36,7 @@ Activation scores measure **instruction adherence or correct nonactivation under
 Allowed selectors are `nullform-gateway/gemini-3.8-flash-high` and `nullform-gateway/gemini-3.7-flash-high`, only with the installed fixed catalog prices: input **$0.75/M**, output **$3.75/M**, cache read **$0.075/M**, no cache-write/server-tool/orchestration billing. This is **SDK fixed-tariff accounting, not independently confirmed provider billing**. Unknown/variable price, extra billed buckets, coerced counters, NaN, mismatched selectors and fallback models are ineligible.
 
 - Closed review: actual `session.runEphemeralTurn({promptText, tools:false, maxTokens:4096, maxContextBytes:49152, dedupeReply:false})`; one dispatched request.
-- Workflow: actual `session.prompt` with full-agent StreamFn enforcing serialized context <=49152 bytes, maxTokens=4096, reasoning off and at most six physical requests. Only fixture-contained native read/write tools are exposed; no task/find/bash/LLM helper tools or network shell escape.
+- Workflow: actual `session.prompt` with mutable native `Agent.streamFn`, enforcing provider-facing system/messages/tool descriptors <=49152 bytes, maxTokens=4096, reasoning off and at most six physical requests. Native tools retain session/executable fields, which are excluded from the context-size projection; the physical wire-body cap below remains authoritative. Only fixture-contained native read/write tools are exposed; no task/find/bash/LLM helper tools or network shell escape.
 - A physical fetch guard verifies the exact configured chat-completions endpoint/wire model and serialized HTTP body <=49152 bytes with an actual numeric output-limit field <=4096. It fsyncs an atomic durable reservation **before each HTTP dispatch**. It disallows any retry until the prior native result has settled, so hidden SDK/transport retries cannot multiply spending. Redirects and unreserved side calls are denied; advisor/compaction/title/warmer/recovery are disabled or cannot dispatch through the closed boundary.
 - Each reservation conservatively covers <=51200 input/cache tokens (serialized bytes plus framing allowance, all charged at the higher input tariff) and <=4096 total output tokens: **$0.05376**. Six closed review sessions and two six-request workflow sessions reserve at most **18 requests × $0.05376 = $0.96768**, below one USD on an empty ledger. Actual native input/cache/output counters settle every request without rounding away spend. Legitimate cached-input zero is accepted.
 
@@ -43,14 +45,18 @@ Allowed selectors are `nullform-gateway/gemini-3.8-flash-high` and `nullform-gat
 ## Observed artifacts and checks
 
 Each run retains `session/session.jsonl`, `input.json`, `score.json`, `result.json`, the benchmark process log, and a runner-owned frozen-test digest for workflow. `comparison-<cohort>.json` retains only that invocation's paired observed outputs/scores, native identity/usage, duration, known tariff spend and halt errors. Equal or unfavorable candidate outcomes remain intact. The general benchmark compare command aggregates historical arms; use the cohort report for a specific fresh comparison.
+Failures also retain `failure.json`: redacted native terminal errors, stream/context/request counters and whether the native terminal message was captured. Synthetic zero-usage native errors are diagnostic, not proof that no inference was billed; a ledger without a row does not establish provider zero spend.
 `bench/.gitignore` uses the existing benchmark `runs/` convention: the durable ledger, raw transcripts, process logs and generated cohort reports stay local and are not staged. Publish only deliberately selected, sanitized evidence; ignoring generated artifacts never permits resetting spending.
 
 No fresh inference, tests or setup verification was executed by the builder. Parent checks:
 
 ```bash
 node tools/test-lens.mjs run -- node --test tools/tests/skill-benefit-eval.test.mjs tools/tests/benchmark.test.mjs
+node tools/test-lens.mjs run -- bun test tools/tests/bench-session-runner.test.ts
 node tools/code-size.mjs check
 node tools/prompt-lint.mjs sizes --check
 ```
 
 Unit native messages/transports are deterministic validation seams, never production execution evidence or a benefit claim.
+
+The native offline test runs the actual installed SDK/agent/tools with fabricated SSE HTTP responses and a deny-all real-network sentinel. It must observe a native implementation write, two guarded requests, normally stopped final assistant and matching durable settlements; it is a regression seam, not comparative API evidence. After those checks, resume only the missing pair with `node tools/run-skill-benefit-eval.mjs --yes --root . --model nullform-gateway/gemini-3.8-flash-high --ceiling 1 --task eval-workflow-execution-outcome`; preserve the six prior review sessions and cumulative ledger.

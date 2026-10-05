@@ -215,5 +215,26 @@
   },
   {
     "rel": ".code-size.baseline.json"
+  },
+  {
+    "rel": "tools/review-evidence.mjs"
+  },
+  {
+    "rel": "tools/review-native-tools.mjs"
+  },
+  {
+    "rel": "tools/worktree-snapshot.mjs"
+  },
+  {
+    "rel": "tools/bench-budget.mjs"
+  },
+  {
+    "rel": "tools/bench-session-runner.ts"
+  },
+  {
+    "rel": "tools/bench-results.mjs"
+  },
+  {
+    "rel": "tools/run-skill-benefit-eval.mjs"
   }
 ]

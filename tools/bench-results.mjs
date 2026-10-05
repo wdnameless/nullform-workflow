@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { validateNativeMessage, DEFAULT_MODEL } from "../../tools/bench-budget.mjs";
+import { validateNativeMessage, DEFAULT_MODEL } from "./bench-budget.mjs";
 
 export function readSession(sessionDir, selector = DEFAULT_MODEL) {
   const files = readdirSync(sessionDir).filter(f => f.endsWith(".jsonl"));

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { extractFinalAssistantResponse, verifyFrozenTests, writeScore } from "./common.mjs";
+import { extractFinalAssistantResponse, verifyFrozenTests, writeScore } from "../../tools/bench-results.mjs";
 import { validateReturnContract } from "../../tools/return-contract.mjs";
 
 const failures = [];
