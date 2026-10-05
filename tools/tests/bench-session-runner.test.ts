@@ -57,7 +57,7 @@ test("native workflow reaches guarded transport, executes a write and records fi
     const ledger = loadSpendLedger(root);
     assert.equal(ledger.status, "ok");
     assert.equal(ledger.requests.every(r => r.status === "settled"), true);
-    assert.equal(ledger.cumulative_tariff_usd, native.tariff_usd);
+    assert.ok(Math.abs(ledger.cumulative_tariff_usd - native.tariff_usd) <= 1e-12, "Native and ledger tariff totals differ beyond floating-point tolerance");
   } finally {
     process.argv = priorArgv; globalThis.fetch = priorFetch;
     rmSync(root, { recursive: true, force: true });
