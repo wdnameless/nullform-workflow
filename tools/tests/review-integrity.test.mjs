@@ -409,3 +409,30 @@ test('reviewer terminal JSON must retain complete typed findings and verdict fie
     assert.throws(() => review(f, 'reviewer', { text: 'ACCEPT: echoed without terminal JSON' }), /complete typed JSON/);
   } finally { f.cleanup(); }
 });
+
+test('Stage-B freezes ordinary benchmark checkers and fixtures before simplification', () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.root, 'bench', 'checks'), { recursive: true });
+    mkdirSync(join(f.root, 'bench', 'fixtures'), { recursive: true });
+    const checker = join(f.root, 'bench', 'checks', 'runtime.mjs');
+    const input = join(f.root, 'bench', 'fixtures', 'expected.mjs');
+    writeFileSync(checker, "import assert from 'node:assert/strict';\nimport product from '../../product.cjs';\nimport { expected } from '../fixtures/expected.mjs';\nassert.equal(product.answer(), expected);\n");
+    writeFileSync(input, 'export const expected = 42;\n');
+    const stageOptions = { ...f, testCmd: `"${process.execPath}" bench/checks/runtime.mjs` };
+    review(f);
+    assert.equal(recordStageB({ ...stageOptions, phase: 'before' }).ok, true);
+    for (const [path, replacement] of [
+      [checker, "import product from '../../product.cjs';\nproduct.answer();\n"],
+      [input, 'export const expected = 41;\n'],
+    ]) {
+      const original = readFileSync(path);
+      writeFileSync(path, replacement);
+      assert.throws(() => recordStageB({ ...stageOptions, phase: 'after', disposition: 'simplified' }), /frozen test files/, 'benchmark grading cannot be weakened under source simplification');
+      writeFileSync(path, original);
+      rmSync(path);
+      assert.throws(() => recordStageB({ ...stageOptions, phase: 'after', disposition: 'simplified' }), /frozen test files/, 'benchmark checker/input deletion invalidates the frozen suite');
+      writeFileSync(path, original);
+    }
+  } finally { f.cleanup(); }
+});

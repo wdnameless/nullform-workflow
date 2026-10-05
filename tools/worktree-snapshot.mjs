@@ -85,9 +85,10 @@ export function sourceDigest(root) {
   return createHash('sha256').update(JSON.stringify([entries, snapshot.secretDigest || null])).digest('hex');
 }
 export function testFilesHash(root) {
+  // Freeze runtime graders and their inputs as well as conventional test files.
   const snapshot = scanWorktree(root);
   const files = snapshot.isGit ? { ...snapshot.tracked, ...snapshot.untracked } : snapshot.files;
-  const entries = Object.entries(files).filter(([p]) => /(^|\/)(tests?|__tests__)\/|\.(test|spec)\.[^/]+$/.test(p)).map(([p, m]) => [p, m.isSecret ? hashFile(join(root, p)) : m.hash]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+  const entries = Object.entries(files).filter(([p]) => /^bench\/(checks|fixtures)\/|(^|\/)(tests?|__tests__)\/|\.(test|spec)\.[^/]+$/.test(p)).map(([p, m]) => [p, m.isSecret ? hashFile(join(root, p)) : m.hash]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   if (!entries.length) throw new Error('Frozen test set is empty; retain real test files before reviewer/Stage-B');
   return createHash('sha256').update(JSON.stringify(entries)).digest('hex');
 }
