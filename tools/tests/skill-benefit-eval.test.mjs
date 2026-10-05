@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEFAULT_MODEL, CAPS, REQUEST_RESERVE_USD, createRequestBudget, computeTariffCost, validateNativeMessage, loadSpendLedger, saveSpendLedger, assertBudgetReady } from "../bench-budget.mjs";
-import { readSession, scoreReview, verifyFrozenTests } from "../bench-results.mjs";
+import { readSession, readRunOutcome, scoreReview, verifyFrozenTests } from "../bench-results.mjs";
 import { parseArgs, runSkillBenefitEval } from "../run-skill-benefit-eval.mjs";
 
 // Fabricated native messages below are deterministic boundary seams, never paid-run evidence.
@@ -183,5 +183,39 @@ test("installed tools-only tree imports evaluation without repository bench file
     }
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(join(tools, "run-skill-benefit-eval.mjs")).href)})`], { cwd: root, encoding: "utf8", shell: false, timeout: 10000 });
     assert.equal(result.status, 0, result.stderr);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("fully accounted incomplete native execution is a failed outcome, unknown spend still halts", async () => {
+  const root = temp();
+  try {
+    const runDir = join(root, "run");
+    const guard = makeGuard(root, async () => new Response());
+    const native = message("working, not a final report", "toolUse");
+    guard.begin(); await guard.fetch(endpoint, payload()); guard.settle(native);
+    transcript(join(runDir, "session"), [native], false);
+    writeFileSync(join(runDir, "input.json"), JSON.stringify({ task: "eval-workflow-execution-outcome", arm: "candidate-skill", selector: DEFAULT_MODEL, fixtureHash: "a".repeat(64), skillHash: "b".repeat(64) }));
+    writeFileSync(join(runDir, "score.json"), JSON.stringify({ requirementsSatisfied: false, failures: ["No normal final assistant completion"] }));
+    writeFileSync(join(runDir, "failure.json"), JSON.stringify({ error: "Request count cap reached", physicalRequests: 1 }));
+    const result = { runId: "unit-seam", runDir, task: "eval-workflow-execution-outcome", arm: "candidate-skill", agentExit: 1, status: "error", checks: [] };
+    const ledger = loadSpendLedger(root);
+    const outcome = readRunOutcome(result, DEFAULT_MODEL, ledger);
+    assert.equal(outcome.evaluationStatus, "failed");
+    assert.equal(outcome.score.requirementsSatisfied, false);
+    assert.equal(outcome.finalText, null);
+    assert.equal(outcome.assistantTurns, 1);
+    assert.equal(outcome.termination.stopReason, "toolUse");
+    assert.equal(outcome.tariff_usd, .001125);
+    assert.equal(outcome.failure.error, "Request count cap reached");
+    assert.equal(outcome.input.fixtureHash, "a".repeat(64));
+    assert.throws(() => readRunOutcome(result, DEFAULT_MODEL, { ...ledger, status: "blocked_unknown_spend" }), /blocked/);
+    assert.throws(() => readRunOutcome(result, DEFAULT_MODEL, { ...ledger, requests: ledger.requests.map(row => ({ ...row, status: "reserved" })) }), /blocked/);
+    assert.throws(() => readRunOutcome(result, DEFAULT_MODEL, { ...ledger, requests: ledger.requests.map(row => ({ ...row, usage: { ...row.usage, cost: { ...row.usage.cost, input: 99 } } })) }), /ledger mismatch/);
+    transcript(join(runDir, "session"), [{ ...native, provider: "wrong-provider" }], false);
+    assert.throws(() => readRunOutcome(result, DEFAULT_MODEL, ledger), /mismatch/);
+    transcript(join(runDir, "session"), [{ ...native, usage: usage(2000,100) }], false);
+    assert.throws(() => readRunOutcome(result, DEFAULT_MODEL, ledger), /ledger mismatch/);
+    transcript(join(runDir, "session"), [{ ...native, usage: { ...native.usage, input: "1000" } }], false);
+    assert.throws(() => readRunOutcome(result, DEFAULT_MODEL, ledger), /Invalid native/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

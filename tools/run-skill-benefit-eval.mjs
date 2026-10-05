@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { runBenchmark, loadTasks, summarizeRuns, compareArms } from "./benchmark.mjs";
 import { DEFAULT_MODEL, CAPS, FIXED_TARIFFS, REQUEST_RESERVE_USD, LEDGER_FILE, loadSpendLedger, assertBudgetReady } from "./bench-budget.mjs";
-import { readSession } from "./bench-results.mjs";
+import { readRunOutcome } from "./bench-results.mjs";
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const args = { root: ".", model: DEFAULT_MODEL, ceiling: 1, dryRun: false, yes: false, json: false };
@@ -52,18 +52,9 @@ export function runSkillBenefitEval(options = {}) {
       const result = runBenchmark({ root, taskId: task.id, arm, cmd, runs: 1, timeoutSec: task.timeoutSec || 120, transcript: "{run_dir}/session/session.jsonl", yes: true })[0];
       const observed = { task: task.id, arm, runId: result.runId, runDir: result.runDir, durationMs: result.durationMs, status: result.status, checks: result.checks };
       runs.push(observed); persist();
-      const current = loadSpendLedger(root);
-      assertBudgetReady(current);
-      const requests = current.requests.filter(r => r.runId === result.runId);
-      if (!requests.length) throw new Error(`Run never dispatched: ${result.runId}; retained process/check errors`);
-      observed.tariff_usd = requests.reduce((n,r) => n + r.tariff_usd, 0);
+      Object.assign(observed, readRunOutcome(result, model, loadSpendLedger(root)));
       const resultPath = join(result.runDir, "result.json");
       result.cost = { total_usd: observed.tariff_usd, sdk_tariff_usd: observed.tariff_usd, source: plan.tariffSource };
-      writeFileSync(resultPath, JSON.stringify(result, null, 2) + "\n");
-      if (result.agentExit !== 0 || result.status !== "ok") throw new Error(`Native run failed: ${result.runId}; known spend/errors retained`);
-      const native = readSession(join(result.runDir, "session"), model);
-      if (native.assistantTurns !== requests.length || Math.abs(native.tariff_usd - observed.tariff_usd) > 1e-9) throw new Error("Transcript/request ledger mismatch");
-      Object.assign(observed, { sessionId: native.sessionId, usage: native.usage, finalText: native.finalText, score: existsSync(join(result.runDir, "score.json")) ? JSON.parse(readFileSync(join(result.runDir, "score.json"), "utf8")) : { requirementsSatisfied: false, error: "Missing/malformed terminal score" }, input: JSON.parse(readFileSync(join(result.runDir, "input.json"), "utf8")) });
       for (const check of result.checks) check.passed = check.passed && observed.score?.requirementsSatisfied === true;
       writeFileSync(resultPath, JSON.stringify(result, null, 2) + "\n");
       if (arm === "candidate-skill") {
@@ -72,7 +63,7 @@ export function runSkillBenefitEval(options = {}) {
       }
       persist();
     }
-    outcome.status = "completed";
+    outcome.status = runs.some(run => run.evaluationStatus === "failed") ? "completed-with-failures" : "completed";
     outcome.comparison = compareArms(summarizeRuns(root, { runIds: runs.map(r => r.runId) }), "baseline-noskill", "candidate-skill");
     outcome.cumulativeSpend = loadSpendLedger(root).cumulative_tariff_usd;
     persist();
