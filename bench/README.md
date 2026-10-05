@@ -53,10 +53,11 @@ No fresh inference, tests or setup verification was executed by the builder. Par
 ```bash
 node tools/test-lens.mjs run -- node --test tools/tests/skill-benefit-eval.test.mjs tools/tests/benchmark.test.mjs
 node tools/test-lens.mjs run -- bun test tools/tests/bench-session-runner.test.ts
+# This explicit Bun/installed-SDK test is not part of the current Node-only CI suite.
 node tools/code-size.mjs check
 node tools/prompt-lint.mjs sizes --check
 ```
 
 Unit native messages/transports are deterministic validation seams, never production execution evidence or a benefit claim.
 
-The native offline test runs the actual installed SDK/agent/tools with fabricated SSE HTTP responses and a deny-all real-network sentinel. It must observe a genuine native implementation write, refusal of an attempted frozen-test write with unchanged test bytes, two guarded requests, normally stopped final assistant and matching durable settlements; it is a regression seam, not comparative API evidence. After those checks, resume only the missing pair with `node tools/run-skill-benefit-eval.mjs --yes --root . --model nullform-gateway/gemini-3.8-flash-high --ceiling 1 --task eval-workflow-execution-outcome`; preserve the six prior review sessions and cumulative ledger.
+The native offline test runs the actual installed SDK/agent/tools in a private Bun child with temporary home/agent directories and native-shaped `models.yml` containing only the exact fixed selector, known fixture tariffs, `offline.invalid` endpoint and a nonsecret dummy credential. Runtime-only environment inheritance and a temporary cwd prevent operator dotenv/auth-file reads; parent environment and SDK caches remain untouched, and argv/fetch are restored in the child's finally block. Real network is denied; only fabricated SSE responses are served. The test requires a genuine implementation write, refusal of a frozen-test write with unchanged bytes, two guarded requests, normally stopped final assistant and matching durable settlements. Bun and the installed OMP SDK are explicit prerequisites; only their absence justifies omitting/skipping this command, never missing operator authentication. This regression seam is not comparative API evidence or a claim of Node-only CI coverage. After checks, resume only the missing pair with `node tools/run-skill-benefit-eval.mjs --yes --root . --model nullform-gateway/gemini-3.8-flash-high --ceiling 1 --task eval-workflow-execution-outcome`; preserve prior review sessions and cumulative ledger.

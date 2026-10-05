@@ -3,15 +3,15 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { spawnSync } from "node:child_process";
 import { run } from "../bench-session-runner.ts";
 import { DEFAULT_MODEL, loadSpendLedger } from "../bench-budget.mjs";
 import { readSession } from "../bench-results.mjs";
 
 // Real installed SDK and native read/write loop; only its HTTP response is fabricated.
 // All real network remains denied, including routes that ignore the injected transport.
-test("native workflow reaches guarded transport, executes a write and records final completion", async () => {
-  const root = mkdtempSync(join(tmpdir(), "bench-native-offline-"));
+async function runOfflineWorkflow(root: string) {
   const runDir = join(root, "run"), repo = join(runDir, "repo");
   const priorArgv = process.argv, priorFetch = globalThis.fetch;
   let calls = 0, escapedCalls = 0;
@@ -28,6 +28,10 @@ test("native workflow reaches guarded transport, executes a write and records fi
       calls++;
       const ledger = loadSpendLedger(root);
       assert.equal(ledger.requests.at(-1).status, "reserved");
+      const url = _input instanceof Request ? _input.url : String(_input);
+      const headers = new Headers(init.headers ?? (_input instanceof Request ? _input.headers : undefined));
+      assert.ok(url === "https://offline.invalid/v1/chat/completions", "Native request escaped the private fixture endpoint");
+      assert.ok(headers.get("authorization") === "Bearer offline-test-dummy", "Native request did not use the private dummy credential");
       assert.equal(ledger.requests.length, calls);
       assert.equal(typeof init.body, "string");
       const body = JSON.parse(init.body as string);
@@ -60,6 +64,29 @@ test("native workflow reaches guarded transport, executes a write and records fi
     assert.ok(Math.abs(ledger.cumulative_tariff_usd - native.tariff_usd) <= 1e-12, "Native and ledger tariff totals differ beyond floating-point tolerance");
   } finally {
     process.argv = priorArgv; globalThis.fetch = priorFetch;
-    rmSync(root, { recursive: true, force: true });
   }
-}, 30000);
+}
+
+const childRoot = process.env.BENCH_NATIVE_OFFLINE_ROOT;
+if (childRoot) {
+  test("native workflow reaches guarded transport, executes a write and records final completion", () => runOfflineWorkflow(childRoot), 30000);
+} else {
+  test("native workflow reaches guarded transport, executes a write and records final completion", () => {
+    const root = mkdtempSync(join(tmpdir(), "bench-native-offline-"));
+    try {
+      const home = join(root, "home"), agentDir = join(root, "agent");
+      mkdirSync(home); mkdirSync(agentDir);
+      // JSON is valid YAML. This dummy endpoint/key can never dispatch real inference.
+      writeFileSync(join(agentDir, "models.yml"), JSON.stringify({ providers: { "nullform-gateway": { baseUrl: "https://offline.invalid/v1", apiKey: "offline-test-dummy", api: "openai-completions", models: [{ id: "gemini-3.8-flash-high", name: "Offline fixture", reasoning: false, input: ["text"], supportsTools: true, cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 }, contextWindow: 1048576, maxTokens: 4096 }] } } }));
+      const env: Record<string, string> = {};
+      for (const key of ["PATH", "SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "TEMP", "TMP"]) {
+        if (process.env[key] !== undefined) env[key] = process.env[key];
+      }
+      Object.assign(env, { HOME: home, USERPROFILE: home, PI_CONFIG_DIR: ".omp", OMP_CONFIG_DIR: ".omp", PI_CODING_AGENT_DIR: agentDir, OMP_CODING_AGENT_DIR: agentDir, BENCH_NATIVE_OFFLINE_ROOT: root });
+      // A private process isolates the SDK's import-time directory cache and eager dotenv reads.
+      // Parent env is never changed; the child restores argv/fetch and dies before cleanup.
+      const result = spawnSync(process.execPath, ["test", fileURLToPath(import.meta.url)], { cwd: root, env, encoding: "utf8", timeout: 40000 });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 45000);
+}
