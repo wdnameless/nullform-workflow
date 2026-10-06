@@ -1,0 +1,9 @@
+{
+  "mode": "strict local replay",
+  "portAllocatedDynamically": true,
+  "capturedStatus": 200,
+  "exactBody": true,
+  "unrecordedStatus": 501,
+  "upstreamRequests": 0,
+  "source": "native-network-proof.cassette.json"
+}

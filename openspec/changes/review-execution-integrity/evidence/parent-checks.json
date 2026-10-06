@@ -1,0 +1,16 @@
+{
+  "cwd": "D:/ohmypi/workflow-repo",
+  "checks": [
+    {"command": "node --test tools/tests/*.test.mjs", "tests": 607, "pass": 607, "fail": 0, "skipped": 0, "exitCode": 0, "outputArtifact": "artifact://4000"},
+    {"command": "node --test tools/tests/doctor.test.mjs", "tests": 51, "pass": 51, "fail": 0, "exitCode": 0},
+    {"command": "node tools/code-size.mjs check --root .", "files": 143, "functions": 925, "exitCode": 0},
+    {"command": "bun test tools/tests/bench-session-runner.test.ts", "pass": 4, "fail": 0, "exitCode": 0, "limitation": "Actual installed SDK/tools with offline fabricated SSE; not live inference proof."},
+    {"command": "node tools/prompt-lint.mjs skills --root . --check", "skills": 70, "structuralErrors": 0, "advisoryWarnings": 130, "exitCode": 0, "outputArtifact": "artifact://4003"},
+    {"command": "node tools/prompt-lint.mjs scan --root .", "promptSurfaces": 160, "exitCode": 0, "outputArtifact": "artifact://4003"},
+    {"command": "openspec validate review-execution-integrity --strict", "exitCode": 0},
+    {"command": "openspec validate skill-structure-audit --strict", "exitCode": 0},
+    {"command": "openspec validate skill-benefit-evaluation --strict", "exitCode": 0}
+  ],
+  "nativeAcceptance": "not-proven: actual review-run failed with spawnSync bun EOF; no receipt fabricated",
+  "scope": "Pre-native-loader-repair verification; parent reruns affected checks after integration."
+}

@@ -1,0 +1,753 @@
+{
+  "model": "nullform-gateway/gemini-3.8-flash-high",
+  "tariffSource": "installed SDK fixed catalog; not independent provider invoice",
+  "knownCumulativeTariffUsd": 0.034614,
+  "knownSettledRequests": 17,
+  "outcomes": [
+    {
+      "task": "eval-review-positive",
+      "arm": "baseline-noskill",
+      "status": "ok",
+      "evaluationStatus": "passed",
+      "sessionId": "01a10d03-1b3e-7717-9091-fb7c610686a3",
+      "assistantTurns": 1,
+      "usage": {
+        "input": 887,
+        "output": 187,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "turns": [
+        {
+          "stopReason": "stop",
+          "usage": {
+            "input": 887,
+            "output": 187,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 1074,
+            "reasoningTokens": 2972,
+            "cost": {
+              "input": 0.00066525,
+              "output": 0.00070125,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0013665
+            }
+          }
+        }
+      ],
+      "finalText": "{\"mode\":\"implementation-review\",\"verdict\":\"incorrect\",\"findings\":[{\"file_path\":\"src/dispatcher.ts\",\"title\":\"Missing handler for pause event\",\"body\":\"Trigger: Calling dispatchEvent with a 'pause' event (e.g., { kind: 'pause', timestamp: Date.now(), reason: 'paused' }). Effect: The switch statement lacks a case for 'pause', falling through and returning undefined at runtime while violating R01. Replacement: Add `case \\\"pause\\\": return `Paused pipeline: ${event.reason}`;` to dispatchEvent.\"},{\"file_path\":\"src/utils.ts\",\"title\":\"customPad uses custom loop vulnerable to infinite loop on empty char\",\"body\":\"Trigger: Calling customPad(str, len, '') where str.length < len. Effect: The while loop does not advance res.length, creating an infinite loop that hangs the thread, and violates R03 requiring native padding. Replacement: Replace the manual loop with `return str.padStart(len, char);`.\"}]}",
+      "termination": {
+        "completed": true,
+        "stopReason": "stop"
+      },
+      "tariff_usd": 0.0013665,
+      "score": {
+        "scenario": "positive",
+        "activation": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "simplificationIdentified": true,
+        "requirementsSatisfied": true,
+        "findings": [
+          {
+            "file_path": "src/dispatcher.ts",
+            "title": "Missing handler for pause event",
+            "body": "Trigger: Calling dispatchEvent with a 'pause' event (e.g., { kind: 'pause', timestamp: Date.now(), reason: 'paused' }). Effect: The switch statement lacks a case for 'pause', falling through and returning undefined at runtime while violating R01. Replacement: Add `case \"pause\": return `Paused pipeline: ${event.reason}`;` to dispatchEvent."
+          },
+          {
+            "file_path": "src/utils.ts",
+            "title": "customPad uses custom loop vulnerable to infinite loop on empty char",
+            "body": "Trigger: Calling customPad(str, len, '') where str.length < len. Effect: The while loop does not advance res.length, creating an infinite loop that hangs the thread, and violates R03 requiring native padding. Replacement: Replace the manual loop with `return str.padStart(len, char);`."
+          }
+        ],
+        "executionFailures": []
+      },
+      "input": {
+        "task": "eval-review-positive",
+        "arm": "baseline-noskill",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "fixtureHash": "d659a1371806e2d80bd17e969d94bfe3866560c1540d57b9864670ff04268fd8",
+        "skillHash": null,
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        }
+      },
+      "failure": null
+    },
+    {
+      "task": "eval-review-positive",
+      "arm": "candidate-skill",
+      "status": "ok",
+      "evaluationStatus": "passed",
+      "sessionId": "01a10d03-93de-74c7-8b42-21443e98261c",
+      "assistantTurns": 1,
+      "usage": {
+        "input": 2294,
+        "output": 189,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "turns": [
+        {
+          "stopReason": "stop",
+          "usage": {
+            "input": 2294,
+            "output": 189,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 2483,
+            "reasoningTokens": 1917,
+            "cost": {
+              "input": 0.0017205,
+              "output": 0.0007087500000000001,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.00242925
+            }
+          }
+        }
+      ],
+      "finalText": "{\n  \"mode\": \"implementation-review\",\n  \"verdict\": \"incorrect\",\n  \"findings\": [\n    {\n      \"file_path\": \"src/dispatcher.ts\",\n      \"title\": \"Unhandled pause event variant in dispatchEvent\",\n      \"body\": \"When dispatchEvent receives a PipelineEvent with kind 'pause', the switch statement lacks a matching case and falls through, returning undefined instead of keeping added events actionable per R01. Add a case for 'pause' that returns a descriptive pipeline status string.\"\n    },\n    {\n      \"file_path\": \"src/utils.ts\",\n      \"title\": \"Custom string padding reinvents native padStart and hangs on empty char\",\n      \"body\": \"customPad duplicates native String.prototype.padStart violating R03, and if passed char = '' when str.length < len it triggers an infinite loop because res.length never increases. Replace the custom implementation with str.padStart(len, char).\"\n    }\n  ]\n}",
+      "termination": {
+        "completed": true,
+        "stopReason": "stop"
+      },
+      "tariff_usd": 0.00242925,
+      "score": {
+        "scenario": "positive",
+        "activation": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "simplificationIdentified": true,
+        "requirementsSatisfied": true,
+        "findings": [
+          {
+            "file_path": "src/dispatcher.ts",
+            "title": "Unhandled pause event variant in dispatchEvent",
+            "body": "When dispatchEvent receives a PipelineEvent with kind 'pause', the switch statement lacks a matching case and falls through, returning undefined instead of keeping added events actionable per R01. Add a case for 'pause' that returns a descriptive pipeline status string."
+          },
+          {
+            "file_path": "src/utils.ts",
+            "title": "Custom string padding reinvents native padStart and hangs on empty char",
+            "body": "customPad duplicates native String.prototype.padStart violating R03, and if passed char = '' when str.length < len it triggers an infinite loop because res.length never increases. Replace the custom implementation with str.padStart(len, char)."
+          }
+        ],
+        "executionFailures": []
+      },
+      "input": {
+        "task": "eval-review-positive",
+        "arm": "candidate-skill",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "fixtureHash": "d659a1371806e2d80bd17e969d94bfe3866560c1540d57b9864670ff04268fd8",
+        "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2",
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        }
+      },
+      "failure": null
+    },
+    {
+      "task": "eval-review-near-negative",
+      "arm": "baseline-noskill",
+      "status": "ok",
+      "evaluationStatus": "passed",
+      "sessionId": "01a10d03-c441-7467-86fb-8ad68702b0f1",
+      "assistantTurns": 1,
+      "usage": {
+        "input": 444,
+        "output": 30,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "turns": [
+        {
+          "stopReason": "stop",
+          "usage": {
+            "input": 444,
+            "output": 30,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 474,
+            "reasoningTokens": 322,
+            "cost": {
+              "input": 0.000333,
+              "output": 0.0001125,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.00044550000000000004
+            }
+          }
+        }
+      ],
+      "finalText": "{\"mode\":\"blind-acceptance\",\"verdict\":\"ACCEPT\",\"requirements\":{\"R01\":\"proven\",\"R02\":\"proven\"},\"findings\":[]}",
+      "termination": {
+        "completed": true,
+        "stopReason": "stop"
+      },
+      "tariff_usd": 0.0004455,
+      "score": {
+        "scenario": "negative",
+        "activation": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "requirementsSatisfied": true,
+        "findings": [],
+        "executionFailures": []
+      },
+      "input": {
+        "task": "eval-review-near-negative",
+        "arm": "baseline-noskill",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "fixtureHash": "6bf1970c4d843828fae2d61af7d5cdfa7693f8a1f8db62b32f583b8e54f0e1ad",
+        "skillHash": null,
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        }
+      },
+      "failure": null
+    },
+    {
+      "task": "eval-review-near-negative",
+      "arm": "candidate-skill",
+      "status": "ok",
+      "evaluationStatus": "passed",
+      "sessionId": "01a10d03-e393-7354-a30d-6e60f17320fa",
+      "assistantTurns": 1,
+      "usage": {
+        "input": 1851,
+        "output": 57,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "turns": [
+        {
+          "stopReason": "stop",
+          "usage": {
+            "input": 1851,
+            "output": 57,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 1908,
+            "reasoningTokens": 769,
+            "cost": {
+              "input": 0.00138825,
+              "output": 0.00021375000000000002,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.001602
+            }
+          }
+        }
+      ],
+      "finalText": "{\n  \"mode\": \"blind-acceptance\",\n  \"verdict\": \"ACCEPT\",\n  \"requirements\": {\n    \"R01\": \"proven\",\n    \"R02\": \"proven\"\n  },\n  \"findings\": []\n}",
+      "termination": {
+        "completed": true,
+        "stopReason": "stop"
+      },
+      "tariff_usd": 0.001602,
+      "score": {
+        "scenario": "negative",
+        "activation": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "requirementsSatisfied": true,
+        "findings": [],
+        "executionFailures": []
+      },
+      "input": {
+        "task": "eval-review-near-negative",
+        "arm": "candidate-skill",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "fixtureHash": "6bf1970c4d843828fae2d61af7d5cdfa7693f8a1f8db62b32f583b8e54f0e1ad",
+        "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2",
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        }
+      },
+      "failure": null
+    },
+    {
+      "task": "eval-review-defect-outcome",
+      "arm": "baseline-noskill",
+      "status": "ok",
+      "evaluationStatus": "passed",
+      "sessionId": "01a10d04-1649-73dd-baa2-175a542923c3",
+      "assistantTurns": 1,
+      "usage": {
+        "input": 895,
+        "output": 223,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "turns": [
+        {
+          "stopReason": "stop",
+          "usage": {
+            "input": 895,
+            "output": 223,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 1118,
+            "reasoningTokens": 3639,
+            "cost": {
+              "input": 0.00067125,
+              "output": 0.00083625,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0015075
+            }
+          }
+        }
+      ],
+      "finalText": "{\n  \"mode\": \"implementation-review\",\n  \"verdict\": \"incorrect\",\n  \"findings\": [\n    {\n      \"file_path\": \"src/router.ts\",\n      \"title\": \"Missing ExportReport case in handleCommand\",\n      \"body\": \"When handleCommand receives a command with type 'ExportReport', the switch statement does not match any case and returns undefined, violating the function's return type and requirement R01. Add 'case \\\"ExportReport\\\": return { success: true, message: `Exporting ${cmd.format.toUpperCase()} report to ${cmd.destination}` };' to handleCommand.\"\n    },\n    {\n      \"file_path\": \"src/utils.ts\",\n      \"title\": \"shallowOrDeepCopy uses bespoke JSON serialization wrapper\",\n      \"body\": \"Calling shallowOrDeepCopy on values such as Date, Map, Set, or BigInt results in data loss or runtime TypeErrors because JSON.parse(JSON.stringify(val)) does not preserve rich JavaScript types, violating requirement R03. Replace the implementation with 'return structuredClone(val);'.\"\n    }\n  ]\n}",
+      "termination": {
+        "completed": true,
+        "stopReason": "stop"
+      },
+      "tariff_usd": 0.0015075,
+      "score": {
+        "scenario": "defect",
+        "activation": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "simplificationIdentified": true,
+        "requirementsSatisfied": true,
+        "findings": [
+          {
+            "file_path": "src/router.ts",
+            "title": "Missing ExportReport case in handleCommand",
+            "body": "When handleCommand receives a command with type 'ExportReport', the switch statement does not match any case and returns undefined, violating the function's return type and requirement R01. Add 'case \"ExportReport\": return { success: true, message: `Exporting ${cmd.format.toUpperCase()} report to ${cmd.destination}` };' to handleCommand."
+          },
+          {
+            "file_path": "src/utils.ts",
+            "title": "shallowOrDeepCopy uses bespoke JSON serialization wrapper",
+            "body": "Calling shallowOrDeepCopy on values such as Date, Map, Set, or BigInt results in data loss or runtime TypeErrors because JSON.parse(JSON.stringify(val)) does not preserve rich JavaScript types, violating requirement R03. Replace the implementation with 'return structuredClone(val);'."
+          }
+        ],
+        "executionFailures": []
+      },
+      "input": {
+        "task": "eval-review-defect-outcome",
+        "arm": "baseline-noskill",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "fixtureHash": "6269e3512776f32e3a5cfeb4c326088e7d75878e355fd5faddbb8caf1ee0dd79",
+        "skillHash": null,
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        }
+      },
+      "failure": null
+    },
+    {
+      "task": "eval-review-defect-outcome",
+      "arm": "candidate-skill",
+      "status": "ok",
+      "evaluationStatus": "passed",
+      "sessionId": "01a10d04-57f3-7357-9af8-9ba815a101dc",
+      "assistantTurns": 1,
+      "usage": {
+        "input": 2302,
+        "output": 240,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "turns": [
+        {
+          "stopReason": "stop",
+          "usage": {
+            "input": 2302,
+            "output": 240,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 2542,
+            "reasoningTokens": 2417,
+            "cost": {
+              "input": 0.0017265,
+              "output": 0.0009,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0026265
+            }
+          }
+        }
+      ],
+      "finalText": "{\n  \"mode\": \"implementation-review\",\n  \"verdict\": \"incorrect\",\n  \"findings\": [\n    {\n      \"file_path\": \"src/router.ts\",\n      \"title\": \"Unhandled ExportReport command variant in router\",\n      \"body\": \"Trigger: Dispatching an 'ExportReport' command to handleCommand(cmd). Effect: The switch statement lacks a branch for 'ExportReport', causing handleCommand to fall through and return undefined, violating the declared return contract { success: boolean; message: string } and failing R01. Replacement: Add a case 'ExportReport' branch in src/router.ts that processes destination and format and returns a valid { success: boolean; message: string } response.\"\n    },\n    {\n      \"file_path\": \"src/utils.ts\",\n      \"title\": \"Bespoke JSON serialization used for cloning instead of native standard library\",\n      \"body\": \"Trigger: Calling shallowOrDeepCopy with supported JavaScript values such as Date, Map, Set, undefined, or BigInt. Effect: JSON.parse(JSON.stringify(val)) corrupts dates, drops undefined, throws on BigInt, and introduces unnecessary serialization overhead, violating R03. Replacement: Replace JSON.parse(JSON.stringify(val)) with native structuredClone(val).\"\n    }\n  ]\n}",
+      "termination": {
+        "completed": true,
+        "stopReason": "stop"
+      },
+      "tariff_usd": 0.0026265,
+      "score": {
+        "scenario": "defect",
+        "activation": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "simplificationIdentified": true,
+        "requirementsSatisfied": true,
+        "findings": [
+          {
+            "file_path": "src/router.ts",
+            "title": "Unhandled ExportReport command variant in router",
+            "body": "Trigger: Dispatching an 'ExportReport' command to handleCommand(cmd). Effect: The switch statement lacks a branch for 'ExportReport', causing handleCommand to fall through and return undefined, violating the declared return contract { success: boolean; message: string } and failing R01. Replacement: Add a case 'ExportReport' branch in src/router.ts that processes destination and format and returns a valid { success: boolean; message: string } response."
+          },
+          {
+            "file_path": "src/utils.ts",
+            "title": "Bespoke JSON serialization used for cloning instead of native standard library",
+            "body": "Trigger: Calling shallowOrDeepCopy with supported JavaScript values such as Date, Map, Set, undefined, or BigInt. Effect: JSON.parse(JSON.stringify(val)) corrupts dates, drops undefined, throws on BigInt, and introduces unnecessary serialization overhead, violating R03. Replacement: Replace JSON.parse(JSON.stringify(val)) with native structuredClone(val)."
+          }
+        ],
+        "executionFailures": []
+      },
+      "input": {
+        "task": "eval-review-defect-outcome",
+        "arm": "candidate-skill",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "fixtureHash": "6269e3512776f32e3a5cfeb4c326088e7d75878e355fd5faddbb8caf1ee0dd79",
+        "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2",
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        }
+      },
+      "failure": null
+    },
+    {
+      "task": "eval-workflow-execution-outcome",
+      "arm": "baseline-noskill",
+      "status": "ok",
+      "evaluationStatus": "passed",
+      "sessionId": "01a10d2c-a4bd-762a-8b85-c62d3a5cbb0d",
+      "assistantTurns": 5,
+      "usage": {
+        "input": 5809,
+        "output": 221,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "turns": [
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 621,
+            "output": 25,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 646,
+            "reasoningTokens": 350,
+            "cost": {
+              "input": 0.00046575,
+              "output": 0.00009375,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0005595
+            }
+          }
+        },
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 1050,
+            "output": 27,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 1077,
+            "reasoningTokens": 30,
+            "cost": {
+              "input": 0.0007875,
+              "output": 0.00010125000000000001,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.00088875
+            }
+          }
+        },
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 1212,
+            "output": 68,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 1280,
+            "reasoningTokens": 115,
+            "cost": {
+              "input": 0.000909,
+              "output": 0.000255,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.001164
+            }
+          }
+        },
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 1419,
+            "output": 25,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 1444,
+            "reasoningTokens": 15,
+            "cost": {
+              "input": 0.00106425,
+              "output": 0.00009375,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0011580000000000002
+            }
+          }
+        },
+        {
+          "stopReason": "stop",
+          "usage": {
+            "input": 1507,
+            "output": 76,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 1583,
+            "reasoningTokens": 282,
+            "cost": {
+              "input": 0.00113025,
+              "output": 0.000285,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0014152499999999998
+            }
+          }
+        }
+      ],
+      "finalText": "STATUS: DONE\nFILES: src/calc.mjs\nTESTS: not-run(parent-owned)\nINTERFACES: multiply(a,b)\nREQUIREMENTS: R01 product, R02 frozen tests\nCONCERNS: honest execution limits (tests not executed locally as environment lacks test runner/bash; frozen test file was unmodified)",
+      "termination": {
+        "completed": true,
+        "stopReason": "stop"
+      },
+      "tariff_usd": 0.0051855,
+      "score": {
+        "scenario": "workflow",
+        "requirementsSatisfied": true,
+        "failures": [],
+        "executionFailures": []
+      },
+      "input": {
+        "task": "eval-workflow-execution-outcome",
+        "arm": "baseline-noskill",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "fixtureHash": "2ac2675bf860259da78f0343bef7fbd6241e54da5b987c1c8752d06b75bb0489",
+        "skillHash": null,
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        }
+      },
+      "failure": null
+    },
+    {
+      "task": "eval-workflow-execution-outcome",
+      "arm": "candidate-skill",
+      "status": "error",
+      "evaluationStatus": "failed",
+      "sessionId": "01a10d2c-ee0d-744e-8840-ee85535e4971",
+      "assistantTurns": 6,
+      "usage": {
+        "input": 24965,
+        "output": 194,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "turns": [
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 2215,
+            "output": 25,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 2240,
+            "reasoningTokens": 584,
+            "cost": {
+              "input": 0.00166125,
+              "output": 0.00009375,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.001755
+            }
+          }
+        },
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 2878,
+            "output": 27,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 2905,
+            "reasoningTokens": 23,
+            "cost": {
+              "input": 0.0021585000000000003,
+              "output": 0.00010125000000000001,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0022597500000000005
+            }
+          }
+        },
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 3033,
+            "output": 22,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 3055,
+            "reasoningTokens": 1340,
+            "cost": {
+              "input": 0.00227475,
+              "output": 0.0000825,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.00235725
+            }
+          }
+        },
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 4416,
+            "output": 68,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 4484,
+            "reasoningTokens": 581,
+            "cost": {
+              "input": 0.0033120000000000003,
+              "output": 0.000255,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0035670000000000003
+            }
+          }
+        },
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 5089,
+            "output": 25,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 5114,
+            "reasoningTokens": 2172,
+            "cost": {
+              "input": 0.0038167500000000003,
+              "output": 0.00009375,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.0039105
+            }
+          }
+        },
+        {
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 7334,
+            "output": 27,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7361,
+            "reasoningTokens": 24,
+            "cost": {
+              "input": 0.0055005,
+              "output": 0.00010125000000000001,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.00560175
+            }
+          }
+        }
+      ],
+      "finalText": null,
+      "termination": {
+        "completed": false,
+        "stopReason": "toolUse"
+      },
+      "tariff_usd": 0.01945125,
+      "score": {
+        "scenario": "workflow",
+        "requirementsSatisfied": false,
+        "failures": [
+          "Missing/invalid native session completion attribution"
+        ],
+        "executionFailures": [
+          "Native process status error, exit 1",
+          "No normally completed final assistant report"
+        ]
+      },
+      "input": {
+        "task": "eval-workflow-execution-outcome",
+        "arm": "candidate-skill",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "fixtureHash": "2ac2675bf860259da78f0343bef7fbd6241e54da5b987c1c8752d06b75bb0489",
+        "skillHash": "356612ee6ee380c802cb200ef23e133e51541681aa45ade4f35742dbb723a81e",
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        }
+      },
+      "failure": {
+        "sessionId": "01a10d2c-ee0d-744e-8840-ee85535e4971",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "error": "No normal final assistant completion: toolUse",
+        "streamCalls": 7,
+        "contextBytes": 21836,
+        "physicalRequests": 6,
+        "recordedAssistantTurns": 6,
+        "nativeMessageCount": 13,
+        "nativeTerminal": {
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "stopReason": "toolUse",
+          "errorMessage": "",
+          "usage": {
+            "input": 7334,
+            "output": 27,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 7361,
+            "reasoningTokens": 24,
+            "cost": {
+              "input": 0.0055005,
+              "output": 0.00010125000000000001,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.00560175
+            }
+          },
+          "recorded": true
+        }
+      }
+    }
+  ],
+  "method": "Four constructed representative cases, baseline and target body injection, one model/one repeat; known bounded failures are observations, not successful completions. No quality gain inferred."
+}
