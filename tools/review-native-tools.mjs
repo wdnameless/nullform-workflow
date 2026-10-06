@@ -7,27 +7,96 @@ import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isS
 function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 }
-export function inspectProduct(options, path = '', kind = 'source') {
+const MAX_AGGREGATE_CHUNK_BYTES = 28 * 1024;
+
+function sliceUtf8Page(buffer, offset, budget) {
+  const total = buffer.length;
+  if (offset >= total) return { text: '', nextOffset: null };
+  const target = Math.min(offset + budget, total);
+  if (target >= total) {
+    return { text: buffer.subarray(offset, total).toString('utf8'), nextOffset: null };
+  }
+  let boundary = target;
+  while (boundary > offset && (buffer[boundary] & 0xC0) === 0x80) boundary--;
+  if (boundary > offset) {
+    const lead = buffer[boundary];
+    let len = 1;
+    if ((lead & 0x80) === 0) len = 1;
+    else if ((lead & 0xE0) === 0xC0) len = 2;
+    else if ((lead & 0xF0) === 0xE0) len = 3;
+    else if ((lead & 0xF8) === 0xF0) len = 4;
+    if (boundary + len <= target) boundary += len;
+  }
+  if (boundary <= offset) {
+    const lead = buffer[offset];
+    let len = 1;
+    if ((lead & 0x80) === 0) len = 1;
+    else if ((lead & 0xE0) === 0xC0) len = 2;
+    else if ((lead & 0xF0) === 0xE0) len = 3;
+    else if ((lead & 0xF8) === 0xF0) len = 4;
+    boundary = Math.min(offset + len, total);
+  }
+  return {
+    text: buffer.subarray(offset, boundary).toString('utf8'),
+    nextOffset: boundary < total ? boundary : null,
+  };
+}
+export function inspectProduct(options, requests) {
+  if (!Array.isArray(requests) || requests.length === 0 || requests.length > 8) {
+    throw new Error('inspectProduct requires an array of 1 to 8 request objects');
+  }
   const { root, role, changeId } = options || {};
   const baseRef = options?.baseRef || options?.provenance?.baseRef || null;
   const snapshot = scanWorktree(root);
   const files = snapshot.isGit ? { ...snapshot.tracked, ...snapshot.untracked } : snapshot.files;
   const allowed = p => !isSecretOrCredentialPath(p) && !isStructuralExcludedPath(p) && !isAcceptancePath(p) && !files[p]?.isSecret && (role !== 'oracle' || !p.startsWith('openspec/') || p === `openspec/changes/${changeId}/manifest.md`) && !/review-evidence.*\.json$/.test(p);
 
-  if (kind === 'diff') {
-    if (role !== 'reviewer') throw new Error('Diff inspection is available only to implementation reviewer');
-    if (!baseRef) throw new Error('Diff inspection requires an explicit base revision');
-    const changed = git(root, ['diff', '--name-only', '-z', baseRef, '--', '.']).split('\0').filter(p => p && allowed(p));
-    if (!path) return changed.sort().join('\n');
-    if (!isPathInsideRoot(root, path) || !allowed(path)) throw new Error('Inspection path is outside allowed product source');
-    if (!changed.includes(path)) throw new Error(`Inspection path has no diff against base revision: ${path}`);
-    if (existsSync(join(root, path)) && !isRealPathInsideRoot(root, path)) throw new Error('Inspection path is outside allowed product source');
-    return git(root, ['--literal-pathspecs', 'diff', baseRef, '--', path]);
-  }
+  const budgetPerRequest = Math.floor(MAX_AGGREGATE_CHUNK_BYTES / requests.length);
+  let changedList = null;
+  const getChanged = () => {
+    if (!changedList) {
+      changedList = git(root, ['diff', '--name-only', '-z', baseRef, '--', '.']).split('\0').filter(p => p && allowed(p));
+    }
+    return changedList;
+  };
 
-  if (!path) return Object.keys(files).filter(allowed).sort().join('\n');
-  if (!Object.hasOwn(files, path) || !allowed(path) || !isRealPathInsideRoot(root, path)) throw new Error('Inspection path is outside allowed product source');
-  return readFileSync(join(root, path), 'utf8');
+  const pages = [];
+  for (const req of requests) {
+    if (!req || typeof req !== 'object') throw new Error('Each request must be an object');
+    const path = typeof req.path === 'string' ? req.path : '';
+    const kind = req.kind || 'source';
+    const offset = req.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error(`Invalid request offset: ${offset}`);
+    if (!['source', 'diff'].includes(kind)) throw new Error(`Invalid request kind: ${kind}`);
+
+    let rawBuffer;
+    if (kind === 'diff') {
+      if (role !== 'reviewer') throw new Error('Diff inspection is available only to implementation reviewer');
+      if (!baseRef) throw new Error('Diff inspection requires an explicit base revision');
+      if (!path) {
+        rawBuffer = Buffer.from(getChanged().sort().join('\n'), 'utf8');
+      } else {
+        if (!isPathInsideRoot(root, path) || !allowed(path)) throw new Error('Inspection path is outside allowed product source');
+        if (!getChanged().includes(path)) throw new Error(`Inspection path has no diff against base revision: ${path}`);
+        if (existsSync(join(root, path)) && !isRealPathInsideRoot(root, path)) throw new Error('Inspection path is outside allowed product source');
+        rawBuffer = Buffer.from(git(root, ['--literal-pathspecs', 'diff', baseRef, '--', path]), 'utf8');
+      }
+    } else {
+      if (!path) {
+        rawBuffer = Buffer.from(Object.keys(files).filter(allowed).sort().join('\n'), 'utf8');
+      } else {
+        if (!Object.hasOwn(files, path) || !allowed(path) || !isRealPathInsideRoot(root, path)) throw new Error('Inspection path is outside allowed product source');
+        rawBuffer = readFileSync(join(root, path));
+      }
+    }
+
+    const totalBytes = rawBuffer.length;
+    if (offset > totalBytes) throw new Error(`Request offset ${offset} exceeds total bytes ${totalBytes}`);
+    const contentHash = createHash('sha256').update(rawBuffer).digest('hex');
+    const { text, nextOffset } = sliceUtf8Page(rawBuffer, offset, budgetPerRequest);
+    pages.push({ path, kind, offset, nextOffset, totalBytes, contentHash, text });
+  }
+  return pages;
 }
 export function executeProduct({ root, productCommand }) {
   if (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(x => typeof x !== 'string' || x.includes('\0')) || !productCommand[0].trim()) throw new Error('No operator-authorized product command');
@@ -42,15 +111,19 @@ export default function (pi) {
   pi.registerTool({
     name: 'inspect_product',
     label: 'Inspect product',
-    description: 'Read product source or inspect git diff. Credentials and oracle planning documents are inaccessible.',
+    description: 'Read product source or inspect git diffs in bounded batches (max 8 requests) with recoverable paging. If nextOffset is not null, request subsequent page with offset=nextOffset.',
     approval: 'read',
     loadMode: 'essential',
     parameters: pi.zod.object({
-      path: pi.zod.string().default(''),
-      kind: pi.zod.enum(['source', 'diff']).default('source'),
+      requests: pi.zod.array(pi.zod.object({
+        path: pi.zod.string().default(''),
+        kind: pi.zod.enum(['source', 'diff']).default('source'),
+        offset: pi.zod.number().int().min(0).default(0),
+      })).min(1).max(8),
     }),
     async execute(_id, params) {
-      return { content: [{ type: 'text', text: inspectProduct(options, params?.path || '', params?.kind || 'source') }] };
+      const pages = inspectProduct(options, params?.requests);
+      return { content: [{ type: 'text', text: JSON.stringify(pages, null, 2) }] };
     },
   });
   pi.registerTool({

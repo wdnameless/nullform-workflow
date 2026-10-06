@@ -178,10 +178,10 @@ test('prompt bypass, path traversal, credentials and blind planning documents ar
     writeFileSync(join(f.changeDir, 'proposal.md'), 'Private plan');
     writeFileSync(join(f.root, 'secrets.json'), 'Synthetic fixture credential');
     const options = { ...f, role: 'oracle' };
-    assert.throws(() => inspectProduct(options, '../outside'), /allowed/);
-    assert.throws(() => inspectProduct(options, 'secrets.json'), /allowed/);
-    assert.throws(() => inspectProduct(options, 'openspec/changes/integrity/proposal.md'), /allowed/);
-    assert.match(inspectProduct(options, 'product.cjs'), /answer/);
+    assert.throws(() => inspectProduct(options, [{ path: '../outside' }]), /allowed/);
+    assert.throws(() => inspectProduct(options, [{ path: 'secrets.json' }]), /allowed/);
+    assert.throws(() => inspectProduct(options, [{ path: 'openspec/changes/integrity/proposal.md' }]), /allowed/);
+    assert.match(inspectProduct(options, [{ path: 'product.cjs' }])[0].text, /answer/);
     writeFileSync(join(outside, 'manifest.md'), '| R01 | escape |\n');
     rmSync(join(f.changeDir, 'manifest.md'));
     try {
@@ -354,18 +354,18 @@ test('review request contains approved role body and manifest without credential
       assert.doesNotMatch(args.prompt, /synthetic-do-not-send/);
       return transport(args);
     } });
-    assert.match(inspectProduct(f, 'product.cjs'), /exports\.answer = \(\) => 21 \* 2/);
-    assert.throws(() => inspectProduct(f, 'secrets.json'), /allowed/);
+    assert.match(inspectProduct(f, [{ path: 'product.cjs' }])[0].text, /exports\.answer = \(\) => 21 \* 2/);
+    assert.throws(() => inspectProduct(f, [{ path: 'secrets.json' }]), /allowed/);
     // Diff inventory lists deleted file alongside modified file
-    const changedInventory = inspectProduct({ ...f, role: 'reviewer', baseRef }, '', 'diff');
+    const changedInventory = inspectProduct({ ...f, role: 'reviewer', baseRef }, [{ path: '', kind: 'diff' }])[0].text;
     assert.match(changedInventory, /deleted\.cjs/);
     assert.match(changedInventory, /product\.cjs/);
     // Reviewer retrieves deletion diff; unchanged file or missing baseRef is rejected
-    const diff = inspectProduct({ ...f, role: 'reviewer', baseRef }, 'deleted.cjs', 'diff');
+    const diff = inspectProduct({ ...f, role: 'reviewer', baseRef }, [{ path: 'deleted.cjs', kind: 'diff' }])[0].text;
     assert.match(diff, /deleted file mode|--- a\/deleted\.cjs/);
-    assert.throws(() => inspectProduct({ ...f, role: 'reviewer', baseRef }, 'agent/agents/reviewer.md', 'diff'), /has no diff against base revision/);
-    assert.throws(() => inspectProduct({ ...f, role: 'reviewer' }, 'product.cjs', 'diff'), /requires an explicit base revision/);
-    assert.throws(() => inspectProduct({ ...f, role: 'oracle', baseRef }, 'product.cjs', 'diff'), /only to implementation reviewer/);
+    assert.throws(() => inspectProduct({ ...f, role: 'reviewer', baseRef }, [{ path: 'agent/agents/reviewer.md', kind: 'diff' }]), /has no diff against base revision/);
+    assert.throws(() => inspectProduct({ ...f, role: 'reviewer' }, [{ path: 'product.cjs', kind: 'diff' }]), /requires an explicit base revision/);
+    assert.throws(() => inspectProduct({ ...f, role: 'oracle', baseRef }, [{ path: 'product.cjs', kind: 'diff' }]), /only to implementation reviewer/);
     const transport2 = nativeRunner();
     assert.throws(() => runReviewRecord({ ...f, role: 'reviewer', redo: true, baseRef, ompRunner: args => {
       const result = transport2(args);
@@ -456,5 +456,27 @@ test('Stage-B freezes ordinary benchmark checkers and fixtures before simplifica
       assert.throws(() => recordStageB({ ...stageOptions, phase: 'after', disposition: 'simplified' }), /frozen test files/, 'benchmark checker/input deletion invalidates the frozen suite');
       writeFileSync(path, original);
     }
+  } finally { f.cleanup(); }
+});
+
+test('inspectProduct: handles batches up to 8 and byte-exact reassembles >50KB multi-byte content across recoverable pages', () => {
+  const f = fixture();
+  try {
+    const largeContent = '\uFEFF' + 'Line of unicode: Привет мир! 🚀 测试 emoji and CRLF\r\n'.repeat(1600);
+    writeFileSync(join(f.root, 'large.txt'), largeContent, 'utf8');
+    assert.ok(Buffer.byteLength(largeContent, 'utf8') > 50 * 1024);
+    assert.throws(() => inspectProduct(f, []), /1 to 8/);
+    assert.throws(() => inspectProduct(f, new Array(9).fill({ path: 'product.cjs' })), /1 to 8/);
+    const batchRes = inspectProduct(f, new Array(8).fill({ path: 'product.cjs' }));
+    assert.equal(batchRes.length, 8);
+    let offset = 0;
+    const chunks = [];
+    while (offset !== null) {
+      const [page] = inspectProduct(f, [{ path: 'large.txt', offset }]);
+      assert.ok(Buffer.byteLength(page.text, 'utf8') <= 28 * 1024);
+      chunks.push(page.text);
+      offset = page.nextOffset;
+    }
+    assert.equal(chunks.join(''), largeContent);
   } finally { f.cleanup(); }
 });
