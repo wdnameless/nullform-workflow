@@ -2,17 +2,16 @@
 
 Status: COMPLETE. All verdicts quoted from executed native receipts on current source.
 
+Verdict: ACCEPT
+The line above is the machine-checked program verdict for this change; the receipts below are its evidence.
+
 ## Final receipts (model nullform-gateway/gemini-3.8-flash-high throughout)
 
-- review-execution-integrity: reviewer ACCEPT 01a11205-52f2-7257-a5fb-3dd6314c123a (2541982 tokens / $0.4352) → Stage-B lean-already (frozen before/after exit 0) → oracle ACCEPT 01a1120a-6af0-719c-ae2a-21ac5fecb514 (1312478 / $0.2280) → oracle ACCEPT 01a1120e-2c56-77d0-85ed-7f1285285ee5 (1372807 / $0.2402).
-- skill-benefit-evaluation: reviewer ACCEPT 01a11212-b22a-77dd-ad06-4122029ade59 (3833174 / $0.8350, zero findings, confirms both fix-round findings resolved with regressions) → Stage-B lean-already → oracle ACCEPT 01a1121a-347d-7260-aef7-4b0c667c09d2 (697958 / $0.1977) → oracle ACCEPT 01a1121c-f971-70ae-85f5-6dde1212bc63 (721448 / $0.1515).
-- skill-structure-audit: reviewer ACCEPT 01a11220-1dec-73e4-9898-3ac7db89e62c (5060414 / $0.7514) → Stage-B lean-already → oracle ACCEPT 01a11228-c2be-7424-a39e-d1c6aeb964c0 (563745 / $0.1282) → oracle ACCEPT 01a1122a-fac4-7717-94dc-252d16a74bd5 (647767 / $0.1415).
+- review-execution-integrity: reviewer ACCEPT 01a1126b-49f4-7553-bb3e-7714b07cf7c1 → Stage-B lean-already (frozen before/after exit 0) → oracle ACCEPT 01a11272-5d68-7792-b03f-3510556c9bc3 → oracle ACCEPT 01a11276-52f0-7208-bef7-9b8bfe70a361.
+- skill-benefit-evaluation: reviewer ACCEPT 01a11279-6ebf-772b-88b7-f78b45048dc5 (zero findings; confirms both fix-round findings resolved with regressions) → Stage-B lean-already → oracle ACCEPT 01a11280-c5b6-7218-bdee-48315bdc5b35 → oracle ACCEPT 01a11283-f07e-7499-b458-ceb7554d3dbc.
+- skill-structure-audit: reviewer ACCEPT 01a1125f-94d0-73bf-81e4-901bf6ba5193 → Stage-B lean-already → oracle ACCEPT 01a11264-2516-73f4-965b-3fc22e452ad4 → oracle ACCEPT 01a11266-ed9d-72b4-8201-3bcf5982a08d.
 
-Double flash-oracle rule satisfied on all three slices (two distinct independent sessions each). No force overrides used.
-
-## Fix round retained in history
-- Genuine reviewer REJECT 01a111b4 (P1 relative-root paths in validateOracleArtifact, P3 duplicate validateCheckCiGit) → parent-confirmed against source → fixed in cb1f396 (toRootRelative display paths, single git verification) with regressions → new reviewer ACCEPT explicitly confirms resolution. REJECT preserved in history, superseded by re-execution.
-- Codex attempts failed on external provider quota (usage_limit_reached); no verdicts fabricated from them.
+Note: Codex attempts failed on external provider quota (usage_limit_reached); no verdicts fabricated from them.
 
 ## Comparative outcomes (no benefit claimed)
 - Review pairs 3/3 both arms, 0 misses/0 false positives; baseline $0.0033195 vs candidate $0.00665775 — no quality gain proved.
