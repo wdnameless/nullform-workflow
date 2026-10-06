@@ -344,7 +344,7 @@ test('review request contains approved role body and manifest without credential
     git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'initial']);
     const baseRef = 'HEAD';
     rmSync(join(f.root, 'deleted.cjs'));
-    writeFileSync(join(f.root, 'product.cjs'), 'exports.answer = () => 42 + 0;\n');
+    writeFileSync(join(f.root, 'product.cjs'), 'exports.answer = () => 21 * 2;\n');
     const transport = nativeRunner();
     runReviewRecord({ ...f, role: 'reviewer', baseRef, ompRunner: args => {
       assert.match(args.prompt, /Approved review instructions/);
@@ -354,7 +354,7 @@ test('review request contains approved role body and manifest without credential
       assert.doesNotMatch(args.prompt, /synthetic-do-not-send/);
       return transport(args);
     } });
-    assert.match(inspectProduct(f, 'product.cjs'), /exports\.answer = \(\) => 42 \+ 0/);
+    assert.match(inspectProduct(f, 'product.cjs'), /exports\.answer = \(\) => 21 \* 2/);
     assert.throws(() => inspectProduct(f, 'secrets.json'), /allowed/);
     // Diff inventory lists deleted file alongside modified file
     const changedInventory = inspectProduct({ ...f, role: 'reviewer', baseRef }, '', 'diff');
