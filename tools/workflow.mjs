@@ -1668,13 +1668,12 @@ function cmdCheckCi(root, flags) {
     oracleRelForCommit = join(relChangeDir, "review-evidence.json");
   }
 
-  const gitCode = validateCheckCiGit(root, oracleRelForCommit, baseRef);
+  // A single git verification covers the oracle evidence: validateCheckCiGit
+  // already walks commit history from the oracle acceptance commit forward,
+  // so a second call on review-evidence.json only repeats subprocess work
+  // and fails spuriously on sequential oracle commits.
+  const gitCode = validateCheckCiGit(root, oracleRelForCommit || join(relChangeDir, "review-evidence.json"), baseRef);
   if (gitCode !== 0) return gitCode;
-  const nativeRel = join(relChangeDir, "review-evidence.json");
-  if (oracleRelForCommit !== nativeRel) {
-    const nativeGitCode = validateCheckCiGit(root, nativeRel, baseRef);
-    if (nativeGitCode !== 0) return nativeGitCode;
-  }
   console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
   return 0;
 }

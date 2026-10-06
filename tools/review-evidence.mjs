@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, basename, resolve, delimiter } from 'node:path';
+import { join, dirname, basename, resolve, relative, delimiter } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot } from './worktree-snapshot.mjs';
@@ -372,6 +372,9 @@ export function isSupersededOracleArtifact(changeDir, path) {
   const data = loadReviewEvidence(changeDir);
   return data?.supersededArtifacts?.some(a => a.path === basename(path) && a.hash === hashFile(path)) || false;
 }
+export function toRootRelative(root, path) {
+  return relative(resolve(root), resolve(path)).replace(/\\/g, "/");
+}
 export function validateOracleArtifact(root, artifact, state, invalid) {
   if (!isPositiveOracleVerdict(artifact.detail)) invalid.push('oracle: expected explicit ACCEPT verdict');
   const rel = state.artifacts?.openspec?.path;
@@ -384,9 +387,10 @@ export function validateOracleArtifact(root, artifact, state, invalid) {
   if (resolvedArtifact && !paths.includes(resolvedArtifact)) paths.push(resolvedArtifact);
   let positive = false;
   for (const path of paths) {
-    if (!isRealPathInsideRoot(root, path) || !statSync(path).isFile()) { invalid.push('oracle: file resolves outside project root or is not a file'); continue; }
+    const displayPath = toRootRelative(root, path);
+    if (!isRealPathInsideRoot(root, path) || !statSync(path).isFile()) { invalid.push(`oracle: file '${displayPath}' resolves outside project root or is not a file`); continue; }
     const text = readFileSync(path, 'utf8');
-    if (isNegativeOracleVerdict(text) && !isSupersededOracleArtifact(resolvedDir, path)) invalid.push(`oracle: verdict in '${path}' is REJECT`);
+    if (isNegativeOracleVerdict(text) && !isSupersededOracleArtifact(resolvedDir, path)) invalid.push(`oracle: verdict in '${displayPath}' is REJECT`);
     if (isPositiveOracleVerdict(text) && dirname(resolve(path)) === resolvedDir) positive = true;
   }
   const native = loadReviewEvidence(resolvedDir);
