@@ -215,8 +215,9 @@ function invokeNative(root, prompt, model, sessionDir, options, runner) {
     return result.stdout || result.transcriptText || '';
   }
   const extension = fileURLToPath(new URL('./review-native-tools.mjs', import.meta.url));
-  const args = [cliPath(), '--mode', 'json', '--print', '--session-dir', sessionDir, '--no-extensions', '--no-skills', '--no-rules', '--no-title', '--trusted-extension', extension, '--tools', 'inspect_product,exercise_product', '--model', model, '--max-time', '180'];
-  const result = spawnSync('bun', args, { cwd: root, input: prompt, encoding: 'utf8', shell: false, windowsHide: true, timeout: 190000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, WORKFLOW_REVIEW_OPTIONS: JSON.stringify(options) } });
+  // Bounded 10-minute allowance accommodates multi-turn on-demand product inspection roundtrips.
+  const args = [cliPath(), '--mode', 'json', '--print', '--session-dir', sessionDir, '--no-extensions', '--no-skills', '--no-rules', '--no-title', '--trusted-extension', extension, '--tools', 'inspect_product,exercise_product', '--model', model, '--max-time', '600'];
+  const result = spawnSync('bun', args, { cwd: root, input: prompt, encoding: 'utf8', shell: false, windowsHide: true, timeout: 610000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, WORKFLOW_REVIEW_OPTIONS: JSON.stringify(options) } });
   if (result.error || result.status !== 0) {
     const code = result.error?.code || result.error?.message || (result.status !== null ? `exit ${result.status}` : 'unknown');
     const stderrSnippet = redactSensitive(result.stderr);
