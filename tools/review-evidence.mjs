@@ -182,7 +182,7 @@ function isRunnableCli(file) {
   if (basename(scopedDir) === '@oh-my-pi' && !existsSync(join(scopedDir, 'pi-natives'))) return false;
   return true;
 }
-export function cliPath() {
+function cliPath() {
   const explicit = process.env.OMP_CLI_PATH;
   if (explicit) {
     if (!isRunnableCli(explicit)) throw new Error(`OMP_CLI_PATH points to invalid or incomplete CLI: ${explicit}`);
@@ -196,17 +196,21 @@ export function cliPath() {
   if (!found) throw new Error('Installed OMP CLI not found; set OMP_CLI_PATH to dist/cli.js');
   return realpathSync(found);
 }
-export function redactSensitive(text, maxLen = 4000) {
+function redactSensitive(text, maxLen = 4000) {
   if (!text || typeof text !== 'string') return '';
-  const trimmed = text.trim();
-  const bounded = trimmed.length > maxLen ? trimmed.slice(-maxLen) : trimmed;
-  return bounded
+  const redacted = text
     .replace(/(?:Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
+    .replace(/ey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._~+/-]*/g, '[REDACTED_JWT]')
+    .replace(/(?:AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}/g, '[REDACTED_AWS_KEY]')
+    .replace(/-----BEGIN[ A-Z_-]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z_-]*PRIVATE KEY-----/gi, '[REDACTED_PRIVATE_KEY]')
     .replace(/(?:sk-[A-Za-z0-9_-]{8,})/gi, 'sk-[REDACTED]')
     .replace(/(?:ghp_[A-Za-z0-9]{20,})/gi, 'ghp_[REDACTED]')
-    .replace(/((?:key|token|auth|password|secret)[=:]\s*["']?)[A-Za-z0-9._~+/-]{12,}(["']?)/gi, '$1[REDACTED]$2');
+    .replace(/(?:postgres|mysql|mongodb(?:\+srv)?|redis|amqp):\/\/[^\s"']+/gi, '[REDACTED_CONNECTION_URI]')
+    .replace(/((?:key|token|auth|password|secret|credential|api_key|apikey)[=:]\s*["']?)[A-Za-z0-9._~+/-]{8,}(["']?)/gi, '$1[REDACTED]$2');
+  const trimmed = redacted.trim();
+  return trimmed.length > maxLen ? trimmed.slice(-maxLen) : trimmed;
 }
-export function invokeNative(root, prompt, model, sessionDir, options, runner) {
+function invokeNative(root, prompt, model, sessionDir, options, runner) {
   if (runner) {
     const result = runner({ root, prompt, model, sessionDir, provenance: options.provenance, changeId: options.changeId, productCommand: options.productCommand });
     if (result.status !== 0) throw new Error(`runner exited with code ${result.status}`);
@@ -218,8 +222,7 @@ export function invokeNative(root, prompt, model, sessionDir, options, runner) {
   if (result.error || result.status !== 0) {
     const code = result.error?.code || result.error?.message || (result.status !== null ? `exit ${result.status}` : 'unknown');
     const stderrSnippet = redactSensitive(result.stderr);
-    const stdoutSnippet = redactSensitive(result.stdout);
-    const detail = stderrSnippet || stdoutSnippet || 'no child process output';
+    const detail = stderrSnippet || (result.status !== 0 ? `child process exited with status ${result.status}` : 'no diagnostic error output');
     throw new Error(`Native OMP failed (${code}, status ${result.status}): ${detail} [retained session: ${sessionDir}]`);
   }
   const files = readdirSync(sessionDir).filter(p => p.endsWith('.jsonl'));

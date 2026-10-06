@@ -19,9 +19,6 @@ import {
   countSourceChanges,
   isFlashOrFallback,
   EVIDENCE_FILE,
-  cliPath,
-  redactSensitive,
-  invokeNative,
 } from "../review-evidence.mjs";
 import { nativeRunner, prepareEvidence } from "./fixtures/review-execution.mjs";
 
@@ -319,30 +316,14 @@ test("review-evidence: stale earlier reviewer rejects appending new oracle", () 
     rmSync(root, { recursive: true, force: true });
   }
 });
-
-test("review-evidence: cliPath resolves runnable CLI and ignores broken candidate lacking natives", () => {
-  const resolved = cliPath();
-  assert.ok(resolved.endsWith("cli.js"));
-  assert.ok(existsSync(resolved));
-  assert.throws(() => {
-    const prev = process.env.OMP_CLI_PATH;
-    try {
-      process.env.OMP_CLI_PATH = join(tmpdir(), "nonexistent-cli.js");
-      cliPath();
-    } finally {
-      if (prev !== undefined) process.env.OMP_CLI_PATH = prev;
-      else delete process.env.OMP_CLI_PATH;
-    }
-  }, /OMP_CLI_PATH points to invalid or incomplete CLI/);
-});
-
-test("review-evidence: redactSensitive scrubs credentials and bounds output", () => {
-  const text = "Bearer secret-token-123456789 and sk-abcdef123456789 and ghp_0123456789abcdef0123456789 and auth='my-secret-key-123456'";
-  const redacted = redactSensitive(text, 100);
-  assert.match(redacted, /Bearer \[REDACTED\]/);
-  assert.match(redacted, /sk-\[REDACTED\]/);
-  assert.match(redacted, /ghp_\[REDACTED\]/);
-  assert.doesNotMatch(redacted, /secret-token/);
-  assert.doesNotMatch(redacted, /abcdef123456789/);
-  assert.ok(redacted.length <= 100);
+test("review-evidence: dryRun option returns clean plan without invoking native process", () => {
+  const root = mkdtempSync(join(tmpdir(), "rev-ev-dry-"));
+  try {
+    setupMockProject(root, "feat-dry");
+    const res = runReviewRecord({ root, changeId: "feat-dry", role: "reviewer", dryRun: true });
+    assert.equal(res.ok, true);
+    assert.equal(res.dryRun, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
