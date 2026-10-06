@@ -255,6 +255,9 @@ export function runReviewRecord(options) {
   let succeeded = false;
   try {
     retained = nativeEvents(invokeNative(root, prompt, model, sessionDir, { root: resolve(root), role, changeId, productCommand, provenance, baseRef: baseRef || null }, ompRunner));
+    // Parse the retained transcript before discarding the session directory:
+    // a malformed final report must keep its raw session for diagnosis.
+    projectNative(retained, role);
     succeeded = true;
   }
   finally { if (succeeded) rmSync(sessionDir, { recursive: true, force: true }); }
