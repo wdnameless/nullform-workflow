@@ -7,38 +7,66 @@ import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isS
 function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 }
-const MAX_AGGREGATE_CHUNK_BYTES = 28 * 1024;
+const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true });
+const MAX_AGGREGATE_JSON_BYTES = 28 * 1024;
 
-function sliceUtf8Page(buffer, offset, budget) {
+function sliceUtf8Page(buffer, offset, budget, meta) {
   const total = buffer.length;
   if (offset >= total) return { text: '', nextOffset: null };
-  const target = Math.min(offset + budget, total);
-  if (target >= total) {
-    return { text: buffer.subarray(offset, total).toString('utf8'), nextOffset: null };
+  if (offset > 0 && (buffer[offset] & 0xC0) === 0x80) {
+    throw new Error(`Invalid UTF-8 offset: ${offset} lands inside a multi-byte sequence`);
   }
-  let boundary = target;
-  while (boundary > offset && (buffer[boundary] & 0xC0) === 0x80) boundary--;
-  if (boundary > offset) {
-    const lead = buffer[boundary];
-    let len = 1;
-    if ((lead & 0x80) === 0) len = 1;
-    else if ((lead & 0xE0) === 0xC0) len = 2;
-    else if ((lead & 0xF0) === 0xE0) len = 3;
-    else if ((lead & 0xF8) === 0xF0) len = 4;
-    if (boundary + len <= target) boundary += len;
+
+  try {
+    const fullRemText = UTF8_DECODER.decode(buffer.subarray(offset, total));
+    const testPage = { ...meta, offset, nextOffset: null, totalBytes: total, text: fullRemText };
+    if (Buffer.byteLength(JSON.stringify(testPage, null, 2), 'utf8') <= budget) {
+      return { text: fullRemText, nextOffset: null };
+    }
+  } catch {
+    // Invalid UTF-8 will be surfaced by UTF8_DECODER below
   }
-  if (boundary <= offset) {
-    const lead = buffer[offset];
-    let len = 1;
-    if ((lead & 0x80) === 0) len = 1;
-    else if ((lead & 0xE0) === 0xC0) len = 2;
-    else if ((lead & 0xF0) === 0xE0) len = 3;
-    else if ((lead & 0xF8) === 0xF0) len = 4;
-    boundary = Math.min(offset + len, total);
+
+  let low = offset + 1;
+  let high = Math.min(offset + budget, total);
+  let bestEnd = offset;
+  let bestText = '';
+
+  while (low <= high) {
+    let mid = Math.floor((low + high) / 2);
+    while (mid > offset && (buffer[mid] & 0xC0) === 0x80) mid--;
+    if (mid <= offset) {
+      mid = offset + 1;
+      while (mid < total && (buffer[mid] & 0xC0) === 0x80) mid++;
+    }
+
+    try {
+      const candidateText = UTF8_DECODER.decode(buffer.subarray(offset, mid));
+      const testPage = { ...meta, offset, nextOffset: mid < total ? mid : null, totalBytes: total, text: candidateText };
+      const renderedBytes = Buffer.byteLength(JSON.stringify(testPage, null, 2), 'utf8');
+      if (renderedBytes <= budget || mid === offset + 1) {
+        bestEnd = mid;
+        bestText = candidateText;
+        low = mid + 1;
+        while (low < total && (buffer[low] & 0xC0) === 0x80) low++;
+      } else {
+        high = mid - 1;
+      }
+    } catch {
+      high = mid - 1;
+    }
   }
+
+  if (bestEnd <= offset) {
+    let end = offset + 1;
+    while (end < total && (buffer[end] & 0xC0) === 0x80) end++;
+    bestText = UTF8_DECODER.decode(buffer.subarray(offset, end));
+    bestEnd = end;
+  }
+
   return {
-    text: buffer.subarray(offset, boundary).toString('utf8'),
-    nextOffset: boundary < total ? boundary : null,
+    text: bestText,
+    nextOffset: bestEnd < total ? bestEnd : null,
   };
 }
 export function inspectProduct(options, requests) {
@@ -51,7 +79,7 @@ export function inspectProduct(options, requests) {
   const files = snapshot.isGit ? { ...snapshot.tracked, ...snapshot.untracked } : snapshot.files;
   const allowed = p => !isSecretOrCredentialPath(p) && !isStructuralExcludedPath(p) && !isAcceptancePath(p) && !files[p]?.isSecret && (role !== 'oracle' || !p.startsWith('openspec/') || p === `openspec/changes/${changeId}/manifest.md`) && !/review-evidence.*\.json$/.test(p);
 
-  const budgetPerRequest = Math.floor(MAX_AGGREGATE_CHUNK_BYTES / requests.length);
+  const budgetPerRequest = Math.floor(MAX_AGGREGATE_JSON_BYTES / requests.length);
   let changedList = null;
   const getChanged = () => {
     if (!changedList) {
@@ -93,7 +121,8 @@ export function inspectProduct(options, requests) {
     const totalBytes = rawBuffer.length;
     if (offset > totalBytes) throw new Error(`Request offset ${offset} exceeds total bytes ${totalBytes}`);
     const contentHash = createHash('sha256').update(rawBuffer).digest('hex');
-    const { text, nextOffset } = sliceUtf8Page(rawBuffer, offset, budgetPerRequest);
+    const meta = { path, kind, contentHash };
+    const { text, nextOffset } = sliceUtf8Page(rawBuffer, offset, budgetPerRequest, meta);
     pages.push({ path, kind, offset, nextOffset, totalBytes, contentHash, text });
   }
   return pages;

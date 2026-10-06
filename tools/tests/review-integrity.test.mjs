@@ -459,24 +459,49 @@ test('Stage-B freezes ordinary benchmark checkers and fixtures before simplifica
   } finally { f.cleanup(); }
 });
 
-test('inspectProduct: handles batches up to 8 and byte-exact reassembles >50KB multi-byte content across recoverable pages', () => {
+test('inspectProduct: handles batches up to 8 distinct files, enforces rendered JSON bound, rejects interior multi-byte offset, and reassembles >50KB backslash/BOM content', () => {
   const f = fixture();
   try {
-    const largeContent = '\uFEFF' + 'Line of unicode: Привет мир! 🚀 测试 emoji and CRLF\r\n'.repeat(1600);
-    writeFileSync(join(f.root, 'large.txt'), largeContent, 'utf8');
-    assert.ok(Buffer.byteLength(largeContent, 'utf8') > 50 * 1024);
+    const distinctRequests = [];
+    for (let i = 1; i <= 8; i++) {
+      writeFileSync(join(f.root, `batch_${i}.cjs`), `exports.n = ${i};\n`);
+      distinctRequests.push({ path: `batch_${i}.cjs` });
+    }
     assert.throws(() => inspectProduct(f, []), /1 to 8/);
-    assert.throws(() => inspectProduct(f, new Array(9).fill({ path: 'product.cjs' })), /1 to 8/);
-    const batchRes = inspectProduct(f, new Array(8).fill({ path: 'product.cjs' }));
+    assert.throws(() => inspectProduct(f, [...distinctRequests, { path: 'product.cjs' }]), /1 to 8/);
+    const batchRes = inspectProduct(f, distinctRequests);
     assert.equal(batchRes.length, 8);
+    for (let i = 0; i < 8; i++) {
+      assert.equal(batchRes[i].path, `batch_${i + 1}.cjs`);
+      assert.equal(batchRes[i].text, `exports.n = ${i + 1};\n`);
+    }
+    assert.ok(Buffer.byteLength(JSON.stringify(batchRes, null, 2), 'utf8') <= 28 * 1024);
+
+    writeFileSync(join(f.root, 'unicode.txt'), '🚀hello');
+    assert.throws(() => inspectProduct(f, [{ path: 'unicode.txt', offset: 1 }]), /Invalid UTF-8 offset/);
+
+    const backslashContent = '/*' + '\\'.repeat(60000) + '*/';
+    writeFileSync(join(f.root, 'backslash.txt'), backslashContent);
     let offset = 0;
-    const chunks = [];
+    let chunks = [];
     while (offset !== null) {
-      const [page] = inspectProduct(f, [{ path: 'large.txt', offset }]);
-      assert.ok(Buffer.byteLength(page.text, 'utf8') <= 28 * 1024);
+      const [page] = inspectProduct(f, [{ path: 'backslash.txt', offset }]);
+      assert.ok(Buffer.byteLength(JSON.stringify([page], null, 2), 'utf8') <= 28 * 1024);
       chunks.push(page.text);
       offset = page.nextOffset;
     }
-    assert.equal(chunks.join(''), largeContent);
+    assert.equal(chunks.join(''), backslashContent);
+
+    const unicodeContent = '\uFEFF' + 'Line of unicode: Привет мир! 🚀 测试 CRLF\r\n'.repeat(1600);
+    writeFileSync(join(f.root, 'large.txt'), unicodeContent);
+    offset = 0;
+    chunks = [];
+    while (offset !== null) {
+      const [page] = inspectProduct(f, [{ path: 'large.txt', offset }]);
+      assert.ok(Buffer.byteLength(JSON.stringify([page], null, 2), 'utf8') <= 28 * 1024);
+      chunks.push(page.text);
+      offset = page.nextOffset;
+    }
+    assert.equal(chunks.join(''), unicodeContent);
   } finally { f.cleanup(); }
 });
