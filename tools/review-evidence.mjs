@@ -176,14 +176,37 @@ function buildPrompt(root, changeId, role, baseRef, productCommand) {
   }
   return `${roleBody}\n\n# ${role === 'oracle' ? 'Blind product acceptance' : 'Implementation review'}\nChange: ${changeId}\n## Original manifest\n${manifest}${context}\nUse inspect_product to read relevant implementation and consumer files. Oracle planning documents are inaccessible. Use exercise_product to run the operator-authorized consumer command: ${JSON.stringify(productCommand)}. Report all requirement results, preserve negative findings, and finish with ${role === 'reviewer' ? 'complete JSON containing findings, overall_correctness (correct or incorrect), overall_explanation, and overall_confidence_score (0..1)' : 'an explicit Verdict: ACCEPT or Verdict: REJECT'}.`;
 }
-function cliPath() {
+function isRunnableCli(file) {
+  if (!file || typeof file !== 'string' || !existsSync(file)) return false;
+  const scopedDir = dirname(dirname(dirname(file)));
+  if (basename(scopedDir) === '@oh-my-pi' && !existsSync(join(scopedDir, 'pi-natives'))) return false;
+  return true;
+}
+export function cliPath() {
   const explicit = process.env.OMP_CLI_PATH;
-  const candidates = explicit ? [explicit] : (process.env.PATH || '').split(delimiter).flatMap(p => [join(p, 'node_modules', '@oh-my-pi', 'pi-coding-agent', 'dist', 'cli.js'), join(p, '..', 'lib', 'node_modules', '@oh-my-pi', 'pi-coding-agent', 'dist', 'cli.js')]);
-  const found = candidates.find(p => existsSync(p));
+  if (explicit) {
+    if (!isRunnableCli(explicit)) throw new Error(`OMP_CLI_PATH points to invalid or incomplete CLI: ${explicit}`);
+    return realpathSync(explicit);
+  }
+  const dirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
+  const ompDirs = dirs.filter(p => ['omp', 'omp.cmd', 'omp.exe'].some(b => existsSync(join(p, b))));
+  const orderedDirs = [...new Set([...ompDirs, ...dirs])];
+  const candidates = orderedDirs.flatMap(p => [join(p, 'node_modules', '@oh-my-pi', 'pi-coding-agent', 'dist', 'cli.js'), join(p, '..', 'lib', 'node_modules', '@oh-my-pi', 'pi-coding-agent', 'dist', 'cli.js')]);
+  const found = candidates.find(isRunnableCli);
   if (!found) throw new Error('Installed OMP CLI not found; set OMP_CLI_PATH to dist/cli.js');
   return realpathSync(found);
 }
-function invokeNative(root, prompt, model, sessionDir, options, runner) {
+export function redactSensitive(text, maxLen = 4000) {
+  if (!text || typeof text !== 'string') return '';
+  const trimmed = text.trim();
+  const bounded = trimmed.length > maxLen ? trimmed.slice(-maxLen) : trimmed;
+  return bounded
+    .replace(/(?:Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
+    .replace(/(?:sk-[A-Za-z0-9_-]{8,})/gi, 'sk-[REDACTED]')
+    .replace(/(?:ghp_[A-Za-z0-9]{20,})/gi, 'ghp_[REDACTED]')
+    .replace(/((?:key|token|auth|password|secret)[=:]\s*["']?)[A-Za-z0-9._~+/-]{12,}(["']?)/gi, '$1[REDACTED]$2');
+}
+export function invokeNative(root, prompt, model, sessionDir, options, runner) {
   if (runner) {
     const result = runner({ root, prompt, model, sessionDir, provenance: options.provenance, changeId: options.changeId, productCommand: options.productCommand });
     if (result.status !== 0) throw new Error(`runner exited with code ${result.status}`);
@@ -192,7 +215,13 @@ function invokeNative(root, prompt, model, sessionDir, options, runner) {
   const extension = fileURLToPath(new URL('./review-native-tools.mjs', import.meta.url));
   const args = [cliPath(), '--mode', 'json', '--print', '--session-dir', sessionDir, '--no-extensions', '--no-skills', '--no-rules', '--no-title', '--trusted-extension', extension, '--tools', 'inspect_product,exercise_product', '--model', model, '--max-time', '180'];
   const result = spawnSync('bun', args, { cwd: root, input: prompt, encoding: 'utf8', shell: false, windowsHide: true, timeout: 190000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, WORKFLOW_REVIEW_OPTIONS: JSON.stringify(options) } });
-  if (result.error || result.status !== 0) throw new Error(`Native OMP failed: ${result.error?.message || result.status}`);
+  if (result.error || result.status !== 0) {
+    const code = result.error?.code || result.error?.message || (result.status !== null ? `exit ${result.status}` : 'unknown');
+    const stderrSnippet = redactSensitive(result.stderr);
+    const stdoutSnippet = redactSensitive(result.stdout);
+    const detail = stderrSnippet || stdoutSnippet || 'no child process output';
+    throw new Error(`Native OMP failed (${code}, status ${result.status}): ${detail} [retained session: ${sessionDir}]`);
+  }
   const files = readdirSync(sessionDir).filter(p => p.endsWith('.jsonl'));
   if (files.length !== 1 || !isRealPathInsideRoot(sessionDir, files[0])) throw new Error('Expected exactly one retained native session');
   return readFileSync(join(sessionDir, files[0]), 'utf8');
@@ -221,8 +250,12 @@ export function runReviewRecord(options) {
   const sessionDir = mkdtempSync(join(tmpdir(), 'omp-review-'));
   let retained;
   const provenance = { role, sourceDigest: source, manifestHash, rolePromptHash, testFilesHash: tests, baseRef: baseRef || null, requestedModel: model || null, promptHash: computeEventProjectionHash(prompt), productCommandHash: computeEventProjectionHash(productCommand) };
-  try { retained = nativeEvents(invokeNative(root, prompt, model, sessionDir, { root: resolve(root), role, changeId, productCommand, provenance }, ompRunner)); }
-  finally { rmSync(sessionDir, { recursive: true, force: true }); }
+  let succeeded = false;
+  try {
+    retained = nativeEvents(invokeNative(root, prompt, model, sessionDir, { root: resolve(root), role, changeId, productCommand, provenance }, ompRunner));
+    succeeded = true;
+  }
+  finally { if (succeeded) rmSync(sessionDir, { recursive: true, force: true }); }
   if (sourceDigest(root) !== source) throw new Error('source tree was mutated during review session (read-only execution violated)');
   const parsed = projectNative(retained, role);
   const requestedModel = model || `${parsed.provider}/${parsed.model}`;

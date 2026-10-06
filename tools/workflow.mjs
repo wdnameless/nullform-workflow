@@ -1679,7 +1679,7 @@ function cmdCheckCi(root, flags) {
 function cmdReviewRun(root, flags) {
   try {
     const res = runReviewRecord({ root, changeId: flags.change, role: flags.role, model: flags.model, baseRef: flags["base-ref"], prompt: flags.prompt, redo: Boolean(flags.redo), productCommand: flags["product-command"] ? JSON.parse(flags["product-command"]) : null, dryRun: Boolean(flags["dry-run"]) });
-    if (res.ok) { console.log(`workflow review-run: successfully recorded ${flags.role} execution for '${flags.change}'.`); return 0; }
+    if (res.ok) { console.log(res.dryRun ? `workflow review-run: dry-run plan verified for ${flags.role} on '${flags.change}'.` : `workflow review-run: successfully recorded ${flags.role} execution for '${flags.change}'.`); return 0; }
     return 1;
   } catch (err) { console.error(`workflow review-run error: ${err.message}`); return 1; }
 }
