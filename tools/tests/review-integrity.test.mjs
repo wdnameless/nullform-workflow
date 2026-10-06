@@ -518,22 +518,25 @@ test('validateOracleArtifact normalizes root-relative paths and cmdCheckCi avoid
   try {
     const relRoot = relative(process.cwd(), f.root);
     const changeDir = join(f.root, 'openspec', 'changes', 'rel-oracle');
-    mkdirSync(changeDir, { recursive: true });
+    mkdirSync(join(changeDir, 'specs'), { recursive: true });
     writeFileSync(join(changeDir, 'oracle.md'), 'Verdict: ACCEPT\nEvidence verified.\n', 'utf8');
     const state = { artifacts: { openspec: { path: 'openspec/changes/rel-oracle' } } };
     const invalid = [];
     validateOracleArtifact(relRoot, { detail: 'ACCEPT', path: 'openspec/changes/rel-oracle/oracle.md' }, state, invalid);
     assert.deepEqual(invalid, []);
 
+    git(['init', '-q']);
     writeFileSync(join(changeDir, 'manifest.md'), '| R01 | requirement |\n', 'utf8');
     writeFileSync(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8');
     writeFileSync(join(changeDir, 'tasks.md'), '# Tasks\n', 'utf8');
-    mkdirSync(join(changeDir, 'specs'), { recursive: true });
     writeFileSync(join(changeDir, 'specs', 'spec.md'), '# Spec\n', 'utf8');
     writeFileSync(join(changeDir, 'interfaces.md'), '# Interfaces\n', 'utf8');
     rmSync(join(changeDir, 'oracle.md'));
+    prepareEvidence(f.root, 'rel-oracle');
+    git(['add', '-A']); git(['commit', '-qm', 'source files']);
+
     writeEvidence(f.root, changeDir, 'rel-oracle');
-    git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'initial']);
+    git(['add', '-A']); git(['commit', '-qm', 'native oracle evidence only']);
     assert.equal(cmdCheckCi(f.root, { tier: 'T2', change: 'rel-oracle' }), 0);
   } finally { f.cleanup(); }
 });
