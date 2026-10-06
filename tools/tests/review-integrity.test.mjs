@@ -331,21 +331,35 @@ test('native context, selection, timestamps and product results fail closed befo
   } finally { f.cleanup(); }
 });
 
-test('review request contains approved role body, full source and manifest without credentials', () => {
+test('review request contains approved role body and manifest without credentials; changed source and diff retrievable via inspectProduct', () => {
   const f = fixture();
+  const git = args => {
+    const result = spawnSync('git', args, { cwd: f.root, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 't@t' } });
+    assert.equal(result.status, 0, result.stderr);
+  };
   try {
     writeFileSync(join(f.root, 'agent', 'agents', 'reviewer.md'), '---\noutput: old-schema\n---\nApproved review instructions.\n');
     writeFileSync(join(f.root, 'secrets.json'), 'synthetic-do-not-send');
+    writeFileSync(join(f.root, 'deleted.cjs'), 'exports.old = 1;\n');
+    git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'initial']);
+    const baseRef = 'HEAD';
+    rmSync(join(f.root, 'deleted.cjs'));
+    writeFileSync(join(f.root, 'product.cjs'), 'exports.answer = () => 42 + 0;\n');
     const transport = nativeRunner();
-    runReviewRecord({ ...f, role: 'reviewer', ompRunner: args => {
+    runReviewRecord({ ...f, role: 'reviewer', baseRef, ompRunner: args => {
       assert.match(args.prompt, /Approved review instructions/);
       assert.match(args.prompt, /User needs product result/);
-      assert.match(args.prompt, /exports.answer = \(\) => 42 \+ 0/);
+      assert.match(args.prompt, /product\.cjs/);
       assert.doesNotMatch(args.prompt, /synthetic-do-not-send/);
       return transport(args);
     } });
+    assert.match(inspectProduct(f, 'product.cjs'), /exports\.answer = \(\) => 42 \+ 0/);
+    assert.throws(() => inspectProduct(f, 'secrets.json'), /allowed/);
+    const diff = inspectProduct({ ...f, role: 'reviewer', baseRef }, 'deleted.cjs', 'diff');
+    assert.match(diff, /deleted file mode|--- a\/deleted\.cjs/);
+    assert.throws(() => inspectProduct({ ...f, role: 'oracle', baseRef }, 'product.cjs', 'diff'), /only to implementation reviewer/);
     const transport2 = nativeRunner();
-    assert.throws(() => runReviewRecord({ ...f, role: 'reviewer', redo: true, ompRunner: args => {
+    assert.throws(() => runReviewRecord({ ...f, role: 'reviewer', redo: true, baseRef, ompRunner: args => {
       const result = transport2(args);
       writeFileSync(join(f.root, 'product.cjs'), 'exports.answer = () => 0;\n');
       return result;

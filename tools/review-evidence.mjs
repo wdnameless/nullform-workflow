@@ -168,11 +168,8 @@ function buildPrompt(root, changeId, role, baseRef, productCommand) {
     const snapshot = scanWorktree(root);
     const paths = Object.keys(snapshot.isGit ? { ...snapshot.tracked, ...snapshot.untracked } : snapshot.files).filter(p => !isStructuralExcludedPath(p) && !isSecretOrCredentialPath(p) && !isAcceptancePath(p));
     const changed = baseRef ? git(root, ['diff', '--name-only', '-z', baseRef, '--', '.']).split('\0').filter(p => p && !isStructuralExcludedPath(p) && !isSecretOrCredentialPath(p) && !isAcceptancePath(p)) : [];
-    // Individual literal pathspecs include deletions without exposing credentials or exceeding Windows argv limits.
-    const diff = baseRef ? changed.map(p => git(root, ['--literal-pathspecs', 'diff', baseRef, '--', p])).join('\n') : 'Non-git source: inspect_product provides complete relevant consumer context.';
     const relevant = baseRef ? [...new Set([...changed, ...Object.keys(snapshot.untracked || {})])].filter(p => paths.includes(p)) : paths;
-    const source = relevant.sort().map(p => `\n### ${p}\n${readFileSync(safeFile(root, p), 'utf8')}`).join('\n');
-    context = `\n## Implementation diff\n${diff}\n## Complete changed source\n${source}\n## Product/consumer paths\n${paths.sort().join('\n')}`;
+    context = `\n## Baseline revision\n${baseRef || 'Non-git or working tree root'}\n## Changed source paths (${relevant.length} files)\n${relevant.sort().join('\n')}\n## Available product paths (${paths.length} files)\n${paths.sort().join('\n')}\nUse inspect_product(path, kind='diff') to inspect literal unified diffs against baseline. Use inspect_product(path, kind='source') to read complete file source.`;
   }
   return `${roleBody}\n\n# ${role === 'oracle' ? 'Blind product acceptance' : 'Implementation review'}\nChange: ${changeId}\n## Original manifest\n${manifest}${context}\nUse inspect_product to read relevant implementation and consumer files. Oracle planning documents are inaccessible. Use exercise_product to run the operator-authorized consumer command: ${JSON.stringify(productCommand)}. Report all requirement results, preserve negative findings, and finish with ${role === 'reviewer' ? 'complete JSON containing findings, overall_correctness (correct or incorrect), overall_explanation, and overall_confidence_score (0..1)' : 'an explicit Verdict: ACCEPT or Verdict: REJECT'}.`;
 }
@@ -255,7 +252,7 @@ export function runReviewRecord(options) {
   const provenance = { role, sourceDigest: source, manifestHash, rolePromptHash, testFilesHash: tests, baseRef: baseRef || null, requestedModel: model || null, promptHash: computeEventProjectionHash(prompt), productCommandHash: computeEventProjectionHash(productCommand) };
   let succeeded = false;
   try {
-    retained = nativeEvents(invokeNative(root, prompt, model, sessionDir, { root: resolve(root), role, changeId, productCommand, provenance }, ompRunner));
+    retained = nativeEvents(invokeNative(root, prompt, model, sessionDir, { root: resolve(root), role, changeId, productCommand, provenance, baseRef: baseRef || null }, ompRunner));
     succeeded = true;
   }
   finally { if (succeeded) rmSync(sessionDir, { recursive: true, force: true }); }
