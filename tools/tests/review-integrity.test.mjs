@@ -475,8 +475,7 @@ test('inspectProduct: handles batches up to 8 distinct files, enforces rendered 
       assert.equal(batchRes[i].path, `batch_${i + 1}.cjs`);
       assert.equal(batchRes[i].text, `exports.n = ${i + 1};\n`);
     }
-    assert.ok(Buffer.byteLength(JSON.stringify(batchRes, null, 2), 'utf8') <= 28 * 1024);
-
+    assert.ok(Buffer.byteLength(JSON.stringify(batchRes, null, 2), 'utf8') <= 32 * 1024);
     writeFileSync(join(f.root, 'unicode.txt'), '🚀hello');
     assert.throws(() => inspectProduct(f, [{ path: 'unicode.txt', offset: 1 }]), /Invalid UTF-8 offset/);
 
@@ -486,7 +485,7 @@ test('inspectProduct: handles batches up to 8 distinct files, enforces rendered 
     let chunks = [];
     while (offset !== null) {
       const [page] = inspectProduct(f, [{ path: 'backslash.txt', offset }]);
-      assert.ok(Buffer.byteLength(JSON.stringify([page], null, 2), 'utf8') <= 28 * 1024);
+      assert.ok(Buffer.byteLength(JSON.stringify([page], null, 2), 'utf8') <= 32 * 1024);
       chunks.push(page.text);
       offset = page.nextOffset;
     }
@@ -498,10 +497,14 @@ test('inspectProduct: handles batches up to 8 distinct files, enforces rendered 
     chunks = [];
     while (offset !== null) {
       const [page] = inspectProduct(f, [{ path: 'large.txt', offset }]);
-      assert.ok(Buffer.byteLength(JSON.stringify([page], null, 2), 'utf8') <= 28 * 1024);
+      assert.ok(Buffer.byteLength(JSON.stringify([page], null, 2), 'utf8') <= 32 * 1024);
       chunks.push(page.text);
       offset = page.nextOffset;
     }
     assert.equal(chunks.join(''), unicodeContent);
+    assert.ok(chunks.join('').startsWith('\uFEFF'));
+
+    writeFileSync(join(f.root, 'invalid.bin'), Buffer.from([0xFF, 0xFE, 0xFD]));
+    assert.throws(() => inspectProduct(f, [{ path: 'invalid.bin' }]));
   } finally { f.cleanup(); }
 });

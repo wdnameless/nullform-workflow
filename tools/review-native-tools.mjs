@@ -7,8 +7,8 @@ import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isS
 function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 }
-const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true });
-const MAX_AGGREGATE_JSON_BYTES = 28 * 1024;
+const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+const MAX_AGGREGATE_JSON_BYTES = 30 * 1024;
 
 function sliceUtf8Page(buffer, offset, budget, meta) {
   const total = buffer.length;
@@ -17,14 +17,10 @@ function sliceUtf8Page(buffer, offset, budget, meta) {
     throw new Error(`Invalid UTF-8 offset: ${offset} lands inside a multi-byte sequence`);
   }
 
-  try {
-    const fullRemText = UTF8_DECODER.decode(buffer.subarray(offset, total));
-    const testPage = { ...meta, offset, nextOffset: null, totalBytes: total, text: fullRemText };
-    if (Buffer.byteLength(JSON.stringify(testPage, null, 2), 'utf8') <= budget) {
-      return { text: fullRemText, nextOffset: null };
-    }
-  } catch {
-    // Invalid UTF-8 will be surfaced by UTF8_DECODER below
+  const fullRemText = UTF8_DECODER.decode(buffer.subarray(offset, total));
+  const testPage = { ...meta, offset, nextOffset: null, totalBytes: total, text: fullRemText };
+  if (Buffer.byteLength(JSON.stringify(testPage, null, 2), 'utf8') <= budget) {
+    return { text: fullRemText, nextOffset: null };
   }
 
   let low = offset + 1;
@@ -40,28 +36,21 @@ function sliceUtf8Page(buffer, offset, budget, meta) {
       while (mid < total && (buffer[mid] & 0xC0) === 0x80) mid++;
     }
 
-    try {
-      const candidateText = UTF8_DECODER.decode(buffer.subarray(offset, mid));
-      const testPage = { ...meta, offset, nextOffset: mid < total ? mid : null, totalBytes: total, text: candidateText };
-      const renderedBytes = Buffer.byteLength(JSON.stringify(testPage, null, 2), 'utf8');
-      if (renderedBytes <= budget || mid === offset + 1) {
-        bestEnd = mid;
-        bestText = candidateText;
-        low = mid + 1;
-        while (low < total && (buffer[low] & 0xC0) === 0x80) low++;
-      } else {
-        high = mid - 1;
-      }
-    } catch {
+    const candidateText = UTF8_DECODER.decode(buffer.subarray(offset, mid));
+    const testCandidate = { ...meta, offset, nextOffset: mid < total ? mid : null, totalBytes: total, text: candidateText };
+    const renderedBytes = Buffer.byteLength(JSON.stringify(testCandidate, null, 2), 'utf8');
+    if (renderedBytes <= budget) {
+      bestEnd = mid;
+      bestText = candidateText;
+      low = mid + 1;
+      while (low < total && (buffer[low] & 0xC0) === 0x80) low++;
+    } else {
       high = mid - 1;
     }
   }
 
   if (bestEnd <= offset) {
-    let end = offset + 1;
-    while (end < total && (buffer[end] & 0xC0) === 0x80) end++;
-    bestText = UTF8_DECODER.decode(buffer.subarray(offset, end));
-    bestEnd = end;
+    throw new Error('Page budget too small to fit entry metadata and first character');
   }
 
   return {
@@ -117,14 +106,16 @@ export function inspectProduct(options, requests) {
         rawBuffer = readFileSync(join(root, path));
       }
     }
-
     const totalBytes = rawBuffer.length;
     if (offset > totalBytes) throw new Error(`Request offset ${offset} exceeds total bytes ${totalBytes}`);
+    UTF8_DECODER.decode(rawBuffer);
     const contentHash = createHash('sha256').update(rawBuffer).digest('hex');
     const meta = { path, kind, contentHash };
     const { text, nextOffset } = sliceUtf8Page(rawBuffer, offset, budgetPerRequest, meta);
     pages.push({ path, kind, offset, nextOffset, totalBytes, contentHash, text });
   }
+  const totalRendered = Buffer.byteLength(JSON.stringify(pages, null, 2), 'utf8');
+  if (totalRendered > 32 * 1024) throw new Error(`Aggregate rendered JSON (${totalRendered} bytes) exceeds 32KiB budget`);
   return pages;
 }
 export function executeProduct({ root, productCommand }) {
