@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot } from './worktree-snapshot.mjs';
 
 export const EVIDENCE_FILE = 'review-evidence.json';
-export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
-export const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
+export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
+export const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
 export { isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath };
 export const computeFileHash = hashFile;
 export const computeSourceDigest = sourceDigest;
