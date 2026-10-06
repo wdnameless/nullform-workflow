@@ -25,3 +25,10 @@ Keep existing sizes metadata budgets semantically intact; add a clearly named sk
 ## Integration
 
 Parent owns all OpenSpec files and integration; child worktrees live inside .tmp/worktrees/. One owner per file; builders do not run tests/builds/formatters. Parent runs focused checks after terminal delivery and a full suite once after integration, then Stage B and independent oracle acceptance. Native execution provenance is reported honestly with raw commands/counts; exact public signatures replace this owner-level contract at reconciliation.
+
+## Native runtime repair: bounded review context
+
+The implementation reviewer receives the complete changed-path inventory, pinned base revision and manifest, not duplicate eager copies of every patch and file. Full source and complete per-path patches remain available through the existing read-only `inspect_product` tool. Its source mode retains the current behavior; an explicit reviewer-only diff mode reads a literal authorized changed path, including deletions. Oracle cannot request diff mode or planning/acceptance artifacts. Git failures, credentials and outside-root paths fail closed. No truncation masquerades as complete source, no timeout increase conceals duplicated context, and no second inspection tool is introduced.
+
+Public signature: `inspectProduct(options, path = '', kind = 'source')`, where `kind` is `source | diff`; native tool parameters are `{path, kind}`. Root/role/change and the pinned baseline come from operator options/provenance, not model arguments. Empty source path lists accessible files; empty diff path lists authorized changed paths, including deletions. Full source/diff retrieval is per literal path; missing baseline, excluded paths and oracle diff requests fail closed. The runtime reproduction and partial native usage are retained under `evidence/native-timeout-projection.json`; failed/aborted calls are not acceptance receipts and are not proven zero provider charges.
+
