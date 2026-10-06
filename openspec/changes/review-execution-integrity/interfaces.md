@@ -32,3 +32,5 @@ The implementation reviewer receives the complete changed-path inventory, pinned
 
 Public signature: `inspectProduct(options, path = '', kind = 'source')`, where `kind` is `source | diff`; native tool parameters are `{path, kind}`. Root/role/change and the pinned baseline come from operator options/provenance, not model arguments. Empty source path lists accessible files; empty diff path lists authorized changed paths, including deletions. Full source/diff retrieval is per literal path; missing baseline, excluded paths and oracle diff requests fail closed. The runtime reproduction and partial native usage are retained under `evidence/native-timeout-projection.json`; failed/aborted calls are not acceptance receipts and are not proven zero provider charges.
 
+Native `review-run` uses a bounded 600-second CLI deadline and 610-second process deadline so a full multi-file program review can finish its actual read-only tool round trips. Source is retrieved on demand; benchmark generation/context/request/spending caps are unchanged.
+
