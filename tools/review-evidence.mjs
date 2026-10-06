@@ -382,7 +382,7 @@ export function validateOracleArtifact(root, artifact, state, invalid) {
   const dir = join(root, rel);
   const resolvedDir = resolve(dir);
   const resolvedArtifact = artifact.path ? resolve(root, artifact.path) : null;
-  if (resolvedArtifact && dirname(resolvedArtifact) !== resolvedDir) invalid.push('oracle: explicit evidence path belongs to another change');
+  if (resolvedArtifact && relative(resolvedDir, resolvedArtifact).startsWith('..')) invalid.push('oracle: explicit evidence path belongs to another change');
   const paths = readdirSync(resolvedDir).filter(isOracleEvidenceFilename).map(p => resolve(resolvedDir, p));
   if (resolvedArtifact && !paths.includes(resolvedArtifact)) paths.push(resolvedArtifact);
   let positive = false;
