@@ -1670,9 +1670,11 @@ function cmdCheckCi(root, flags) {
 
   const gitCode = validateCheckCiGit(root, oracleRelForCommit, baseRef);
   if (gitCode !== 0) return gitCode;
-  const nativeGitCode = validateCheckCiGit(root, join(relChangeDir, "review-evidence.json"), baseRef);
-  if (nativeGitCode !== 0) return nativeGitCode;
-
+  const nativeRel = join(relChangeDir, "review-evidence.json");
+  if (oracleRelForCommit !== nativeRel) {
+    const nativeGitCode = validateCheckCiGit(root, nativeRel, baseRef);
+    if (nativeGitCode !== 0) return nativeGitCode;
+  }
   console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
   return 0;
 }

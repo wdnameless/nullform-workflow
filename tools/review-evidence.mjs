@@ -377,16 +377,18 @@ export function validateOracleArtifact(root, artifact, state, invalid) {
   const rel = state.artifacts?.openspec?.path;
   if (!rel || !isRealPathInsideRoot(root, rel)) { invalid.push('oracle: missing rooted change'); return; }
   const dir = join(root, rel);
-  if (artifact.path && dirname(resolve(root, artifact.path)) !== resolve(dir)) invalid.push('oracle: explicit evidence path belongs to another change');
-  const paths = readdirSync(dir).filter(isOracleEvidenceFilename).map(p => join(dir, p));
-  if (artifact.path && !paths.includes(resolve(root, artifact.path))) paths.push(resolve(root, artifact.path));
+  const resolvedDir = resolve(dir);
+  const resolvedArtifact = artifact.path ? resolve(root, artifact.path) : null;
+  if (resolvedArtifact && dirname(resolvedArtifact) !== resolvedDir) invalid.push('oracle: explicit evidence path belongs to another change');
+  const paths = readdirSync(resolvedDir).filter(isOracleEvidenceFilename).map(p => resolve(resolvedDir, p));
+  if (resolvedArtifact && !paths.includes(resolvedArtifact)) paths.push(resolvedArtifact);
   let positive = false;
   for (const path of paths) {
     if (!isRealPathInsideRoot(root, path) || !statSync(path).isFile()) { invalid.push('oracle: file resolves outside project root or is not a file'); continue; }
     const text = readFileSync(path, 'utf8');
-    if (isNegativeOracleVerdict(text) && !isSupersededOracleArtifact(dir, path)) invalid.push(`oracle: verdict in '${path}' is REJECT`);
-    if (isPositiveOracleVerdict(text) && dirname(path) === resolve(dir)) positive = true;
+    if (isNegativeOracleVerdict(text) && !isSupersededOracleArtifact(resolvedDir, path)) invalid.push(`oracle: verdict in '${path}' is REJECT`);
+    if (isPositiveOracleVerdict(text) && dirname(resolve(path)) === resolvedDir) positive = true;
   }
-  const native = loadReviewEvidence(dir);
+  const native = loadReviewEvidence(resolvedDir);
   if (!positive && !native?.oracles?.length) invalid.push('oracle: missing oracle evidence file (oracle*.md or acceptance.md)');
 }

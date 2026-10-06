@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { computeSourceDigest } from '../review-evidence.mjs';
 import { readFileSync, symlinkSync } from 'node:fs';
-import { runReviewRecord, recordStageB, validateReviewEvidence, loadReviewEvidence, saveReviewEvidence, computeEventProjectionHash, countSourceChanges } from '../review-evidence.mjs';
+import { runReviewRecord, recordStageB, validateReviewEvidence, loadReviewEvidence, saveReviewEvidence, computeEventProjectionHash, countSourceChanges, validateOracleArtifact } from '../review-evidence.mjs';
 import { nativeRunner, prepareEvidence, writeEvidence } from './fixtures/review-execution.mjs';
 import { inspectProduct, executeProduct } from '../review-native-tools.mjs';
-import { cmdStart, cmdArtifact, cmdClose } from '../workflow.mjs';
+import { cmdStart, cmdArtifact, cmdClose, cmdCheckCi } from '../workflow.mjs';
 
 // Parent-owned execution: node --test tools/tests/review-integrity.test.mjs
 // If dirty-status hashing causes the defect, hashing snapshot bytes detects the second edit.
@@ -506,5 +506,34 @@ test('inspectProduct: handles batches up to 8 distinct files, enforces rendered 
 
     writeFileSync(join(f.root, 'invalid.bin'), Buffer.from([0xFF, 0xFE, 0xFD]));
     assert.throws(() => inspectProduct(f, [{ path: 'invalid.bin' }]));
+  } finally { f.cleanup(); }
+});
+
+test('validateOracleArtifact normalizes root-relative paths and cmdCheckCi avoids duplicate git check on review-evidence', () => {
+  const f = fixture();
+  const git = args => {
+    const result = spawnSync('git', args, { cwd: f.root, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 't@t' } });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  try {
+    const relRoot = relative(process.cwd(), f.root);
+    const changeDir = join(f.root, 'openspec', 'changes', 'rel-oracle');
+    mkdirSync(changeDir, { recursive: true });
+    writeFileSync(join(changeDir, 'oracle.md'), 'Verdict: ACCEPT\nEvidence verified.\n', 'utf8');
+    const state = { artifacts: { openspec: { path: 'openspec/changes/rel-oracle' } } };
+    const invalid = [];
+    validateOracleArtifact(relRoot, { detail: 'ACCEPT', path: 'openspec/changes/rel-oracle/oracle.md' }, state, invalid);
+    assert.deepEqual(invalid, []);
+
+    writeFileSync(join(changeDir, 'manifest.md'), '| R01 | requirement |\n', 'utf8');
+    writeFileSync(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8');
+    writeFileSync(join(changeDir, 'tasks.md'), '# Tasks\n', 'utf8');
+    mkdirSync(join(changeDir, 'specs'), { recursive: true });
+    writeFileSync(join(changeDir, 'specs', 'spec.md'), '# Spec\n', 'utf8');
+    writeFileSync(join(changeDir, 'interfaces.md'), '# Interfaces\n', 'utf8');
+    rmSync(join(changeDir, 'oracle.md'));
+    writeEvidence(f.root, changeDir, 'rel-oracle');
+    git(['init', '-q']); git(['add', '.']); git(['commit', '-qm', 'initial']);
+    assert.equal(cmdCheckCi(f.root, { tier: 'T2', change: 'rel-oracle' }), 0);
   } finally { f.cleanup(); }
 });
