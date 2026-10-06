@@ -7,9 +7,9 @@ The line above is the machine-checked program verdict for this change; the recei
 
 ## Final receipts (model nullform-gateway/gemini-3.8-flash-high throughout)
 
-- review-execution-integrity: reviewer ACCEPT 01a1126b-49f4-7553-bb3e-7714b07cf7c1 → Stage-B lean-already (frozen before/after exit 0) → oracle ACCEPT 01a11272-5d68-7792-b03f-3510556c9bc3 → oracle ACCEPT 01a11276-52f0-7208-bef7-9b8bfe70a361.
-- skill-benefit-evaluation: reviewer ACCEPT 01a11279-6ebf-772b-88b7-f78b45048dc5 (zero findings; confirms both fix-round findings resolved with regressions) → Stage-B lean-already → oracle ACCEPT 01a11280-c5b6-7218-bdee-48315bdc5b35 → oracle ACCEPT 01a11283-f07e-7499-b458-ceb7554d3dbc.
-- skill-structure-audit: reviewer ACCEPT 01a1125f-94d0-73bf-81e4-901bf6ba5193 → Stage-B lean-already → oracle ACCEPT 01a11264-2516-73f4-965b-3fc22e452ad4 → oracle ACCEPT 01a11266-ed9d-72b4-8201-3bcf5982a08d.
+- review-execution-integrity: reviewer ACCEPT 01a1128a-d0aa-7667-9b4a-68bb6cf6c2ef → Stage-B lean-already (frozen before/after exit 0) → oracle ACCEPT 01a11293-bf94-720d-a0cc-0515a10ec9e6 → oracle ACCEPT 01a11296-f85b-7786-9a47-98d3d46e9b62.
+- skill-benefit-evaluation: reviewer ACCEPT 01a1129a-9132-748d-bd13-c5c5b22e3e44 (zero findings; confirms both fix-round findings resolved with regressions) → Stage-B lean-already → oracle ACCEPT 01a112a2-23da-73b0-b65b-b7dac836d398 → oracle ACCEPT 01a112a4-8f45-71a3-88c9-ff6ad919da07.
+- skill-structure-audit: reviewer ACCEPT 01a112a7-6fd3-7260-8ca4-158820eebb5d → Stage-B lean-already → oracle ACCEPT 01a112ae-5723-71ee-966c-2875a06d4688 → oracle ACCEPT 01a112b0-9f6d-752a-8920-faed13c5433c.
 
 Note: Codex attempts failed on external provider quota (usage_limit_reached); no verdicts fabricated from them.
 
