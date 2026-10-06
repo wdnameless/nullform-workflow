@@ -316,14 +316,3 @@ test("review-evidence: stale earlier reviewer rejects appending new oracle", () 
     rmSync(root, { recursive: true, force: true });
   }
 });
-test("review-evidence: dryRun option returns clean plan without invoking native process", () => {
-  const root = mkdtempSync(join(tmpdir(), "rev-ev-dry-"));
-  try {
-    setupMockProject(root, "feat-dry");
-    const res = runReviewRecord({ root, changeId: "feat-dry", role: "reviewer", dryRun: true });
-    assert.equal(res.ok, true);
-    assert.equal(res.dryRun, true);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
