@@ -350,13 +350,21 @@ test('review request contains approved role body and manifest without credential
       assert.match(args.prompt, /Approved review instructions/);
       assert.match(args.prompt, /User needs product result/);
       assert.match(args.prompt, /product\.cjs/);
+      assert.match(args.prompt, /deleted\.cjs/);
       assert.doesNotMatch(args.prompt, /synthetic-do-not-send/);
       return transport(args);
     } });
     assert.match(inspectProduct(f, 'product.cjs'), /exports\.answer = \(\) => 42 \+ 0/);
     assert.throws(() => inspectProduct(f, 'secrets.json'), /allowed/);
+    // Diff inventory lists deleted file alongside modified file
+    const changedInventory = inspectProduct({ ...f, role: 'reviewer', baseRef }, '', 'diff');
+    assert.match(changedInventory, /deleted\.cjs/);
+    assert.match(changedInventory, /product\.cjs/);
+    // Reviewer retrieves deletion diff; unchanged file or missing baseRef is rejected
     const diff = inspectProduct({ ...f, role: 'reviewer', baseRef }, 'deleted.cjs', 'diff');
     assert.match(diff, /deleted file mode|--- a\/deleted\.cjs/);
+    assert.throws(() => inspectProduct({ ...f, role: 'reviewer', baseRef }, 'agent/agents/reviewer.md', 'diff'), /has no diff against base revision/);
+    assert.throws(() => inspectProduct({ ...f, role: 'reviewer' }, 'product.cjs', 'diff'), /requires an explicit base revision/);
     assert.throws(() => inspectProduct({ ...f, role: 'oracle', baseRef }, 'product.cjs', 'diff'), /only to implementation reviewer/);
     const transport2 = nativeRunner();
     assert.throws(() => runReviewRecord({ ...f, role: 'reviewer', redo: true, baseRef, ompRunner: args => {

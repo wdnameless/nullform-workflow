@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isSecretOrCredentialPath } from './worktree-snapshot.mjs';
+import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isSecretOrCredentialPath, isStructuralExcludedPath, isAcceptancePath } from './worktree-snapshot.mjs';
 
 function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -10,22 +10,17 @@ function git(root, args) {
 export function inspectProduct(options, path = '', kind = 'source') {
   const { root, role, changeId } = options || {};
   const baseRef = options?.baseRef || options?.provenance?.baseRef || null;
-  if (path && typeof path === 'object') {
-    kind = path.kind || kind;
-    path = path.path || '';
-  }
   const snapshot = scanWorktree(root);
   const files = snapshot.isGit ? { ...snapshot.tracked, ...snapshot.untracked } : snapshot.files;
-  const allowed = p => !isSecretOrCredentialPath(p) && !files[p]?.isSecret && (role !== 'oracle' || !p.startsWith('openspec/') || p === `openspec/changes/${changeId}/manifest.md`) && !/review-evidence.*\.json$/.test(p);
+  const allowed = p => !isSecretOrCredentialPath(p) && !isStructuralExcludedPath(p) && !isAcceptancePath(p) && !files[p]?.isSecret && (role !== 'oracle' || !p.startsWith('openspec/') || p === `openspec/changes/${changeId}/manifest.md`) && !/review-evidence.*\.json$/.test(p);
 
   if (kind === 'diff') {
     if (role !== 'reviewer') throw new Error('Diff inspection is available only to implementation reviewer');
-    if (!baseRef) return 'Non-git source or unprovided base revision: inspect_product provides complete source context.';
-    if (!path) {
-      const changed = git(root, ['diff', '--name-only', '-z', baseRef, '--', '.']).split('\0').filter(p => p && allowed(p));
-      return changed.sort().join('\n');
-    }
+    if (!baseRef) throw new Error('Diff inspection requires an explicit base revision');
+    const changed = git(root, ['diff', '--name-only', '-z', baseRef, '--', '.']).split('\0').filter(p => p && allowed(p));
+    if (!path) return changed.sort().join('\n');
     if (!isPathInsideRoot(root, path) || !allowed(path)) throw new Error('Inspection path is outside allowed product source');
+    if (!changed.includes(path)) throw new Error(`Inspection path has no diff against base revision: ${path}`);
     if (existsSync(join(root, path)) && !isRealPathInsideRoot(root, path)) throw new Error('Inspection path is outside allowed product source');
     return git(root, ['--literal-pathspecs', 'diff', baseRef, '--', path]);
   }
