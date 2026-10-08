@@ -30,6 +30,7 @@ Match tool class to task stage — never bulk-dump everything:
 - **Verification**: deterministic first — `lsp diagnostics`, build, tests. LLM-judgment (@oracle) only for what tools can't decide.
 - **External truth**: `context7` (library docs) before guessing APIs; `web_search` for ecosystem questions.
 - Skip MCP calls whose answer won't change your decision.
+- **BUILT-IN FIRST**: before adopting a new plugin, MCP server, or external service, check whether the host's built-in capability already covers the need (OMP tools > installed plugin > new MCP > external service). Record the decision in one line (`built-in: <what> | why-not: <reason> | adopted: <what>`); a new dependency without this line is a review finding.
 - **Observability dashboard**: `workflow.mjs start` launches it in the background and prints its **live** URL — the printed address is liveness-checked (a leftover runtime file from a dead server is ignored and a fresh one started). (`--no-dashboard` or `NF_NO_DASHBOARD=1` permitted in read-only/security situations.)
   In a Paseo workspace (`PASEO_AGENT_ID`), unless `--no-dashboard` was specified, use the URL that `start` printed and call `browser_new_tab(url)` immediately, so the dashboard opens in the **Paseo IDE browser tab** for the user.
   If `browser_new_tab` fails because no browser host is connected, say so in one line and give the user the URL — do NOT report the dashboard as opened, and do NOT retry in a loop.
