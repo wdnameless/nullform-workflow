@@ -566,15 +566,17 @@ function installHarness(options = {}) {
               options.dryRun
             )
           );
-          // Native OMP extension for automatic JEV assistance: installed idempotently
-          const jevSource = join(REPO_ROOT, "agent", "extensions", "nullform-jev.ts");
-          const jevDest = join(homeAgentDir, "extensions", "nullform-jev.ts");
-          if (existsSync(jevSource)) {
-            if (!options.dryRun) {
-              mkdirSync(dirname(jevDest), { recursive: true });
-              copyFileSync(jevSource, jevDest);
+          // Native OMP extensions (JEV assistance, delete-guard): installed idempotently
+          for (const extFile of ["nullform-jev.ts", "nullform-delete-guard.ts"]) {
+            const extSource = join(REPO_ROOT, "agent", "extensions", extFile);
+            const extDest = join(homeAgentDir, "extensions", extFile);
+            if (existsSync(extSource)) {
+              if (!options.dryRun) {
+                mkdirSync(dirname(extDest), { recursive: true });
+                copyFileSync(extSource, extDest);
+              }
+              plan.filesToCopy.push(extDest);
             }
-            plan.filesToCopy.push(jevDest);
           }
         }
         break;

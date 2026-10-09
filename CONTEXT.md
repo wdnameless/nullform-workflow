@@ -183,6 +183,9 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Spend ledger (`spend-ledger.json`)** — version-2 durable request reservations/settlements and cumulative one-USD ceiling in `bench/runs/`; outstanding reservations or `blocked_unknown_spend` prohibit further inference across restarts.
 - **SDK tariff (`computeTariffCost`)** — exact allowlisted installed-catalog pricing applied to strict nonnegative native token buckets; not independently confirmed provider billing.
 - **Terminal findings score (`scoreReview`)** — scores only the final normally stopped assistant's typed findings against known consumer defects and counts unmatched findings as false positives; injection adherence is not automatic skill discovery.
+- **Delete-guard** — `agent/extensions/nullform-delete-guard.ts`. Native OMP extension intercepting destructive shell commands (`rm -r`, `git push --force`, `git reset --hard`, `git clean -f`, `find -delete`, SQL drops/truncates) in interactive sessions to require explicit user confirmation before execution.
+- **Destructive rule (`DestructiveRule`)** — pattern match specification (`agent/extensions/nullform-delete-guard.ts`) associating a high-risk command regex with a human-readable action description for confirmation prompts.
+- **Delete guard result (`DeleteGuardResult`)** — execution block decision (`agent/extensions/nullform-delete-guard.ts`) containing denial status, user-facing reason, and instruction preventing command retry.
 
 ## Operations
 

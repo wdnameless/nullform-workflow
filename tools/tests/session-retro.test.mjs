@@ -22,6 +22,11 @@ import {
   formatRetroReport,
   recordRetroReview,
   loadRetroState,
+  suggestSessions,
+  formatSuggestReport,
+  sanitizeErrorSample,
+  ruleForRepeat,
+  isServiceOrReadonlyCommand,
 } from "../session-retro.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../session-retro.mjs", import.meta.url));
@@ -161,6 +166,200 @@ test("parseSessionFile detects retry on repeated failed bash command", () => {
     assert.equal(s.bashCalls, 2);
     assert.equal(s.failedBash, 2);
     assert.equal(s.retries, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+test("suggestSessions aggregates repeating bash commands and rules across sessions", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "retro-suggest-cmd-"));
+  try {
+    // Session 1: npm test repeated 3 times
+    writeSession(tmp, "s1.jsonl", [
+      toolCall("bash", { command: "npm test" }),
+      toolCall("bash", { command: "npm test" }),
+      toolCall("bash", { command: "npm test" }),
+    ]);
+    // Session 2: npm test repeated 3 times
+    writeSession(tmp, "s2.jsonl", [
+      toolCall("bash", { command: "npm test" }),
+      toolCall("bash", { command: "npm test" }),
+      toolCall("bash", { command: "npm test" }),
+    ]);
+    // Session 3: single command, no repeat
+    writeSession(tmp, "s3.jsonl", [
+      toolCall("bash", { command: "git status" }),
+    ]);
+
+    const suggestions = suggestSessions(tmp);
+    assert.equal(suggestions.length, 1);
+    const top = suggestions[0];
+    assert.equal(top.repeat, "repeat-bash: npm test");
+    assert.equal(top.sessions, 2);
+    assert.equal(top.totalSessions, 3);
+    assert.equal(top.rule, "guardrail: npm test — проверять <условие> до повтора");
+
+    const report = formatSuggestReport(suggestions);
+    assert.equal(
+      report,
+      "1. repeat-bash: npm test (встречается в 2 сессий из 3) → guardrail: npm test — проверять <условие> до повтора"
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("suggestSessions and formatSuggestReport on empty dir return empty string", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "retro-suggest-empty-"));
+  try {
+    const suggestions = suggestSessions(tmp);
+    assert.deepEqual(suggestions, []);
+    const report = formatSuggestReport(suggestions);
+    assert.equal(report, "");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("suggestSessions covers many-reads, long-session, retries/errors rule templates", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "retro-suggest-signals-"));
+  try {
+    // Session 1: many reads (45 calls)
+    const reads = Array.from({ length: 45 }, () => toolCall("read", { path: "a.ts:1-10" }));
+    writeSession(tmp, "reads.jsonl", reads);
+
+    // Session 2: long session (130 calls)
+    const toolCalls = Array.from({ length: 130 }, () => toolCall("bash", { command: `cmd_${Math.random()}` }));
+    writeSession(tmp, "long.jsonl", toolCalls);
+
+    // Session 3: error / retry
+    const failBash = {
+      type: "toolCall",
+      name: "bash",
+      arguments: { command: "deploy.sh" },
+      result: { exitCode: 1, output: "fatal error: permission denied" },
+    };
+    writeSession(tmp, "error.jsonl", [failBash, failBash]);
+
+    const suggestions = suggestSessions(tmp, { limit: 5 });
+    const rules = suggestions.map((s) => s.rule);
+
+    assert.ok(rules.includes("navigate: читать <паттерн> через диапазон строк вместо полного файла"));
+    assert.ok(rules.includes("compaction: разбивать задачи >N вызовов"));
+    assert.ok(rules.includes("preflight: <команда> --dry-run перед выполнением"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("CLI suggest supports empty dir, formatted output, and --json flag", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "retro-cli-suggest-"));
+  try {
+    // Empty dir returns empty stdout and exits 0
+    const emptyRun = runCli(["suggest", "--sessions", tmp]);
+    assert.equal(emptyRun.status, 0);
+    assert.equal(emptyRun.stdout.trim(), "");
+
+    // Add session with repeats
+    writeSession(tmp, "s1.jsonl", [
+      toolCall("bash", { command: "npm test" }),
+      toolCall("bash", { command: "npm test" }),
+    ]);
+    writeSession(tmp, "s2.jsonl", [
+      toolCall("bash", { command: "npm test" }),
+      toolCall("bash", { command: "npm test" }),
+    ]);
+
+    const reportRun = runCli(["suggest", "--sessions", tmp]);
+    assert.equal(reportRun.status, 0);
+    assert.match(reportRun.stdout, /1\. repeat-bash: npm test \(встречается в 2 сессий из 2\)/);
+
+    const jsonRun = runCli(["suggest", "--sessions", tmp, "--json"]);
+    assert.equal(jsonRun.status, 0);
+    const parsed = JSON.parse(jsonRun.stdout);
+    assert.ok(Array.isArray(parsed));
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].sessions, 2);
+    assert.equal(parsed[0].totalSessions, 2);
+
+    const helpRun = runCli(["--help"]);
+    assert.equal(helpRun.status, 0);
+    assert.match(helpRun.stdout, /suggest/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+test("sanitizeErrorSample extracts clean error text without raw JSON fragments or tails", () => {
+  const jsonSample = JSON.stringify({
+    type: "toolResult",
+    name: "bash",
+    result: { exitCode: 1, output: "fatal: not a git repository (or any of the parent directories): .git" },
+  });
+  const cleaned = sanitizeErrorSample(jsonSample);
+  assert.equal(cleaned, "fatal: not a git repository (or any of the parent directories): .git");
+  assert.ok(!cleaned.includes("{") && !cleaned.includes("}") && !cleaned.includes('"'));
+
+  // Truncated JSON without closing brackets
+  const truncated = '{"type":"toolResult","result":{"exitCode":1,"output":"error: connection timeout after 30000ms';
+  const cleanedTrunc = sanitizeErrorSample(truncated);
+  assert.equal(cleanedTrunc, "error: connection timeout after 30000ms");
+
+  // Long error truncated to <= 80 characters with no trailing quotes or punctuation
+  const longError = JSON.stringify({
+    error: { message: "very long error message that repeats over and over and exceeds the eighty character limit easily" },
+  });
+  const cleanedLong = sanitizeErrorSample(longError);
+  assert.ok(cleanedLong.length <= 80);
+  assert.ok(!cleanedLong.endsWith('"') && !cleanedLong.endsWith(",") && !cleanedLong.endsWith(":"));
+});
+
+test("ruleForRepeat many-reads returns clean navigate template without <уж>", () => {
+  const rule = ruleForRepeat("many-reads");
+  assert.equal(rule, "navigate: читать <паттерн> через диапазон строк вместо полного файла");
+  assert.ok(!rule.includes("<уж>"));
+});
+
+test("suggestSessions ignores service and readonly commands in stop-list", () => {
+  assert.ok(isServiceOrReadonlyCommand("git status"));
+  assert.ok(isServiceOrReadonlyCommand("git status --short"));
+  assert.ok(isServiceOrReadonlyCommand("git diff HEAD~1"));
+  assert.ok(isServiceOrReadonlyCommand("git log -n 5"));
+  assert.ok(isServiceOrReadonlyCommand("ls -la"));
+  assert.ok(isServiceOrReadonlyCommand("pwd"));
+  assert.ok(!isServiceOrReadonlyCommand("npm test"));
+  assert.ok(!isServiceOrReadonlyCommand("cargo build"));
+
+  const tmp = mkdtempSync(join(tmpdir(), "retro-stoplist-"));
+  try {
+    // Both sessions repeat git status and ls 5 times, but run npm test 3 times
+    writeSession(tmp, "s1.jsonl", [
+      toolCall("bash", { command: "git status" }),
+      toolCall("bash", { command: "git status" }),
+      toolCall("bash", { command: "git status" }),
+      toolCall("bash", { command: "ls -la" }),
+      toolCall("bash", { command: "ls -la" }),
+      toolCall("bash", { command: "npm test" }),
+      toolCall("bash", { command: "npm test" }),
+    ]);
+    writeSession(tmp, "s2.jsonl", [
+      toolCall("bash", { command: "git status" }),
+      toolCall("bash", { command: "git status" }),
+      toolCall("bash", { command: "git status" }),
+      toolCall("bash", { command: "pwd" }),
+      toolCall("bash", { command: "pwd" }),
+      toolCall("bash", { command: "npm test" }),
+      toolCall("bash", { command: "npm test" }),
+    ]);
+
+    const suggestions = suggestSessions(tmp);
+    const repeats = suggestions.map((s) => s.repeat);
+
+    // git status, ls, pwd must NOT be in repeat suggestions
+    assert.ok(!repeats.some((r) => r.includes("git status")));
+    assert.ok(!repeats.some((r) => r.includes("ls")));
+    assert.ok(!repeats.some((r) => r.includes("pwd")));
+
+    // npm test must be suggested
+    assert.ok(repeats.includes("repeat-bash: npm test"));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

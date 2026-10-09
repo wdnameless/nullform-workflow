@@ -36,14 +36,12 @@
  */
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";
-import { join, dirname, resolve, relative, isAbsolute, basename } from "node:path";
-import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join, dirname, resolve, basename } from "node:path";
 import {
-  POSITIVE_VERDICT_RE,
   NEGATIVE_VERDICT_RE,
   isPositiveOracleVerdict,
   isNegativeOracleVerdict,
-  isOracleEvidenceFilename,
   isAcceptanceArtifactFilename,
   validateOracleArtifact,
   getPorcelainStatusRaw,
@@ -59,6 +57,10 @@ const FILE = "state.json";
 const BUDGETS_FILE = "budgets.json";
 const METRICS_FILE = "metrics.jsonl";
 const DEFAULT_BUDGETS = { T0: 10, T1: 25, T2: 45, T3: 45 };
+const BUDGET_WARN_RATIO = 0.8;
+const BUDGET_WARN_DEFAULT_TOKENS = 200_000;
+const BUDGET_WARN_DEFAULT_CALLS = 45;
+
 
 // Ordered: each tier inherits every requirement below it.
 const LADDER = ["T0", "T1", "T2", "T3"];
@@ -969,7 +971,115 @@ function cmdCheck(root) {
   return 0;
 }
 
-function cmdStatus(root) {
+function loadSoftBudgets(root) {
+  const p = budgetsPath(root);
+  const def = { tokens: BUDGET_WARN_DEFAULT_TOKENS, calls: BUDGET_WARN_DEFAULT_CALLS, warnRatio: BUDGET_WARN_RATIO };
+  if (!existsSync(p)) return def;
+  try {
+    const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
+    return {
+      tokens: typeof raw.tokens === "number" && raw.tokens > 0 ? raw.tokens : def.tokens,
+      calls: typeof raw.calls === "number" && raw.calls > 0 ? raw.calls : def.calls,
+      warnRatio: typeof raw.warnRatio === "number" && raw.warnRatio > 0 ? raw.warnRatio : def.warnRatio,
+    };
+  } catch { return def; }
+}
+
+// WHY: Parsing the active session .jsonl transcript directly in JS (reusing logic from
+// tools/session_cost.py for token usage and tools/session-retro.mjs for tool call counting)
+// is the most boring, reliable, and decoupled approach. It reads ground truth directly from
+// transcript lines without spawning child processes or requiring Python, and gracefully
+// supports explicit --tokens/--calls CLI flags as zero-overhead overrides.
+function parseSessionUsage(filePath) {
+  let tokens = 0, calls = 0;
+  try {
+    for (const line of readFileSync(filePath, "utf8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let ev;
+      try { ev = JSON.parse(trimmed); } catch { continue; }
+      const u = ev.message?.usage || ev.data?.usage || ev.usage;
+      if (u) tokens += typeof u.totalTokens === "number" ? u.totalTokens : ((u.input || 0) + (u.output || 0));
+      if (ev.type === "toolCall" || ev.type === "tool_call" || ev.type === "tool_use") calls++;
+      else if (Array.isArray(ev.message?.tool_calls)) calls += ev.message.tool_calls.length;
+      else {
+        const blk = Array.isArray(ev.message?.content) ? ev.message.content : Array.isArray(ev.content) ? ev.content : null;
+        if (blk) for (const b of blk) if (b && (b.type === "toolCall" || b.type === "tool_call" || b.type === "tool_use")) calls++;
+      }
+    }
+  } catch {}
+  return { tokens, calls };
+}
+
+function findJsonlFiles(dir) {
+  const out = [];
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) out.push(...findJsonlFiles(full));
+      else if (e.isFile() && e.name.endsWith(".jsonl")) out.push(full);
+    }
+  } catch {}
+  return out;
+}
+
+function findNewestSessionJsonl(dir) {
+  try {
+    if (!existsSync(dir)) return null;
+    if (statSync(dir).isFile() && dir.endsWith(".jsonl")) return dir;
+    const files = findJsonlFiles(dir);
+    let newest = null;
+    for (const f of files) {
+      try {
+        const st = statSync(f);
+        if (!newest || st.mtimeMs > newest.mtimeMs) newest = { path: f, mtimeMs: st.mtimeMs };
+      } catch {}
+    }
+    return newest ? newest.path : null;
+  } catch { return null; }
+}
+
+function getSessionConsumption(root, flags = {}) {
+  const t = flags.tokens !== undefined ? Number(flags.tokens) : null;
+  const c = flags.calls !== undefined ? Number(flags.calls) : null;
+  if (t !== null && !Number.isNaN(t) && c !== null && !Number.isNaN(c)) return { tokens: t, calls: c };
+  let sf = null;
+  if (flags.sessions) {
+    const raw = resolve(root, String(flags.sessions));
+    sf = findNewestSessionJsonl(raw);
+  }
+  if (!sf) {
+    const candidateDirs = [
+      join(root, DIR, "sessions"),
+      join(root, "agent", "sessions"),
+      join(root, "sessions"),
+      join(homedir(), ".omp", "agent", "sessions"),
+    ];
+    for (const d of candidateDirs) {
+      const found = findNewestSessionJsonl(d);
+      if (found) { sf = found; break; }
+    }
+  }
+  const parsed = sf ? parseSessionUsage(sf) : { tokens: 0, calls: 0 };
+  return { tokens: t !== null && !Number.isNaN(t) ? t : parsed.tokens, calls: c !== null && !Number.isNaN(c) ? c : parsed.calls };
+}
+
+function checkHandoffFile(root, startedAt) {
+  const p = join(root, DIR, "handoff.md");
+  if (!existsSync(p)) return { exists: false, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: "file missing" };
+  try {
+    const st = statSync(p);
+    const startMs = startedAt ? new Date(startedAt).getTime() : 0;
+    const fresh = Number.isFinite(startMs) ? st.mtimeMs > startMs : true;
+    if (!fresh) return { exists: true, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: "stale mtime" };
+    const txt = readFileSync(p, "utf8");
+    const valid = /РЕШЕНИЯ/i.test(txt) && /ТУПИКИ/i.test(txt) && /ДАЛЬШЕ/i.test(txt);
+    return { exists: true, fresh: true, valid, path: join(DIR, "handoff.md"), reason: valid ? null : "missing sections (РЕШЕНИЯ/ТУПИКИ/ДАЛЬШЕ)" };
+  } catch (err) { return { exists: true, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: err.message }; }
+}
+
+function cmdStatus(root, flags = {}) {
   const st = load(root);
   if (!st) { console.log("workflow: no active task."); return 0; }
   const reqs = requiredFor(st.tier);
@@ -991,7 +1101,44 @@ function cmdStatus(root) {
     const a = st.artifacts[r.kind];
     console.log(`  ${a ? "+" : "-"} ${r.kind}${a && a.path ? ` (${a.path})` : ""}`);
   }
+  const soft = loadSoftBudgets(root);
+  const usage = getSessionConsumption(root, flags);
+  console.log(`budget  consumption ${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`);
+  const tokenRatio = soft.tokens > 0 ? usage.tokens / soft.tokens : 0;
+  const callRatio = soft.calls > 0 ? usage.calls / soft.calls : 0;
+  if (tokenRatio >= soft.warnRatio || callRatio >= soft.warnRatio) {
+    console.log(`BUDGET warning: session approaching soft budget ceiling (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls)`);
+  }
   return 0;
+}
+
+function cmdCheckBudget(root, flags = {}) {
+  const st = load(root);
+  if (!st) {
+    if (flags.json) console.log(JSON.stringify({ ok: false, error: "no active task" }, null, 2));
+    else console.error("workflow check-budget: no active task.");
+    return 2;
+  }
+  const soft = loadSoftBudgets(root);
+  const usage = getSessionConsumption(root, flags);
+  const warnTokens = Math.floor(soft.tokens * soft.warnRatio);
+  const warnCalls = Math.floor(soft.calls * soft.warnRatio);
+  const isOver = usage.tokens >= warnTokens || usage.calls >= warnCalls;
+  if (!isOver) {
+    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: false, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, message: "under budget threshold" }, null, 2));
+    else console.log(`workflow check-budget: under budget threshold (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls).`);
+    return 0;
+  }
+  const handoff = checkHandoffFile(root, st.startedAt);
+  if (handoff.valid) {
+    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: true, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, handoff, message: "over budget, valid fresh handoff present" }, null, 2));
+    else console.log(`workflow check-budget: over budget threshold (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls), but valid fresh .workflow/handoff.md present.`);
+    return 0;
+  }
+  const err = `workflow check-budget: budget threshold exceeded (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls). Requires .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ sections newer than task start (${st.startedAt}). ${handoff.reason ? `Current handoff state: ${handoff.reason}.` : ""}`.trim();
+  if (flags.json) console.log(JSON.stringify({ ok: false, overBudget: true, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, handoff, error: err }, null, 2));
+  else console.error(err);
+  return 1;
 }
 
 
@@ -1050,7 +1197,7 @@ function findAcceptanceStaleness(root, st) {
     : findNonGitStaleness(snapshot, current, acceptedAt, acceptedMs);
 }
 
-function findGitStaleness(root, snapshot, current, acceptedAt) {
+function findGitStaleness(_root, snapshot, current, acceptedAt) {
   const newer = [];
   const deleted = [];
   const untrackedAdded = [];
@@ -1694,7 +1841,7 @@ function cmdStageB(root, flags) {
 }
 /* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB };
 
 import { fileURLToPath } from "node:url";
 
@@ -1713,7 +1860,8 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
     case "suggest":  code = cmdSuggest(args.flags); break;
     case "artifact": code = cmdArtifact(root, args.flags); break;
     case "check":    code = cmdCheck(root); break;
-    case "status":   code = cmdStatus(root); break;
+    case "status":       code = cmdStatus(root, args.flags); break;
+    case "check-budget": code = cmdCheckBudget(root, args.flags); break;
     case "close":    code = cmdClose(root, args.flags); break;
     case "escalate": code = cmdEscalate(root, args.flags); break;
     case "metrics":  code = cmdMetrics(root); break;
@@ -1731,6 +1879,7 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
       console.log("  node workflow.mjs artifact --kind manifest --path openspec/changes/x/manifest.md");
       console.log("  node workflow.mjs check      # exit 1 if the tier's artifacts are missing");
       console.log("  node workflow.mjs status");
+      console.log("  node workflow.mjs check-budget [--sessions <dir>] [--json]");
       console.log("  node workflow.mjs escalate --tier T2");
       console.log("  node workflow.mjs close [--force --reason \"...\"] [--auto] [--diff-lines N]");
       console.log("  node workflow.mjs metrics [--root .]");

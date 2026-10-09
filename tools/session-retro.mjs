@@ -238,6 +238,203 @@ export function formatRetroReport(result, { limit = 10 } = {}) {
     `Дальше — skill://session-retro: разобрать топ-кандидатов вручную, находки подтвердить у человека.`,
   ].join("\n");
 }
+export const SERVICE_COMMAND_PATTERNS = [
+  /^git\s+(status|diff|log|show|branch|rev-parse)\b/i,
+  /^(ls|dir|pwd|echo|cat|head|tail|which|where|whoami|date)\b/i,
+];
+
+export function isServiceOrReadonlyCommand(cmd) {
+  if (!cmd || typeof cmd !== "string") return false;
+  const trimmed = cmd.trim();
+  return SERVICE_COMMAND_PATTERNS.some((pat) => pat.test(trimmed));
+}
+
+export function extractCmdPrefix(cmd) {
+  if (!cmd) return "<cmd-prefix>";
+  const parts = cmd.trim().split(/\s+/);
+  const prefix = parts.slice(0, 3).join(" ");
+  return prefix.replace(/[|&;]+$/, "").trim() || cmd.trim();
+}
+
+export function sanitizeErrorSample(sample) {
+  if (!sample || typeof sample !== "string") return "";
+  let extracted = "";
+
+  try {
+    const obj = JSON.parse(sample);
+    if (typeof obj === "string") {
+      extracted = obj;
+    } else if (obj && typeof obj === "object") {
+      if (typeof obj.error === "string") extracted = obj.error;
+      else if (typeof obj.error?.message === "string") extracted = obj.error.message;
+      else if (typeof obj.result?.error === "string") extracted = obj.result.error;
+      else if (typeof obj.result?.output === "string") extracted = obj.result.output;
+      else if (typeof obj.output === "string") extracted = obj.output;
+      else if (typeof obj.message === "string") extracted = obj.message;
+      else if (typeof obj.message?.content === "string") extracted = obj.message.content;
+      else if (Array.isArray(obj.message?.content)) {
+        const textItem = obj.message.content.find((c) => c && typeof c.text === "string");
+        if (textItem) extracted = textItem.text;
+      } else if (Array.isArray(obj.content)) {
+        const textItem = obj.content.find((c) => c && typeof c.text === "string");
+        if (textItem) extracted = textItem.text;
+      } else if (typeof obj.stderr === "string") extracted = obj.stderr;
+      else if (typeof obj.details === "string") extracted = obj.details;
+      else if (typeof obj.reason === "string") extracted = obj.reason;
+    }
+  } catch {
+    // Non-JSON or truncated JSON
+  }
+
+  // 2. Если из объекта не извлекли (или JSON был обрезан), ищем ключевые поля по регулярке
+  if (!extracted) {
+    const fieldMatch = sample.match(/"(?:output|error|message|text|stderr|details|reason)"\s*:\s*"([^"\r\n]+)/i);
+    if (fieldMatch) {
+      extracted = fieldMatch[1];
+    }
+  }
+
+  // 3. Если всё ещё не извлекли, очищаем от любых JSON-ключей, двоеточий, скобок
+  if (!extracted) {
+    extracted = sample
+      .replace(/"[a-zA-Z0-9_-]+"\s*:/g, " ")
+      .replace(/[{}\[\]"]/g, " ");
+  }
+
+  let cleaned = extracted
+    .replace(/\\n/g, " ")
+    .replace(/\\"/g, '"')
+    .replace(/\\t/g, " ")
+    .replace(/\\r/g, " ")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  cleaned = cleaned.replace(/^[\s{}[\]"':,]+|[\s{}[\]"':,]+$/g, "");
+
+  if (cleaned.length > 80) {
+    cleaned = cleaned.slice(0, 80).trim();
+    cleaned = cleaned.replace(/[\s{}[\]"':,]+$/g, "");
+  }
+
+  return cleaned;
+}
+
+export function ruleForRepeat(type, cmd) {
+  if (type === "repeat-bash") {
+    const p = extractCmdPrefix(cmd);
+    return `guardrail: ${p} — проверять <условие> до повтора`;
+  }
+  if (type === "many-reads") {
+    return "navigate: читать <паттерн> через диапазон строк вместо полного файла";
+  }
+  if (type === "long-session") {
+    return "compaction: разбивать задачи >N вызовов";
+  }
+  if (type === "retries/errors") {
+    return "preflight: <команда> --dry-run перед выполнением";
+  }
+  return "guardrail: <условие>";
+}
+/** Агрегирует повторы по сессиям и генерирует однострочные шаблоны правил. */
+export function suggestSessions(sessionsDir, { days = 30, limit = 5, now = Date.now() } = {}) {
+  if (!sessionsDir || !existsSync(sessionsDir)) return [];
+  const files = findJsonlFiles(sessionsDir);
+  if (files.length === 0) return [];
+  const maxAgeMs = typeof days === "number" && days > 0 ? days * 24 * 60 * 60 * 1000 : Infinity;
+  const validFiles = [];
+  for (const f of files) {
+    try {
+      if (maxAgeMs !== Infinity && now - statSync(f).mtimeMs > maxAgeMs) continue;
+      validFiles.push(f);
+    } catch {
+      continue;
+    }
+  }
+  if (validFiles.length === 0) return [];
+  const totalSessions = validFiles.length;
+
+  const aggregated = new Map();
+
+  for (const f of validFiles) {
+    const summary = parseSessionFile(f);
+    const scored = scoreSession(summary);
+    const sessionRepeats = new Map();
+
+    // 1. Повторяющиеся bash-команды (исключая служебные/ридонли команды)
+    for (const [cmd, n] of summary.lastCommandCounts) {
+      if (n >= 2 && !isServiceOrReadonlyCommand(cmd)) {
+        const key = `repeat-bash: ${cmd}`;
+        sessionRepeats.set(key, { repeat: key, type: "repeat-bash", cmd });
+      }
+    }
+
+    // 2. many-reads
+    if (
+      summary.readCalls > 40 ||
+      summary.readBytes > 100000 ||
+      scored.signals.some((s) => s.startsWith("many-reads") || s.startsWith("heavy-reads"))
+    ) {
+      sessionRepeats.set("many-reads", { repeat: "many-reads", type: "many-reads" });
+    }
+
+    // 3. long-session
+    if (
+      summary.toolCalls > 120 ||
+      scored.signals.some((s) => s.startsWith("long-session") || s.startsWith("medium-session"))
+    ) {
+      sessionRepeats.set("long-session", { repeat: "long-session", type: "long-session" });
+    }
+
+    // 4. retries / errors / errorSamples
+    if (summary.retries > 0 || summary.errors >= 5 || summary.errorSamples.length > 0) {
+      let added = false;
+      if (summary.errorSamples.length > 0) {
+        for (const sample of summary.errorSamples) {
+          const sampleText = sanitizeErrorSample(sample);
+          if (sampleText) {
+            const key = `retries/errors: ${sampleText}`;
+            sessionRepeats.set(key, { repeat: key, type: "retries/errors" });
+            added = true;
+          }
+        }
+      }
+      if (!added) {
+        sessionRepeats.set("retries/errors", { repeat: "retries/errors", type: "retries/errors" });
+      }
+    }
+
+    for (const [key, item] of sessionRepeats) {
+      const prev = aggregated.get(key);
+      if (prev) {
+        prev.sessions++;
+      } else {
+        aggregated.set(key, { ...item, sessions: 1 });
+      }
+    }
+  }
+
+  const result = [];
+  for (const item of aggregated.values()) {
+    result.push({
+      repeat: item.repeat,
+      sessions: item.sessions,
+      totalSessions,
+      rule: ruleForRepeat(item.type, item.cmd),
+    });
+  }
+
+  result.sort((a, b) => b.sessions - a.sessions || a.repeat.localeCompare(b.repeat));
+  return result.slice(0, limit);
+}
+
+/** Текстовый отчёт с нумерованным топ-5 повторов и правил. */
+export function formatSuggestReport(result) {
+  const items = Array.isArray(result) ? result : (result?.suggestions || []);
+  if (items.length === 0) return "";
+  return items
+    .map((item, i) => `${i + 1}. ${item.repeat} (встречается в ${item.sessions} сессий из ${item.totalSessions}) → ${item.rule}`)
+    .join("\n");
+}
 
 export function loadRetroState(statePath = DEFAULT_STATE_PATH) {
   try {
@@ -259,10 +456,11 @@ export function recordRetroReview(statePath = DEFAULT_STATE_PATH, details = {}) 
 }
 
 export function parseArgs(argv) {
-  const cmd = argv[0] && !argv[0].startsWith("--") ? argv[0] : "scan";
-  const rest = cmd === argv[0] && !argv[0]?.startsWith("--") ? argv.slice(1) : argv;
-  const opts = { cmd, sessions: DEFAULT_SESSIONS_DIR, days: 30, limit: 10, json: false, state: DEFAULT_STATE_PATH, maxDays: DEFAULT_MAX_DAYS, detail: "", help: false, errors: [] };
-  const known = new Set(["sessions", "days", "limit", "json", "state", "max-days", "detail", "help"]);
+  const hasCmd = Boolean(argv[0] && !argv[0].startsWith("--"));
+  const cmd = hasCmd ? argv[0] : "scan";
+  const rest = hasCmd ? argv.slice(1) : argv;
+  const opts = { cmd, sessions: DEFAULT_SESSIONS_DIR, days: 30, limit: cmd === "suggest" || rest.includes("--suggest") ? 5 : 10, json: false, state: DEFAULT_STATE_PATH, maxDays: DEFAULT_MAX_DAYS, detail: "", help: false, errors: [] };
+  const known = new Set(["sessions", "days", "limit", "json", "state", "max-days", "detail", "help", "suggest"]);
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (!a.startsWith("--")) {
@@ -272,6 +470,10 @@ export function parseArgs(argv) {
     const key = a.slice(2).split("=")[0];
     if (!known.has(key)) {
       opts.errors.push(`неизвестный параметр: ${a}`);
+      continue;
+    }
+    if (key === "suggest") {
+      opts.cmd = "suggest";
       continue;
     }
     if (key === "json" || key === "help") {
@@ -296,10 +498,12 @@ function printHelp() {
 
 Использование:
   node tools/session-retro.mjs scan [--sessions <dir>] [--days <n>] [--limit <n>] [--json]
+  node tools/session-retro.mjs suggest [--sessions <dir>] [--days <n>] [--limit <n>] [--json]
   node tools/session-retro.mjs record [--state <path>] [--detail <text>]
   node tools/session-retro.mjs status [--state <path>] [--max-days <n>]
 
 scan выделяет сессии-кандидаты для ручного разбора (skill://session-retro).
+suggest агрегирует повторы по сессиям и предлагает правила.
 record фиксирует проведённый разбор. status проверяет свежесть каденции.
 `);
 }
@@ -314,7 +518,15 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
     for (const e of opts.errors) process.stderr.write(`Ошибка: ${e}\n`);
     process.exit(2);
   }
-  if (opts.cmd === "scan") {
+  if (opts.cmd === "suggest") {
+    const res = suggestSessions(opts.sessions, { days: opts.days, limit: opts.limit });
+    if (opts.json) process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    else {
+      const rep = formatSuggestReport(res);
+      if (rep) process.stdout.write(rep + "\n");
+    }
+    process.exit(0);
+  } else if (opts.cmd === "scan") {
     const res = scanSessions(opts.sessions, { days: opts.days, limit: opts.limit });
     if (opts.json) process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     else process.stdout.write(formatRetroReport(res, { limit: opts.limit }) + "\n");
@@ -338,7 +550,7 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
       process.exit(0);
     }
   } else {
-    process.stderr.write(`Ошибка: неизвестная команда: ${opts.cmd} (scan|record|status)\n`);
+    process.stderr.write(`Ошибка: неизвестная команда: ${opts.cmd} (scan|suggest|record|status)\n`);
     process.exit(2);
   }
 }
