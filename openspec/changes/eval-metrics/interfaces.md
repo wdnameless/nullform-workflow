@@ -18,3 +18,11 @@
 - `bench/fixtures/smoke/{baseline,candidate}/`: минимальные result.json для red/green путей smoke в CI.
 - `.github/workflows/repo-gate.yml`: джоба `bench-smoke` — validate-tasks + smoke на фикстурах (оба пути) + benchmark unit-тесты.
 - Тесты в `tools/tests/benchmark.test.mjs`: smoke red/green/edge (baseline не идеален → не красный; отсутствующая задача → skip), validate-tasks ok/bad, tasks.json = 10 валидных.
+
+## Пункт 3: record/replay LM (R03)
+- Новый `tools/lm-replay.mjs` (НЕ расширять replay.mjs: там HTTP-прокси-семантика, здесь — LM transcript-семантика; разные ключи матчинга и redaction).
+- Кассета `bench/cassettes/<task>.json`: `{version, model, recordedAt, turns: [{promptHash, prompt, response, usage}]}`. Ключ — sha256 нормализованного промпта (trim + squeeze whitespace).
+- CLI: `record --task <id> --from <session.jsonl|transcript> --out <cassette>` (собрать кассету из живого прогона); `replay --cassette <f> --prompt <text|@file>` (выдать записанный ответ или exit 1 `STALE` при промисе; `--strict` — exit 1 при несовпадении хеша); `verify --cassette` (структура + отсутствие секретов: сканировать теми же SECRET-паттернами, что replay.mjs).
+- Интеграция в benchmark: `benchmark.mjs run --replay <cassette>` — вместо живого агента подставлять ответы из кассеты ($0); `--record` — сохранить живой прогон в кассету. Минимальный шов: на уровне чтения prompt/ответа, не переписывать runBenchmark.
+- Redaction обязательна при record (API-ключи/токены в промптах — как SECRET_BODY_KEYS).
+- Тесты `tools/tests/lm-replay.test.mjs`: record из фиктивного транскрипта → replay hit/miss/stale; verify ok/bad (секрет → fail); benchmark --replay $0-путь (cost 0, checks по записанному).

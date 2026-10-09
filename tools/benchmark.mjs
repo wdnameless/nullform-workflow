@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
+import { executeReplayTurn, recordBenchmarkRun } from "./lm-replay.mjs";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 export const TASKS_FILE = "bench/tasks.json";
@@ -501,7 +502,7 @@ export function findRecentSessionTranscript(sinceMs = 0) {
  * @param {boolean} [options.dryRun=false]
  * @returns {object|Array<object>} план (при dryRun) или массив результатов
  */
-export function runBenchmark(options) {
+export function runBenchmark(options) { // code-size:allow
   const {
     root,
     taskId,
@@ -512,6 +513,8 @@ export function runBenchmark(options) {
     transcript,
     yes = false,
     dryRun = false,
+    replay = null,
+    record = null,
   } = options;
 
   const absRoot = resolve(root || ".");
@@ -527,10 +530,12 @@ export function runBenchmark(options) {
     throw new Error(`Задача '${taskId}' не найдена в ${TASKS_FILE}`);
   }
 
-  if (!arm) {
+  const effectiveArm = arm || (replay ? "replay" : null);
+  const effectiveCmd = cmd || (replay ? "replay" : null);
+  if (!effectiveArm) {
     throw new Error("Не указано имя арма (--arm)");
   }
-  if (!cmd) {
+  if (!effectiveCmd) {
     throw new Error("Не указан шаблон команды арма (--cmd)");
   }
 
@@ -546,10 +551,10 @@ export function runBenchmark(options) {
 
   const plan = {
     taskId,
-    arm,
+    arm: effectiveArm,
     runsCount: runCount,
     timeoutSec: taskTimeoutSec,
-    cmdTemplate: cmd,
+    cmdTemplate: effectiveCmd,
     transcript: transcript || null,
     setup: task.setup || [],
     checks: task.checks || [],
@@ -625,17 +630,17 @@ export function runBenchmark(options) {
 
     // 3. Подготовка команды арма
     // Плейсхолдеры: {prompt_file}, {run_dir}, {task_id}, {arm}
-    let renderedCmd = cmd
+    let renderedCmd = effectiveCmd
       .replace(/\{prompt_file\}/g, promptFilePath)
       .replace(/\{run_dir\}/g, runDir)
       .replace(/\{task_id\}/g, taskId)
-      .replace(/\{arm\}/g, arm);
+      .replace(/\{arm\}/g, effectiveArm);
 
     const env = {
       ...process.env,
       BENCH_TASK_PROMPT: task.prompt,
       BENCH_RUN_DIR: runDir,
-      BENCH_ARM: arm,
+      BENCH_ARM: effectiveArm,
       BENCH_RUN_ID: runId,
     };
 
@@ -647,35 +652,43 @@ export function runBenchmark(options) {
     let agentStdout = "";
     let agentStderr = "";
 
-    try {
-      const agentRes = spawnSync(renderedCmd, {
-        cwd: repoDir,
-        encoding: "utf8",
-        shell: true,
-        timeout: taskTimeoutSec > 0 ? taskTimeoutSec * 1000 : undefined,
-        env,
-        windowsHide: true,
-      });
+    if (replay) {
+      const res = executeReplayTurn({ replay, absRoot, prompt: task.prompt, repoDir });
+      agentStdout = res.stdout;
+      agentStderr = res.stderr;
+      agentExit = res.exitCode;
+      status = res.status;
+    } else {
+      try {
+        const agentRes = spawnSync(renderedCmd, {
+          cwd: repoDir,
+          encoding: "utf8",
+          shell: true,
+          timeout: taskTimeoutSec > 0 ? taskTimeoutSec * 1000 : undefined,
+          env,
+          windowsHide: true,
+        });
 
-      agentStdout = agentRes.stdout || "";
-      agentStderr = agentRes.stderr || "";
+        agentStdout = agentRes.stdout || "";
+        agentStderr = agentRes.stderr || "";
 
-      if (agentRes.error && agentRes.error.code === "ETIMEDOUT") {
-        status = "timeout";
-        agentExit = -1;
-      } else if (agentRes.signal === "SIGTERM" && (Date.now() - startTime >= taskTimeoutSec * 1000 - 500)) {
-        status = "timeout";
-        agentExit = -1;
-      } else if (agentRes.status !== 0) {
+        if (agentRes.error && agentRes.error.code === "ETIMEDOUT") {
+          status = "timeout";
+          agentExit = -1;
+        } else if (agentRes.signal === "SIGTERM" && (Date.now() - startTime >= taskTimeoutSec * 1000 - 500)) {
+          status = "timeout";
+          agentExit = -1;
+        } else if (agentRes.status !== 0) {
+          status = "error";
+          agentExit = agentRes.status ?? -1;
+        } else {
+          agentExit = 0;
+        }
+      } catch (e) {
         status = "error";
-        agentExit = agentRes.status ?? -1;
-      } else {
-        agentExit = 0;
+        agentExit = -1;
+        agentStderr += `\n${e.message}\n`;
       }
-    } catch (e) {
-      status = "error";
-      agentExit = -1;
-      agentStderr += `\n${e.message}\n`;
     }
 
     const durationMs = Date.now() - startTime;
@@ -724,13 +737,13 @@ export function runBenchmark(options) {
     }
 
     const transcriptToUse = transcript ? transcript.replace(/\{run_dir\}/g, runDir) : findRecentSessionTranscript(startTime - 2000);
-    const cost = evaluateCost(absRoot, transcriptToUse);
+    const cost = replay ? { total_usd: 0 } : evaluateCost(absRoot, transcriptToUse);
 
     // 7. Сборка result.json
     const resultJson = {
       version: 1,
       task: taskId,
-      arm,
+      arm: effectiveArm,
       runId,
       runDir,
       tier: task.tier || "standard",
@@ -754,6 +767,18 @@ export function runBenchmark(options) {
     const resultPath = join(runDir, "result.json");
     writeFileSync(resultPath, JSON.stringify(resultJson, null, 2) + "\n", "utf8");
     results.push(resultJson);
+    if (record) {
+      recordBenchmarkRun({
+        out: record,
+        absRoot,
+        prompt: task.prompt,
+        response: agentStdout,
+        repoDir,
+        baseSha,
+        cost,
+        arm: effectiveArm,
+      });
+    }
   }
 
   return results;
@@ -1656,7 +1681,7 @@ export function parseArgs(argv) {
   const args = {
     command: null, root: ".", task: null, tasks: null, arm: null, cmd: null,
     runs: 1, timeout: null, transcript: null, dryRun: false, yes: false,
-    json: false, tier: null, baseline: null, candidate: null, help: false, _: [],
+    json: false, tier: null, baseline: null, candidate: null, replay: null, record: null, help: false, _: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -1674,6 +1699,10 @@ export function parseArgs(argv) {
     else if (arg.startsWith("--arm=")) args.arm = arg.slice(6);
     else if (arg === "--cmd") args.cmd = argv[++i];
     else if (arg.startsWith("--cmd=")) args.cmd = arg.slice(6);
+    else if (arg === "--replay") args.replay = argv[++i];
+    else if (arg.startsWith("--replay=")) args.replay = arg.slice(9);
+    else if (arg === "--record") args.record = argv[++i];
+    else if (arg.startsWith("--record=")) args.record = arg.slice(9);
     else if (arg === "--runs" || arg === "-n") args.runs = parseInt(argv[++i], 10);
     else if (arg.startsWith("--runs=")) args.runs = parseInt(arg.slice(7), 10);
     else if (arg.startsWith("-n=")) args.runs = parseInt(arg.slice(3), 10);
@@ -1718,6 +1747,8 @@ function printUsage() {
   --timeout <sec>        Таймаут выполнения команды в секундах
   --transcript <path>    Путь к транскрипту для подсчета стоимости (session_cost.py)
   --dry-run              Показать план запуска без создания файлов и выполнения команд
+  --replay <cassette>    Воспроизвести LM-ответы из кассеты вместо живого вызова ($0)
+  --record <cassette>    Сохранить ответы и изменения живого запуска в кассету
   --yes, -y              Подтверждение запуска бенчмарка (обязательно для run)
   --json                 Вывод результата в формате JSON
   --baseline <arm>       Базовый арм для команды compare
@@ -1821,6 +1852,8 @@ export function main(argv = process.argv.slice(2)) {
           transcript: args.transcript,
           yes: args.yes,
           dryRun: args.dryRun,
+          replay: args.replay,
+          record: args.record,
         });
 
         if (args.dryRun) {

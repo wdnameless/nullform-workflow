@@ -46,6 +46,7 @@ import {
 } from "../benchmark.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../benchmark.mjs", import.meta.url));
+import { recordCassette, loadCassette, hashPrompt } from "../lm-replay.mjs";
 import { createTempDir, createGitRepo } from "./test-helpers.mjs";
 
 
@@ -69,6 +70,9 @@ test("parseArgs: разбирает команды и все флаги", () => 
     "--baseline",
     "b-arm",
     "--candidate=c-arm",
+    "--replay",
+    "bench/cassettes/task.json",
+    "--record=bench/cassettes/out.json",
   ]);
 
   assert.equal(args.command, "run");
@@ -84,6 +88,8 @@ test("parseArgs: разбирает команды и все флаги", () => 
   assert.equal(args.json, true);
   assert.equal(args.baseline, "b-arm");
   assert.equal(args.candidate, "c-arm");
+  assert.equal(args.replay, "bench/cassettes/task.json");
+  assert.equal(args.record, "bench/cassettes/out.json");
 });
 
 test("initBenchmark: создает структуру bench/ и работает идемпотентно", () => {
@@ -1190,4 +1196,170 @@ test("R02: smoke граничные случаи — неидеальный base
   assert.equal(res.exitCode, 0);
   assert.deepEqual(res.redTasks, []);
   assert.deepEqual(res.skippedTasks, ["only-base", "only-cand"]);
+});
+
+test("R03: runBenchmark --replay подменяет живой вызов ответом из кассеты ($0, checks pass)", () => {
+  const repoDir = createGitRepo("bench-replay-unit-");
+  try {
+    mkdirSync(join(repoDir, "bench", "cassettes"), { recursive: true });
+    const prompt = "Return answer in result.txt";
+    const tasksFile = join(repoDir, "bench", "tasks.json");
+    const cassetteFile = join(repoDir, "bench", "cassettes", "t-replay.json");
+
+    writeFileSync(
+      tasksFile,
+      JSON.stringify(
+        {
+          version: 1,
+          tasks: [
+            {
+              id: "t-replay",
+              tier: "safety",
+              prompt,
+              checks: [
+                "node -e \"if(require('fs').readFileSync('result.txt','utf8').trim()!=='REPLAY_OK') process.exit(1);\"",
+              ],
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    recordCassette({
+      taskId: "t-replay",
+      prompt,
+      response: "REPLAY_OK",
+      files: {
+        "result.txt": "REPLAY_OK\n",
+      },
+      out: cassetteFile,
+      model: "replay-arm",
+    });
+
+    const results = runBenchmark({
+      root: repoDir,
+      taskId: "t-replay",
+      arm: "candidate",
+      cmd: "node -e 'process.exit(42)'", // failed live command must not be run
+      replay: cassetteFile,
+      runs: 1,
+      yes: true,
+    });
+
+    assert.equal(results.length, 1);
+    const r = results[0];
+    assert.equal(r.status, "ok");
+    assert.equal(r.agentExit, 0);
+    assert.equal(r.cost?.total_usd, 0);
+    assert.equal(r.checks[0].passed, true);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("R03: runBenchmark --record сохраняет кассету после живого прогона", () => {
+  const repoDir = createGitRepo("bench-record-unit-");
+  try {
+    mkdirSync(join(repoDir, "bench", "cassettes"), { recursive: true });
+    const prompt = "Record prompt test";
+    const tasksFile = join(repoDir, "bench", "tasks.json");
+    const cassetteOut = join(repoDir, "bench", "cassettes", "recorded.json");
+
+    writeFileSync(
+      tasksFile,
+      JSON.stringify(
+        {
+          version: 1,
+          tasks: [
+            {
+              id: "t-record",
+              tier: "standard",
+              prompt,
+              checks: [],
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    runBenchmark({
+      root: repoDir,
+      taskId: "t-record",
+      arm: "live-arm",
+      cmd: "node -e \"require('fs').writeFileSync('artifact.txt','hello recorded\\n'); console.log('live response');\"",
+      record: cassetteOut,
+      runs: 1,
+      yes: true,
+    });
+
+    assert.equal(existsSync(cassetteOut), true);
+    const cassette = loadCassette(cassetteOut);
+    assert.ok(cassette);
+    assert.equal(cassette.version, 1);
+    assert.equal(cassette.turns.length, 1);
+    assert.equal(cassette.turns[0].promptHash, hashPrompt(prompt));
+    assert.match(cassette.turns[0].response, /live response/);
+    assert.equal(cassette.turns[0].files["artifact.txt"], "hello recorded\n");
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("R03: runBenchmark --replay дрейф промпта бросает STALE-ошибку с кодом 1", () => {
+  const repoDir = createGitRepo("bench-drift-unit-");
+  try {
+    mkdirSync(join(repoDir, "bench", "cassettes"), { recursive: true });
+    const tasksFile = join(repoDir, "bench", "tasks.json");
+    const cassetteFile = join(repoDir, "bench", "cassettes", "orig.json");
+
+    writeFileSync(
+      tasksFile,
+      JSON.stringify(
+        {
+          version: 1,
+          tasks: [
+            {
+              id: "t-drift",
+              tier: "safety",
+              prompt: "Prompt changed compared to cassette",
+              checks: [],
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    recordCassette({
+      taskId: "t-drift",
+      prompt: "Original prompt in cassette",
+      response: "Orig response",
+      out: cassetteFile,
+      model: "drift-arm",
+    });
+
+    assert.throws(
+      () =>
+        runBenchmark({
+          root: repoDir,
+          taskId: "t-drift",
+          arm: "candidate",
+          cmd: "exit 0",
+          replay: cassetteFile,
+          runs: 1,
+          yes: true,
+        }),
+      (err) => err.exitCode === 1 && /STALE prompt drift/.test(err.message)
+    );
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
 });

@@ -13,3 +13,19 @@ pass^k (solved in all K runs) per task×arm and across the task set.
 #### Scenario: Single run degenerates to pass
 - **WHEN** K = 1
 - **THEN** pass@1 = pass^1 = task pass rate.
+
+### Requirement: LM cassettes replay deterministically at zero cost
+Recorded LM transcripts SHALL replay byte-identical responses for matching prompts
+and fail loudly on mismatch; replay runs SHALL cost $0.
+
+#### Scenario: Replay hit returns recorded bytes
+- **WHEN** replaying a cassette with the recorded prompt
+- **THEN** output equals recorded bytes and usage cost is 0.
+
+#### Scenario: Prompt drift fails loudly
+- **WHEN** replaying with a changed prompt under --strict
+- **THEN** exit is 1 with a STALE/drift message naming the prompt hash.
+
+#### Scenario: Secrets never land in cassettes
+- **WHEN** verifying a cassette containing an API key pattern
+- **THEN** verify fails naming the offending turn.
