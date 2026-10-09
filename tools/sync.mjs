@@ -3,6 +3,8 @@
  * tools/sync.mjs — Sync the live OMP harness with the workflow repo (drift control).
  *
  * Single cross-platform implementation replacing twin sync.ps1 and sync.sh logic.
+ *
+ * defer: sync monolithic cli with live backup | ceiling: 900 lines | upgrade: split into sync-backup and sync-core modules
  */
 
 import fs from 'node:fs';
@@ -15,7 +17,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function printHelp() {
-  console.log(`Usage: node sync.mjs [--check|--promote|--deploy|--prune [--confirm]] [--harness <dir>] [--agents-root <dir>] [--agent-dir <dir>] [--repo <dir>] [--force] [--only <substr>] [--quiet] [--json]`);
+  console.log(`Usage: node sync.mjs [--check|--promote|--deploy|--prune [--confirm]] [--dry-run] [--harness <dir>] [--agents-root <dir>] [--agent-dir <dir>] [--repo <dir>] [--force] [--only <substr>] [--quiet] [--json]`);
 }
 
 function parseArgs(argv) {
@@ -26,6 +28,7 @@ function parseArgs(argv) {
     force: false,
     quiet: false,
     json: false,
+    dryRun: false,
     only: '',
     harnessRoot: null,
     agentsRoot: '',
@@ -80,6 +83,11 @@ function parseArgs(argv) {
       case '-Json':
         opts.json = true;
         break;
+      case '--dry-run':
+      case '-DryRun':
+      case '--dryrun':
+        opts.dryRun = true;
+        break;
       case '--only':
       case '-Only':
         opts.only = val !== undefined ? val : argv[++i] || '';
@@ -127,7 +135,7 @@ function parseArgs(argv) {
 
   if (promoteSet) opts.mode = 'promote';
   else if (deploySet) opts.mode = 'deploy';
-
+  else if (opts.dryRun && !opts.prune) opts.mode = 'deploy';
   return opts;
 }
 
@@ -173,6 +181,84 @@ function readNormalized(filePath) {
 function writeNormalized(filePath, text) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, text.replace(/\r\n/g, '\n'), 'utf8');
+}
+
+export const MAX_BACKUPS = 3;
+
+let lastBackupTs = 0;
+export function generateBackupTimestamp() {
+  const now = Date.now();
+  const effectiveNow = now <= lastBackupTs ? lastBackupTs + 1 : now;
+  lastBackupTs = effectiveNow;
+  return new Date(effectiveNow).toISOString().replace(/[:.]/g, '-');
+}
+
+export function getBackupsForFile(livePath) {
+  const dir = path.dirname(livePath);
+  if (!fs.existsSync(dir)) return [];
+  const base = path.basename(livePath);
+  const prefix = `${base}.bak-`;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const backups = [];
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.startsWith(prefix)) {
+        const fullPath = path.join(dir, entry.name);
+        let mtime = 0;
+        try {
+          mtime = fs.statSync(fullPath).mtimeMs;
+        } catch {
+          mtime = 0;
+        }
+        backups.push({ name: entry.name, fullPath, mtime });
+      }
+    }
+    backups.sort((a, b) => (a.mtime - b.mtime) || a.name.localeCompare(b.name));
+    return backups;
+  } catch {
+    return [];
+  }
+}
+
+export function rotateBackups(livePath, maxBackups = MAX_BACKUPS) {
+  const backups = getBackupsForFile(livePath);
+  const deleted = [];
+  if (backups.length > maxBackups) {
+    const toDelete = backups.slice(0, backups.length - maxBackups);
+    for (const b of toDelete) {
+      try {
+        fs.unlinkSync(b.fullPath);
+        deleted.push(b.fullPath);
+      } catch {
+        // ignore deletion errors
+      }
+    }
+  }
+  return deleted;
+}
+
+export function backupLiveFile(livePath, newContent, { dryRun = false } = {}) {
+  if (!fs.existsSync(livePath)) {
+    return null;
+  }
+  const currentContent = readNormalized(livePath);
+  if (currentContent === null || currentContent === newContent) {
+    return null;
+  }
+
+  const ts = generateBackupTimestamp();
+  const backupName = `${path.basename(livePath)}.bak-${ts}`;
+  const backupPath = path.join(path.dirname(livePath), backupName);
+
+  if (dryRun) {
+    return { backupPath, backupName, dryRun: true };
+  }
+
+  const rawLive = fs.readFileSync(livePath, 'utf8');
+  fs.writeFileSync(backupPath, rawLive, 'utf8');
+  rotateBackups(livePath, MAX_BACKUPS);
+
+  return { backupPath, backupName, dryRun: false };
 }
 
 function runPrune(harnessRoot, repoRoot, confirm) {
@@ -350,7 +436,7 @@ function substituteHarnessRoot(text, harnessRoot) {
 }
 
 
-function main() {
+function main() { // code-size:allow
   const opts = parseArgs(process.argv.slice(2));
 
   const log = opts.json ? console.error : console.log;
@@ -487,9 +573,25 @@ function main() {
   } else if (opts.mode === 'deploy') {
     for (const item of drifted) {
       if (item.repoResolved === null) continue;
-      writeNormalized(item.livePath, item.repoResolved);
+      const bak = backupLiveFile(item.livePath, item.repoResolved, { dryRun: opts.dryRun });
+      if (bak) {
+        if (!opts.quiet) {
+          if (opts.dryRun) {
+            log(`  [dry-run] backup ${item.rel}`);
+          } else {
+            log(`  [bak] backup ${item.rel}`);
+          }
+        }
+      }
+      if (!opts.dryRun) {
+        writeNormalized(item.livePath, item.repoResolved);
+      }
       if (!opts.quiet) {
-        log(`  [<-] deploy  ${item.rel}`);
+        if (opts.dryRun) {
+          log(`  [dry-run] deploy  ${item.rel}`);
+        } else {
+          log(`  [<-] deploy  ${item.rel}`);
+        }
       }
     }
   }
@@ -502,8 +604,26 @@ function main() {
     if (ompText !== harnessText) {
       if (opts.mode !== 'promote') drift.push('~/.omp/agent/AGENTS.md');
       if (opts.mode === 'deploy') {
-        writeNormalized(ompAgents, harnessText);
-        if (!opts.quiet) log("  [<-] deploy  ~/.omp/agent/AGENTS.md");
+        const bak = backupLiveFile(ompAgents, harnessText, { dryRun: opts.dryRun });
+        if (bak) {
+          if (!opts.quiet) {
+            if (opts.dryRun) {
+              log("  [dry-run] backup ~/.omp/agent/AGENTS.md");
+            } else {
+              log("  [bak] backup ~/.omp/agent/AGENTS.md");
+            }
+          }
+        }
+        if (!opts.dryRun) {
+          writeNormalized(ompAgents, harnessText);
+        }
+        if (!opts.quiet) {
+          if (opts.dryRun) {
+            log("  [dry-run] deploy  ~/.omp/agent/AGENTS.md");
+          } else {
+            log("  [<-] deploy  ~/.omp/agent/AGENTS.md");
+          }
+        }
       } else if (opts.mode === 'promote') {
         if (!opts.quiet) log("  [--] skip    ~/.omp/agent/AGENTS.md (resolved copy; promote the harness copy instead)");
       } else {
@@ -620,7 +740,9 @@ function main() {
       }
     }
 
-    const action = opts.mode === 'promote' ? 'promoted to repo' : 'deployed to harness';
+    const action = opts.mode === 'promote'
+      ? (opts.dryRun ? 'would be promoted to repo (dry-run)' : 'promoted to repo')
+      : (opts.dryRun ? 'would be deployed to harness (dry-run)' : 'deployed to harness');
     if (opts.mode === 'deploy' && skillsApplicable && skillsStatusText) {
       console.log(skillsStatusText);
       if (skillsParityStatus !== 'VERIFIED') {
@@ -648,4 +770,7 @@ function main() {
   process.exit(1);
 }
 
-main();
+const isMain = process.argv[1] && path.resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
+if (isMain) {
+  main();
+}
