@@ -1,5 +1,11 @@
 [
   {
+    "rel": "VERSION"
+  },
+  {
+    "rel": "tools/self-update.mjs"
+  },
+  {
     "rel": "agent/AGENTS.md"
   },
   {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, cpSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, cpSync, chmodSync, existsSync } from "node:fs";
 import { join, resolve, dirname, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync, spawn } from "node:child_process";
@@ -9,7 +9,6 @@ import {
   CORE_TOOLS,
   REQUIRED_ROLES,
   runDoctor,
-  parseCliArgs,
   parseRoleModels,
   probeProviders,
   discoverRepoClone,
@@ -74,9 +73,23 @@ process.env.PATH = `${OMP_SHIM_DIR}${delimiter}${ORIGINAL_PATH}`;
 /** Каталоги, покрытые манифестом sync.ps1 (та же область, что у orphan-files). */
 const MANIFEST_DIRS = ["tools", "agent", "rules", "core", "templates", "paseo"];
 
+function resolveCliArgs(args) {
+  const extra = [];
+  const harnessIdx = args.indexOf("--harness");
+  if (harnessIdx !== -1 && args[harnessIdx + 1]) {
+    const baseDir = dirname(resolve(args[harnessIdx + 1]));
+    for (const [flag, dir] of [["--agents-home", "agents-home"], ["--agent-dir", "agent-dir"]]) {
+      const candidate = join(baseDir, dir);
+      if (!args.includes(flag) && existsSync(candidate)) extra.push(flag, candidate);
+    }
+  }
+  return [...args, ...extra];
+}
+
 /** Запускает doctor как CLI и возвращает {status, json}. */
 function runDoctorCli(args) {
-  const res = spawnSync(process.execPath, [DOCTOR_PATH, ...args, "--json"], { encoding: "utf8" });
+  const finalArgs = resolveCliArgs(args);
+  const res = spawnSync(process.execPath, [DOCTOR_PATH, ...finalArgs, "--json"], { encoding: "utf8" });
   let json = null;
   try {
     json = JSON.parse(res.stdout);
@@ -95,8 +108,9 @@ function checkOf(json, id) {
  * внутри теста — spawnSync заблокировал бы event loop и сервер не ответил бы.
  */
 function runDoctorCliAsync(args) {
+  const finalArgs = resolveCliArgs(args);
   return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [DOCTOR_PATH, ...args, "--json"]);
+    const child = spawn(process.execPath, [DOCTOR_PATH, ...finalArgs, "--json"]);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -121,6 +135,9 @@ function addRepoClone(harness, extraFiles = []) {
   const clone = join(harness, "workflow-repo");
   for (const dir of MANIFEST_DIRS) {
     cpSync(join(harness, dir), join(clone, dir), { recursive: true });
+  }
+  if (existsSync(join(harness, "skills"))) {
+    cpSync(join(harness, "skills"), join(clone, "skills"), { recursive: true });
   }
   writeFileSync(join(clone, "install.ps1"), "# repo marker\n", "utf8");
   writeFileSync(join(clone, "agent/models.yml.example"), "providers: {}\n", "utf8");
@@ -161,6 +178,8 @@ function createMockHarness(baseDir, { omitFiles = [], omitTools = [] } = {}) {
   const harness = join(baseDir, "harness");
   mkdirSync(harness, { recursive: true });
 
+  mkdirSync(join(baseDir, "agents-home", "skills"), { recursive: true });
+  mkdirSync(join(baseDir, "agent-dir"), { recursive: true });
   // Top-level files
   writeFileSync(join(harness, "README.md"), "# Mock README\n", "utf8");
   writeFileSync(join(harness, "CONTEXT.md"), "# Mock CONTEXT\n", "utf8");
@@ -229,21 +248,6 @@ name: ${role.replace(".md", "")}
   return harness;
 }
 
-test("parseCliArgs parses custom flags correctly", () => {
-  const parsed = parseCliArgs([
-    "--harness", "/tmp/my-harness",
-    "--agent-dir", "/tmp/my-agent",
-    "--agents-home", "/tmp/my-agents-home",
-    "--mode", "installed",
-    "--json",
-    "--quiet"
-  ]);
-
-  assert.equal(parsed.mode, "installed");
-  assert.equal(parsed.json, true);
-  assert.equal(parsed.quiet, true);
-  assert.equal(parsed.help, false);
-});
 
 test("doctor real workflow-repo in repo mode returns valid exit and parses JSON", () => {
   const res = spawnSync(
@@ -695,10 +699,6 @@ test("orphan-files: клон репозитория не обнаружен — 
   }
 });
 
-test("parseCliArgs: --probe включает сетевую проверку, по умолчанию выключена", () => {
-  assert.equal(parseCliArgs(["--harness", "/tmp/h"]).probe, false);
-  assert.equal(parseCliArgs(["--harness", "/tmp/h", "--probe"]).probe, true);
-});
 
 test("parseRoleModels: modelRoles и task.agentModelOverrides, комментарии и кавычки", () => {
   const config = [
@@ -1133,12 +1133,6 @@ function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false, skipPluginCheck
   });
 }
 
-test("parseCliArgs: --require-plugins по умолчанию выключен", () => {
-  assert.equal(parseCliArgs(["--harness", "/tmp/h"]).requirePlugins, false);
-  assert.equal(parseCliArgs(["--harness", "/tmp/h", "--require-plugins"]).requirePlugins, true);
-  assert.equal(parseCliArgs(["--harness", "/tmp/h"]).skipPluginCheck, false);
-  assert.equal(parseCliArgs(["--harness", "/tmp/h", "--skip-plugin-check"]).skipPluginCheck, true);
-});
 
 test("plugins: только опциональные плагины отсутствуют → WARN с именами и командой установки (ok: true)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-missing-"));

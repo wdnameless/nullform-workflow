@@ -559,6 +559,7 @@ function installHarness(options = {}) {
   // tree is a repo clone or an installed harness by looking for install.ps1, so
   // shipping it into the harness would make a standalone install look like a repo.
   const coreFiles = [
+    "VERSION",
     ".code-size.baseline.json",
     "CONTEXT.md",
     "README.md",

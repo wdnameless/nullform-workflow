@@ -146,6 +146,20 @@ Three habits borrowed from Matt Pocock's Skills v1.3 video ([transcript](https:/
 - **Session retro** ([`session-retro`](skills/session-retro/SKILL.md), `node tools/session-retro.mjs scan`): retrospective over real `.jsonl` session logs — ranks sessions with hidden waste (errors/retries, heavy reads, long sessions, repeated commands) for human-led review. Findings apply manually through normal lanes; auto-fix loops are banned (they spiral on false positives).
 - **Task graph + integration branch** ([`nullform-workflow-full`](skills/nullform-workflow-full/SKILL.md), Wave 2–3): tasks carry `blocked-by` edges, each build wave launches the ready frontier, ticket work merges into `feat/<name>-integration` for whole-branch review. Uniform tickets go through a deterministic script loop, not an agent loop.
 
+### Release updates
+
+Run `node tools/self-update.mjs check` or `update --dry-run` from the git clone.
+`update` fetches the latest **published release tag**, requires a clean tracked
+working tree and a fast-forward, then reinstalls and runs doctor. An existing OMP
+installation keeps the root registered in `~/.omp/agent/.harness-root`; doctor
+checks that installed tree. Both installers and sync ship `VERSION` and the updater.
+Failed or missing install/doctor stages return exit 1, even if git already advanced;
+there is no automatic rollback. Required OMP plugins must already be installed.
+After fixing a failed deployment, use `update --force` to retry even if the clone's
+version already matches the release.
+This is notification plus an explicit update command, not a background updater.
+Commits pushed without a new GitHub release are not detected as a newer version.
+
 ### Key Commands & Architecture Links
 
 - **Core Protocol & 4-Wave SDD**: [`core/PORTABLE.md`](core/PORTABLE.md) — harness-agnostic specification, roles (`orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic`), Lean A→B→A stage rhythm, and evidence protocol.
@@ -295,6 +309,18 @@ node tools/jev-control.mjs disable
 
 Маршрутизация моделей удалена по согласованному решению. Папка [`jev/`](jev/) — предоставленный пользователем **референс Claude-плагина**, а не действующая extension OMP; автоматически она не устанавливается. Реализация и команды оценки: [docs/jev.md](docs/jev.md).
 
+
+### Обновление релизов
+
+Из git-клона: `node tools/self-update.mjs check`, затем `update --dry-run` или `update`.
+Обновление ориентируется на **опубликованный GitHub Release**, а не на свежие коммиты.
+Нужны чистые отслеживаемые файлы и fast-forward. Для настроенного OMP сохраняется
+путь из `~/.omp/agent/.harness-root`, после переустановки doctor проверяет live-дерево.
+`VERSION` и updater входят в установку и sync. Ошибка установки/doctor даёт exit 1;
+git к этому моменту мог обновиться, автоматического отката нет. Обязательные плагины
+OMP должны быть установлены заранее. Фонового обновления без команды нет.
+После устранения причины сбоя используйте `update --force`: версия клона уже могла
+совпасть с релизом, хотя установка ещё не завершена.
 
 ### Документация, канон и инструменты
 

@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -268,6 +269,18 @@ export async function executeUpdate(options = {}) {
     }
     targetTag = check.tag;
   }
+  const userHome = process.env.USERPROFILE || process.env.HOME || homedir();
+  const agentDir = join(userHome, ".omp", "agent");
+  const pointer = join(agentDir, ".harness-root");
+  const installedRoot = existsSync(pointer) ? readFileSync(pointer, "utf8").trim() : "";
+  const stages = [
+    ["install-harness", installedRoot
+      ? ["--harness", "omp", "--root", installedRoot, "--user-home", userHome]
+      : [], "install_failed"],
+    ["doctor", installedRoot
+      ? ["--harness", installedRoot, "--agent-dir", agentDir, "--agents-home", join(userHome, ".agents")]
+      : [], "doctor_failed"],
+  ];
 
   if (options.dryRun) {
     return {
@@ -279,8 +292,7 @@ export async function executeUpdate(options = {}) {
       plan: [
         `git fetch origin tag ${targetTag}`,
         `git merge --ff-only ${targetTag}`,
-        `node tools/install-harness.mjs --dry-run`,
-        `node tools/doctor.mjs`,
+        ...stages.map(([name, args]) => `node tools/${name}.mjs${name === "install-harness" ? " --dry-run" : ""}${args.map(arg => ` ${JSON.stringify(arg)}`).join("")}`),
       ],
       detail: `[dry-run] Update plan for ${targetTag} ready. No changes written.`,
     };
@@ -324,24 +336,20 @@ export async function executeUpdate(options = {}) {
     };
   }
 
-  const installScript = join(root, "tools", "install-harness.mjs");
-  let installOk = true;
-  if (existsSync(installScript)) {
-    const instRes = spawnFn(process.execPath, [installScript, "--json"], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    if (instRes.status !== 0) installOk = false;
-  }
-
-  const doctorScript = join(root, "tools", "doctor.mjs");
-  let doctorOk = true;
-  if (existsSync(doctorScript)) {
-    const docRes = spawnFn(process.execPath, [doctorScript, "--json"], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    if (docRes.status !== 0) doctorOk = false;
+  for (const [name, args, error] of stages) {
+    const script = join(root, "tools", `${name}.mjs`);
+    const result = existsSync(script)
+      ? spawnFn(process.execPath, [script, ...args, "--json"], { cwd: root, encoding: "utf8" })
+      : null;
+    if (!result || result.status !== 0) {
+      return {
+        ok: false,
+        updated: true,
+        tag: targetTag,
+        error,
+        detail: `Repository advanced to ${targetTag}, but ${name} ${result ? "failed" : "is missing"}. Installation is not verified.`,
+      };
+    }
   }
 
   return {
@@ -350,8 +358,8 @@ export async function executeUpdate(options = {}) {
     from: check ? check.current : null,
     to: check ? check.latest : targetTag.replace(/^v/i, ""),
     tag: targetTag,
-    installOk,
-    doctorOk,
+    installOk: true,
+    doctorOk: true,
     detail: `Successfully updated to ${targetTag}.`,
   };
 }

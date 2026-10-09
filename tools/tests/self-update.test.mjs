@@ -274,6 +274,36 @@ test("executeUpdate: refuses on non-fast-forward with manual instructions", asyn
   }
 });
 
+test("executeUpdate: failed or missing post-merge stages never report success", async () => {
+  const tmp = createTempDir();
+  mkdirSync(join(tmp, "tools"));
+  try {
+    for (const stage of ["install-harness", "doctor"]) {
+      const script = join(tmp, "tools", `${stage}.mjs`);
+      for (const missing of [false, true]) {
+        for (const name of ["install-harness", "doctor"]) {
+          writeFileSync(join(tmp, "tools", `${name}.mjs`), "", "utf8");
+        }
+        if (missing) rmSync(script);
+        const result = await executeUpdate({
+          root: tmp,
+          targetTag: "v1.1.0",
+          spawnFn: (cmd, args) => ({
+            status: cmd === process.execPath && args[0] === script ? 1 : 0,
+            stdout: "",
+            stderr: "stage failed",
+          }),
+        });
+        assert.equal(result.ok, false, `${stage}: missing=${missing}`);
+        assert.equal(result.updated, true, "git was advanced; deployment still failed");
+        assert.equal(result.error, stage === "doctor" ? "doctor_failed" : "install_failed");
+      }
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("doctor: release-drift check emits WARN when behind (never FAIL)", () => {
   const tmp = createTempDir();
   writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");

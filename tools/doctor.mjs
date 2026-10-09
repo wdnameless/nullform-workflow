@@ -101,7 +101,11 @@ export const REQUIRED_ROLES = [
 
 export function normalizePath(p) {
   if (!p) return "";
-  return resolve(p).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+  try {
+    return realpathSync(p).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+  } catch {
+    return resolve(p).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+  }
 }
 export function stripBom(text) {
   if (typeof text !== "string") return text;
@@ -889,8 +893,10 @@ export function runDoctor(options) { // code-size:allow
     const installedSkills = join(agentsHome, "skills");
     let repoSkills = null;
     const repoClone = discoverRepoClone(harness);
-    if (repoClone && existsSync(join(repoClone, "skills"))) {
-      repoSkills = join(repoClone, "skills");
+    if (repoClone) {
+      if (existsSync(join(repoClone, "skills"))) {
+        repoSkills = join(repoClone, "skills");
+      }
     } else if ((mode === "repo" || isRepoTree(harness)) && existsSync(join(harness, "skills"))) {
       repoSkills = join(harness, "skills");
     }
@@ -1338,7 +1344,8 @@ export function runDoctor(options) { // code-size:allow
   // 12. check 'logs-hygiene': аудит размера и количества сессионных логов в ~/.omp/logs/.
   {
     const id = "logs-hygiene";
-    const logsDir = join(homedir(), ".omp", "logs");
+    const logsHome = dirname(agentsHome);
+    const logsDir = join(logsHome, ".omp", "logs");
     if (!existsSync(logsDir)) {
       checks.push({
         id,
@@ -1483,10 +1490,14 @@ export function runDoctor(options) { // code-size:allow
           });
         } else if (releaseInfo.status === "drift") {
           const latest = releaseInfo.latest || "релиза";
+          const updateRepo = discoverRepoClone(harness);
+          const updateCmd = updateRepo
+            ? `Запустите 'node tools/self-update.mjs update' в репозитории (${updateRepo})`
+            : `Запустите 'node tools/self-update.mjs update'`;
           checks.push({
             id,
             status: "warn",
-            detail: `Локальная версия v${localVersion} отстает от релиза v${latest}. Запустите 'node tools/self-update.mjs update'`,
+            detail: `Локальная версия v${localVersion} отстает от релиза v${latest}. ${updateCmd}`,
           });
         } else if (releaseInfo.status === "clean") {
           checks.push({
