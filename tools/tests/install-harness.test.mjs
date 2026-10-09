@@ -1,6 +1,7 @@
+// defer: multi-harness adapter tests expansion | ceiling: 1200 lines | upgrade: split tests per harness
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, symlinkSync } from "node:fs";
+import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -11,7 +12,7 @@ const REPO_ROOT = resolve(__dirname, "../..");
 const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 const SH_PATH = resolve(REPO_ROOT, "install.sh");
 import { createTempDir } from "./test-helpers.mjs";
-
+import { detectHarness } from "../install-harness.mjs";
 
 function getBashPath() {
   const candidates = process.platform === "win32"
@@ -185,6 +186,193 @@ test("installation creates Cursor adapter (.cursor/rules/00-workflow.mdc)", () =
 
     const slashRoot = tempRoot.replace(/\\/g, "/");
     assert.ok(content.includes(slashRoot), `Cursor rule must contain resolved path ${slashRoot}`);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+test("installation creates OpenClaw adapter (AGENTS.md, SOUL.md, USER.md, openclaw.json) with substituted <HARNESS> and <= 60 lines", () => {
+  const tempRoot = createTempDir("harness-openclaw-root-");
+  const tempHome = createTempDir("harness-openclaw-home-");
+  try {
+    const res = spawnSync(process.execPath, [
+      SCRIPT_PATH,
+      "--harness", "openclaw",
+      "--root", tempRoot,
+      "--user-home", tempHome,
+    ], { encoding: "utf8" });
+
+    assert.equal(res.status, 0, `Failed: ${res.stderr}`);
+    const agentsMdPath = join(tempRoot, "AGENTS.md");
+    const soulMdPath = join(tempRoot, "SOUL.md");
+    const userMdPath = join(tempRoot, "USER.md");
+    const jsonPath = join(tempRoot, "openclaw.json");
+    const homeJsonPath = join(tempHome, ".openclaw", "openclaw.json");
+
+    assert.equal(existsSync(agentsMdPath), true, "AGENTS.md must exist in target root");
+    assert.equal(existsSync(soulMdPath), true, "SOUL.md must exist in target root");
+    assert.equal(existsSync(userMdPath), true, "USER.md must exist in target root");
+    assert.equal(existsSync(jsonPath), true, "openclaw.json must exist in target root");
+    assert.equal(existsSync(homeJsonPath), true, "openclaw.json must exist in user home");
+
+    const content = readFileSync(agentsMdPath, "utf8");
+    const lines = content.trim().split("\n");
+    assert.ok(lines.length <= 60, `AGENTS.md must be <= 60 lines, got ${lines.length}`);
+    assert.equal(content.includes("<HARNESS>"), false, "All <HARNESS> placeholders must be substituted");
+
+    const soulContent = readFileSync(soulMdPath, "utf8");
+    assert.ok(soulContent.trim().split("\n").length <= 60, "SOUL.md must be <= 60 lines");
+    assert.equal(soulContent.includes("<HARNESS>"), false);
+
+    const userContent = readFileSync(userMdPath, "utf8");
+    assert.ok(userContent.trim().split("\n").length <= 60, "USER.md must be <= 60 lines");
+    assert.equal(userContent.includes("<HARNESS>"), false);
+
+    const slashRoot = tempRoot.replace(/\\/g, "/");
+    assert.ok(content.includes(slashRoot), `AGENTS.md must contain resolved path ${slashRoot}`);
+
+    const cfg = JSON.parse(readFileSync(jsonPath, "utf8"));
+    assert.ok(cfg.agents?.entries?.workflow, "openclaw.json must contain agents.entries.workflow");
+    assert.ok(cfg.mcp?.servers, "openclaw.json must contain mcp.servers");
+
+    const homeSkillsPath = join(tempHome, ".openclaw", "skills");
+    assert.equal(existsSync(homeSkillsPath), true, "openclaw skills must exist in user home");
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test("installation creates Hermes adapter (AGENTS.md, config.yaml) with substituted <HARNESS> and <= 60 lines", () => {
+  const tempRoot = createTempDir("harness-hermes-root-");
+  const tempHome = createTempDir("harness-hermes-home-");
+  try {
+    const res = spawnSync(process.execPath, [
+      SCRIPT_PATH,
+      "--harness", "hermes",
+      "--root", tempRoot,
+      "--user-home", tempHome,
+    ], { encoding: "utf8" });
+
+    assert.equal(res.status, 0, `Failed: ${res.stderr}`);
+    const agentsMdPath = join(tempRoot, "AGENTS.md");
+    const configPath = join(tempRoot, "config.yaml");
+    const homeConfigPath = join(tempHome, ".hermes", "config.yaml");
+
+    assert.equal(existsSync(agentsMdPath), true, "AGENTS.md must exist in target root");
+    assert.equal(existsSync(configPath), true, "config.yaml must exist in target root");
+    assert.equal(existsSync(homeConfigPath), true, "config.yaml must exist in user home");
+
+    const content = readFileSync(agentsMdPath, "utf8");
+    const lines = content.trim().split("\n");
+    assert.ok(lines.length <= 60, `AGENTS.md must be <= 60 lines, got ${lines.length}`);
+    assert.equal(content.includes("<HARNESS>"), false, "All <HARNESS> placeholders must be substituted");
+
+    const slashRoot = tempRoot.replace(/\\/g, "/");
+    assert.ok(content.includes(slashRoot), `AGENTS.md must contain resolved path ${slashRoot}`);
+
+    const yamlContent = readFileSync(configPath, "utf8");
+    assert.ok(yamlContent.includes("mcp_servers:"), "config.yaml must contain mcp_servers");
+    assert.ok(yamlContent.includes("profiles:"), "config.yaml must contain profiles");
+
+    const homeSkillsPath = join(tempHome, ".hermes", "skills");
+    assert.equal(existsSync(homeSkillsPath), true, "hermes skills must exist in user home");
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test("installation creates OpenHuman adapter copying skills without symlinks and keeping AGENTS.md conventions", () => {
+  const tempRoot = createTempDir("harness-openhuman-root-");
+  const tempHome = createTempDir("harness-openhuman-home-");
+  try {
+    const res = spawnSync(process.execPath, [
+      SCRIPT_PATH,
+      "--harness", "openhuman",
+      "--root", tempRoot,
+      "--user-home", tempHome,
+    ], { encoding: "utf8" });
+
+    assert.equal(res.status, 0, `Failed: ${res.stderr}`);
+    const agentsMdPath = join(tempRoot, "AGENTS.md");
+    assert.equal(existsSync(agentsMdPath), true, "AGENTS.md must exist in target root");
+
+    const content = readFileSync(agentsMdPath, "utf8");
+    const lines = content.trim().split("\n");
+    assert.ok(lines.length <= 60, `AGENTS.md must be <= 60 lines, got ${lines.length}`);
+    assert.equal(content.includes("<HARNESS>"), false, "All <HARNESS> placeholders must be substituted");
+
+    const slashRoot = tempRoot.replace(/\\/g, "/");
+    assert.ok(content.includes(slashRoot), `AGENTS.md must contain resolved path ${slashRoot}`);
+
+    const agentSkillsDir = join(tempRoot, "agents", "workflow", "skills");
+    assert.equal(existsSync(agentSkillsDir), true, "agents/workflow/skills must exist");
+
+    const entries = readdirSync(agentSkillsDir);
+    assert.ok(entries.length > 0, "agents/workflow/skills must contain copied skill directories");
+    for (const skillName of entries) {
+      const skillPath = join(agentSkillsDir, skillName);
+      const stat = lstatSync(skillPath);
+      assert.equal(stat.isSymbolicLink(), false, `${skillName} must be a real copy, not a symlink`);
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test("detectHarness detects openclaw, hermes, and openhuman from home directory markers", () => {
+  const tempHome = createTempDir("harness-detect-home-");
+  try {
+    const openclawDir = join(tempHome, ".openclaw");
+    mkdirSync(openclawDir, { recursive: true });
+    writeFileSync(join(openclawDir, "openclaw.json"), "{}", "utf8");
+    assert.equal(detectHarness({ userHome: tempHome }), "openclaw");
+    rmSync(openclawDir, { recursive: true, force: true });
+
+    const hermesDir = join(tempHome, ".hermes");
+    mkdirSync(hermesDir, { recursive: true });
+    writeFileSync(join(hermesDir, "config.yaml"), "mcp_servers:\n", "utf8");
+    assert.equal(detectHarness({ userHome: tempHome }), "hermes");
+    rmSync(hermesDir, { recursive: true, force: true });
+
+    const openhumanDir = join(tempHome, ".openhuman");
+    mkdirSync(openhumanDir, { recursive: true });
+    assert.equal(detectHarness({ userHome: tempHome }), "openhuman");
+    rmSync(openhumanDir, { recursive: true, force: true });
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test("dry-run with openclaw, hermes, and openhuman outputs valid plans matching spec", () => {
+  const tempRoot = createTempDir("harness-dry-spec-");
+  try {
+    const openclawRes = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "openclaw", "--root", tempRoot, "--dry-run", "--json",
+    ], { encoding: "utf8" });
+    assert.equal(openclawRes.status, 0, openclawRes.stderr);
+    const openclawPlan = JSON.parse(openclawRes.stdout);
+    assert.equal(openclawPlan.harness, "openclaw");
+    assert.ok(openclawPlan.adapters.some(p => p.endsWith("openclaw.json")));
+    assert.ok(openclawPlan.adapters.some(p => p.endsWith("AGENTS.md")));
+    assert.ok(openclawPlan.filesToCopy.some(p => p.includes("skills")));
+
+    const hermesRes = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "hermes", "--root", tempRoot, "--dry-run", "--json",
+    ], { encoding: "utf8" });
+    assert.equal(hermesRes.status, 0, hermesRes.stderr);
+    const hermesPlan = JSON.parse(hermesRes.stdout);
+    assert.equal(hermesPlan.harness, "hermes");
+    assert.ok(hermesPlan.adapters.some(p => p.endsWith("config.yaml")));
+
+    const openhumanRes = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "openhuman", "--root", tempRoot, "--dry-run", "--json",
+    ], { encoding: "utf8" });
+    assert.equal(openhumanRes.status, 0, openhumanRes.stderr);
+    const openhumanPlan = JSON.parse(openhumanRes.stdout);
+    assert.equal(openhumanPlan.harness, "openhuman");
+    assert.ok(openhumanPlan.filesToCopy.some(p => p.includes("skills")));
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -367,7 +555,7 @@ test("unknown --harness exits with code 2 and helpful message on stderr", () => 
 
     assert.equal(res.status, 2, `Expected exit code 2, got ${res.status}`);
     assert.match(res.stderr, /unknown harness/i);
-    assert.match(res.stderr, /claude|codex|opencode|cursor|omp/i);
+    assert.match(res.stderr, /claude|codex|opencode|cursor|omp|openclaw|hermes|openhuman/i);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

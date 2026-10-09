@@ -6,7 +6,7 @@
 **Portable engineering workflow harness for AI coding agents — hard gates over promises, verified tests over "done", live observability over guesswork.**  
 **Переносимый инженерный каркас разработки для ИИ-агентов: строгие гейты вместо обещаний, проверенные тесты вместо «готово», наблюдаемость вместо догадок.**
 
-Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for **Claude Code**, **Codex**, **OpenCode**, and **Cursor** on Windows, Linux, and macOS. Zero external npm dependencies (Node.js 18+ stdlib only) · 8 specialized roles · 70 skills · 34 CLI tools · 29 install & 15 audit checks.
+Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for **Claude Code**, **Codex**, **OpenCode**, **Cursor**, **OpenClaw**, **Hermes**, and **OpenHuman** on Windows, Linux, and macOS. Zero external npm dependencies (Node.js 18+ stdlib only) · 8 specialized roles · 70 skills · 34 CLI tools · 29 install & 15 audit checks.
 
 ![NULLFORM WORKFLOW Live Dashboard](docs/assets/dashboard-graph.jpg)
 
@@ -22,7 +22,7 @@ git clone https://github.com/wdnameless/nullform-workflow.git "$HOME/nullform-sr
 cd "$HOME/nullform-src"
 ```
 
-**2. Install the adapter for your harness** (`omp|claude|codex|opencode|cursor|all` or `auto`)
+**2. Install the adapter for your harness** (`omp|claude|codex|opencode|cursor|openclaw|hermes|openhuman|all` or `auto`)
 ```bash
 node tools/install-harness.mjs --harness auto --root .
 # Or full OMP + Paseo + MCP fleet setup on Windows:
@@ -35,6 +35,54 @@ node tools/doctor.mjs --harness .
 node tools/workflow.mjs start --tier T1 --task "smoke check"
 node tools/workflow.mjs artifact --kind recon --detail "environment verified"
 node tools/workflow.mjs close
+```
+
+### One-Phrase Install (Agent Prompt)
+
+Copy-paste this prompt to your AI coding agent (OMP, Claude Code, Cursor, OpenCode, OpenClaw, Hermes, OpenHuman, Codex). The agent inspects environment markers, identifies the active harness, displays a dry-run component table, and asks for confirmation before applying:
+
+```text
+You are an installer agent for NULLFORM WORKFLOW.
+Follow these steps strictly:
+
+1. DETECT HARNESS & SUPPORTED ENVIRONMENTS:
+   - Dynamically inspect supported harnesses from CLI help (do NOT hardcode the list):
+     Run: `node tools/install-harness.mjs --help`
+   - Detect the host harness strictly in priority order:
+     Step 1.1: Explicit environment markers:
+       • omp: `omp` binary in PATH, `~/.omp/` directory, `OMP_CONFIG_DIR`, or running inside an OMP session (`proc://`, `agent://`, `skill://`, `xd://`).
+       • openclaw: `~/.openclaw/openclaw.json` or `openclaw` in PATH.
+       • hermes: `~/.hermes/config.yaml`, `$HERMES_HOME`, or `hermes` in PATH.
+       • openhuman: `~/.openhuman/` or `openhuman-core` in PATH.
+       • claude: `~/.claude/` or `claude` in PATH.
+       • codex: `~/.codex/` or `codex` in PATH.
+       • opencode: `~/.opencode/` or `opencode` in PATH.
+       • cursor: `~/.cursor/` or `cursor` in PATH.
+     Step 1.2: Fallback auto-detection:
+       If multiple or ambiguous markers exist, run `node tools/install-harness.mjs --harness auto --dry-run` (invokes detectHarness).
+   - If still uncertain, suggest the most probable harness and ask the user to pick from the `--help` list.
+
+2. DRY-RUN PREVIEW & COMPONENT TABLE:
+   - ALWAYS perform a dry-run first before touching files on disk:
+     `node tools/install-harness.mjs --harness <detected_harness> --dry-run`
+   - Present a clear table showing what will be installed for <detected_harness> (per-harness set):
+     | Component | Installed path & format for <detected_harness> |
+     |---|---|
+     | Skills | Target directory: omp (`~/.agents/skills/`), openclaw (`~/.openclaw/skills/` & `~/.agents/skills/`), hermes (`$HERMES_HOME/skills/`), openhuman (copied into `agents/<id>/skills/`), etc. |
+     | Agents & Roles | Law & roles: omp (`~/.omp/agent/agents`), openclaw (`openclaw.json` entries + `AGENTS.md`/`SOUL.md`/`USER.md`), hermes (`AGENTS.md` + profiles), openhuman (`AGENTS.md` + AgentSpec), claude/codex/opencode/cursor (`CLAUDE.md`/`AGENTS.md`/`00-workflow.mdc`) |
+     | Rules & Methodology | Workflow rules in `rules/`, `~/.agents/rules/`, or `.cursor/rules/` |
+     | MCP Configuration | MCP config key: `mcp.servers` (openclaw), `mcp_servers` (hermes), `mcp` (opencode), `mcpServers` (claude, cursor, codex), or `mcp.json` (omp) |
+     | Core CLI Tools | `tools/`, `templates/`, `CONTEXT.md` in project root |
+
+3. USER CONFIRMATION:
+   - Display the detected harness, target root, and the component table.
+   - Ask for explicit user confirmation before applying any changes.
+
+4. APPLY INSTALLATION:
+   - Upon confirmation, execute:
+     `node tools/install-harness.mjs --harness <detected_harness>`
+   - Verify health: `node tools/doctor.mjs --harness .`
+   - Report status and next steps (`node tools/workflow.mjs start --tier T1 --task "smoke check"`).
 ```
 
 ### Work Tiers (T0–T3)
@@ -126,7 +174,7 @@ git clone https://github.com/wdnameless/nullform-workflow.git "$HOME/nullform-sr
 cd "$HOME/nullform-src"
 ```
 
-**2. Установите адаптер под ваш харнесс** (`omp|claude|codex|opencode|cursor|all` или `auto`)
+**2. Установите адаптер под ваш харнесс** (`omp|claude|codex|opencode|cursor|openclaw|hermes|openhuman|all` или `auto`)
 ```bash
 ./install.sh --harness auto --root .
 # Или на любой ОС через Node.js:
@@ -141,6 +189,58 @@ node tools/doctor.mjs --harness .
 node tools/workflow.mjs start --tier T1 --task "проба"
 node tools/workflow.mjs artifact --kind recon --detail "проверка окружения и инструментов"
 node tools/workflow.mjs close
+```
+
+### Установка одной фразой
+
+Скопируйте и передайте этот промпт вашему ИИ-агенту (в любой среде: OMP, Claude Code, Cursor, OpenCode, OpenClaw, Hermes, OpenHuman, Codex). Агент определит текущий харнесс хоста, покажет предпросмотр компонентов и запросит подтверждение перед запуском установки:
+
+```text
+Ты — агент установки и настройки NULLFORM WORKFLOW в текущем окружении.
+Выполни установку строго по следующим шагам без самодеятельности:
+
+1. ДЕТЕКТ ХАРНЕССА И СПИСКА ПОДДЕРЖИВАЕМЫХ СРЕД:
+   - Получи актуальный список поддерживаемых харнессов динамически из справки установщика (НЕ хардкодь список):
+     Запусти: `node tools/install-harness.mjs --help`
+   - Определи активный харнесс хоста строго в следующем порядке приоритета:
+     Шаг 1.1 (Явные маркеры окружения, переменных и файловой системы):
+       • omp: наличие бинарника `omp` в PATH, каталога `~/.omp/` (или `%USERPROFILE%/.omp`), переменной окружения `OMP_CONFIG_DIR`, либо текущая сессия запущена в среде OMP (доступны схемы URIs: `proc://`, `agent://`, `skill://`, `xd://`).
+       • openclaw: наличие конфигурации `~/.openclaw/openclaw.json` (или `%USERPROFILE%/.openclaw/openclaw.json`) либо команды `openclaw` в PATH.
+       • hermes: наличие `~/.hermes/config.yaml`, переменной `$HERMES_HOME` либо команды `hermes` в PATH.
+       • openhuman: наличие каталога `~/.openhuman/` либо бинарника `openhuman-core` в PATH.
+       • claude: наличие каталога `~/.claude/` либо команды `claude` в PATH.
+       • codex: наличие каталога `~/.codex/` либо команды `codex` в PATH.
+       • opencode: наличие каталога `~/.opencode/` либо команды `opencode` в PATH.
+       • cursor: наличие каталога `~/.cursor/` либо команды `cursor` в PATH.
+     Шаг 1.2 (Запасной вариант детекта):
+       Если явных маркеров несколько или однозначного совпадения нет, запусти встроенную функцию автоопределения detectHarness через CLI:
+       `node tools/install-harness.mjs --harness auto --dry-run`
+   - Если харнесс всё равно не удалось определить со 100% уверенностью, назови наиболее вероятный и запроси у пользователя выбор одного из вариантов из вывода `--help`.
+
+2. DRY-RUN ПРЕДПРОСМОТР И ТАБЛИЦА КОМПОНЕНТОВ:
+   - ОБЯЗАТЕЛЬНО выполни dry-run запуск первым шагом до внесения каких-либо изменений на диск:
+     `node tools/install-harness.mjs --harness <определённый_харнесс> --dry-run` (при необходимости используй `--json` для парсинга плана).
+   - Сформируй и покажи пользователю наглядную таблицу компонентов, которые будут установлены для выбранного харнесса (per-harness набор):
+     | Компонент | Назначение и путь установки для <определённый_харнесс> |
+     |---|---|
+     | Навыки (skills) | Каталог установки: omp (`~/.agents/skills/`), openclaw (`~/.openclaw/skills/` и `~/.agents/skills/`), hermes (`$HERMES_HOME/skills/`), openhuman (копирование без симлинков в `agents/<id>/skills/`), базовые инструкции |
+     | Агенты и роли (agents/roles) | Роли и законы: omp (`~/.omp/agent/agents` и `agent/AGENTS.md`), openclaw (`openclaw.json` entries + `AGENTS.md`/`SOUL.md`/`USER.md`), hermes (`AGENTS.md` + profiles в `config.yaml`), openhuman (`AGENTS.md` + AgentSpec), claude/codex/opencode/cursor (`CLAUDE.md`/`AGENTS.md`/`00-workflow.mdc`) |
+     | Правила и методологии (rules) | Правила workflow: `rules/` -> `~/.omp/agent/rules/`, `~/.agents/rules/` или `.cursor/rules/` |
+     | MCP-интеграция | Конфиг серверов: ключ `mcp.servers` (openclaw), `mcp_servers` (hermes), `mcp` (opencode), `mcpServers` (claude, cursor, codex) или `mcp.json` (omp) |
+     | Ядро инструментов | `tools/` (workflow, doctor, sync, review, verify), `templates/`, `CONTEXT.md` в корне целевого проекта |
+
+3. ЗАПРОС ПОДТВЕРЖДЕНИЯ У ПОЛЬЗОВАТЕЛЯ:
+   - Выведи пользователю:
+     1) Определённый харнесс.
+     2) Целевой путь установки (`--root`).
+     3) Таблицу компонентов из шага 2.
+   - Задай прямой вопрос и запроси явное подтверждение (да/нет) перед применением установки.
+
+4. ПРИМЕНЕНИЕ УСТАНОВКИ:
+   - Только после получения явного согласия пользователя выполни установку:
+     `node tools/install-harness.mjs --harness <определённый_харнесс>`
+   - Запусти верификацию: `node tools/doctor.mjs --harness .`
+   - Выведи результат и инструкцию по запуску первой задачи (`node tools/workflow.mjs start --tier T1 --task "smoke check"`).
 ```
 
 ### Ярусы задач (T0–T3)
