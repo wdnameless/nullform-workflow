@@ -178,7 +178,7 @@ test("installed tools-only tree imports evaluation without repository bench file
   try {
     const tools = join(root, "tools");
     mkdirSync(tools);
-    for (const file of ["benchmark.mjs", "bench-budget.mjs", "bench-results.mjs", "run-skill-benefit-eval.mjs"]) {
+    for (const file of ["benchmark.mjs", "lm-replay.mjs", "bench-budget.mjs", "bench-results.mjs", "run-skill-benefit-eval.mjs"]) {
       cpSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), join(tools, file));
     }
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(join(tools, "run-skill-benefit-eval.mjs")).href)})`], { cwd: root, encoding: "utf8", shell: false, timeout: 10000 });
