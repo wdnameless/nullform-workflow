@@ -1,0 +1,20 @@
+{
+  "hypothesis": "PATH scanning selected an incomplete shadow OMP package before the working omp command installation; child exit before consuming the prompt caused the parent stdin EOF symptom.",
+  "cwd": "D:/ohmypi/workflow-repo",
+  "noInference": true,
+  "oldSelection": {
+    "cliPath": "C:/Users/Administrator/.bun/bin/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js",
+    "command": ["bun", "C:/Users/Administrator/.bun/bin/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js", "--version"],
+    "exitCode": 1,
+    "missingModule": "Cannot find module '@oh-my-pi/pi-natives'"
+  },
+  "repairedSelection": {
+    "cliPath": "D:/npm-global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js",
+    "command": ["bun", "D:/npm-global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js", "--version"],
+    "exitCode": 0,
+    "stdout": "omp/18.6.1"
+  },
+  "genericStdinProbe": {"inputBytes": [1024, 1048576, 8388608], "exitCodes": [0, 0, 0], "exactByteCounts": true},
+  "schemaExposure": {"source": "D:/npm-global/node_modules/@oh-my-pi/pi-coding-agent/src/extensibility/extensions/loader.ts:179-183", "observation": "ConcreteExtensionAPI exposes readonly zod = zod; changing pi.zod would not fix the confirmed shadow-package failure."},
+  "limitation": "Version/startup and source inspection only. Native reviewer/oracle execution is not yet proven."
+}

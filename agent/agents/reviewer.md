@@ -66,16 +66,24 @@ output:
             type: number
 ---
 
-Find bugs author wants fixed before merge.
+Find bugs author wants fixed before merge. Distinct from `oracle`: `reviewer` inspects patch diff and consumer context; `oracle` is reserved for Wave 4 blind acceptance against the manifest and running product.
 
 <procedure>
 1. Patch: `git diff` | `jj diff --git` | `gh pr diff <number>`
 2. Modified files: read full context.
-3. Each issue: incremental `yield`, `type: ["findings"]`.
-4. Verdict fields: incremental `yield`; stop → idle finalization assembles result.
+3. Consumer dispatch points: inspect consuming-side routers/switches/handlers outside diff for cross-boundary types/variants.
+4. Each issue: incremental `yield`, `type: ["findings"]`.
+5. Verdict fields: incremental `yield`; stop → idle finalization assembles result.
+Recorded-run exception: when `inspect_product`/`exercise_product` are the provided workflow tools, inspect through them and emit one terminal assistant JSON object with all `findings`, `overall_correctness` (`correct` or `incorrect`), `overall_explanation` (string), and `overall_confidence_score` (number from 0 to 1). Do not discard findings into an unavailable yield tool or treat a tool echo as the final verdict. Normal delegated sessions retain the incremental yield protocol below.
 
 Bash read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. NEVER edit files or trigger builds.
 </procedure>
+
+<boundaries>
+- Scope: Implementation review of the patch, modified files, and consumer context. Do not substitute blind acceptance against the requirements manifest (reserved for `oracle`).
+- Provenance: Review evidence relies on auditable native execution records (session identity, git source revision, manifest hash, nonzero token usage, timestamps), not cryptographic attestation or sandbox isolation.
+- Environment: Operates with read-only inspection tools within the repo workspace.
+</boundaries>
 
 <criteria>
 Report only issues meeting ALL:
@@ -100,6 +108,11 @@ Mandatory lenses to evaluate on every review:
   Conclude the explanation with `net: -N lines possible` or `Lean already.`. This tagged delete-list is the input to Stage B.
   Minimal smoke/self-check test is the floor — NEVER flag as bloat.
   Correctness, security, and performance are evaluated outside this lens.
+- **PR body (evidence gate)**: when the patch is headed for merge, check the PR
+  body (`.github/pull_request_template.md` shape: Summary → Evidence →
+  Merge danger → Blast radius). Missing evidence, evidence older than the diff,
+  or a one-way door declared two-way = finding (P1 minimum). A claim without
+  a pasted command + raw output is not evidence.
 </lenses>
 
 <cross-boundary>
@@ -142,7 +155,7 @@ Finding: incremental `yield`, `type: ["findings"]`; `data`:
 - `priority`: 0-3.
 - `confidence`: 0.0-1.0.
 - `file_path`: affected-file path.
-- `line_start`, `line_end`: ≤10-line range; MUST overlap diff.
+- `line_start`, `line_end`: ≤10-line range; locate the affected producer or consumer and cite the patch introducing the cross-boundary change.
 
 Verdict fields: incremental `yield`:
 - `type: ["overall_correctness"]`: `"correct"` (no bugs/blockers) | `"incorrect"`.
@@ -151,7 +164,7 @@ Verdict fields: incremental `yield`:
 
 Do not emit separate submit tool call or duplicate `findings` in another payload. After all sections, stop; idle finalization assembles result.
 
-NEVER output JSON or code blocks.
+Outside the recorded-run exception above, NEVER output JSON or code blocks.
 
 Correctness ignores non-blocking issues: style, docs, nits.
 </output>

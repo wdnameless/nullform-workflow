@@ -19,6 +19,10 @@
  *   status                           what is done / still required
  *   close  [--force --reason "..."]  finish the task
  *          [--auto] [--diff-lines N] finish guarded auto task
+ *   review-run --change ID --role reviewer|oracle --model PROVIDER/MODEL --base-ref BASE
+ *          [--product-command JSON_ARGV] [--redo]  retained native execution (no prompt bypass)
+ *   stage-b --change ID --phase before|after --test-cmd COMMAND
+ *          [--disposition simplified|lean-already]  freeze Stage-A tests and execute on A/B
  *
  * TIER REQUIREMENTS (a tier requires everything the tiers below it require)
  *   T0  lane only            — trivial, 1-2 known files
@@ -32,14 +36,31 @@
  */
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";
-import { join, dirname, resolve, relative, isAbsolute, basename } from "node:path";
-import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join, dirname, resolve, basename } from "node:path";
+import {
+  NEGATIVE_VERDICT_RE,
+  isPositiveOracleVerdict,
+  isNegativeOracleVerdict,
+  isAcceptanceArtifactFilename,
+  validateOracleArtifact,
+  getPorcelainStatusRaw,
+  validateReviewEvidence,
+  runReviewRecord,
+  recordStageB,
+  isSupersededOracleArtifact,
+} from "./review-evidence.mjs";
+import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
 
 const DIR = ".workflow";
 const FILE = "state.json";
 const BUDGETS_FILE = "budgets.json";
 const METRICS_FILE = "metrics.jsonl";
 const DEFAULT_BUDGETS = { T0: 10, T1: 25, T2: 45, T3: 45 };
+const BUDGET_WARN_RATIO = 0.8;
+const BUDGET_WARN_DEFAULT_TOKENS = 200_000;
+const BUDGET_WARN_DEFAULT_CALLS = 45;
+
 
 // Ordered: each tier inherits every requirement below it.
 const LADDER = ["T0", "T1", "T2", "T3"];
@@ -645,75 +666,6 @@ function printRemainingArtifacts(tier, st) {
 }
 
 
-function hashFile(fullPath) {
-  try {
-    const buf = readFileSync(fullPath);
-    return createHash("sha256").update(buf).digest("hex");
-  } catch {
-    return null;
-  }
-}
-
-function isPathInsideRoot(root, userPath) {
-  if (!userPath || typeof userPath !== "string") return false;
-  const absRoot = resolve(root);
-  const absTarget = resolve(root, userPath);
-  const rel = relative(absRoot, absTarget);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-}
-function isRealPathInsideRoot(root, userPath) {
-  if (!userPath || typeof userPath !== "string") return false;
-  if (!isPathInsideRoot(root, userPath)) return false;
-  const fullPath = resolve(root, userPath);
-  try {
-    const realRoot = realpathSync(root);
-    const realTarget = realpathSync(fullPath);
-    const rel = relative(realRoot, realTarget);
-    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-  } catch {
-    return false;
-  }
-}
-const GENERATED_DIRS = new Set([".tmp", ".archmap", ".codemap", ".opencode"]);
-function isStructuralExcludedPath(relPath) {
-  if (!relPath) return true;
-  const normalized = relPath.replace(/\\/g, "/");
-  const parts = normalized.split("/");
-  if (parts.some((part) => GENERATED_DIRS.has(part)) ||
-      parts[0] === "cache" || parts[0] === "logs") return true;
-
-  if (
-    normalized === DIR ||
-    normalized.startsWith(`${DIR}/`) ||
-    normalized === ".git" ||
-    normalized.startsWith(".git/") ||
-    normalized.includes("/.git/") ||
-    normalized === "node_modules" ||
-    normalized.startsWith("node_modules/") ||
-    normalized.includes("/node_modules/")
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function isSecretOrCredentialPath(relPath) {
-  if (!relPath) return false;
-  const normalized = relPath.replace(/\\/g, "/");
-  const base = normalized.split("/").pop();
-  return (
-    base === "models.yml" ||
-    base === "models.yaml" ||
-    base === "mcp.json" ||
-    base.startsWith(".env") ||
-    base.startsWith("secrets") ||
-    /credentials|\.secret|secrets\.|\.key$|\.pem$/i.test(base)
-  );
-}
-
-function isExcludedFromSnapshot(relPath) {
-  return isStructuralExcludedPath(relPath) || isSecretOrCredentialPath(relPath);
-}
 function findGitRoot(startDir) {
   let curr = resolve(startDir);
   while (true) {
@@ -740,96 +692,6 @@ function isInsideGitRepo(root) {
 }
 
 
-function scanWorktree(root) {
-  try {
-    let commitSha = null;
-    try {
-      commitSha = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 5000
-      }).trim();
-    } catch {}
-
-    const trackedOut = execFileSync("git", ["ls-files", "-z"], {
-      cwd: root,
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 10000,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    const untrackedOut = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
-      cwd: root,
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 10000,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    function collectFiles(output, isUntracked = false) {
-      const map = {};
-      for (const rel of output.split("\0")) {
-        if (!rel || isStructuralExcludedPath(rel)) continue;
-        if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
-        if (isSecretOrCredentialPath(rel)) {
-          if (!isUntracked) {
-            map[rel] = { hash: null, isSecret: true };
-          }
-          continue;
-        }
-        const full = join(root, rel);
-        const hash = hashFile(full);
-        if (hash !== null) {
-          try {
-            const s = statSync(full);
-            map[rel] = { hash, mtimeMs: s.mtimeMs, size: s.size };
-          } catch {}
-        }
-      }
-      return map;
-    }
-    const tracked = collectFiles(trackedOut, false);
-    const untracked = collectFiles(untrackedOut, true);
-    return { isGit: true, commitSha, tracked, untracked };
-  } catch {
-    const files = {};
-    function walk(dir, relPrefix = "") {
-      let entries;
-      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const entry of entries) {
-        const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
-        if (isStructuralExcludedPath(rel)) continue;
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
-          walk(full, rel);
-        } else if (entry.isFile()) {
-          if (!isPathInsideRoot(root, rel) || !isRealPathInsideRoot(root, rel)) continue;
-          if (isSecretOrCredentialPath(rel)) {
-            try {
-              const s = statSync(full);
-              files[rel] = { hash: null, mtimeMs: s.mtimeMs, size: s.size, isSecret: true };
-            } catch {}
-            continue;
-          }
-          const hash = hashFile(full);
-          if (hash !== null) {
-            try {
-              const s = statSync(full);
-              files[rel] = { hash, mtimeMs: s.mtimeMs, size: s.size };
-            } catch {}
-          }
-        }
-      }
-    }
-    walk(root);
-    return { isGit: false, files };
-  }
-}
-const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
-const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$)|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
-
-function isOracleEvidenceFilename(f) {
-  const b = basename(String(f || "")).trim();
-  return /^oracle(-+[A-Za-z0-9]+)*\.md$/i.test(b) || b.toLowerCase() === "acceptance.md";
-}
 const isWorkflowPath = (p) => String(p || "").replace(/\\/g, "/").split("/").includes(".workflow");
 
 function parseRenamePaths(filePath) {
@@ -837,97 +699,23 @@ function parseRenamePaths(filePath) {
   const b = norm.match(/^(.*?)\{(.*?)\s*=>\s*(.*?)\}(.*)$/);
   if (b) return [(b[1] + b[2] + b[4]).replace(/\/\/+/g, "/"), (b[1] + b[3] + b[4]).replace(/\/\/+/g, "/")];
   const a = norm.match(/^(.*?)\s*=>\s*(.*)$/);
-  if (a) return [a[1].replace(/\/\/+/g, "/"), a[2].replace(/\/\/+/g, "/")];
-  return [norm];
+  return a ? [a[1].replace(/\/\/+/g, "/"), a[2].replace(/\/\/+/g, "/")] : [norm];
 }
-
-function isPositiveOracleVerdict(text) {
-  return typeof text === "string" && POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text);
-}
-
-/** True when the text states an explicit rejection. Distinct from "states nothing". */
-function isNegativeOracleVerdict(text) {
-  return typeof text === "string" && NEGATIVE_VERDICT_RE.test(text);
-}
-
-
 function validateOpenspecArtifact(root, a, fullPath, invalid) {
-  const s = statSync(fullPath);
-  if (!s.isDirectory()) {
-    invalid.push(`openspec: path '${a.path}' must be a directory`);
-    return;
-  }
+  if (!statSync(fullPath).isDirectory()) { invalid.push(`openspec: path '${a.path}' must be a directory`); return; }
   let entries = [];
   try { entries = readdirSync(fullPath); } catch {}
-  if (entries.length === 0) {
-    invalid.push(`openspec: directory '${a.path}' is empty`);
-    return;
-  }
+  if (entries.length === 0) { invalid.push(`openspec: directory '${a.path}' is empty`); return; }
   for (const entry of entries) {
     const entryPath = join(a.path, entry);
-    if (!isRealPathInsideRoot(root, entryPath)) {
-      invalid.push(`openspec: entry '${entryPath}' real path must stay inside project root`);
-      return;
-    }
+    if (!isRealPathInsideRoot(root, entryPath)) { invalid.push(`openspec: entry '${entryPath}' real path must stay inside project root`); return; }
   }
-
-  const propPath = join(fullPath, "proposal.md");
-  if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) {
-    invalid.push(`openspec: missing proposal.md in '${a.path}'`);
-  }
-  const tasksPath = join(fullPath, "tasks.md");
-  if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) {
-    invalid.push(`openspec: missing tasks.md in '${a.path}'`);
-  }
-  const specsPath = join(fullPath, "specs");
-  if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) {
-    invalid.push(`openspec: missing specs/ directory in '${a.path}'`);
-  }
+  const propPath = join(fullPath, "proposal.md"), tasksPath = join(fullPath, "tasks.md"), specsPath = join(fullPath, "specs");
+  if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) invalid.push(`openspec: missing proposal.md in '${a.path}'`);
+  if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) invalid.push(`openspec: missing tasks.md in '${a.path}'`);
+  if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) invalid.push(`openspec: missing specs/ directory in '${a.path}'`);
 }
 
-function validateOracleArtifact(root, a, st, invalid) {
-  const detail = a.detail || "";
-  if (!detail.trim()) {
-    invalid.push("oracle: no verdict recorded — pass --detail \"ACCEPT: <evidence>\"");
-  } else if (isNegativeOracleVerdict(detail)) {
-    invalid.push("oracle: verdict is REJECT (must be ACCEPT)");
-  } else if (!isPositiveOracleVerdict(detail)) {
-    invalid.push("oracle: note states no verdict — expected an explicit ACCEPT line");
-  }
-  const changeOraclePaths = [];
-  const registeredChangePath = st.artifacts?.openspec?.path;
-  if (registeredChangePath) {
-    try {
-      for (const f of readdirSync(join(root, registeredChangePath))) {
-        if (isOracleEvidenceFilename(f)) changeOraclePaths.push(join(registeredChangePath, f));
-      }
-    } catch {}
-  }
-  if (changeOraclePaths.length === 0) invalid.push("oracle: missing oracle evidence file (oracle*.md or acceptance.md)");
-  const oraclePaths = [...changeOraclePaths];
-  if (a.path && !changeOraclePaths.some((p) => resolve(root, p) === resolve(root, a.path))) oraclePaths.push(a.path);
-  const registeredChangeAbs = registeredChangePath ? resolve(root, registeredChangePath) : null;
-  let hasAccept = false;
-  for (const oPath of oraclePaths) {
-    const fullPath = join(root, oPath);
-    if (!existsSync(fullPath)) {
-      invalid.push(`oracle: file '${oPath}' does not exist on disk`);
-      continue;
-    }
-    if (!isRealPathInsideRoot(root, oPath) || !statSync(fullPath).isFile()) {
-      invalid.push(`oracle: file '${oPath}' resolves outside project root or is not a file`);
-      continue;
-    }
-    let body = "";
-    try { body = readFileSync(fullPath, "utf8"); } catch {}
-    if (isNegativeOracleVerdict(body) || NEGATIVE_VERDICT_RE.test(body)) {
-      invalid.push(`oracle: verdict in '${oPath}' is REJECT`);
-    } else if (isPositiveOracleVerdict(body) && registeredChangeAbs && resolve(root, dirname(oPath)) === registeredChangeAbs && isOracleEvidenceFilename(basename(oPath))) {
-      hasAccept = true;
-    }
-  }
-  if (!hasAccept && changeOraclePaths.length > 0) invalid.push("oracle: oracle evidence must state an explicit anchored positive ACCEPT verdict");
-}
 
 function validateArtifacts(root, st) {
   const reqs = requiredFor(st.tier);
@@ -986,6 +774,15 @@ function validateArtifacts(root, st) {
 
     if (r.kind === "oracle") {
       validateOracleArtifact(root, a, st, invalid);
+      if (st.tier === "T2" || st.tier === "T3") {
+        const changeId = st.artifacts?.openspec?.path ? basename(st.artifacts.openspec.path) : null;
+        if (changeId) {
+          const revRes = validateReviewEvidence({ root, changeId, tier: st.tier });
+          if (!revRes.ok) {
+            for (const err of revRes.errors) invalid.push(err);
+          }
+        }
+      }
     }
   }
 
@@ -1174,7 +971,115 @@ function cmdCheck(root) {
   return 0;
 }
 
-function cmdStatus(root) {
+function loadSoftBudgets(root) {
+  const p = budgetsPath(root);
+  const def = { tokens: BUDGET_WARN_DEFAULT_TOKENS, calls: BUDGET_WARN_DEFAULT_CALLS, warnRatio: BUDGET_WARN_RATIO };
+  if (!existsSync(p)) return def;
+  try {
+    const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
+    return {
+      tokens: typeof raw.tokens === "number" && raw.tokens > 0 ? raw.tokens : def.tokens,
+      calls: typeof raw.calls === "number" && raw.calls > 0 ? raw.calls : def.calls,
+      warnRatio: typeof raw.warnRatio === "number" && raw.warnRatio > 0 ? raw.warnRatio : def.warnRatio,
+    };
+  } catch { return def; }
+}
+
+// WHY: Parsing the active session .jsonl transcript directly in JS (reusing logic from
+// tools/session_cost.py for token usage and tools/session-retro.mjs for tool call counting)
+// is the most boring, reliable, and decoupled approach. It reads ground truth directly from
+// transcript lines without spawning child processes or requiring Python, and gracefully
+// supports explicit --tokens/--calls CLI flags as zero-overhead overrides.
+function parseSessionUsage(filePath) {
+  let tokens = 0, calls = 0;
+  try {
+    for (const line of readFileSync(filePath, "utf8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let ev;
+      try { ev = JSON.parse(trimmed); } catch { continue; }
+      const u = ev.message?.usage || ev.data?.usage || ev.usage;
+      if (u) tokens += typeof u.totalTokens === "number" ? u.totalTokens : ((u.input || 0) + (u.output || 0));
+      if (ev.type === "toolCall" || ev.type === "tool_call" || ev.type === "tool_use") calls++;
+      else if (Array.isArray(ev.message?.tool_calls)) calls += ev.message.tool_calls.length;
+      else {
+        const blk = Array.isArray(ev.message?.content) ? ev.message.content : Array.isArray(ev.content) ? ev.content : null;
+        if (blk) for (const b of blk) if (b && (b.type === "toolCall" || b.type === "tool_call" || b.type === "tool_use")) calls++;
+      }
+    }
+  } catch {}
+  return { tokens, calls };
+}
+
+function findJsonlFiles(dir) {
+  const out = [];
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) out.push(...findJsonlFiles(full));
+      else if (e.isFile() && e.name.endsWith(".jsonl")) out.push(full);
+    }
+  } catch {}
+  return out;
+}
+
+function findNewestSessionJsonl(dir) {
+  try {
+    if (!existsSync(dir)) return null;
+    if (statSync(dir).isFile() && dir.endsWith(".jsonl")) return dir;
+    const files = findJsonlFiles(dir);
+    let newest = null;
+    for (const f of files) {
+      try {
+        const st = statSync(f);
+        if (!newest || st.mtimeMs > newest.mtimeMs) newest = { path: f, mtimeMs: st.mtimeMs };
+      } catch {}
+    }
+    return newest ? newest.path : null;
+  } catch { return null; }
+}
+
+function getSessionConsumption(root, flags = {}) {
+  const t = flags.tokens !== undefined ? Number(flags.tokens) : null;
+  const c = flags.calls !== undefined ? Number(flags.calls) : null;
+  if (t !== null && !Number.isNaN(t) && c !== null && !Number.isNaN(c)) return { tokens: t, calls: c };
+  let sf = null;
+  if (flags.sessions) {
+    const raw = resolve(root, String(flags.sessions));
+    sf = findNewestSessionJsonl(raw);
+  }
+  if (!sf) {
+    const candidateDirs = [
+      join(root, DIR, "sessions"),
+      join(root, "agent", "sessions"),
+      join(root, "sessions"),
+      join(homedir(), ".omp", "agent", "sessions"),
+    ];
+    for (const d of candidateDirs) {
+      const found = findNewestSessionJsonl(d);
+      if (found) { sf = found; break; }
+    }
+  }
+  const parsed = sf ? parseSessionUsage(sf) : { tokens: 0, calls: 0 };
+  return { tokens: t !== null && !Number.isNaN(t) ? t : parsed.tokens, calls: c !== null && !Number.isNaN(c) ? c : parsed.calls };
+}
+
+function checkHandoffFile(root, startedAt) {
+  const p = join(root, DIR, "handoff.md");
+  if (!existsSync(p)) return { exists: false, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: "file missing" };
+  try {
+    const st = statSync(p);
+    const startMs = startedAt ? new Date(startedAt).getTime() : 0;
+    const fresh = Number.isFinite(startMs) ? st.mtimeMs > startMs : true;
+    if (!fresh) return { exists: true, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: "stale mtime" };
+    const txt = readFileSync(p, "utf8");
+    const valid = /РЕШЕНИЯ/i.test(txt) && /ТУПИКИ/i.test(txt) && /ДАЛЬШЕ/i.test(txt);
+    return { exists: true, fresh: true, valid, path: join(DIR, "handoff.md"), reason: valid ? null : "missing sections (РЕШЕНИЯ/ТУПИКИ/ДАЛЬШЕ)" };
+  } catch (err) { return { exists: true, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: err.message }; }
+}
+
+function cmdStatus(root, flags = {}) {
   const st = load(root);
   if (!st) { console.log("workflow: no active task."); return 0; }
   const reqs = requiredFor(st.tier);
@@ -1196,7 +1101,44 @@ function cmdStatus(root) {
     const a = st.artifacts[r.kind];
     console.log(`  ${a ? "+" : "-"} ${r.kind}${a && a.path ? ` (${a.path})` : ""}`);
   }
+  const soft = loadSoftBudgets(root);
+  const usage = getSessionConsumption(root, flags);
+  console.log(`budget  consumption ${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`);
+  const tokenRatio = soft.tokens > 0 ? usage.tokens / soft.tokens : 0;
+  const callRatio = soft.calls > 0 ? usage.calls / soft.calls : 0;
+  if (tokenRatio >= soft.warnRatio || callRatio >= soft.warnRatio) {
+    console.log(`BUDGET warning: session approaching soft budget ceiling (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls)`);
+  }
   return 0;
+}
+
+function cmdCheckBudget(root, flags = {}) {
+  const st = load(root);
+  if (!st) {
+    if (flags.json) console.log(JSON.stringify({ ok: false, error: "no active task" }, null, 2));
+    else console.error("workflow check-budget: no active task.");
+    return 2;
+  }
+  const soft = loadSoftBudgets(root);
+  const usage = getSessionConsumption(root, flags);
+  const warnTokens = Math.floor(soft.tokens * soft.warnRatio);
+  const warnCalls = Math.floor(soft.calls * soft.warnRatio);
+  const isOver = usage.tokens >= warnTokens || usage.calls >= warnCalls;
+  if (!isOver) {
+    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: false, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, message: "under budget threshold" }, null, 2));
+    else console.log(`workflow check-budget: under budget threshold (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls).`);
+    return 0;
+  }
+  const handoff = checkHandoffFile(root, st.startedAt);
+  if (handoff.valid) {
+    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: true, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, handoff, message: "over budget, valid fresh handoff present" }, null, 2));
+    else console.log(`workflow check-budget: over budget threshold (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls), but valid fresh .workflow/handoff.md present.`);
+    return 0;
+  }
+  const err = `workflow check-budget: budget threshold exceeded (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls). Requires .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ sections newer than task start (${st.startedAt}). ${handoff.reason ? `Current handoff state: ${handoff.reason}.` : ""}`.trim();
+  if (flags.json) console.log(JSON.stringify({ ok: false, overBudget: true, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, handoff, error: err }, null, 2));
+  else console.error(err);
+  return 1;
 }
 
 
@@ -1215,9 +1157,8 @@ function getPorcelainEntries(root) {
       }).trim().replace(/\\/g, "/");
     } catch {}
 
-    const statusOut = execFileSync("git", ["-c", "core.quotepath=false", "status", "--porcelain", "-z", "-uall", "--", "."], {
-      cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-    });
+    const statusOut = getPorcelainStatusRaw(root);
+    if (statusOut === null) return null;
     const rawItems = statusOut.split("\0");
     const entries = [];
     for (let i = 0; i < rawItems.length; i++) {
@@ -1256,7 +1197,7 @@ function findAcceptanceStaleness(root, st) {
     : findNonGitStaleness(snapshot, current, acceptedAt, acceptedMs);
 }
 
-function findGitStaleness(root, snapshot, current, acceptedAt) {
+function findGitStaleness(_root, snapshot, current, acceptedAt) {
   const newer = [];
   const deleted = [];
   const untrackedAdded = [];
@@ -1300,30 +1241,7 @@ function findGitStaleness(root, snapshot, current, acceptedAt) {
     }
   }
 
-  const porcelain = getPorcelainEntries(root);
-  if (porcelain) {
-    for (const { code, rel } of porcelain) {
-      if (code !== "??" && isSecretOrCredentialPath(rel) && !newer.includes(rel)) {
-        newer.push(rel);
-      }
-    }
-  }
-
-  const baseSha = snapshot?.commitSha;
-  if (baseSha) {
-    try {
-      const diffOut = execFileSync("git", ["diff", "--name-only", "--relative", `${baseSha}..HEAD`], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-      });
-      for (const file of diffOut.split("\n")) {
-        const rel = file.trim();
-        if (!rel || rel.startsWith(".workflow/") || isStructuralExcludedPath(rel)) continue;
-        if (isSecretOrCredentialPath(rel) && !newer.includes(rel)) {
-          newer.push(rel);
-        }
-      }
-    } catch {}
-  }
+  if (snapshot?.secretDigest !== current.secretDigest) newer.push("tracked credential content");
 
   const reasons = [];
   if (newer.length > 0) {
@@ -1495,8 +1413,12 @@ function cmdClose(root, flags) {
     return 1;
   }
 
-  if (invalid.length) {
+  if (invalid.length && !flags.force) {
     console.error(`workflow: cannot close ${st.tier} — retained evidence invalid:\n  ${invalid.join('\n  ')}`);
+    return 1;
+  }
+  if (invalid.length && flags.force && !flags.reason) {
+    console.error(`workflow: --force requires --reason "<why the invalid evidence is accepted>"`);
     return 1;
   }
 
@@ -1534,6 +1456,11 @@ function cmdClose(root, flags) {
     deviation.forced = true;
     deviation.reason = String(flags.reason);
     deviation.missing = [...missing];
+  }
+  if (invalid.length && flags.force) {
+    deviation.forced = true;
+    deviation.reason = String(flags.reason);
+    deviation.invalid = [...invalid];
   }
   if (staleAcceptance && flags.force) {
     deviation.forced = true;
@@ -1663,7 +1590,7 @@ function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
       if (commitFilesRaw) {
         const nonOracle = commitFilesRaw.split("\n")
           .map((f) => f.trim().replace(/\\/g, "/"))
-          .filter((f) => f && !isWorkflowPath(f) && !isOracleEvidenceFilename(f));
+          .filter((f) => f && !isWorkflowPath(f) && !isAcceptanceArtifactFilename(f));
         if (nonOracle.length > 0) {
           console.error(`workflow check-ci: oracle acceptance commit (${oracleCommit.slice(0, 8)}) contains non-oracle changes (mixed commit):\n  ${nonOracle.slice(0, 5).join("\n  ")}`);
           return 1;
@@ -1692,6 +1619,40 @@ function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
     return 1;
   }
   return 0;
+}
+
+function validateCheckCiOracleFiles(root, relChangeDir) {
+  const changeDir = join(root, relChangeDir);
+  // Consider every retained receipt: any unsuperseded explicit REJECT blocks.
+  const oracleEntries = readdirSync(changeDir).filter(isAcceptanceArtifactFilename);
+  if (oracleEntries.length === 0) {
+    console.error(`workflow check-ci: missing oracle evidence in '${changeDir}' or resolves outside project root.`);
+    return { ok: false };
+  }
+  let hasPositive = false;
+  let oracleRelForCommit = null;
+  for (const entry of oracleEntries) {
+    const oraclePath = join(changeDir, entry);
+    const relOracle = join(relChangeDir, entry);
+    if (!isRealPathInsideRoot(root, relOracle) || !statSync(oraclePath).isFile()) {
+      console.error(`workflow check-ci: oracle file '${entry}' in '${changeDir}' resolves outside project root or is not a file.`);
+      return { ok: false };
+    }
+    const oracleBody = readFileSync(oraclePath, "utf8");
+    if ((isNegativeOracleVerdict(oracleBody) || NEGATIVE_VERDICT_RE.test(oracleBody)) && !isSupersededOracleArtifact(changeDir, oraclePath)) {
+      console.error(`workflow check-ci: oracle evidence in '${entry}' states an explicit REJECT verdict.`);
+      return { ok: false };
+    }
+    if (isPositiveOracleVerdict(oracleBody)) {
+      hasPositive = true;
+      if (!oracleRelForCommit) oracleRelForCommit = relOracle;
+    }
+  }
+  if (!hasPositive && !existsSync(join(changeDir, "review-evidence.json"))) {
+    console.error(`workflow check-ci: oracle evidence in '${changeDir}' must state an explicit anchored positive ACCEPT verdict.`);
+    return { ok: false };
+  }
+  return { ok: true, oracleRelForCommit };
 }
 
 function cmdCheckCi(root, flags) {
@@ -1827,38 +1788,9 @@ function cmdCheckCi(root, flags) {
     return 1;
   }
 
-  // 6. Oracle evidence (consider ALL matching files: any explicit REJECT blocks)
-  const entries = readdirSync(changeDir);
-  const oracleEntries = entries.filter(isOracleEvidenceFilename);
-  if (oracleEntries.length === 0) {
-    console.error(`workflow check-ci: missing oracle evidence in '${changeDir}' or resolves outside project root.`);
-    return 1;
-  }
-
-  let hasPositive = false;
-  let oracleRelForCommit = null;
-  for (const entry of oracleEntries) {
-    const oraclePath = join(changeDir, entry);
-    const relOracle = join(relChangeDir, entry);
-    if (!isRealPathInsideRoot(root, relOracle) || !statSync(oraclePath).isFile()) {
-      console.error(`workflow check-ci: oracle file '${entry}' in '${changeDir}' resolves outside project root or is not a file.`);
-      return 1;
-    }
-    const oracleBody = readFileSync(oraclePath, "utf8");
-    if (isNegativeOracleVerdict(oracleBody) || NEGATIVE_VERDICT_RE.test(oracleBody)) {
-      console.error(`workflow check-ci: oracle evidence in '${entry}' states an explicit REJECT verdict.`);
-      return 1;
-    }
-    if (isPositiveOracleVerdict(oracleBody)) {
-      hasPositive = true;
-      if (!oracleRelForCommit) oracleRelForCommit = relOracle;
-    }
-  }
-
-  if (!hasPositive) {
-    console.error(`workflow check-ci: oracle evidence in '${changeDir}' must state an explicit anchored positive ACCEPT verdict.`);
-    return 1;
-  }
+  const oracleFiles = validateCheckCiOracleFiles(root, relChangeDir);
+  if (!oracleFiles.ok) return 1;
+  let { oracleRelForCommit } = oracleFiles;
 
   // T3 additionally requires worktrees.md
   if (tier === "T3") {
@@ -1874,19 +1806,42 @@ function cmdCheckCi(root, flags) {
       return 1;
     }
   }
+  const revRes = validateReviewEvidence({ root, changeId, tier, baseRef });
+  if (!revRes.ok) {
+    console.error(`workflow check-ci: review execution evidence failed for '${changeId}':\n  ${revRes.errors.join("\n  ")}`);
+    return 1;
+  }
+  if (!oracleRelForCommit && existsSync(join(changeDir, "review-evidence.json"))) {
+    oracleRelForCommit = join(relChangeDir, "review-evidence.json");
+  }
 
-  const gitCode = validateCheckCiGit(root, oracleRelForCommit, baseRef);
+  // A single git verification covers the oracle evidence: validateCheckCiGit
+  // already walks commit history from the oracle acceptance commit forward,
+  // so a second call on review-evidence.json only repeats subprocess work
+  // and fails spuriously on sequential oracle commits.
+  const gitCode = validateCheckCiGit(root, oracleRelForCommit || join(relChangeDir, "review-evidence.json"), baseRef);
   if (gitCode !== 0) return gitCode;
-
   console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
   return 0;
 }
+function cmdReviewRun(root, flags) {
+  try {
+    const res = runReviewRecord({ root, changeId: flags.change, role: flags.role, model: flags.model, baseRef: flags["base-ref"], prompt: flags.prompt, redo: Boolean(flags.redo), productCommand: flags["product-command"] ? JSON.parse(flags["product-command"]) : null, dryRun: Boolean(flags["dry-run"]) });
+    if (res.ok) { console.log(res.dryRun ? `workflow review-run: dry-run plan verified for ${flags.role} on '${flags.change}'.` : `workflow review-run: successfully recorded ${flags.role} execution for '${flags.change}'.`); return 0; }
+    return 1;
+  } catch (err) { console.error(`workflow review-run error: ${err.message}`); return 1; }
+}
 
-
-
+function cmdStageB(root, flags) {
+  try {
+    const res = recordStageB({ root, changeId: flags.change, phase: flags.phase || "after", disposition: flags.disposition || "lean-already", testCmd: flags["test-cmd"] || flags.testCmd, summary: flags.summary });
+    if (res.ok) { console.log(`workflow stage-b: recorded ${flags.phase || "after"} execution (${res.stageB.disposition || "frozen baseline"}) for '${flags.change}'.`); return 0; }
+    return 1;
+  } catch (err) { console.error(`workflow stage-b error: ${err.message}`); return 1; }
+}
 /* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB };
 
 import { fileURLToPath } from "node:url";
 
@@ -1905,11 +1860,14 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
     case "suggest":  code = cmdSuggest(args.flags); break;
     case "artifact": code = cmdArtifact(root, args.flags); break;
     case "check":    code = cmdCheck(root); break;
-    case "status":   code = cmdStatus(root); break;
+    case "status":       code = cmdStatus(root, args.flags); break;
+    case "check-budget": code = cmdCheckBudget(root, args.flags); break;
     case "close":    code = cmdClose(root, args.flags); break;
     case "escalate": code = cmdEscalate(root, args.flags); break;
     case "metrics":  code = cmdMetrics(root); break;
     case "check-ci": code = cmdCheckCi(root, args.flags); break;
+    case "review-run": code = cmdReviewRun(root, args.flags); break;
+    case "stage-b":    code = cmdStageB(root, args.flags); break;
     default:
       // An unrecognised subcommand is an error, not a help request: exiting 0 on a typo
       // tells every calling script and CI gate that the run succeeded.
@@ -1921,11 +1879,14 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
       console.log("  node workflow.mjs artifact --kind manifest --path openspec/changes/x/manifest.md");
       console.log("  node workflow.mjs check      # exit 1 if the tier's artifacts are missing");
       console.log("  node workflow.mjs status");
+      console.log("  node workflow.mjs check-budget [--sessions <dir>] [--json]");
       console.log("  node workflow.mjs escalate --tier T2");
       console.log("  node workflow.mjs close [--force --reason \"...\"] [--auto] [--diff-lines N]");
       console.log("  node workflow.mjs metrics [--root .]");
       console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
       console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
+      console.log("  node workflow.mjs review-run --role <reviewer|oracle> --change <name> --model <provider/model> --base-ref <base> [--product-command <JSON argv>] [--redo]");
+      console.log("  node workflow.mjs stage-b --change <name> --phase <before|after> --test-cmd \"<cmd>\" [--disposition <lean-already|simplified>]");
       if (cmd !== undefined) code = 2;
   }
   process.exitCode = code;

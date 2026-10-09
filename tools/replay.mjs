@@ -27,15 +27,19 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { createServer, request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { gunzipSync, brotliDecompressSync, inflateSync } from "node:zlib";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /* --------------------------------------------------------------- normalising */
 
 // Headers that differ every run and would make matching/commit-review noisy.
 const VOLATILE_HEADERS = new Set([
   "date", "connection", "keep-alive", "transfer-encoding", "content-length",
+  "content-encoding",
   "x-request-id", "x-amzn-trace-id", "cf-ray", "set-cookie", "expires",
   "etag", "last-modified", "age", "via", "server-timing",
 ]);
@@ -43,7 +47,7 @@ const VOLATILE_HEADERS = new Set([
 // Header names whose VALUES are secrets; the name is kept, the value redacted,
 // so a cassette still shows that authentication happened.
 const SECRET_HEADERS = /^(authorization|cookie|x-api-key|api-key|x-auth-token|proxy-authorization)$/i;
-const SECRET_BODY_KEYS = /("(?:api_?key|token|secret|password|access_?token|refresh_?token|signature|apiKey|apiSecret)"\s*:\s*")[^"]*"/gi;
+const SECRET_BODY_KEYS = /("(?:api_?key|token|secret|password|access_?token|refresh_?token|signature|apiKey|apiSecret)"\s*:\s*")(?:\\.|[^"\\])*"/gi;
 const SECRET_QUERY = /([?&](?:api_?key|token|secret|password|signature|access_?token)=)[^&]*/gi;
 
 function redactHeaders(headers) {
@@ -58,12 +62,23 @@ function redactHeaders(headers) {
 
 function redactBody(text) {
   if (!text) return text;
-  return text.replace(SECRET_BODY_KEYS, "$1[REDACTED]");
+  return text.replace(SECRET_BODY_KEYS, '$1[REDACTED]"');
 }
 
 function redactUrl(url) {
   return (url || "").replace(SECRET_QUERY, "$1[REDACTED]");
 }
+function decodeResponseBody(buffer, encoding) {
+  if (!buffer || !buffer.length) return "";
+  const enc = (encoding || "").toLowerCase().trim();
+  try {
+    if (enc === "gzip") return gunzipSync(buffer).toString("utf8");
+    if (enc === "br") return brotliDecompressSync(buffer).toString("utf8");
+    if (enc === "deflate") return inflateSync(buffer).toString("utf8");
+  } catch {}
+  return buffer.toString("utf8");
+}
+
 
 /** Stable identity of a request, ignoring volatile and secret material. */
 function requestKey(method, url, body) {
@@ -80,10 +95,24 @@ function requestKey(method, url, body) {
 
 function loadCassette(path) {
   if (!existsSync(path)) return null;
-  // PowerShell's `Set-Content -Encoding UTF8` writes a BOM, and JSON.parse
-  // rejects it. Strip a leading BOM rather than making every caller care.
   const raw = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
-  return JSON.parse(raw);
+  let cassette;
+  try {
+    cassette = JSON.parse(raw);
+  } catch {
+    const repaired = raw.replace(/(\"\[REDACTED\])(?=[\s,}\]])/g, '$1"');
+    cassette = JSON.parse(repaired);
+  }
+  if (Array.isArray(cassette?.interactions)) {
+    const fixUnclosed = (t) => (typeof t === "string"
+      ? t.replace(/("(?:api_?key|token|secret|password|access_?token|refresh_?token|signature|apiKey|apiSecret)"\s*:\s*")\[REDACTED\](?=[\s,}\]])/gi, '$1[REDACTED]"')
+      : t);
+    for (const item of cassette.interactions) {
+      if (item.request?.body) item.request.body = fixUnclosed(item.request.body);
+      if (item.response?.body) item.response.body = fixUnclosed(item.response.body);
+    }
+  }
+  return cassette;
 }
 
 function saveCassette(path, cassette) {
@@ -104,8 +133,11 @@ function readBody(req) {
 async function cmdRecord(cassettePath, port, target, filter) {
   if (!target) { console.error("replay: --target is required for record"); return 2; }
   const base = new URL(target);
+  const isHttps = base.protocol === "https:";
+  const upstreamPort = base.port ? Number(base.port) : (isHttps ? 443 : 80);
+  const upstreamRequest = isHttps ? httpsRequest : httpRequest;
+  const upstreamHost = base.host;
   const filterRe = filter ? new RegExp(filter) : null;
-
   const existing = loadCassette(cassettePath);
   const interactions = existing?.interactions ?? [];
   const seen = new Set(interactions.map((i) => i.key));
@@ -121,12 +153,15 @@ async function cmdRecord(cassettePath, port, target, filter) {
   };
   const server = createServer(async (req, res) => {
     const body = await readBody(req);
-    const pathAndQuery = req.url || "/";
+    const u = new URL(req.url || "/", "http://localhost");
+    const pathAndQuery = u.pathname + u.search;
 
+    const isRecorded = !filterRe || filterRe.test(pathAndQuery) || filterRe.test(u.pathname);
     // Pass-through for anything the operator excluded (auth, telemetry).
-    if (filterRe && !filterRe.test(pathAndQuery)) {
-      const upstream = httpRequest(
-        { hostname: base.hostname, port: base.port || 80, path: pathAndQuery, method: req.method, headers: req.headers },
+    if (!isRecorded) {
+      const headers = { ...req.headers, host: upstreamHost };
+      const upstream = upstreamRequest(
+        { hostname: base.hostname, port: upstreamPort, path: pathAndQuery, method: req.method, headers },
         (up) => { res.writeHead(up.statusCode || 502, up.headers); up.pipe(res); },
       );
       upstream.on("error", () => { res.writeHead(502); res.end(); });
@@ -135,19 +170,21 @@ async function cmdRecord(cassettePath, port, target, filter) {
       return;
     }
 
-    const upstream = httpRequest(
-      { hostname: base.hostname, port: base.port || 80, path: pathAndQuery, method: req.method, headers: req.headers },
+    const headers = { ...req.headers, host: upstreamHost };
+    const upstream = upstreamRequest(
+      { hostname: base.hostname, port: upstreamPort, path: pathAndQuery, method: req.method, headers },
       async (up) => {
         const chunks = [];
         up.on("data", (c) => chunks.push(c));
         up.on("end", () => {
-          const respBody = Buffer.concat(chunks).toString("utf8");
+          const rawBuffer = Buffer.concat(chunks);
+          const respBody = decodeResponseBody(rawBuffer, up.headers["content-encoding"]);
           const key = requestKey(req.method, pathAndQuery, body);
           if (!seen.has(key)) {
             seen.add(key);
             const entry = {
               key,
-              request: { method: req.method, url: redactUrl(pathAndQuery), headers: redactHeaders(req.headers), body: redactBody(body) || null },
+              request: { method: req.method, url: redactUrl(pathAndQuery), headers: redactHeaders(headers), body: redactBody(body) || null },
               response: { status: up.statusCode, headers: redactHeaders(up.headers), body: redactBody(respBody) },
             };
             interactions.push(entry);
@@ -156,7 +193,7 @@ async function cmdRecord(cassettePath, port, target, filter) {
             console.log(`  + ${key}`);
           }
           res.writeHead(up.statusCode || 200, up.headers);
-          res.end(respBody);
+          res.end(rawBuffer);
         });
       },
     );
@@ -181,7 +218,7 @@ async function cmdRecord(cassettePath, port, target, filter) {
   process.on("SIGTERM", finish);
   // On Windows a hard kill does not deliver signals, so also flush on exit.
   process.on("exit", () => { try { flush(); } catch { /* best effort */ } });
-  return 0;
+  return server;
 }
 
 /* -------------------------------------------------------------------- replay */
@@ -220,6 +257,7 @@ function cmdReplay(cassettePath, port, strict) {
     const hit = matches[Math.min(n, matches.length - 1)];
     const headers = { ...hit.response.headers };
     delete headers["content-length"];
+    delete headers["content-encoding"];
     res.writeHead(hit.response.status || 200, headers);
     res.end(hit.response.body ?? "");
     console.log(`  HIT   ${key}`);
@@ -237,7 +275,7 @@ function cmdReplay(cassettePath, port, strict) {
     server.close();
     process.exit(unmatched.length && strict ? 1 : 0);
   });
-  return 0;
+  return server;
 }
 
 /* -------------------------------------------------------------------- verify */
@@ -261,6 +299,14 @@ function cmdVerify(cassettePath) {
     seen.add(i.key);
     const m = i.request?.method || "?";
     methods.set(m, (methods.get(m) || 0) + 1);
+    const ct = (i.response?.headers?.["content-type"] || "").toLowerCase();
+    if (ct.includes("application/json") && typeof i.response?.body === "string" && i.response.body.trim()) {
+      try {
+        JSON.parse(i.response.body);
+      } catch (err) {
+        problems.push(`interaction ${n}: malformed JSON body (${err.message})`);
+      }
+    }
   }
 
   // Scan the actual body STRINGS, not a re-serialized document: inside
@@ -318,10 +364,33 @@ function cmdShow(cassettePath) {
   }
   return 0;
 }
+export {
+  cmdRecord,
+  cmdReplay,
+  cmdVerify,
+  cmdShow,
+  loadCassette,
+  saveCassette,
+  requestKey,
+  redactUrl,
+  redactHeaders,
+  redactBody,
+  decodeResponseBody,
+};
+
 
 /* ---------------------------------------------------------------------- main */
 
-const argv = process.argv.slice(2);
+const isMain = process.argv[1] && (() => {
+  try {
+    return fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  const argv = process.argv.slice(2);
 const opts = { _: [] };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -350,3 +419,4 @@ switch (cmd) {
 }
 if (cmd === "record" || cmd === "replay") { /* servers keep the loop alive */ }
 else process.exit(code);
+}

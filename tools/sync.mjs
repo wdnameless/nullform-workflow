@@ -393,7 +393,7 @@ function main() {
   for (const entry of manifest) {
     if (!isApplicable(entry.rel)) continue;
     const liveRoot = entry.liveRoot === '@agents' ? agentsRoot : (entry.liveRoot === '@agentdir' ? agentDir : harnessRoot);
-    const livePath = path.join(liveRoot, ...entry.rel.split('/'));
+    const livePath = path.join(liveRoot, ...(entry.liveRel || entry.rel).split('/'));
     const repoPath = path.join(repoRoot, ...entry.rel.split('/'));
 
     if (!validatePathWithinRoot(livePath, liveRoot)) {
@@ -430,13 +430,9 @@ function main() {
 
   for (const entry of manifest) {
     const rel = entry.rel;
+    if (!isApplicable(rel)) continue;
     const liveRoot = entry.liveRoot === '@agents' ? agentsRoot : (entry.liveRoot === '@agentdir' ? agentDir : harnessRoot);
-
-    if (opts.only && !rel.toLowerCase().includes(opts.only.toLowerCase())) {
-      continue;
-    }
-
-    const livePath = path.join(liveRoot, ...rel.split('/'));
+    const livePath = path.join(liveRoot, ...(entry.liveRel || rel).split('/'));
     const repoPath = path.join(repoRoot, ...rel.split('/'));
     checked++;
 

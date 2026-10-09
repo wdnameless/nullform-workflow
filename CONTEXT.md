@@ -52,6 +52,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Gate** — a mandatory checkpoint (G1–G4). A failed gate sends the phase back.
 - **Blind acceptance** — Wave 4. The oracle judges the product against the
   manifest and the running artifact, never against our own spec.
+- **Implementation review** — Wave 3.5 code and patch review performed by the `reviewer` role using the patch diff, changed files, and consuming-side dispatch points. Emits concrete defect findings and a tagged delete-list for Stage B.
+- **Review execution evidence** — `review-evidence.json`. Mandatory for heavy (T2) and program (T3) workflows. Binds retained native OMP events and the final assistant report (`review-run`) to exact provider/model, session identity, nonzero known-tariff usage, manifest/role hashes and current source bytes; links reviewer A → frozen-test Stage-B A/B → blind oracle B. Reviewer recorded mode returns complete typed JSON; oracle returns per-requirement runtime evidence and an explicit terminal verdict.
 - **Oracle** — the read-only acceptance role. See *Roles*.
 - **Double acceptance** — the Wave 4 rule when the resolved oracle model is flash-class (name matches `*flash*` or is the configured fallback): two independent oracle passes, reconciled. ACCEPT requires the two to agree; either `REJECT` forces a fix round, then a fresh pair.
 - **Oracle-lite** — a single-pass Wave 4 acceptance permitted only for a small slice (≤2 files, ≤~80 diff lines), under the same evidence protocol as a full oracle pass. Anything larger goes through double acceptance.
@@ -85,6 +87,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
   `sonic`).
 - **Read-only role** — a specialist that never edits (`explorer`, `librarian`,
   `reviewer`, `oracle`; built-in `scout`).
+- **Reviewer** — the read-only implementation review specialist. Inspects diffs and consuming-side dispatch points, evaluating correctness, security, cross-boundary routing, and simplest solution (Ponytail/Lean delete-list for Stage B). Distinct from `oracle`.
+- **Oracle role** — the read-only acceptance specialist. Judges completed work in Wave 4 blind to plans and specs, evaluating strictly the requirements manifest (`manifest.md`) and running product/runtime. Distinct from `reviewer`.
 - **Fleet** — the set of specialists dispatched for a task.
 - **Spawn** — creating a specialist run (`task()`). Distinct from **reuse**, which
   continues an existing specialist session that already holds relevant context.
@@ -121,6 +125,7 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Arm** — a named variant or configuration of an agent workflow being evaluated (e.g. `raw-model` vs `omp-workflow`), defined by a runner command template executed inside a fresh local git clone.
 - **Stage B** — the simplifying second phase in the A→B→A delivery rhythm. After meeting specifications and passing tests in Stage A, the agent executes an explicit compression and deduplication pass, preserving test invariance while achieving neutral or negative net lines of code (`net: -N lines`).
 
+- **Skill benefit evaluation** — reproducible, controlled comparison of workflow and review skills using isolated baseline (no skill) and candidate (target skill) sessions with identical real task inputs, measuring actual defect detection, false positives, task satisfaction, duration, and token usage within a hard $1 cost ceiling.
 ## Tooling
 
 - **Codemap** — `CODEMAP.md` per folder plus `.codemap/state.json` (hashes), built
@@ -143,6 +148,7 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Debt ledger tool** — `tools/debt-ledger.mjs`. Scans repository code comments for `defer:` markers, checks for formatting errors or missing triggers, and generates `DEBT-LEDGER.md`.
 - **Test lens** — `tools/test-lens.mjs`. Runs a test command (`run -- <cmd>`) or parses saved output (`parse <file>` / stdin) into a compact JSON summary (`total` / `passed` / `failed` / `failures`); recognizes `node --test` (spec reporter), Jest/Vitest JSON, pytest, and cargo, and otherwise falls back to a raw `fail|error|exception` filter. Exit code mirrors the command (`2` = `spawnError`, `1` = killed by signal), so a lens failure never reads as a green suite.
 - **Benchmark harness** — `tools/benchmark.mjs`. Orchestrates isolated benchmark task runs across arms (`init`, `run`, `report`, `compare`), capturing objective metrics (LOC deltas, duration, check pass rates, safety pass rates across safety-tier tasks, and optional session cost).
+- **Accounted benchmark outcome** — `readRunOutcome(result, selector, ledger)` in `tools/bench-results.mjs` binds each captured native assistant turn to its settled request usage/cost. A bounded failed execution has `evaluationStatus: failed`, false requirement satisfaction and no fabricated final report; the cohort finishes `completed-with-failures`. Unknown/pending spend or inconsistent provenance still halts.
 - **Safety tier** — benchmark task tier (`tier: "safety"`) designed to test behavior preservation, boundary conditions, and invariant enforcement where lazy shortcut solutions break observable behavior.
 - **Memory cadence** — `tools/memory-cadence.mjs`. Enforces a regular maintenance cadence (default 7 days) over the Hindsight long-term memory bank, tracking last review timestamps and checking configuration freshness.
 - **Mutation testing** — `tools/mutation-test.mjs`. Evaluates test suite quality by injecting deliberate AST/syntax mutations (comparison flips, boolean flips, operator inversions, boundary shifts) into target source files and measuring the percentage of killed mutants.
@@ -163,11 +169,23 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Cache policy** — `tools/cache-policy.mjs`. Enforces prompt-cache observability gates (volatile literal scan, prompt fingerprint determinism, return-contract validation) while keeping model thresholds advisory.
 - **Context inbox** — `tools/context-inbox.mjs`. Manages the context intake pipeline (`context/REQUESTS.md`) across categories (`init`, `request`, `list`, `resolve`, `check`).
 - **Domain context** — `tools/domain-context.mjs`. Collects domain-scoped context from matching paths, git history, codemap state, and related issues without external dependencies.
-- **Fix plugin windows** — `tools/fix-plugin-windows.cjs`. Eliminates flashing console windows on Windows for installed OMP plugins by adding `windowsHide: true` to child process calls.
+- **Session retro** — `tools/session-retro.mjs` + `skill://session-retro`. Scans `.jsonl` session logs for inefficiency signals (errors/retries, heavy reads, long sessions, repeated commands) and ranks candidates for human-led retrospective; findings apply manually, never auto-fixed.
 - **Oracle model** — `tools/oracle-model.mjs`. Autoselects the highest-priority model from `models.yml` for the oracle role and updates `config.yml` while preserving comments and layout.
 - **Return contract** — `tools/return-contract.mjs`. Validates subagent return contracts against format constraints (≤25 lines, valid status, required sections, numeric test counts).
 - **Session cost** — `tools/session_cost.py`. Aggregates token usage and estimated costs from session transcripts per provider, model, agent, and UTC day.
 - **Sync prune** — `tools/sync-prune.mjs`. Identifies harness-only orphan files absent from the repository manifest before cleanup (`sync.ps1 -Prune` / `doctor.mjs`).
+- **Review execution (`review-run`)** — `tools/workflow.mjs review-run --change ID --role reviewer|oracle --model PROVIDER/MODEL --base-ref BASE [--product-command JSON_ARGV] [--redo]`. Uses `tools/review-evidence.mjs` to record and validate retained native executions, not hand-supplied verdict strings.
+- **Skill audit module (`SkillStructure`)** — `tools/skill-audit.mjs`. Deep implementation module providing `auditSkills`, `extractSkillBody`, `auditSkillFile`, and `checkMarkdownReferences` for structural auditing of skill definitions, body line limits (<500 lines), direct markdown references, and navigation anchors.
+- **Skill structural audit** — `tools/prompt-lint.mjs skills [--check] [--json]`. Audits skill body length separately from discovery metadata budgets, verifies direct local markdown references and anchor navigation in long files (>100 lines), and flags JEV description-selection risks.
+- **Stage-B disposition (`stage-b`)** — captures reviewer-A fixed-test provenance using `--phase before --test-cmd COMMAND`, then records actual B using `--phase after --disposition simplified|lean-already --test-cmd SAME_COMMAND`; unchanged test bytes bind both phases.
+- **Skill benefit evaluation (`runSkillBenefitEval`)** — `tools/run-skill-benefit-eval.mjs`; fresh `baseline-noskill` / `candidate-skill` native sessions under equal constructed fixture inputs and one selected skill body.
+- **Request budget (`createRequestBudget`)** — `tools/bench-budget.mjs`; bounds native context/output and physical request count, durably reserves before every inference HTTP dispatch, settles native usage, and rejects unresolved retries or side calls.
+- **Spend ledger (`spend-ledger.json`)** — version-2 durable request reservations/settlements and cumulative one-USD ceiling in `bench/runs/`; outstanding reservations or `blocked_unknown_spend` prohibit further inference across restarts.
+- **SDK tariff (`computeTariffCost`)** — exact allowlisted installed-catalog pricing applied to strict nonnegative native token buckets; not independently confirmed provider billing.
+- **Terminal findings score (`scoreReview`)** — scores only the final normally stopped assistant's typed findings against known consumer defects and counts unmatched findings as false positives; injection adherence is not automatic skill discovery.
+- **Delete-guard** — `agent/extensions/nullform-delete-guard.ts`. Native OMP extension intercepting destructive shell commands (`rm -r`, `git push --force`, `git reset --hard`, `git clean -f`, `find -delete`, SQL drops/truncates) in interactive sessions to require explicit user confirmation before execution.
+- **Destructive rule (`DestructiveRule`)** — pattern match specification (`agent/extensions/nullform-delete-guard.ts`) associating a high-risk command regex with a human-readable action description for confirmation prompts.
+- **Delete guard result (`DeleteGuardResult`)** — execution block decision (`agent/extensions/nullform-delete-guard.ts`) containing denial status, user-facing reason, and instruction preventing command retry.
 
 ## Operations
 
@@ -180,6 +198,15 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Codemap state** — `.codemap/state.json`. Gitignored; scan config persists
   inside it so `changes`/`update` need no repeated flags.
 
+## JEV assistance
+
+- **JEV assistance** — automatic, native OMP turn assistance with bounded skill prompt suggestions powered by OpenRouter Decisions (`typesafe/jev-1.13`), preserving canonical prompts, permissions, models, and Oracle gates. Model routing was evaluated and dropped after negative experimental evidence showed higher costs and insufficient primary acceptance; release scope is skills-only.
+- **JEV decision (`JevDecision`)** — typed single-question classifier response from OpenRouter Decisions (`typesafe/jev-1.13`) containing `status` (`ok` | `fallback`), `reason`, `skill`, `confidence` (validated $\ge 0.80$), `model`, and `usage` (`inputTokens`, `outputTokens`, `costUsd`, `costKnown`).
+- **JEV policy (`JevPolicy`)** — validated local policy JSON (`~/.omp/agent/jev-policy.json`) storing version 2 metadata: `version: 2`, `enabled: true`, `expiresAt`, `catalogFingerprint`, `baselineModel`, `decisionModel`, `fingerprint`, `reportSha256`, and `decisionSnapshots`.
+- **JEV core (`JevCore`)** — underlying runtime contract interface providing `loadSkillCatalog`, `readCredential`, `screenTask`, `decide`, `readPolicy`, and `appendEvent`.
+- **JEV extension options (`JevExtensionOptions`)** — configuration object for the native OMP extension factory `createJevExtension(options)` accepting `core`, `home`, and `cwd`.
+- **JEV evaluation** — paired reproducible evaluation comparing a pinned baseline chat model and JEV candidate classifier over separate canonical calibration (14 cases) and held-out RU/EN cases (44 cases), accounting for actual token usage, latencies, provider errors, and receipts.
+- **Policy fingerprint** — deterministic SHA-256 hash derived from catalog fingerprint, baseline model, and decision model version; invalidates outdated assistance automatically.
 ## Flagged
 
 Terms with real but non-blocking ambiguity, recorded so they are not re-derived:

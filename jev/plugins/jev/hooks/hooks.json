@@ -1,0 +1,19 @@
+{
+  "description": "Роутер моделей и подсказка скилла через Jev перед каждым запросом",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/before_prompt.py"
+            ],
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}

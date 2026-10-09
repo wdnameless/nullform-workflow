@@ -542,7 +542,6 @@ export function runBenchmark(options) {
     ? Number(timeoutSec)
     : (task.timeoutSec || 300);
 
-  // План запусков
   const plan = {
     taskId,
     arm,
@@ -706,13 +705,12 @@ export function runBenchmark(options) {
           encoding: "utf8",
           shell: true,
           windowsHide: true,
+          env,
         });
 
-        const code = cRes.status ?? (cRes.signal ? -1 : 0);
+        const code = cRes.status ?? -1;
         const passed = code === 0;
-        const outText = (cRes.stdout || "") + (cRes.stderr || "");
-        const lines = outText.trim().split("\n");
-        const tail = lines.slice(-5).join("\n");
+        const tail = ((cRes.stdout || "") + (cRes.stderr || "")).trim().split("\n").slice(-5).join("\n");
 
         checksResults.push({
           cmd: cCmd,
@@ -723,8 +721,7 @@ export function runBenchmark(options) {
       }
     }
 
-    // 6. Стоимость (cost)
-    const transcriptToUse = transcript || findRecentSessionTranscript(startTime - 2000);
+    const transcriptToUse = transcript ? transcript.replace(/\{run_dir\}/g, runDir) : findRecentSessionTranscript(startTime - 2000);
     const cost = evaluateCost(absRoot, transcriptToUse);
 
     // 7. Сборка result.json
@@ -732,6 +729,8 @@ export function runBenchmark(options) {
       version: 1,
       task: taskId,
       arm,
+      runId,
+      runDir,
       tier: task.tier || "standard",
       run: item.runNumber,
       startedAt,
@@ -808,6 +807,7 @@ export function summarizeRuns(root, options = {}) {
   const allCosts = [];
 
   for (const entry of entries) {
+    if (options.runIds && !options.runIds.includes(entry)) continue;
     const resFile = join(runsDir, entry, "result.json");
     if (!existsSync(resFile)) continue;
 

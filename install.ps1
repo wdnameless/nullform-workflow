@@ -196,10 +196,10 @@ Write-Host "`n-- Files"
 $agentDir = Join-Path $UserHome ".omp\agent"
 $agentsHome = Join-Path $UserHome ".agents"
 
-foreach ($d in @("$HarnessRoot\agent", "$HarnessRoot\agent\agents", "$HarnessRoot\tools",
-                 "$HarnessRoot\core", "$HarnessRoot\paseo", "$HarnessRoot\templates",
+foreach ($d in @("$HarnessRoot\agent", "$HarnessRoot\agent\agents", "$HarnessRoot\agent\extensions",
+                 "$HarnessRoot\tools", "$HarnessRoot\core", "$HarnessRoot\paseo", "$HarnessRoot\templates",
                  "$HarnessRoot\rules",
-                 $agentDir, "$agentDir\rules",
+                 $agentDir, "$agentDir\rules", "$agentDir\extensions",
                  "$agentsHome\rules", "$agentsHome\skills")) {
   New-Item -ItemType Directory -Force -Path $d | Out-Null
 }
@@ -219,6 +219,13 @@ Copy-Item "$PSScriptRoot\agent\oracle-priority.example.json" "$HarnessRoot\agent
 # it expects, and doctor can only report "nothing declared".
 if (Test-Path "$PSScriptRoot\agent\plugins.json") {
   Copy-Item "$PSScriptRoot\agent\plugins.json" "$HarnessRoot\agent\" -Force
+}
+# Native OMP extension: copy to harness root and user .omp/agent/extensions idempotently
+$jevExtSrc = Join-Path $PSScriptRoot "agent\extensions\nullform-jev.ts"
+if (Test-Path $jevExtSrc) {
+  Copy-Item $jevExtSrc (Join-Path $HarnessRoot "agent\extensions\nullform-jev.ts") -Force
+  Copy-Item $jevExtSrc (Join-Path $agentDir "extensions\nullform-jev.ts") -Force
+  Ok "extension -> $agentDir\extensions\nullform-jev.ts"
 }
 # Copy rules directly into HarnessRoot/rules first. NEVER modify source files in PSScriptRoot!
 if (Test-Path "$PSScriptRoot\rules") {

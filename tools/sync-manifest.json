@@ -27,6 +27,14 @@
     "rel": "agent/agents/sonic.md"
   },
   {
+    "rel": "agent/extensions/nullform-jev.ts"
+  },
+  {
+    "rel": "agent/extensions/nullform-jev.ts",
+    "liveRoot": "@agentdir",
+    "liveRel": "extensions/nullform-jev.ts"
+  },
+  {
     "rel": "rules/enterprise-directives.md"
   },
   {
@@ -42,6 +50,9 @@
   },
   {
     "rel": "tools/prompt-lint.mjs"
+  },
+  {
+    "rel": "tools/skill-audit.mjs"
   },
   {
     "rel": "tools/skills-doctor.mjs"
@@ -92,6 +103,9 @@
     "rel": "tools/usage-audit.mjs"
   },
   {
+    "rel": "tools/session-retro.mjs"
+  },
+  {
     "rel": "tools/test-lens.mjs"
   },
   {
@@ -111,6 +125,27 @@
   },
   {
     "rel": "tools/dashboard.mjs"
+  },
+  {
+    "rel": "tools/jev-assist.mjs"
+  },
+  {
+    "rel": "tools/jev-evaluate.mjs"
+  },
+  {
+    "rel": "tools/jev-control.mjs"
+  },
+  {
+    "rel": "tools/jev-evidence.mjs"
+  },
+  {
+    "rel": "tools/jev-evaluation-cases.mjs"
+  },
+  {
+    "rel": "tools/tests/fixtures/jev/calibration.json"
+  },
+  {
+    "rel": "tools/tests/fixtures/jev/heldout.json"
   },
   {
     "rel": "tools/fix-plugin-windows.cjs"
@@ -183,5 +218,26 @@
   },
   {
     "rel": ".code-size.baseline.json"
+  },
+  {
+    "rel": "tools/review-evidence.mjs"
+  },
+  {
+    "rel": "tools/review-native-tools.mjs"
+  },
+  {
+    "rel": "tools/worktree-snapshot.mjs"
+  },
+  {
+    "rel": "tools/bench-budget.mjs"
+  },
+  {
+    "rel": "tools/bench-session-runner.ts"
+  },
+  {
+    "rel": "tools/bench-results.mjs"
+  },
+  {
+    "rel": "tools/run-skill-benefit-eval.mjs"
   }
 ]

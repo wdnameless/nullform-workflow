@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "benchmark": {
+    "command": "bun .tmp/jev-run-recorded-eval.mjs 2273 --catalog .tmp/jev-native-catalog.json --max-cost-usd 0.35 --output openspec/changes/jev-automatic-assistance/evidence/live-skills-v2.json",
+    "exitCode": 0,
+    "wallSeconds": 121.99,
+    "requests": 104,
+    "errors": 0,
+    "spendUsd": 0.286204,
+    "unknownSpendUsd": 0,
+    "heldoutBaseline": { "attempted": 40, "correct": 38, "costUsd": 0.206264 },
+    "heldoutJev": { "attempted": 36, "correct": 36, "costUsd": 0.012637 },
+    "coverage": 0.9,
+    "scope": "Constructed RU/EN skill-selection corpus and pinned OpenRouter API baseline; not whole-workflow or subscription savings. Per-case latencies were not recorded in this run; wallSeconds is the actual executed-command duration."
+  },
+  "nativeSmoke": {
+    "command": "bun .tmp/jev-native-skills-smoke.mjs",
+    "exitCode": 0,
+    "wallSeconds": 19.74,
+    "ompVersion": "18.4.4",
+    "installedExtensionLoaded": true,
+    "nativeSkillHint": "[JEV Assistance] Recommended skill: python-resilience",
+    "nativeDecisionRequests": 2,
+    "modelUnchanged": true,
+    "jevPrefixUnchanged": true,
+    "sdkDynamicBlocksChanged": true,
+    "secretBlocked": true,
+    "optoutBlocked": true,
+    "unavailableCredentialBlocked": true,
+    "unavailableTransportRetainsBaseline": true,
+    "scope": "Actual SDK session + official print-mode initializeExtensions, actual main-model turn and installed native extension with validated temporary v2 policy. JEV callback input/output prefix audited unchanged; unrelated SDK/plugin dynamic prompt changes explicitly observed. Credential-unavailable and transport-unavailable boundaries were injected without changing OS credentials. Secret and opt-out paths used actual native dispatcher."
+  }
+}

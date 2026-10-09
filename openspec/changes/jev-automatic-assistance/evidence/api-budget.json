@@ -1,0 +1,9 @@
+{
+  "httpStatus": 200,
+  "totalKeyUsageUsd": 1.508473925,
+  "approvedBaseUsd": 0.864415202,
+  "additionalObservedUsd": 0.6440587230000001,
+  "additionalLimitUsd": 1,
+  "withinApproval": true,
+  "scope": "Provider key aggregate observation. No unknown charged request was treated as zero; all failed prior experiments remain documented."
+}

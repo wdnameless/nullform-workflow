@@ -98,6 +98,7 @@ jobs:
         # Unquoted glob on purpose: the shell expands it into explicit paths,
         # which every Node >= 18 accepts. A quoted glob needs >= 22.6, and the
         # bare directory form breaks on Node >= 22 ("Cannot find module").
+        # Includes review-integrity native-proof/security consumer regressions.
         run: |
           if [ -d "tools/tests" ]; then
             node --test tools/tests/*.test.mjs
@@ -178,7 +179,7 @@ jobs:
               echo "Validating workflow CI evidence for $CHANGE_ID ($TIER)..."
               node tools/workflow.mjs check-ci \
                 --tier "$TIER" --change "$CHANGE_ID" \
-                --base-ref "origin/$BASE_REF"
+                --base-ref "origin/$BASE_REF" || exit $?
               VALIDATED_COUNT=$((VALIDATED_COUNT + 1))
             done
 
@@ -225,6 +226,7 @@ jobs:
       - name: Prompt surfaces & cache safety checks
         run: |
           node tools/prompt-lint.mjs scan --root .
+          node tools/prompt-lint.mjs skills --check --root .
           FP1=$(node tools/prompt-lint.mjs fingerprint --root .)
           FP2=$(node tools/prompt-lint.mjs fingerprint --root .)
           if [ "$FP1" != "$FP2" ]; then

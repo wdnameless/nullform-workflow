@@ -545,3 +545,46 @@ test("install.ps1: preserves pre-existing unrelated mcp.json untouched (R04)", (
     rmSync(tmpHome, { recursive: true, force: true });
   }
 });
+
+test("install.ps1: installs nullform-jev.ts into user .omp/agent/extensions idempotently and preserves unrelated extensions (R04)", (t) => {
+  if (!POWERSHELL_PATH) {
+    t.skip("PowerShell is not available on this host");
+    return;
+  }
+  const tmpHome = mkdtempSync(join(tmpdir(), "install-jev-ext-"));
+  const tmpHarness = join(tmpHome, "omp-workflow");
+  const userExtDir = join(tmpHome, ".omp", "agent", "extensions");
+  mkdirSync(userExtDir, { recursive: true });
+  const customExtPath = join(userExtDir, "custom-plugin.ts");
+  writeFileSync(customExtPath, "// custom extension\nexport default () => {};\n", "utf8");
+
+  try {
+    const env = { ...process.env, PATH: pathWithoutOmp() };
+    const res = spawnSync(POWERSHELL_PATH, [
+      "-ExecutionPolicy", "Bypass",
+      "-File", INSTALL_PATH,
+      "-UserHome", tmpHome,
+      "-HarnessRoot", tmpHarness,
+      "-SkipPlugins",
+      "-NonInteractive",
+    ], { encoding: "utf8", env });
+
+    assert.equal(res.status, 0, `Installer must succeed: ${res.stderr}\n${res.stdout}`);
+
+    const installedExt = join(userExtDir, "nullform-jev.ts");
+    assert.ok(existsSync(installedExt), "nullform-jev.ts must be installed in user .omp/agent/extensions");
+    assert.ok(existsSync(customExtPath), "Pre-existing unrelated extension must be preserved");
+    assert.equal(readFileSync(customExtPath, "utf8"), "// custom extension\nexport default () => {};\n");
+
+    // Harness root pointer must be present
+    const pointerPath = join(tmpHome, ".omp", "agent", ".harness-root");
+    assert.ok(existsSync(pointerPath), ".harness-root pointer must be installed");
+    assert.equal(readFileSync(pointerPath, "utf8").trim(), tmpHarness);
+
+    // Harness root copy of extension must also exist
+    const harnessExt = join(tmpHarness, "agent", "extensions", "nullform-jev.ts");
+    assert.ok(existsSync(harnessExt), "Extension must also be copied to harnessRoot/agent/extensions");
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});

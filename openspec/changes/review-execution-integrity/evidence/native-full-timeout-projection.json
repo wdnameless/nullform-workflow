@@ -1,0 +1,375 @@
+{
+  "sourceSession": "D:/TMP/omp-review-u8w4KX/2026-10-06T11-37-34-494Z_01a11101-361e-719c-b2f5-513485a4d08f.jsonl",
+  "purpose": "Failed native acceptance, not comparative evaluation",
+  "exitCode": 1,
+  "accepted": false,
+  "deadlineSeconds": 600,
+  "initialTokens": 60208,
+  "normalTurns": 51,
+  "knownRecordedSdkTariffUsd": 0.7285881000000001,
+  "terminal": "Deadline exceeded; aborted, no final report",
+  "inspectionCalls": [
+    {
+      "name": "exercise_product",
+      "arguments": {}
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/workflow.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/review-evidence.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/review-native-tools.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/skill-audit.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/prompt-lint.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "agent/agents/reviewer.md"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "agent/agents/oracle.md"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "agent/agents/orchestrator.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "skills/requesting-code-review/SKILL.md"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "tools/bench-budget.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "tools/bench-results.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/benchmark.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "tools/worktree-snapshot.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "tools/doctor.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "tools/session-retro.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/run-skill-benefit-eval.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": ".github/pull_request_template.md"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": ".github/workflows/repo-gate.yml"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "templates/ci/workflow-gate.yml"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "bench/checks/check-workflow-outcome.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "bench/checks/check-defect-outcome.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "bench/checks/check-near-negative.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "bench/checks/check-positive.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "tools/tests/review-integrity.test.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/tests/workflow-gate.test.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "tools/tests/skill-audit.test.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/tests/skill-benefit-eval.test.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/bench-session-runner.ts",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/tests/bench-session-runner.test.ts",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/tests/workflow-staleness.test.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/tests/session-retro.test.mjs",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/sync-manifest.json",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "bench/tasks.json"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "CONTEXT.md"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "core/PORTABLE.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "tools/doctor.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "diff",
+        "path": "skills/session-retro/SKILL.md"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "skills/nullform-workflow-full/SKILL.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "skills/design-taste-frontend/SKILL.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "skills/design-taste-frontend/SKILL.md",
+        "kind": "source"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "skills/docker-patterns/SKILL.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "skills/gitlab-cli-skills/SKILL.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "skills/launch/SKILL.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "skills/paseo-plugin/SKILL.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "skills/refero-design/SKILL.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "bench/README.md",
+        "kind": "diff"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "source",
+        "path": "tools/workflow.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "kind": "source",
+        "path": "tools/tests/review-evidence.test.mjs"
+      }
+    },
+    {
+      "name": "inspect_product",
+      "arguments": {
+        "path": "tools/tests/fixtures/review-execution.mjs",
+        "kind": "source"
+      }
+    }
+  ],
+  "outputCompleteness": {
+    "file": "tools/workflow.mjs",
+    "sourceChars": 69038,
+    "nativePreviewChars": 38678,
+    "missingMiddleLines": 795,
+    "recovery": "SDKartifact://1",
+    "problem": "Existing restricted inspection cannot recover native artifact or omitted source ranges."
+  },
+  "billingLimit": "Partial aborted requests/earlier lost failures not proven zerocharges; SDK tariffs are not independently verified provider invoice."
+}

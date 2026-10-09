@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "activationCommands": [
+    "bun tools/jev-control.mjs enable --home 'C:/Users/Administrator' --root . --catalog .tmp/jev-native-catalog.json --report openspec/changes/jev-automatic-assistance/evidence/live-skills-v2-measured.json",
+    "bun tools/jev-control.mjs status --home 'C:/Users/Administrator' --root . --catalog .tmp/jev-native-catalog.json"
+  ],
+  "exitCode": 0,
+  "rawStatus": "JEV assistance is active and verified (skills-only).",
+  "profileDeployment": { "selectedManifestEntries": 9, "suspectFiles": [], "canonicalPromptsChanged": false, "credentialInFiles": false },
+  "defaultNativeSmoke": {
+    "command": "bun .tmp/jev-default-profile-smoke.mjs",
+    "exitCode": 0,
+    "wallSeconds": 11.75,
+    "defaultProfileExtensionLoaded": true,
+    "defaultProfilePolicyActive": true,
+    "normalRegistrySkills": 89,
+    "automaticSkillHint": "[JEV Assistance] Recommended skill: python-resilience",
+    "modelUnchanged": true,
+    "factoryOverrideUsed": false
+  },
+  "activationScope": "Current OMP profile; a new native session loads the default installed extension and policy. Existing long-running sessions may require normal native reload; no daemon was killed or restarted."
+}

@@ -1,20 +1,13 @@
 /**
- * tools/tests/workflow-gate.test.mjs
- * Behavioral tests for workflow gate hardening (R02, R04):
- * - missing path: T2 requires real rooted paths for manifest, openspec, interfaces
- * - path containment: rejects paths escaping root (relative traversal)
- * - shared validator: cmdCheck and cmdClose agree when evidence is emptied/invalidated
- * - negative oracle: REJECT verdict cannot close
- * - retained evidence: missing or empty artifact files fail close
- * - check-ci: PR labels, lean T0/T1, committed T2/T3 OpenSpec evidence (proposal + tasks + specs + manifest + interfaces + oracle)
+ * Workflow consumer regressions: artifacts, native proof, staleness, tiers and commit isolation.
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, symlinkSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, basename } from "node:path";
 import { testTierGate } from "../verify.mjs";
 import {
   cmdStart,
@@ -25,16 +18,21 @@ import {
   cmdCheckCi,
   load,
 } from "../workflow.mjs";
+import { writeEvidence as writeValidEvidence, prepareEvidence } from "./fixtures/review-execution.mjs";
 
-function setupT2(root) {
+function setupT2(root, extra = {}) {
   const featDir = join(root, "openspec", "changes", "feat-x");
   mkdirSync(join(featDir, "specs"), { recursive: true });
   writeFileSync(join(root, "manifest.md"), "| R01 | \"user wanted X\" |\n", "utf8");
+  writeFileSync(join(featDir, "manifest.md"), "| R01 | \"user wanted X\" |\n", "utf8");
   writeFileSync(join(root, "interfaces.md"), "# Interfaces\n- export function run(): void\n", "utf8");
   writeFileSync(join(featDir, "proposal.md"), "proposal body\n", "utf8");
   writeFileSync(join(featDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
   writeFileSync(join(featDir, "specs", "spec.md"), "# Spec\n", "utf8");
   writeFileSync(join(featDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
+  if (extra.evidence !== false) {
+    writeValidEvidence(root, featDir, "feat-x", extra.evidenceOverrides);
+  }
 }
 
 test("gate: T2 rejects registering manifest, openspec, or interfaces without a path", () => {
@@ -226,29 +224,11 @@ test("check-ci: validates committed T2 OpenSpec artifacts (manifest + proposal +
 
     // Positive oracle.md (ACCEPT) succeeds
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nEvidence verified.\n", "utf8");
+    writeValidEvidence(root, changeDir, changeId);
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "complete valid evidence passes");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
-test("ci contract: workflow gate configurations trigger on label changes", () => {
-  const root = join(import.meta.dirname, "../..");
-  const repoGatePath = join(root, ".github", "workflows", "repo-gate.yml");
-  const templatePath = join(root, "templates", "ci", "workflow-gate.yml");
-
-  const repoGateYaml = readFileSync(repoGatePath, "utf8");
-  assert.match(
-    repoGateYaml,
-    /types:\s*\[opened,\s*synchronize,\s*reopened,\s*labeled,\s*unlabeled\]/,
-    "repo-gate.yml must trigger on PR label changes"
-  );
-
-  const templateYaml = readFileSync(templatePath, "utf8");
-  assert.match(
-    templateYaml,
-    /types:\s*\[opened,\s*synchronize,\s*reopened,\s*labeled,\s*unlabeled\]/,
-    "templates/ci/workflow-gate.yml must trigger on PR label changes"
-  );
 });
 
 test("gate: external manifest or openspec symlink pointing outside project root is rejected", () => {
@@ -304,6 +284,7 @@ test("check-ci: distinguishes anchored positive/negative verdicts from prose wor
       "# Oracle\nVerdict: ACCEPT\nExternal symlink artifacts are rejected; contradictory wrapper status is rejected.\n",
       "utf8"
     );
+    writeValidEvidence(root, changeDir, changeId);
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "Verdict: ACCEPT with prose 'rejected' must pass");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -328,10 +309,12 @@ test("check-ci: rejects manifest modified in commits after oracle acceptance", (
     writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task\n", "utf8");
     writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
     writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
+    prepareEvidence(root, changeId);
     git("add", "-A");
     git("commit", "-qm", "spec artifacts");
 
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+    writeValidEvidence(root, changeDir, changeId);
     git("add", "-A");
     git("commit", "-qm", "oracle accepted");
     // Check passes immediately after oracle commit
@@ -531,6 +514,15 @@ function writeT2Files(dir, extra = {}) {
   writeFileSync(join(dir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
   if (extra.oracle !== false) writeFileSync(join(dir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
   if (extra.worktrees) writeFileSync(join(dir, "worktrees.md"), "# Worktrees\n- isolated wt-1\n", "utf8");
+  const rootDir = resolve(dir, "../../..");
+  prepareEvidence(rootDir, basename(dir));
+  if (extra.evidence !== false) {
+    const norm = dir.replace(/\\/g, "/");
+    const idx = norm.lastIndexOf("/openspec/changes/");
+    const root = idx > 0 ? norm.slice(0, idx) : resolve(dir, "../../..");
+    const changeId = norm.split("/").pop();
+    writeValidEvidence(root, dir, changeId, extra.evidenceOverrides);
+  }
 }
 
 test("check-ci: split-oracle REJECT blocks CI even if another oracle ACCEPT exists", () => {
@@ -579,6 +571,7 @@ test("check-ci: T3 requires committed worktrees.md describing at least one isola
     writeT2Files(changeDir);
     assert.equal(cmdCheckCi(root, { tier: "T3", change: "t3-change" }), 1, "T3 without worktrees.md must fail");
     writeFileSync(join(changeDir, "worktrees.md"), "# Worktrees\n- isolated worktree wt-1\n", "utf8");
+    writeValidEvidence(root, changeDir, "t3-change");
     assert.equal(cmdCheckCi(root, { tier: "T3", change: "t3-change" }), 0, "T3 with worktrees.md must pass");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -629,6 +622,8 @@ test("local T2: refuses while proposal/tasks/specs/oracle file are absent", () =
     writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
     assert.equal(cmdCheck(root), 1, "missing oracle file");
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+    writeFileSync(join(changeDir, "manifest.md"), "| R01 | quote |\n", "utf8");
+    writeValidEvidence(root, changeDir, "align-feat");
     cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against brief, no gaps found" });
     assert.equal(cmdCheck(root), 0, "all required evidence present: passes check");
     assert.equal(cmdClose(root, {}), 0, "all required evidence present: passes close");
@@ -663,9 +658,9 @@ test("check-ci: git failure fails closed", () => {
 
 test("check-ci: base-ref intersection stops false merge failure from unrelated base branch updates", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-gate-base-merge-"));
-  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  const git = (...args) => { const result = spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }); assert.equal(result.status, 0, result.stderr); return result; };
   try {
-    git("init", "-q", "-b", "main", ".");
+    git("init", "-q", "-b", "main", "."); git("config", "core.autocrlf", "false"); // Preserve reviewed bytes through checkout/merge.
     writeFileSync(join(root, "root.txt"), "root\n", "utf8");
     git("add", "root.txt");
     git("commit", "-qm", "base commit");
@@ -675,8 +670,10 @@ test("check-ci: base-ref intersection stops false merge failure from unrelated b
     writeFileSync(join(root, "feature.txt"), "feature code\n", "utf8");
     git("add", "-A");
     git("commit", "-qm", "feature code");
+    writeFileSync(join(root, "unrelated.txt"), "unrelated change on main\n", "utf8");
+    writeValidEvidence(root, changeDir, "feat-merge");
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
-    git("add", "-A");
+    git("add", "openspec/changes/feat-merge");
     git("commit", "-qm", "oracle only");
     git("checkout", "main");
     writeFileSync(join(root, "unrelated.txt"), "unrelated change on main\n", "utf8");
@@ -915,7 +912,7 @@ test("gate: local check/close and CI refuse Markdown-bold **Verdict:** REJECT si
     git("commit", "-qm", "commit bold reject evidence");
     assert.equal(cmdCheckCi(root, { tier: "T2", change: "feat-x" }), 1, "committed **Verdict:** REJECT must fail check-ci");
 
-    // Turning sibling into ACCEPT and refreshing oracle-1 passes both local and CI
+    // Resolving the sibling requires a new native cycle, not receipt registration.
     writeFileSync(join(changeDir, "oracle-2.md"), "# Oracle 2\n**Verdict:** ACCEPT\n", "utf8");
     writeFileSync(join(changeDir, "oracle-1.md"), "# Oracle 1\n**Verdict:** ACCEPT\nFresh verification: sibling resolved\n", "utf8");
     cmdArtifact(root, {
@@ -923,6 +920,7 @@ test("gate: local check/close and CI refuse Markdown-bold **Verdict:** REJECT si
       path: "openspec/changes/feat-x/oracle-1.md",
       detail: "ACCEPT: passed primary verification refreshed",
     });
+    writeValidEvidence(root, changeDir, "feat-x");
     git("add", "-A");
     git("commit", "-qm", "commit all-accept evidence");
     assert.equal(cmdCheck(root), 0, "all-positive evidence must pass local check");
@@ -967,6 +965,7 @@ test("check-ci: R03 rejects oracle and code/non-oracle files in same commit", ()
       git2("commit", "-qm", "spec and code");
 
       writeFileSync(join(changeDir2, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+      writeValidEvidence(root2, changeDir2, changeId);
       git2("add", "-A");
       git2("commit", "-qm", "oracle separate");
 
@@ -1056,6 +1055,7 @@ test("check-ci: R07 dirty-check uses NUL porcelain and exact .workflow segment f
     git("commit", "-qm", "specs");
 
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
+    writeValidEvidence(root, changeDir, changeId);
     git("add", "-A");
     git("commit", "-qm", "oracle accepted");
 

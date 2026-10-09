@@ -1,0 +1,421 @@
+{
+  "source": "bench/runs/comparison-0659d78e-578c-4abc-a21d-fc00130c5218.json",
+  "report": {
+    "status": "halted",
+    "cohortId": "0659d78e-578c-4abc-a21d-fc00130c5218",
+    "plan": {
+      "model": "nullform-gateway/gemini-3.8-flash-high",
+      "ceiling": 1,
+      "nativeSetup": {
+        "setup": "ready",
+        "sdkVersion": "18.6.1",
+        "selector": "nullform-gateway/gemini-3.8-flash-high",
+        "transport": "openai-completions",
+        "authConfigured": true,
+        "caps": {
+          "contextBytes": 49152,
+          "inputTokens": 51200,
+          "outputTokens": 4096,
+          "workflowRequests": 6
+        },
+        "tariffSource": "installed SDK fixed catalog; not independent provider billing"
+      },
+      "sessions": 8,
+      "maximumRequests": 18,
+      "maxProjectedSpend": 0.9676800000000001,
+      "currentLedgerSpend": 0,
+      "tasks": [
+        {
+          "id": "eval-review-positive",
+          "candidateSkill": "requesting-code-review"
+        },
+        {
+          "id": "eval-review-near-negative",
+          "candidateSkill": "requesting-code-review"
+        },
+        {
+          "id": "eval-review-defect-outcome",
+          "candidateSkill": "requesting-code-review"
+        },
+        {
+          "id": "eval-workflow-execution-outcome",
+          "candidateSkill": "nullform-workflow-full"
+        }
+      ],
+      "caps": {
+        "contextBytes": 49152,
+        "inputTokens": 51200,
+        "outputTokens": 4096,
+        "workflowRequests": 6
+      },
+      "tariffSource": "installed SDK fixed catalog; not independently confirmed provider billing"
+    },
+    "runs": [
+      {
+        "task": "eval-review-positive",
+        "arm": "baseline-noskill",
+        "runId": "2026-10-05T17-01-06-324Z-eval-review-positive-baseline-noskill-1",
+        "runDir": "D:\\ohmypi\\workflow-repo\\bench\\runs\\2026-10-05T17-01-06-324Z-eval-review-positive-baseline-noskill-1",
+        "durationMs": 29296,
+        "status": "ok",
+        "checks": [
+          {
+            "cmd": "node bench/checks/check-positive.mjs",
+            "code": 0,
+            "passed": true,
+            "tail": "{\"scenario\":\"positive\",\"activation\":true,\"missedDefects\":0,\"falsePositives\":0,\"simplificationIdentified\":true,\"requirementsSatisfied\":true,\"findings\":[{\"file_path\":\"src/dispatcher.ts\",\"title\":\"Missing handler for pause event\",\"body\":\"Trigger: Calling dispatchEvent with a 'pause' event (e.g., { kind: 'pause', timestamp: Date.now(), reason: 'paused' }). Effect: The switch statement lacks a case for 'pause', falling through and returning undefined at runtime while violating R01. Replacement: Add `case \\\"pause\\\": return `Paused pipeline: ${event.reason}`;` to dispatchEvent.\"},{\"file_path\":\"src/utils.ts\",\"title\":\"customPad uses custom loop vulnerable to infinite loop on empty char\",\"body\":\"Trigger: Calling customPad(str, len, '') where str.length < len. Effect: The while loop does not advance res.length, creating an infinite loop that hangs the thread, and violates R03 requiring native padding. Replacement: Replace the manual loop with `return str.padStart(len, char);`.\"}]}"
+          }
+        ],
+        "tariff_usd": 0.0013665,
+        "sessionId": "01a10d03-1b3e-7717-9091-fb7c610686a3",
+        "usage": {
+          "input": 887,
+          "output": 187,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "finalText": "{\"mode\":\"implementation-review\",\"verdict\":\"incorrect\",\"findings\":[{\"file_path\":\"src/dispatcher.ts\",\"title\":\"Missing handler for pause event\",\"body\":\"Trigger: Calling dispatchEvent with a 'pause' event (e.g., { kind: 'pause', timestamp: Date.now(), reason: 'paused' }). Effect: The switch statement lacks a case for 'pause', falling through and returning undefined at runtime while violating R01. Replacement: Add `case \\\"pause\\\": return `Paused pipeline: ${event.reason}`;` to dispatchEvent.\"},{\"file_path\":\"src/utils.ts\",\"title\":\"customPad uses custom loop vulnerable to infinite loop on empty char\",\"body\":\"Trigger: Calling customPad(str, len, '') where str.length < len. Effect: The while loop does not advance res.length, creating an infinite loop that hangs the thread, and violates R03 requiring native padding. Replacement: Replace the manual loop with `return str.padStart(len, char);`.\"}]}",
+        "score": {
+          "scenario": "positive",
+          "activation": true,
+          "missedDefects": 0,
+          "falsePositives": 0,
+          "simplificationIdentified": true,
+          "requirementsSatisfied": true,
+          "findings": [
+            {
+              "file_path": "src/dispatcher.ts",
+              "title": "Missing handler for pause event",
+              "body": "Trigger: Calling dispatchEvent with a 'pause' event (e.g., { kind: 'pause', timestamp: Date.now(), reason: 'paused' }). Effect: The switch statement lacks a case for 'pause', falling through and returning undefined at runtime while violating R01. Replacement: Add `case \"pause\": return `Paused pipeline: ${event.reason}`;` to dispatchEvent."
+            },
+            {
+              "file_path": "src/utils.ts",
+              "title": "customPad uses custom loop vulnerable to infinite loop on empty char",
+              "body": "Trigger: Calling customPad(str, len, '') where str.length < len. Effect: The while loop does not advance res.length, creating an infinite loop that hangs the thread, and violates R03 requiring native padding. Replacement: Replace the manual loop with `return str.padStart(len, char);`."
+            }
+          ]
+        },
+        "input": {
+          "task": "eval-review-positive",
+          "arm": "baseline-noskill",
+          "selector": "nullform-gateway/gemini-3.8-flash-high",
+          "fixtureHash": "d659a1371806e2d80bd17e969d94bfe3866560c1540d57b9864670ff04268fd8",
+          "skillHash": null,
+          "caps": {
+            "contextBytes": 49152,
+            "inputTokens": 51200,
+            "outputTokens": 4096,
+            "workflowRequests": 6
+          }
+        }
+      },
+      {
+        "task": "eval-review-positive",
+        "arm": "candidate-skill",
+        "runId": "2026-10-05T17-01-37-966Z-eval-review-positive-candidate-skill-1",
+        "runDir": "D:\\ohmypi\\workflow-repo\\bench\\runs\\2026-10-05T17-01-37-966Z-eval-review-positive-candidate-skill-1",
+        "durationMs": 9724,
+        "status": "ok",
+        "checks": [
+          {
+            "cmd": "node bench/checks/check-positive.mjs",
+            "code": 0,
+            "passed": true,
+            "tail": "{\"scenario\":\"positive\",\"activation\":true,\"missedDefects\":0,\"falsePositives\":0,\"simplificationIdentified\":true,\"requirementsSatisfied\":true,\"findings\":[{\"file_path\":\"src/dispatcher.ts\",\"title\":\"Unhandled pause event variant in dispatchEvent\",\"body\":\"When dispatchEvent receives a PipelineEvent with kind 'pause', the switch statement lacks a matching case and falls through, returning undefined instead of keeping added events actionable per R01. Add a case for 'pause' that returns a descriptive pipeline status string.\"},{\"file_path\":\"src/utils.ts\",\"title\":\"Custom string padding reinvents native padStart and hangs on empty char\",\"body\":\"customPad duplicates native String.prototype.padStart violating R03, and if passed char = '' when str.length < len it triggers an infinite loop because res.length never increases. Replace the custom implementation with str.padStart(len, char).\"}]}"
+          }
+        ],
+        "tariff_usd": 0.00242925,
+        "sessionId": "01a10d03-93de-74c7-8b42-21443e98261c",
+        "usage": {
+          "input": 2294,
+          "output": 189,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "finalText": "{\n  \"mode\": \"implementation-review\",\n  \"verdict\": \"incorrect\",\n  \"findings\": [\n    {\n      \"file_path\": \"src/dispatcher.ts\",\n      \"title\": \"Unhandled pause event variant in dispatchEvent\",\n      \"body\": \"When dispatchEvent receives a PipelineEvent with kind 'pause', the switch statement lacks a matching case and falls through, returning undefined instead of keeping added events actionable per R01. Add a case for 'pause' that returns a descriptive pipeline status string.\"\n    },\n    {\n      \"file_path\": \"src/utils.ts\",\n      \"title\": \"Custom string padding reinvents native padStart and hangs on empty char\",\n      \"body\": \"customPad duplicates native String.prototype.padStart violating R03, and if passed char = '' when str.length < len it triggers an infinite loop because res.length never increases. Replace the custom implementation with str.padStart(len, char).\"\n    }\n  ]\n}",
+        "score": {
+          "scenario": "positive",
+          "activation": true,
+          "missedDefects": 0,
+          "falsePositives": 0,
+          "simplificationIdentified": true,
+          "requirementsSatisfied": true,
+          "findings": [
+            {
+              "file_path": "src/dispatcher.ts",
+              "title": "Unhandled pause event variant in dispatchEvent",
+              "body": "When dispatchEvent receives a PipelineEvent with kind 'pause', the switch statement lacks a matching case and falls through, returning undefined instead of keeping added events actionable per R01. Add a case for 'pause' that returns a descriptive pipeline status string."
+            },
+            {
+              "file_path": "src/utils.ts",
+              "title": "Custom string padding reinvents native padStart and hangs on empty char",
+              "body": "customPad duplicates native String.prototype.padStart violating R03, and if passed char = '' when str.length < len it triggers an infinite loop because res.length never increases. Replace the custom implementation with str.padStart(len, char)."
+            }
+          ]
+        },
+        "input": {
+          "task": "eval-review-positive",
+          "arm": "candidate-skill",
+          "selector": "nullform-gateway/gemini-3.8-flash-high",
+          "fixtureHash": "d659a1371806e2d80bd17e969d94bfe3866560c1540d57b9864670ff04268fd8",
+          "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2",
+          "caps": {
+            "contextBytes": 49152,
+            "inputTokens": 51200,
+            "outputTokens": 4096,
+            "workflowRequests": 6
+          }
+        }
+      },
+      {
+        "task": "eval-review-near-negative",
+        "arm": "baseline-noskill",
+        "runId": "2026-10-05T17-01-49-526Z-eval-review-near-negative-baseline-noskill-1",
+        "runDir": "D:\\ohmypi\\workflow-repo\\bench\\runs\\2026-10-05T17-01-49-526Z-eval-review-near-negative-baseline-noskill-1",
+        "durationMs": 5932,
+        "status": "ok",
+        "checks": [
+          {
+            "cmd": "node bench/checks/check-near-negative.mjs",
+            "code": 0,
+            "passed": true,
+            "tail": "{\"scenario\":\"negative\",\"activation\":true,\"missedDefects\":0,\"falsePositives\":0,\"requirementsSatisfied\":true,\"findings\":[]}"
+          }
+        ],
+        "tariff_usd": 0.0004455,
+        "sessionId": "01a10d03-c441-7467-86fb-8ad68702b0f1",
+        "usage": {
+          "input": 444,
+          "output": 30,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "finalText": "{\"mode\":\"blind-acceptance\",\"verdict\":\"ACCEPT\",\"requirements\":{\"R01\":\"proven\",\"R02\":\"proven\"},\"findings\":[]}",
+        "score": {
+          "scenario": "negative",
+          "activation": true,
+          "missedDefects": 0,
+          "falsePositives": 0,
+          "requirementsSatisfied": true,
+          "findings": []
+        },
+        "input": {
+          "task": "eval-review-near-negative",
+          "arm": "baseline-noskill",
+          "selector": "nullform-gateway/gemini-3.8-flash-high",
+          "fixtureHash": "6bf1970c4d843828fae2d61af7d5cdfa7693f8a1f8db62b32f583b8e54f0e1ad",
+          "skillHash": null,
+          "caps": {
+            "contextBytes": 49152,
+            "inputTokens": 51200,
+            "outputTokens": 4096,
+            "workflowRequests": 6
+          }
+        }
+      },
+      {
+        "task": "eval-review-near-negative",
+        "arm": "candidate-skill",
+        "runId": "2026-10-05T17-01-58-067Z-eval-review-near-negative-candidate-skill-1",
+        "runDir": "D:\\ohmypi\\workflow-repo\\bench\\runs\\2026-10-05T17-01-58-067Z-eval-review-near-negative-candidate-skill-1",
+        "durationMs": 9440,
+        "status": "ok",
+        "checks": [
+          {
+            "cmd": "node bench/checks/check-near-negative.mjs",
+            "code": 0,
+            "passed": true,
+            "tail": "{\"scenario\":\"negative\",\"activation\":true,\"missedDefects\":0,\"falsePositives\":0,\"requirementsSatisfied\":true,\"findings\":[]}"
+          }
+        ],
+        "tariff_usd": 0.001602,
+        "sessionId": "01a10d03-e393-7354-a30d-6e60f17320fa",
+        "usage": {
+          "input": 1851,
+          "output": 57,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "finalText": "{\n  \"mode\": \"blind-acceptance\",\n  \"verdict\": \"ACCEPT\",\n  \"requirements\": {\n    \"R01\": \"proven\",\n    \"R02\": \"proven\"\n  },\n  \"findings\": []\n}",
+        "score": {
+          "scenario": "negative",
+          "activation": true,
+          "missedDefects": 0,
+          "falsePositives": 0,
+          "requirementsSatisfied": true,
+          "findings": []
+        },
+        "input": {
+          "task": "eval-review-near-negative",
+          "arm": "candidate-skill",
+          "selector": "nullform-gateway/gemini-3.8-flash-high",
+          "fixtureHash": "6bf1970c4d843828fae2d61af7d5cdfa7693f8a1f8db62b32f583b8e54f0e1ad",
+          "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2",
+          "caps": {
+            "contextBytes": 49152,
+            "inputTokens": 51200,
+            "outputTokens": 4096,
+            "workflowRequests": 6
+          }
+        }
+      },
+      {
+        "task": "eval-review-defect-outcome",
+        "arm": "baseline-noskill",
+        "runId": "2026-10-05T17-02-10-505Z-eval-review-defect-outcome-baseline-noskill-1",
+        "runDir": "D:\\ohmypi\\workflow-repo\\bench\\runs\\2026-10-05T17-02-10-505Z-eval-review-defect-outcome-baseline-noskill-1",
+        "durationMs": 14628,
+        "status": "ok",
+        "checks": [
+          {
+            "cmd": "node bench/checks/check-defect-outcome.mjs",
+            "code": 0,
+            "passed": true,
+            "tail": "{\"scenario\":\"defect\",\"activation\":true,\"missedDefects\":0,\"falsePositives\":0,\"simplificationIdentified\":true,\"requirementsSatisfied\":true,\"findings\":[{\"file_path\":\"src/router.ts\",\"title\":\"Missing ExportReport case in handleCommand\",\"body\":\"When handleCommand receives a command with type 'ExportReport', the switch statement does not match any case and returns undefined, violating the function's return type and requirement R01. Add 'case \\\"ExportReport\\\": return { success: true, message: `Exporting ${cmd.format.toUpperCase()} report to ${cmd.destination}` };' to handleCommand.\"},{\"file_path\":\"src/utils.ts\",\"title\":\"shallowOrDeepCopy uses bespoke JSON serialization wrapper\",\"body\":\"Calling shallowOrDeepCopy on values such as Date, Map, Set, or BigInt results in data loss or runtime TypeErrors because JSON.parse(JSON.stringify(val)) does not preserve rich JavaScript types, violating requirement R03. Replace the implementation with 'return structuredClone(val);'.\"}]}"
+          }
+        ],
+        "tariff_usd": 0.0015075,
+        "sessionId": "01a10d04-1649-73dd-baa2-175a542923c3",
+        "usage": {
+          "input": 895,
+          "output": 223,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "finalText": "{\n  \"mode\": \"implementation-review\",\n  \"verdict\": \"incorrect\",\n  \"findings\": [\n    {\n      \"file_path\": \"src/router.ts\",\n      \"title\": \"Missing ExportReport case in handleCommand\",\n      \"body\": \"When handleCommand receives a command with type 'ExportReport', the switch statement does not match any case and returns undefined, violating the function's return type and requirement R01. Add 'case \\\"ExportReport\\\": return { success: true, message: `Exporting ${cmd.format.toUpperCase()} report to ${cmd.destination}` };' to handleCommand.\"\n    },\n    {\n      \"file_path\": \"src/utils.ts\",\n      \"title\": \"shallowOrDeepCopy uses bespoke JSON serialization wrapper\",\n      \"body\": \"Calling shallowOrDeepCopy on values such as Date, Map, Set, or BigInt results in data loss or runtime TypeErrors because JSON.parse(JSON.stringify(val)) does not preserve rich JavaScript types, violating requirement R03. Replace the implementation with 'return structuredClone(val);'.\"\n    }\n  ]\n}",
+        "score": {
+          "scenario": "defect",
+          "activation": true,
+          "missedDefects": 0,
+          "falsePositives": 0,
+          "simplificationIdentified": true,
+          "requirementsSatisfied": true,
+          "findings": [
+            {
+              "file_path": "src/router.ts",
+              "title": "Missing ExportReport case in handleCommand",
+              "body": "When handleCommand receives a command with type 'ExportReport', the switch statement does not match any case and returns undefined, violating the function's return type and requirement R01. Add 'case \"ExportReport\": return { success: true, message: `Exporting ${cmd.format.toUpperCase()} report to ${cmd.destination}` };' to handleCommand."
+            },
+            {
+              "file_path": "src/utils.ts",
+              "title": "shallowOrDeepCopy uses bespoke JSON serialization wrapper",
+              "body": "Calling shallowOrDeepCopy on values such as Date, Map, Set, or BigInt results in data loss or runtime TypeErrors because JSON.parse(JSON.stringify(val)) does not preserve rich JavaScript types, violating requirement R03. Replace the implementation with 'return structuredClone(val);'."
+            }
+          ]
+        },
+        "input": {
+          "task": "eval-review-defect-outcome",
+          "arm": "baseline-noskill",
+          "selector": "nullform-gateway/gemini-3.8-flash-high",
+          "fixtureHash": "6269e3512776f32e3a5cfeb4c326088e7d75878e355fd5faddbb8caf1ee0dd79",
+          "skillHash": null,
+          "caps": {
+            "contextBytes": 49152,
+            "inputTokens": 51200,
+            "outputTokens": 4096,
+            "workflowRequests": 6
+          }
+        }
+      },
+      {
+        "task": "eval-review-defect-outcome",
+        "arm": "candidate-skill",
+        "runId": "2026-10-05T17-02-27-506Z-eval-review-defect-outcome-candidate-skill-1",
+        "runDir": "D:\\ohmypi\\workflow-repo\\bench\\runs\\2026-10-05T17-02-27-506Z-eval-review-defect-outcome-candidate-skill-1",
+        "durationMs": 11361,
+        "status": "ok",
+        "checks": [
+          {
+            "cmd": "node bench/checks/check-defect-outcome.mjs",
+            "code": 0,
+            "passed": true,
+            "tail": "{\"scenario\":\"defect\",\"activation\":true,\"missedDefects\":0,\"falsePositives\":0,\"simplificationIdentified\":true,\"requirementsSatisfied\":true,\"findings\":[{\"file_path\":\"src/router.ts\",\"title\":\"Unhandled ExportReport command variant in router\",\"body\":\"Trigger: Dispatching an 'ExportReport' command to handleCommand(cmd). Effect: The switch statement lacks a branch for 'ExportReport', causing handleCommand to fall through and return undefined, violating the declared return contract { success: boolean; message: string } and failing R01. Replacement: Add a case 'ExportReport' branch in src/router.ts that processes destination and format and returns a valid { success: boolean; message: string } response.\"},{\"file_path\":\"src/utils.ts\",\"title\":\"Bespoke JSON serialization used for cloning instead of native standard library\",\"body\":\"Trigger: Calling shallowOrDeepCopy with supported JavaScript values such as Date, Map, Set, undefined, or BigInt. Effect: JSON.parse(JSON.stringify(val)) corrupts dates, drops undefined, throws on BigInt, and introduces unnecessary serialization overhead, violating R03. Replacement: Replace JSON.parse(JSON.stringify(val)) with native structuredClone(val).\"}]}"
+          }
+        ],
+        "tariff_usd": 0.0026265,
+        "sessionId": "01a10d04-57f3-7357-9af8-9ba815a101dc",
+        "usage": {
+          "input": 2302,
+          "output": 240,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "finalText": "{\n  \"mode\": \"implementation-review\",\n  \"verdict\": \"incorrect\",\n  \"findings\": [\n    {\n      \"file_path\": \"src/router.ts\",\n      \"title\": \"Unhandled ExportReport command variant in router\",\n      \"body\": \"Trigger: Dispatching an 'ExportReport' command to handleCommand(cmd). Effect: The switch statement lacks a branch for 'ExportReport', causing handleCommand to fall through and return undefined, violating the declared return contract { success: boolean; message: string } and failing R01. Replacement: Add a case 'ExportReport' branch in src/router.ts that processes destination and format and returns a valid { success: boolean; message: string } response.\"\n    },\n    {\n      \"file_path\": \"src/utils.ts\",\n      \"title\": \"Bespoke JSON serialization used for cloning instead of native standard library\",\n      \"body\": \"Trigger: Calling shallowOrDeepCopy with supported JavaScript values such as Date, Map, Set, undefined, or BigInt. Effect: JSON.parse(JSON.stringify(val)) corrupts dates, drops undefined, throws on BigInt, and introduces unnecessary serialization overhead, violating R03. Replacement: Replace JSON.parse(JSON.stringify(val)) with native structuredClone(val).\"\n    }\n  ]\n}",
+        "score": {
+          "scenario": "defect",
+          "activation": true,
+          "missedDefects": 0,
+          "falsePositives": 0,
+          "simplificationIdentified": true,
+          "requirementsSatisfied": true,
+          "findings": [
+            {
+              "file_path": "src/router.ts",
+              "title": "Unhandled ExportReport command variant in router",
+              "body": "Trigger: Dispatching an 'ExportReport' command to handleCommand(cmd). Effect: The switch statement lacks a branch for 'ExportReport', causing handleCommand to fall through and return undefined, violating the declared return contract { success: boolean; message: string } and failing R01. Replacement: Add a case 'ExportReport' branch in src/router.ts that processes destination and format and returns a valid { success: boolean; message: string } response."
+            },
+            {
+              "file_path": "src/utils.ts",
+              "title": "Bespoke JSON serialization used for cloning instead of native standard library",
+              "body": "Trigger: Calling shallowOrDeepCopy with supported JavaScript values such as Date, Map, Set, undefined, or BigInt. Effect: JSON.parse(JSON.stringify(val)) corrupts dates, drops undefined, throws on BigInt, and introduces unnecessary serialization overhead, violating R03. Replacement: Replace JSON.parse(JSON.stringify(val)) with native structuredClone(val)."
+            }
+          ]
+        },
+        "input": {
+          "task": "eval-review-defect-outcome",
+          "arm": "candidate-skill",
+          "selector": "nullform-gateway/gemini-3.8-flash-high",
+          "fixtureHash": "6269e3512776f32e3a5cfeb4c326088e7d75878e355fd5faddbb8caf1ee0dd79",
+          "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2",
+          "caps": {
+            "contextBytes": 49152,
+            "inputTokens": 51200,
+            "outputTokens": 4096,
+            "workflowRequests": 6
+          }
+        }
+      },
+      {
+        "task": "eval-workflow-execution-outcome",
+        "arm": "baseline-noskill",
+        "runId": "2026-10-05T17-02-41-485Z-eval-workflow-execution-outcome-baseline-noskill-1",
+        "runDir": "D:\\ohmypi\\workflow-repo\\bench\\runs\\2026-10-05T17-02-41-485Z-eval-workflow-execution-outcome-baseline-noskill-1",
+        "durationMs": 1941,
+        "status": "error",
+        "checks": [
+          {
+            "cmd": "node bench/checks/check-workflow-outcome.mjs",
+            "code": 1,
+            "passed": false,
+            "tail": "{\"scenario\":\"workflow\",\"requirementsSatisfied\":false,\"failures\":[\"Frozen baseline test execution/counts failed: TAP version 13\\n# Subtest: add: returns sum\\nok 1 - add: returns sum\\n  ---\\n  duration_ms: 0.7373\\n  type: 'test'\\n  ...\\n# Subtest: multiply: returns product\\nnot ok 2 - multiply: returns product\\n  ---\\n  duration_ms: 0.2081\\n  type: 'test'\\n  location: 'D:\\\\\\\\ohmypi\\\\\\\\workflow-repo\\\\\\\\bench\\\\\\\\runs\\\\\\\\2026-10-05T17-02-41-485Z-eval-workflow-execution-outcome-baseline-noskill-1\\\\\\\\repo\\\\\\\\tests\\\\\\\\calc.test.mjs:9:1'\\n  failureType: 'testCodeFailure'\\n  error: 'unimplemented'\\n  code: 'ERR_TEST_FAILURE'\\n  stack: |-\\n    multiply (file:///D:/ohmypi/workflow-repo/bench/runs/2026-10-05T17-02-41-485Z-eval-workflow-execution-outcome-baseline-noskill-1/repo/src/calc.mjs:6:9)\\n    TestContext.<anonymous> (file:///D:/ohmypi/workflow-repo/bench/runs/2026-10-05T17-02-41-485Z-eval-workflow-execution-outcome-baseline-noskill-1/repo/tests/calc.test.mjs:10:16)\\n    Test.runInAsyncScope (node:async_hooks:227:14)\\n    Test.run (node:internal/test_runner/test:1306:25)\\n    Test.processPendingSubtests (node:internal/test_runner/test:897:18)\\n    Test.postRun (node:internal/test_runner/test:1447:19)\\n    Test.run (node:internal/test_runner/test:1372:12)\\n    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)\\n  ...\\n1..2\\n# tests 2\\n# suites 0\\n# pass 1\\n# fail 1\\n# cancelled 0\\n# skipped 0\\n# todo 0\\n# duration_ms 79.5267\\n\",\"unimplemented\"]}"
+          }
+        ]
+      }
+    ],
+    "ledger": "bench/runs/spend-ledger.json",
+    "dataset": "constructed representative code/consumer patterns, not production dataset",
+    "activationMeasure": "instruction adherence/nonactivation under explicit target-body injection; not automatic discovery/JEV selection",
+    "billing": "installed SDK fixed catalog; not independently confirmed provider billing",
+    "error": "Run never dispatched: 2026-10-05T17-02-41-485Z-eval-workflow-execution-outcome-baseline-noskill-1; retained process/check errors",
+    "cumulativeSpend": 0.00997725
+  },
+  "derivedReviewOnlySummary": {
+    "baseline-noskill": {
+      "cases": 3,
+      "requirementsSatisfied": 3,
+      "missedDefects": 0,
+      "falsePositives": 0,
+      "tariffUsd": 0.0033195,
+      "durationMs": 49856
+    },
+    "candidate-skill": {
+      "cases": 3,
+      "requirementsSatisfied": 3,
+      "missedDefects": 0,
+      "falsePositives": 0,
+      "tariffUsd": 0.0066577500000000005,
+      "durationMs": 30525
+    }
+  },
+  "interpretation": "Three paired review cases had equal observed quality; no quality gain proved. Latencies are single sequential observations, not causal speedup. Workflow baseline halted before a recorded dispatch; not a completed full cohort. Configured native SDK tariff, not independent provider invoice."
+}

@@ -1,0 +1,168 @@
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { spawnSync, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isSecretOrCredentialPath, isStructuralExcludedPath, isAcceptancePath } from './worktree-snapshot.mjs';
+
+function git(root, args) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+}
+const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+const MAX_AGGREGATE_JSON_BYTES = 30 * 1024;
+
+function sliceUtf8Page(buffer, offset, budget, meta) {
+  const total = buffer.length;
+  if (offset >= total) return { text: '', nextOffset: null };
+  if (offset > 0 && (buffer[offset] & 0xC0) === 0x80) {
+    throw new Error(`Invalid UTF-8 offset: ${offset} lands inside a multi-byte sequence`);
+  }
+
+  const fullRemText = UTF8_DECODER.decode(buffer.subarray(offset, total));
+  const testPage = { ...meta, offset, nextOffset: null, totalBytes: total, text: fullRemText };
+  if (Buffer.byteLength(JSON.stringify(testPage, null, 2), 'utf8') <= budget) {
+    return { text: fullRemText, nextOffset: null };
+  }
+
+  let low = offset + 1;
+  let high = Math.min(offset + budget, total);
+  let bestEnd = offset;
+  let bestText = '';
+
+  while (low <= high) {
+    let mid = Math.floor((low + high) / 2);
+    while (mid > offset && (buffer[mid] & 0xC0) === 0x80) mid--;
+    if (mid <= offset) {
+      mid = offset + 1;
+      while (mid < total && (buffer[mid] & 0xC0) === 0x80) mid++;
+    }
+
+    const candidateText = UTF8_DECODER.decode(buffer.subarray(offset, mid));
+    const testCandidate = { ...meta, offset, nextOffset: mid < total ? mid : null, totalBytes: total, text: candidateText };
+    const renderedBytes = Buffer.byteLength(JSON.stringify(testCandidate, null, 2), 'utf8');
+    if (renderedBytes <= budget) {
+      bestEnd = mid;
+      bestText = candidateText;
+      low = mid + 1;
+      while (low < total && (buffer[low] & 0xC0) === 0x80) low++;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  if (bestEnd <= offset) {
+    throw new Error('Page budget too small to fit entry metadata and first character');
+  }
+
+  return {
+    text: bestText,
+    nextOffset: bestEnd < total ? bestEnd : null,
+  };
+}
+export function inspectProduct(options, requests) {
+  if (!Array.isArray(requests) || requests.length === 0 || requests.length > 8) {
+    throw new Error('inspectProduct requires an array of 1 to 8 request objects');
+  }
+  const { root, role, changeId } = options || {};
+  const baseRef = options?.baseRef || options?.provenance?.baseRef || null;
+  const snapshot = scanWorktree(root);
+  const files = snapshot.isGit ? { ...snapshot.tracked, ...snapshot.untracked } : snapshot.files;
+  const allowed = p => !isSecretOrCredentialPath(p) && !isStructuralExcludedPath(p) && !isAcceptancePath(p) && !files[p]?.isSecret && (role !== 'oracle' || !p.startsWith('openspec/') || p === `openspec/changes/${changeId}/manifest.md`) && !/review-evidence.*\.json$/.test(p);
+
+  const budgetPerRequest = Math.floor(MAX_AGGREGATE_JSON_BYTES / requests.length);
+  let changedList = null;
+  const getChanged = () => {
+    if (!changedList) {
+      changedList = git(root, ['diff', '--name-only', '-z', baseRef, '--', '.']).split('\0').filter(p => p && allowed(p));
+    }
+    return changedList;
+  };
+
+  const pages = [];
+  for (const req of requests) {
+    if (!req || typeof req !== 'object') throw new Error('Each request must be an object');
+    const path = typeof req.path === 'string' ? req.path : '';
+    const kind = req.kind || 'source';
+    const offset = req.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error(`Invalid request offset: ${offset}`);
+    if (!['source', 'diff'].includes(kind)) throw new Error(`Invalid request kind: ${kind}`);
+
+    let rawBuffer;
+    if (kind === 'diff') {
+      if (role !== 'reviewer') throw new Error('Diff inspection is available only to implementation reviewer');
+      if (!baseRef) throw new Error('Diff inspection requires an explicit base revision');
+      if (!path) {
+        rawBuffer = Buffer.from(getChanged().sort().join('\n'), 'utf8');
+      } else {
+        if (!isPathInsideRoot(root, path) || !allowed(path)) throw new Error('Inspection path is outside allowed product source');
+        if (!getChanged().includes(path)) throw new Error(`Inspection path has no diff against base revision: ${path}`);
+        if (existsSync(join(root, path)) && !isRealPathInsideRoot(root, path)) throw new Error('Inspection path is outside allowed product source');
+        rawBuffer = Buffer.from(git(root, ['--literal-pathspecs', 'diff', baseRef, '--', path]), 'utf8');
+      }
+    } else {
+      if (!path) {
+        rawBuffer = Buffer.from(Object.keys(files).filter(allowed).sort().join('\n'), 'utf8');
+      } else {
+        if (!Object.hasOwn(files, path) || !allowed(path) || !isRealPathInsideRoot(root, path)) throw new Error('Inspection path is outside allowed product source');
+        rawBuffer = readFileSync(join(root, path));
+      }
+    }
+    const totalBytes = rawBuffer.length;
+    if (offset > totalBytes) throw new Error(`Request offset ${offset} exceeds total bytes ${totalBytes}`);
+    UTF8_DECODER.decode(rawBuffer);
+    const contentHash = createHash('sha256').update(rawBuffer).digest('hex');
+    const meta = { path, kind, contentHash };
+    const { text, nextOffset } = sliceUtf8Page(rawBuffer, offset, budgetPerRequest, meta);
+    pages.push({ path, kind, offset, nextOffset, totalBytes, contentHash, text });
+  }
+  const totalRendered = Buffer.byteLength(JSON.stringify(pages, null, 2), 'utf8');
+  if (totalRendered > 32 * 1024) throw new Error(`Aggregate rendered JSON (${totalRendered} bytes) exceeds 32KiB budget`);
+  return pages;
+}
+export function executeProduct({ root, productCommand }) {
+  if (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(x => typeof x !== 'string' || x.includes('\0')) || !productCommand[0].trim()) throw new Error('No operator-authorized product command');
+  const before = sourceDigest(root);
+  const result = spawnSync(productCommand[0], productCommand.slice(1), { cwd: root, encoding: 'utf8', shell: false, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
+  if (sourceDigest(root) !== before) throw new Error('Product command mutated source; read-only execution violated');
+  if (result.error || result.status === null) throw new Error('Product execution failed or timed out');
+  return JSON.stringify({ exitCode: result.status, stdout: result.stdout, stderr: result.stderr });
+}
+export default function (pi) {
+  const options = JSON.parse(process.env.WORKFLOW_REVIEW_OPTIONS || '{}');
+  pi.registerTool({
+    name: 'inspect_product',
+    label: 'Inspect product',
+    description: 'Read product source or inspect git diffs in bounded batches (max 8 requests) with recoverable paging. If nextOffset is not null, request subsequent page with offset=nextOffset.',
+    approval: 'read',
+    loadMode: 'essential',
+    parameters: pi.zod.object({
+      requests: pi.zod.array(pi.zod.object({
+        path: pi.zod.string().default(''),
+        kind: pi.zod.enum(['source', 'diff']).default('source'),
+        offset: pi.zod.number().int().min(0).default(0),
+      })).min(1).max(8),
+    }),
+    async execute(_id, params) {
+      const pages = inspectProduct(options, params?.requests);
+      return { content: [{ type: 'text', text: JSON.stringify(pages, null, 2) }] };
+    },
+  });
+  pi.registerTool({
+    name: 'exercise_product',
+    label: 'Exercise product',
+    description: 'Execute the fixed operator-authorized consumer/test command; no arbitrary commands or arguments.',
+    approval: 'read',
+    loadMode: 'essential',
+    parameters: pi.zod.object({}),
+    async execute() {
+      const startedAt = new Date().toISOString();
+      const text = executeProduct(options);
+      const result = JSON.parse(text);
+      pi.appendEntry('workflow-product-execution', { commandHash: options.provenance.productCommandHash, sourceDigest: sourceDigest(options.root), exitCode: result.exitCode, startedAt, completedAt: new Date().toISOString(), outputHash: createHash('sha256').update(text).digest('hex') });
+      return { content: [{ type: 'text', text }] };
+    },
+  });
+  pi.on('tool_call', event => {
+    if (!['inspect_product', 'exercise_product'].includes(event.toolName)) return { block: true, reason: 'Review execution permits only read-only product tools' };
+  });
+  pi.on('session_start', () => { pi.appendEntry('workflow-review-context', options.provenance); });
+}

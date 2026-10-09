@@ -1,0 +1,18 @@
+{
+  "name": "jev",
+  "displayName": "Jev для Claude Code",
+  "version": "1.1.0",
+  "description": "Jev (System One модель TypeSafe) в Claude Code: роутер моделей Haiku / Sonnet / Opus / Fable — задачу под другую модель делает субагент, подсказка скилла и любые массовые решения по твоим данным со сверкой на разметке. Ключ TypeSafe или OpenRouter.",
+  "author": {
+    "name": "Nick Vels"
+  },
+  "repository": "https://github.com/nick-vels/skills",
+  "license": "MIT",
+  "keywords": [
+    "jev",
+    "typesafe",
+    "openrouter",
+    "router",
+    "classification"
+  ]
+}

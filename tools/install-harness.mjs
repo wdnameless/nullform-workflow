@@ -554,22 +554,9 @@ function installHarness(options = {}) {
               options.dryRun
             )
           );
-          plan.filesToCopy.push(
-            ...copyDirRecursive(
-              join(targetRoot, "rules"),
-              join(homeAgentDir, "rules"),
-              slashRoot,
-              options.dryRun
-            )
-          );
-          plan.filesToCopy.push(
-            ...copyDirRecursive(
-              join(targetRoot, "rules"),
-              join(agentsHome, "rules"),
-              slashRoot,
-              options.dryRun
-            )
-          );
+          for (const dst of [join(homeAgentDir, "rules"), join(agentsHome, "rules")]) {
+            plan.filesToCopy.push(...copyDirRecursive(join(targetRoot, "rules"), dst, slashRoot, options.dryRun));
+          }
           plan.filesToCopy.push(
             ...installSkills(
               join(targetRoot, "skills"),
@@ -579,6 +566,18 @@ function installHarness(options = {}) {
               options.dryRun
             )
           );
+          // Native OMP extensions (JEV assistance, delete-guard): installed idempotently
+          for (const extFile of ["nullform-jev.ts", "nullform-delete-guard.ts"]) {
+            const extSource = join(REPO_ROOT, "agent", "extensions", extFile);
+            const extDest = join(homeAgentDir, "extensions", extFile);
+            if (existsSync(extSource)) {
+              if (!options.dryRun) {
+                mkdirSync(dirname(extDest), { recursive: true });
+                copyFileSync(extSource, extDest);
+              }
+              plan.filesToCopy.push(extDest);
+            }
+          }
         }
         break;
       }

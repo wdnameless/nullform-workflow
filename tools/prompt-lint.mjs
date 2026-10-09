@@ -17,6 +17,8 @@
  *   baseline    — record golden hashes of every surface
  *   check       — fail if a surface drifted from the baseline
  *   fingerprint — layered deterministic prompt fingerprints (--json, fixed keys)
+ *   sizes       — report prompt size budgets
+ *   skills      — structural skill and reference validation (--json, --check)
  *
  * Escape hatch: put `prompt-lint:allow` anywhere on a line to exempt it.
  *
@@ -26,6 +28,9 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, realpathSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cmdSkills, auditSkills } from "./skill-audit.mjs";
+
+export { auditSkills };
 
 const STATE_DIR = ".prompt-lint";
 const BASELINE = "baseline.json";
@@ -502,7 +507,6 @@ function cmdSizes(root, home, asJson, checkMode) {
   return 0;
 }
 
-
 /* -------------------------------------------------------------------- command */
 
 function normaliseHarnessRoot(text, root) {
@@ -662,6 +666,7 @@ function main(argv = process.argv.slice(2)) {
     case "check":       return cmdCheck(root, home);
     case "fingerprint": return cmdFingerprint(root, home, args.json);
     case "sizes":       return cmdSizes(root, home, args.json, args.check);
+    case "skills":      return cmdSkills(root, home, args.json, args.check);
     case undefined:     printUsage();
                         return 0;
     default:
@@ -678,6 +683,7 @@ function printUsage() {
   console.log("  node prompt-lint.mjs check       --root <harness>   # fail on drift");
   console.log("  node prompt-lint.mjs fingerprint --root <harness> [--json] # layered fingerprints");
   console.log("  node prompt-lint.mjs sizes       --root <harness> [--json] [--check] # size budgets");
+  console.log("  node prompt-lint.mjs skills      --root <harness> [--json] [--check] # structural skill audit");
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {

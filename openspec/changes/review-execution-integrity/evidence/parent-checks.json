@@ -1,0 +1,17 @@
+{
+  "cwd": "D:/ohmypi/workflow-repo",
+  "checks": [
+    {"command": "node --test tools/tests/*.test.mjs", "tests": 608, "pass": 608, "fail": 0, "skipped": 0, "exitCode": 0, "outputArtifact": "artifact://4213"},
+    {"command": "node tools/code-size.mjs check --root .", "files": 143, "functions": 929, "exitCode": 0, "outputArtifact": "artifact://4213"},
+    {"command": "node --test tools/tests/review-evidence.test.mjs tools/tests/review-integrity.test.mjs", "tests": 36, "pass": 36, "fail": 0, "exitCode": 0},
+    {"command": "bun test tools/tests/bench-session-runner.test.ts", "pass": 4, "fail": 0, "exitCode": 0, "limitation": "Actual installed SDK/tools with offline fabricated SSE; not live inference proof."},
+    {"command": "node tools/prompt-lint.mjs skills --root . --check", "skills": 70, "structuralErrors": 0, "advisoryWarnings": 130, "exitCode": 0},
+    {"command": "node tools/prompt-lint.mjs scan --root .", "promptSurfaces": 160, "exitCode": 0},
+    {"command": "openspec validate review-execution-integrity --strict", "exitCode": 0},
+    {"command": "openspec validate skill-structure-audit --strict", "exitCode": 0},
+    {"command": "openspec validate skill-benefit-evaluation --strict", "exitCode": 0}
+  ],
+  "actualSdkOutputSmoke": {"sdk": "18.6.1", "files": 8, "renderedBytes": 30882, "nativeSpill": false, "exactNativeContent": true, "inference": false},
+  "nativeRuntimeSmoke": {"reviewerVerdict": "ACCEPT", "sessionId": "01a1114c-f7d6-72b5-9ba9-4f30ebffabac", "model": "nullform-gateway/gemini-3.8-flash-high", "stopReason": "stop", "totalTokens": 3991708, "knownSdkTariffUsd": 0.5624016000000001, "productExitCode": 0, "stageBDisposition": "lean-already", "beforeExitCode": 0, "afterExitCode": 0, "frozenSourceAndTestsEqual": true},
+  "acceptance": "Final-source independent oracle proof remains separate; current statuses are maintained in acceptance.md."
+}
