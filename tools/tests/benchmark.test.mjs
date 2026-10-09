@@ -39,6 +39,8 @@ import {
   formatReport,
   formatCompare,
   computePassK,
+  validateTasks,
+  runSmoke,
   findRecentSessionTranscript,
   parseArgs,
 } from "../benchmark.mjs";
@@ -1087,4 +1089,105 @@ test("summarizeRuns: tier-фильтр считает pass@k и pass^k толь�
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
+});
+
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+
+test("R02: bench/tasks.json содержит 10 валидных задач и проходит validate-tasks", () => {
+  const res = validateTasks(REPO_ROOT);
+  assert.equal(res.valid, true, res.errors.join("; "));
+  assert.equal(res.count, 10);
+
+  const cli = spawnSync(process.execPath, [CLI_PATH, "validate-tasks", "--root", REPO_ROOT, "--json"], {
+    encoding: "utf8",
+  });
+  assert.equal(cli.status, 0, cli.stderr);
+  const parsed = JSON.parse(cli.stdout);
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.count, 10);
+});
+
+test("R02: validate-tasks отклоняет невалидную схему с exit 2 и списком причин", () => {
+  const tmp = createTempDir();
+  try {
+    mkdirSync(join(tmp, "bench"), { recursive: true });
+    writeFileSync(
+      join(tmp, TASKS_FILE),
+      JSON.stringify({
+        version: 1,
+        tasks: [
+          { id: "dup", tier: "safety", title: "ok", prompt: "p", checks: ["node -e 0"], timeoutSec: 10 },
+          { id: "dup", tier: "bad-tier", title: "bad", prompt: "p", checks: [], timeoutSec: 0 },
+        ],
+      }),
+      "utf8"
+    );
+    const res = validateTasks(tmp);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /дублирующийся id/.test(e)));
+    assert.ok(res.errors.some((e) => /tier/.test(e)));
+    assert.ok(res.errors.some((e) => /checks/.test(e)));
+    assert.ok(res.errors.some((e) => /timeoutSec/.test(e)));
+
+    const cli = spawnSync(process.execPath, [CLI_PATH, "validate-tasks", "--root", tmp], { encoding: "utf8" });
+    assert.equal(cli.status, 2);
+    assert.match(cli.stderr, /дублирующийся id/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R02: smoke на фикстурах (red exit 1 и green exit 0)", () => {
+  const baseDir = join(REPO_ROOT, "bench/fixtures/smoke/baseline");
+  const candDir = join(REPO_ROOT, "bench/fixtures/smoke/candidate");
+
+  const redCli = spawnSync(
+    process.execPath,
+    [CLI_PATH, "smoke", "--baseline", baseDir, "--candidate", candDir, "--json"],
+    { encoding: "utf8" }
+  );
+  assert.equal(redCli.status, 1);
+  const redData = JSON.parse(redCli.stdout);
+  assert.equal(redData.passed, false);
+  assert.deepEqual(redData.redTasks, ["eval-verdict-parsing"]);
+
+  const greenFiltered = spawnSync(
+    process.execPath,
+    [CLI_PATH, "smoke", "--baseline", baseDir, "--candidate", candDir, "--tasks", "eval-frozen-test-invariance"],
+    { encoding: "utf8" }
+  );
+  assert.equal(greenFiltered.status, 0);
+  assert.match(greenFiltered.stdout, /SMOKE GREEN/);
+
+  const greenSame = spawnSync(
+    process.execPath,
+    [CLI_PATH, "smoke", "--baseline", baseDir, "--candidate", baseDir],
+    { encoding: "utf8" }
+  );
+  assert.equal(greenSame.status, 0);
+});
+
+test("R02: smoke граничные случаи — неидеальный baseline (4/5 vs 0/5) и отсутствующая задача (skip)", () => {
+  const res = runSmoke({
+    baseline: [
+      { task: "flaky", checks: [{ passed: true }] },
+      { task: "flaky", checks: [{ passed: true }] },
+      { task: "flaky", checks: [{ passed: true }] },
+      { task: "flaky", checks: [{ passed: true }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "only-base", checks: [{ passed: true }] },
+    ],
+    candidate: [
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "only-cand", checks: [{ passed: false }] },
+    ],
+  });
+  assert.equal(res.passed, true);
+  assert.equal(res.exitCode, 0);
+  assert.deepEqual(res.redTasks, []);
+  assert.deepEqual(res.skippedTasks, ["only-base", "only-cand"]);
 });

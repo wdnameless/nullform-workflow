@@ -1,0 +1,12 @@
+[
+  { "task": "eval-verdict-parsing", "arm": "baseline", "run": 1, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-verdict-parsing", "arm": "baseline", "run": 2, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-verdict-parsing", "arm": "baseline", "run": 3, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-verdict-parsing", "arm": "baseline", "run": 4, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-verdict-parsing", "arm": "baseline", "run": 5, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-frozen-test-invariance", "arm": "baseline", "run": 1, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-frozen-test-invariance", "arm": "baseline", "run": 2, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-frozen-test-invariance", "arm": "baseline", "run": 3, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-frozen-test-invariance", "arm": "baseline", "run": 4, "status": "ok", "checks": [{ "passed": true }] },
+  { "task": "eval-frozen-test-invariance", "arm": "baseline", "run": 5, "status": "ok", "checks": [{ "passed": true }] }
+]
