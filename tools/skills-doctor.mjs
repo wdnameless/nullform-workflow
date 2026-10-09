@@ -275,9 +275,26 @@ const { values } = parseArgs({
     repo: { type: "string" },
     "agents-home": { type: "string" },
     json: { type: "boolean", default: false },
+    help: { type: "boolean", short: "h", default: false },
   },
   strict: false,
 });
+
+if (values.help || process.argv.slice(2).includes("--help") || process.argv.slice(2).includes("-h")) {
+  console.log(`skills-doctor.mjs — registry health for installed skills
+
+Usage:
+  node tools/skills-doctor.mjs [options]
+
+Options:
+  --installed <dir>    Path to installed skills directory (default: ~/.agents/skills)
+  --repo <dir>         Path to canonical repo skills directory
+  --agents-home <dir>  Path to agents home directory (default: parent of installed skills)
+  --json               Output structured JSON report
+  -h, --help           Show this help message
+`);
+  process.exit(0);
+}
 let installedRoot = values.installed || null;
 let repoRoot = values.repo || null;
 let agentsHome = values["agents-home"] || null;

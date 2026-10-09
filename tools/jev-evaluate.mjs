@@ -24,6 +24,7 @@ const DEFAULT_MAX_COST_USD = 1.0;
 
 export function parseEvalArgs(argv = process.argv.slice(2)) {
   const args = {
+    help: false,
     root: process.cwd(),
     home: process.env.HOME || process.env.USERPROFILE || process.cwd(),
     baseline: DEFAULT_BASELINE,
@@ -39,8 +40,8 @@ export function parseEvalArgs(argv = process.argv.slice(2)) {
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--root" && argv[i + 1]) args.root = resolve(argv[++i]);
-    else if (a === "--home" && argv[i + 1]) args.home = resolve(argv[++i]);
+    if (a === "--help" || a === "-h") args.help = true;
+    else if (a === "--root" && argv[i + 1]) args.root = resolve(argv[++i]);
     else if (a === "--baseline" && argv[i + 1]) args.baseline = argv[++i];
     else if (a === "--decision-model" && argv[i + 1]) args.decisionModel = argv[++i];
     else if (a === "--max-cost-usd" && argv[i + 1]) {
@@ -419,7 +420,29 @@ export async function runEvaluation(optionsInput = parseEvalArgs()) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  runEvaluation().catch((err) => {
+  const args = parseEvalArgs();
+  if (args.help) {
+    console.log(`jev-evaluate.mjs — paired empirical evaluation runner
+
+Usage:
+  node tools/jev-evaluate.mjs [options]
+
+Options:
+  --root <dir>             Project root (default: current directory)
+  --home <dir>             Agent home directory (default: user home)
+  --baseline <model>       Baseline model ID (default: google/gemini-3.8-flash)
+  --decision-model <model> Decision model ID (default: typesafe/jev-1.13)
+  --max-cost-usd <num>     Maximum budget in USD (default: 1.0)
+  --output <path>          Output report file path
+  --catalog <path>         Skill catalog snapshot path
+  --fixture-only           Run on fixtures only without live model calls
+  --dry-run                Dry run without API credentials or spend
+  --no-interleave          Disable interleaved prompt batches
+  -h, --help               Show this help message
+`);
+    process.exit(0);
+  }
+  runEvaluation(args).catch((err) => {
     console.error(`Evaluation failed: ${err.message}`);
     process.exit(1);
   });

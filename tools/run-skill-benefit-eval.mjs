@@ -9,10 +9,11 @@ import { DEFAULT_MODEL, CAPS, FIXED_TARIFFS, REQUEST_RESERVE_USD, LEDGER_FILE, l
 import { readRunOutcome } from "./bench-results.mjs";
 
 export function parseArgs(argv = process.argv.slice(2)) {
-  const args = { root: ".", model: DEFAULT_MODEL, ceiling: 1, dryRun: false, yes: false, json: false };
+  const args = { root: ".", model: DEFAULT_MODEL, ceiling: 1, dryRun: false, yes: false, json: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
-    if (["--dry-run", "--yes", "--json"].includes(flag)) args[{ "--dry-run": "dryRun", "--yes": "yes", "--json": "json" }[flag]] = true;
+    if (flag === "--help" || flag === "-h") args.help = true;
+    else if (["--dry-run", "--yes", "--json"].includes(flag)) args[{ "--dry-run": "dryRun", "--yes": "yes", "--json": "json" }[flag]] = true;
     else if (["--root", "--model", "--ceiling", "--task"].includes(flag) && argv[i + 1]) args[flag.slice(2)] = flag === "--ceiling" ? Number(argv[++i]) : argv[++i];
     else throw new Error(`Unknown/missing option ${flag}`);
   }
@@ -75,6 +76,27 @@ export function runSkillBenefitEval(options = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { const result = runSkillBenefitEval(parseArgs()); console.log(JSON.stringify(result, null, 2)); }
+  try {
+    const parsed = parseArgs();
+    if (parsed.help) {
+      console.log(`run-skill-benefit-eval.mjs — benchmark skill benefit evaluation
+
+Usage:
+  node tools/run-skill-benefit-eval.mjs [options]
+
+Options:
+  --root <path>     Project root (default: .)
+  --model <model>   Model identifier (default: ${DEFAULT_MODEL})
+  --ceiling <num>   Spending ceiling in USD (default: 1)
+  --task <id>       Specific evaluation task ID
+  --dry-run         Run setup check without executing paid sessions
+  --yes             Approve execution of evaluation sessions
+  --json            Output results as JSON
+  -h, --help        Show this help message`);
+      process.exit(0);
+    }
+    const result = runSkillBenefitEval(parsed);
+    console.log(JSON.stringify(result, null, 2));
+  }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }

@@ -459,7 +459,7 @@ Complete this lightweight self-check before delivery. It does **not** require la
 - [ ] Relevant failure patterns were checked; repeated layouts and decorative UI do not overpower the brief
 - [ ] Semantic naming, clean structure, easy to modify later
 - [ ] Visual quality at Dribbble / Behance showcase level
-- [ ] **Only if executable acceptance was requested**: `references/browser-acceptance.md` was run, evidence was recorded, and discovered failures were repaired or disclosed
+- [ ] **Only if executable acceptance was requested**: [Browser Acceptance](references/browser-acceptance.md) was run, evidence was recorded, and discovered failures were repaired or disclosed
 
 ---
 
@@ -480,13 +480,13 @@ Read on demand based on task type — don't preload everything:
 
 | Task | Read |
 |---|---|
-| Infer Design Read + five dials; resolve dial conflicts; decide whether image-first exploration is justified | `references/design-calibration.md` |
-| Extend or redesign an existing project; classify Extension / Preserve / Overhaul; protect routes, IA, analytics, forms, accessibility, and brand | `references/redesign-protocol.md` |
-| Check recurring AI-design failure modes by artifact type; apply contextual detection and repairs | `references/failure-patterns.md` |
-| User explicitly asks for browser acceptance / 验收 / QA / responsive verification / visual regression | `references/browser-acceptance.md` |
-| Reuse a known working component pattern before inventing a new implementation | `references/block-library.md` → targeted section in `references/advanced-patterns.md` |
-| Slide engine, device frames, Tweaks panel, animation timeline, design canvas, dark mode, data viz, oklch color system, font recommendations | `references/advanced-patterns.md` |
-| Vague request → recommend 3 design directions; extended philosophy library + per-direction visual recipes + AI-prompt templates | `references/design-directions.md` |
+| Infer Design Read + five dials; resolve dial conflicts; decide whether image-first exploration is justified | [Design Calibration](references/design-calibration.md) |
+| Extend or redesign an existing project; classify Extension / Preserve / Overhaul; protect routes, IA, analytics, forms, accessibility, and brand | [Redesign Protocol](references/redesign-protocol.md) |
+| Check recurring AI-design failure modes by artifact type; apply contextual detection and repairs | [Failure Patterns](references/failure-patterns.md) |
+| User explicitly asks for browser acceptance / 验收 / QA / responsive verification / visual regression | [Browser Acceptance](references/browser-acceptance.md) |
+| Reuse a known working component pattern before inventing a new implementation | [Block Library](references/block-library.md) → targeted section in [Advanced Patterns](references/advanced-patterns.md) |
+| Slide engine, device frames, Tweaks panel, animation timeline, design canvas, dark mode, data viz, oklch color system, font recommendations | [Advanced Patterns](references/advanced-patterns.md) |
+| Vague request → recommend 3 design directions; extended philosophy library + per-direction visual recipes + AI-prompt templates | [Design Directions](references/design-directions.md) |
 | User named an anchor ("Linear-style" / "Aesop feeling") → load **only that one file** | `references/style-recipes/<anchor>.md` (e.g., `linear.md`, `aesop.md`) |
 | Browse the recipe catalog / compare options after Direction Advisor picks a school | `references/style-recipes/INDEX.md` (3 indexes + cross-cutting anti-patterns; then read 1–3 specific recipe files) |
-| Critique mode — detailed scoring rubrics, per-output-type weighting, common-issue catalog (top 10) | `references/critique-guide.md` |
+| Critique mode — detailed scoring rubrics, per-output-type weighting, common-issue catalog (top 10) | [Critique Guide](references/critique-guide.md) |

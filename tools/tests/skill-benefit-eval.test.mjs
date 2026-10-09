@@ -122,6 +122,11 @@ test("legacy/malformed accounting and budget laundering fail closed", () => {
     saveSpendLedger(root,{ version:2, ceiling_usd:1, cumulative_tariff_usd:.2, status:"ok", requests:[] }); assert.throws(() => loadSpendLedger(root), /Inconsistent/);
     for (const ceiling of [NaN,Infinity,2,"1"]) assert.throws(() => runSkillBenefitEval({ root, ceiling, dryRun:true }), /numeric ceiling/);
     assert.throws(() => parseArgs(["--invented-cap", "1"]), /Unknown/);
+    assert.equal(parseArgs(["--help"]).help, true);
+    assert.equal(parseArgs(["-h"]).help, true);
+    const res = spawnSync(process.execPath, [fileURLToPath(new URL("../run-skill-benefit-eval.mjs", import.meta.url)), "--help"], { encoding: "utf8" });
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /run-skill-benefit-eval\.mjs — benchmark skill benefit evaluation/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

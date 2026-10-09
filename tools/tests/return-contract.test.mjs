@@ -13,7 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { validateReturnContract } from "../return-contract.mjs";
@@ -229,4 +229,22 @@ test("CLI return-contract.mjs fails with non-zero exit on empty stdin", () => {
   const parsed = JSON.parse(res.stdout);
   assert.equal(parsed.valid, false);
   assert.ok(parsed.errors.some((e) => e.includes("Пустой ввод")));
+});
+
+test("CLI return-contract.mjs --help outputs usage and exits 0", () => {
+  const scriptPath = join(__dirname, "..", "return-contract.mjs");
+  const res = spawnSync(process.execPath, [scriptPath, "--help"], { encoding: "utf8" });
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /Использование: node tools\/return-contract\.mjs/);
+});
+
+test("CLI return-contract.mjs with isTTY and no args outputs usage and exits 2 without hanging", () => {
+  const scriptPath = join(__dirname, "..", "return-contract.mjs");
+  const inline = `process.stdin.isTTY = true; const { main } = await import(${JSON.stringify(pathToFileURL(scriptPath).href)}); process.exitCode = main([]);`;
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", inline], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assert.equal(res.status, 2);
+  assert.match(res.stdout, /return-contract\.mjs — валидация контракта возврата/);
 });

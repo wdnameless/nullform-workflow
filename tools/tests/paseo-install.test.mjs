@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -12,6 +12,23 @@ const SETUP_PASEO_PATH = resolve(REPO_ROOT, "paseo/setup-paseo.ps1");
 const PLUGINS_MANIFEST_PATH = resolve(REPO_ROOT, "agent/plugins.json");
 const PROFILES_MANIFEST_PATH = resolve(REPO_ROOT, "paseo/profiles.json");
 const INSTALL_PATH = resolve(REPO_ROOT, "install.ps1");
+
+function canonicalizePath(p) {
+  if (!p) return "";
+  let resolved = p;
+  try {
+    resolved = realpathSync.native(p);
+  } catch {
+    try {
+      resolved = realpathSync(p);
+    } catch {
+      resolved = resolve(p);
+    }
+  }
+  return process.platform === "win32"
+    ? resolved.replace(/\//g, "\\").toLowerCase()
+    : resolved;
+}
 
 function getPowerShellPath() {
   const candidates = process.platform === "win32"
@@ -579,7 +596,10 @@ test("install.ps1: installs nullform-jev.ts into user .omp/agent/extensions idem
     // Harness root pointer must be present
     const pointerPath = join(tmpHome, ".omp", "agent", ".harness-root");
     assert.ok(existsSync(pointerPath), ".harness-root pointer must be installed");
-    assert.equal(readFileSync(pointerPath, "utf8").trim(), tmpHarness);
+    assert.equal(
+      canonicalizePath(readFileSync(pointerPath, "utf8").trim()),
+      canonicalizePath(tmpHarness)
+    );
 
     // Harness root copy of extension must also exist
     const harnessExt = join(tmpHarness, "agent", "extensions", "nullform-jev.ts");

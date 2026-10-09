@@ -4,6 +4,16 @@ Read this when the request is vague ("make something nice", "I don't know what s
 
 > **Terminology lock**: this file deals in **schools** (six high-level lenses) and **anchors** (named studios / brands / designers per school). The companion folder `style-recipes/` contains 25 **recipe** files — one file per anchor — with concrete, ready-to-paste configurations. When a user picks a school here, hand them off to the recipe files in that school for concrete palette / typography / spacing values. Load only the recipe files you actually need; the catalog index is at `style-recipes/INDEX.md`.
 
+## Navigation
+
+- [How to Use This File](#how-to-use-this-file)
+- [The Six Schools](#the-six-schools-1-of-3-must-come-from-each-different-row)
+- [When the User Picks (or Remixes)](#when-the-user-picks-or-remixes)
+- [AI-Prompt Templates](#ai-prompt-templates-when-generating-imagery-to-support-a-direction)
+- [Anti-Patterns in Direction Recommendation](#anti-patterns-in-direction-recommendation)
+
+---
+
 ---
 
 ## How to Use This File

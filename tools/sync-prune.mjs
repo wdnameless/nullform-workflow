@@ -14,7 +14,7 @@
  *
  * Границы (общие для CLI и doctor — один источник правды):
  *   - обход только каталогов манифеста: tools/, agent/, rules/, core/, templates/, paseo/;
- *   - служебные dot-записи не обходятся вовсе (.git, .prompt-lint, .workflow, .archmap,
+ *   - служебные dot-записи не обходятся вовсе (.git, .prompt-lint, .workflow,
  *     .omp, .agents, …), плюс явный список node_modules, worktrees, sessions, blobs,
  *     cache, logs, custom-session-files;
  *   - не считает кандидатами конфиги, секреты и сессионные данные
@@ -38,7 +38,6 @@ export const NEVER_DIRS = new Set([
   ".git",
   ".prompt-lint",
   ".workflow",
-  ".archmap",
   "node_modules",
   "worktrees",
   "sessions",

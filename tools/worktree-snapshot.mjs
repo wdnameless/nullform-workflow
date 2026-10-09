@@ -14,7 +14,7 @@ export function isRealPathInsideRoot(root, path) {
 }
 export function isStructuralExcludedPath(path) {
   const parts = String(path || '').replace(/\\/g, '/').split('/');
-  return !path || ['.tmp', '.archmap', '.codemap', '.opencode', '.workflow', 'cache', 'logs'].includes(parts[0]) || parts.some(p => p === '.git' || p === 'node_modules');
+  return !path || ['.tmp', '.codemap', '.opencode', '.workflow', 'cache', 'logs'].includes(parts[0]) || parts.some(p => p === '.git' || p === 'node_modules');
 }
 export function isSecretOrCredentialPath(path) {
   const base = basename(String(path || '').replace(/\\/g, '/'));

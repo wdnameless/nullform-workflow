@@ -2,6 +2,24 @@
 
 Config file structure, custom utilities, plugins, and theme extensions.
 
+## Navigation
+
+- [@theme Directive](#theme-directive)
+- [Color Customization](#color-customization)
+- [Typography Customization](#typography-customization)
+- [Spacing Customization](#spacing-customization)
+- [Custom Utilities](#custom-utilities)
+- [Custom Variants](#custom-variants)
+- [Layer Organization](#layer-organization)
+- [@apply Directive](#apply-directive)
+- [Plugins](#plugins)
+- [Configuration Examples](#configuration-examples)
+- [Dark Mode Configuration](#dark-mode-configuration)
+- [Content Configuration](#content-configuration)
+- [Best Practices](#best-practices)
+
+---
+
 ## @theme Directive
 
 Modern approach to customize Tailwind using CSS:

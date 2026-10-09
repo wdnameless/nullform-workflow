@@ -15,7 +15,7 @@ Skip it for pure backend logic, API/database design, non-visual performance work
 
 ## Rule Categories by Priority
 
-*Follow priority 1→10 to decide which category to focus on first; use `--domain <Domain>` to query full details. The full rule text for every category lives in `references/quick-reference.md` — read it on demand rather than loading it every time.*
+*Follow priority 1→10 to decide which category to focus on first; use `--domain <Domain>` to query full details. The full rule text for every category lives in [Quick Reference](references/quick-reference.md) — read it on demand rather than loading it every time.*
 
 | Priority | Category | Impact | Domain | Key Checks (Must Have) | Anti-Patterns (Avoid) |
 |----------|----------|--------|--------|------------------------|------------------------|
@@ -30,7 +30,7 @@ Skip it for pure backend logic, API/database design, non-visual performance work
 | 9 | Navigation Patterns | HIGH | `ux` | Predictable back, Bottom nav ≤5, Deep linking | Overloaded nav, Broken back behavior, No deep links |
 | 10 | Charts & Data | LOW | `chart` | Legends, Tooltips, Accessible colors | Relying on color alone to convey meaning |
 
-For the full rule list per category (all ~98 UX guidelines with rationale), read `references/quick-reference.md`. For app-specific polish rules (icons, touch feedback, dark mode contrast, safe areas) and the canonical pre-delivery checklist, read `references/pro-rules.md`.
+For the full rule list per category (all ~98 UX guidelines with rationale), read [Quick Reference](references/quick-reference.md). For app-specific polish rules (icons, touch feedback, dark mode contrast, safe areas) and the canonical pre-delivery checklist, read [Pro Rules](references/pro-rules.md).
 
 ---
 
@@ -184,13 +184,13 @@ Then synthesize the design system + detailed searches and implement.
 | Problem | What to Do |
 |---------|------------|
 | Can't decide on style/color | Re-run `--design-system` with different keywords |
-| Dark mode contrast issues | `references/quick-reference.md` §6: `color-dark-mode` + `color-accessible-pairs` |
-| Animations feel unnatural | `references/quick-reference.md` §7: `spring-physics` + `easing` + `exit-faster-than-enter` |
-| Form UX is poor | `references/quick-reference.md` §8: `inline-validation` + `error-clarity` + `focus-management` |
-| Navigation feels confusing | `references/quick-reference.md` §9: `nav-hierarchy` + `bottom-nav-limit` + `back-behavior` |
-| Layout breaks on small screens | `references/quick-reference.md` §5: `mobile-first` + `breakpoint-consistency` |
-| Performance / jank | `references/quick-reference.md` §3: `virtualize-lists` + `main-thread-budget` + `debounce-throttle` |
+| Dark mode contrast issues | [Quick Reference](references/quick-reference.md) §6: `color-dark-mode` + `color-accessible-pairs` |
+| Animations feel unnatural | [Quick Reference](references/quick-reference.md) §7: `spring-physics` + `easing` + `exit-faster-than-enter` |
+| Form UX is poor | [Quick Reference](references/quick-reference.md) §8: `inline-validation` + `error-clarity` + `focus-management` |
+| Navigation feels confusing | [Quick Reference](references/quick-reference.md) §9: `nav-hierarchy` + `bottom-nav-limit` + `back-behavior` |
+| Layout breaks on small screens | [Quick Reference](references/quick-reference.md) §5: `mobile-first` + `breakpoint-consistency` |
+| Performance / jank | [Quick Reference](references/quick-reference.md) §3: `virtualize-lists` + `main-thread-budget` + `debounce-throttle` |
 
 ## Before Delivering App UI
 
-Read `references/pro-rules.md` and run through its canonical Pre-Delivery Checklist. It covers icon/visual-element discipline, interaction feedback, light/dark contrast, safe-area layout, and accessibility — scoped to native/mobile app UI (iOS/Android/React Native/Flutter).
+Read [Pro Rules](references/pro-rules.md) and run through its canonical Pre-Delivery Checklist. It covers icon/visual-element discipline, interaction feedback, light/dark contrast, safe-area layout, and accessibility — scoped to native/mobile app UI (iOS/Android/React Native/Flutter).

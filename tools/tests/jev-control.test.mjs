@@ -14,9 +14,10 @@ import {
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { spawnSync } from "node:child_process";
 
-import { executeControl } from "../jev-control.mjs";
+import { executeControl, parseControlArgs } from "../jev-control.mjs";
 import { buildReportV2 } from "../jev-evaluate.mjs";
 import { evaluateReport, policyFingerprint, loadEvaluationDatasetContext } from "../jev-evidence.mjs";
 import { loadSkillCatalog } from "../jev-assist.mjs";
@@ -348,4 +349,14 @@ test("jev-control enable fails closed when supplied --catalog snapshot is invali
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }
+});
+
+test("jev-control --help returns exit 0 with usage", () => {
+  const parsed = parseControlArgs(["--help"]);
+  assert.strictEqual(parsed.help, true);
+
+  const scriptPath = join(import.meta.dirname, "../jev-control.mjs");
+  const res = spawnSync(process.execPath, [scriptPath, "--help"], { encoding: "utf8" });
+  assert.strictEqual(res.status, 0);
+  assert.match(res.stdout, /Usage: jev-control\.mjs/);
 });

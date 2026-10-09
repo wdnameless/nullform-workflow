@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { spawnSync } from "node:child_process";
 import {
   parseEvalArgs,
   runEvaluation,
@@ -537,4 +537,17 @@ test("buildReportV2 preserves deterministic zero latencyMs and non-negative dura
   assert.strictEqual(report.skills.baseline.latencyMs, 0, "must preserve numeric 0 latencyMs on baseline");
   assert.strictEqual(report.skills.candidate.latencyMs, 0, "must preserve numeric 0 latencyMs on candidate");
   assert.strictEqual(report.runDurationMs, 0, "must preserve numeric 0 runDurationMs");
+});
+
+test("jev-evaluate --help returns exit 0 with usage without credential checks", () => {
+  const parsed = parseEvalArgs(["--help"]);
+  assert.strictEqual(parsed.help, true);
+
+  const scriptPath = join(fileURLToPath(new URL(".", import.meta.url)), "..", "jev-evaluate.mjs");
+  const res = spawnSync(process.execPath, [scriptPath, "--help"], {
+    encoding: "utf8",
+    env: { ...process.env, OPENROUTER_API_KEY: "" },
+  });
+  assert.strictEqual(res.status, 0);
+  assert.match(res.stdout, /jev-evaluate\.mjs — paired empirical evaluation runner/);
 });

@@ -5,8 +5,37 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
+let _bunAvailable;
+export function isBunAvailable() {
+  if (_bunAvailable === undefined) {
+    try {
+      const res = spawnSync("bun", ["--version"], { stdio: "ignore" });
+      _bunAvailable = !res.error && res.status === 0;
+    } catch {
+      _bunAvailable = false;
+    }
+  }
+  return _bunAvailable;
+}
 
-export function runBunTest(testCode) {
+export function runBunTest(arg1, arg2) {
+  let t = null;
+  let testCode = "";
+  if (typeof arg1 === "string") {
+    testCode = arg1;
+    t = arg2;
+  } else {
+    t = arg1;
+    testCode = arg2;
+  }
+
+  if (!isBunAvailable()) {
+    if (t && typeof t.skip === "function") {
+      t.skip("bun not in PATH");
+      return;
+    }
+    return;
+  }
   const fullCode = `
 import assert from "node:assert/strict";
 import jevExtensionFactory, { createJevExtension, getEffectiveNativeSkills } from "./agent/extensions/nullform-jev.ts";

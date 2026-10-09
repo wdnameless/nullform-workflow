@@ -304,6 +304,13 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
     }
     content = readFileSync(file, "utf8");
   } else {
+    if (process.stdin.isTTY) {
+      console.log("return-contract.mjs — валидация контракта возврата субагента\n");
+      console.log("  node return-contract.mjs <file> [--json]");
+      console.log("  node return-contract.mjs --text \"<content>\" [--json]");
+      console.log("  echo \"<content>\" | node return-contract.mjs [--json]\n");
+      return 2;
+    }
     // Read from stdin (file descriptor 0 or "-" argument)
     try {
       content = readFileSync(0, "utf8");
@@ -311,13 +318,6 @@ REQUIREMENTS/CONCERNS), ≤25 строк, числовой переход в TES
       content = "";
     }
     if (!content.trim()) {
-      if (process.stdin.isTTY) {
-        console.log("return-contract.mjs — валидация контракта возврата субагента\n");
-        console.log("  node return-contract.mjs <file> [--json]");
-        console.log("  node return-contract.mjs --text \"<content>\" [--json]");
-        console.log("  echo \"<content>\" | node return-contract.mjs [--json]\n");
-        return 1;
-      }
       if (args.json) {
         console.log(JSON.stringify({ valid: false, errors: ["Пустой ввод: контракт возврата не получен на stdin."] }, null, 2));
       } else {

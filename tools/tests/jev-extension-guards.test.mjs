@@ -1,8 +1,8 @@
 import test from "node:test";
 import { runBunTest } from "./jev-native-test-helpers.mjs";
 
-test("Regression: getEffectiveNativeSkills extracts authoritative active skills from native getCommands preserving namespaces and metadata", () => {
-  runBunTest(`
+test("Regression: getEffectiveNativeSkills extracts authoritative active skills from native getCommands preserving namespaces and metadata", (t) => {
+  runBunTest(t, `
     const mockPi = {
       getCommands: () => [
         { source: "skill", name: "skill:agent-browser", description: "Browser automation skill", path: "/skills/browser" },
@@ -39,8 +39,8 @@ test("Regression: getEffectiveNativeSkills extracts authoritative active skills 
   `);
 });
 
-test("Regression: excluded ghost skill and unavailable native roster retain baseline without filesystem guessing", () => {
-  runBunTest(`
+test("Regression: excluded ghost skill and unavailable native roster retain baseline without filesystem guessing", (t) => {
+  runBunTest(t, `
     const handlers = new Map();
     let loadCatalogCalled = false;
     const mockPiNoSkills = createMockPi(handlers, { getCommands: () => [] });
@@ -77,8 +77,8 @@ test("Regression: excluded ghost skill and unavailable native roster retain base
   `);
 });
 
-test("Regression: strict confidence threshold validation requires confidence >= 0.80 and <= 1.0", () => {
-  runBunTest(`
+test("Regression: strict confidence threshold validation requires confidence >= 0.80 and <= 1.0", (t) => {
+  runBunTest(t, `
     const handlers = new Map();
     let lastDecision = null;
     const mockPi = createMockPi(handlers, {
@@ -146,8 +146,8 @@ test("Regression: strict confidence threshold validation requires confidence >= 
   `);
 });
 
-test("Regression: error logs sanitize exception messages and do not dump arbitrary raw secrets", () => {
-  runBunTest(`
+test("Regression: error logs sanitize exception messages and do not dump arbitrary raw secrets", (t) => {
+  runBunTest(t, `
     const warnings = [];
     let credentialReadCount = 0;
     const handlers = new Map();
@@ -184,8 +184,8 @@ test("Regression: error logs sanitize exception messages and do not dump arbitra
   `);
 });
 
-test("Regression: opt-out in cwd suppresses before_agent_start without classifier calls", () => {
-  runBunTest(`
+test("Regression: opt-out in cwd suppresses before_agent_start without classifier calls", (t) => {
+  runBunTest(t, `
     import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
     import { tmpdir } from "node:os";
     import { join } from "node:path";

@@ -4,6 +4,16 @@ Load this file before final delivery of native/mobile app UI (iOS/Android/React 
 
 **Scope notice:** everything below targets native/mobile app UI. For web/desktop interaction patterns, use `references/quick-reference.md` (stack-agnostic) instead — these tables assume touch targets, safe areas, and platform gesture conventions that don't apply 1:1 to desktop web.
 
+## Navigation
+
+- [Icons & Visual Elements](#icons--visual-elements)
+- [Interaction (App)](#interaction-app)
+- [Light/Dark Mode Contrast](#lightdark-mode-contrast)
+- [Layout & Spacing](#layout--spacing)
+- [Pre-Delivery Checklist](#pre-delivery-checklist-canonical--the-only-one)
+
+---
+
 These are frequently overlooked issues that make UI look unprofessional.
 
 ## Icons & Visual Elements

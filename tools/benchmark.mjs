@@ -91,7 +91,6 @@ export const DEFAULT_GITIGNORE_CONTENT = `runs/\n`;
  */
 export const TOOL_ARTIFACT_PATHS = [
   ".opencode",
-  ".archmap",
   ".workflow",
   ".prompt-lint",
   "node_modules",
@@ -428,8 +427,8 @@ function evaluateCost(root, transcriptPath) {
 
   // Сначала пробуем заданный извне интерпретатор, затем типовые имена/пути.
   // Только переносимые имена: конкретные пути машины в дистрибутиве недопустимы,
-  // при необходимости путь задаётся снаружи через PYTHON_PATH.
-  const commands = [process.env.PYTHON_PATH, "python3", "python", "py"].filter(Boolean);
+  // при необходимости путь задаётся снаружи через PYTHON или PYTHON_PATH.
+  const commands = [process.env.PYTHON, process.env.PYTHON_PATH, "python3", "python", "py"].filter(Boolean);
   let lastErr = "";
   for (const py of commands) {
     try {

@@ -2,6 +2,24 @@
 
 Core utility classes for layout, spacing, typography, colors, borders, and shadows.
 
+## Navigation
+
+- [Layout Utilities](#layout-utilities)
+- [Spacing Utilities](#spacing-utilities)
+- [Typography](#typography)
+- [Colors](#colors)
+- [Borders](#borders)
+- [Shadows](#shadows)
+- [Width & Height](#width--height)
+- [Arbitrary Values](#arbitrary-values)
+- [Aspect Ratio](#aspect-ratio)
+- [Overflow](#overflow)
+- [Opacity](#opacity)
+- [Cursor](#cursor)
+- [User Select](#user-select)
+
+---
+
 ## Layout Utilities
 
 ### Display

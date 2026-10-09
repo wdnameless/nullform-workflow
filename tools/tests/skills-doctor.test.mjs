@@ -352,3 +352,9 @@ test("leading UTF-8 BOM in SKILL.md and .skills-disabled.json does not break fro
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("skills-doctor --help returns exit 0 with usage", () => {
+  const res = spawnSync(process.execPath, [TOOL, "--help"], { encoding: "utf8" });
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /skills-doctor\.mjs — registry health for installed skills/);
+});

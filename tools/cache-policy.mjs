@@ -42,6 +42,7 @@ function parseArgs(args) {
       policy: { type: "string" },
       "return-contract": { type: "string" },
       json: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
     },
     allowPositionals: true,
     strict: false,
@@ -52,6 +53,7 @@ function parseArgs(args) {
     policy: values.policy ?? null,
     returnContract: values["return-contract"] ?? null,
     json: values.json,
+    help: values.help ?? false,
   };
 }
 
@@ -148,10 +150,10 @@ if (isMain) {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
 
-  if (cmd !== "check") {
+  if (args.help || cmd !== "check") {
     console.log("cache-policy.mjs — safe, advisory policy checks for prompt cache observability\n");
     console.log("  node cache-policy.mjs check --root <harness> [--policy <file>] [--return-contract <file>] [--json]\n");
-    process.exitCode = 0;
+    process.exit(0);
   }
 
   const result = runCachePolicyCheck({

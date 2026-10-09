@@ -4,6 +4,16 @@ Read this when running Step 7 of the workflow (user asked for review, or self-ch
 
 **Critique the design, not the designer.** Be specific, actionable, and grounded in design language — not vague taste claims.
 
+## Navigation
+
+- [The Five Dimensions — Detailed Rubrics](#the-five-dimensions--detailed-rubrics)
+- [Per-Output-Type Weighting](#per-output-type-weighting)
+- [Common Issues — Top 10 Catalog](#common-issues--top-10-catalog)
+- [Output Template](#output-template-copy-this-when-delivering-a-critique)
+- [Critique Anti-Patterns](#critique-anti-patterns)
+
+---
+
 ---
 
 ## The Five Dimensions — Detailed Rubrics

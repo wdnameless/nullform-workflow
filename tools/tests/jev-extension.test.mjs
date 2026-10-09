@@ -1,8 +1,8 @@
 import test from "node:test";
 import { runBunTest } from "./jev-native-test-helpers.mjs";
 
-test("R01: before_agent_start suggests skill via message without altering systemPrompt", () => {
-  runBunTest(`
+test("R01: before_agent_start suggests skill via message without altering systemPrompt", (t) => {
+  runBunTest(t, `
     const handlers = new Map();
     const mockPi = createMockPi(handlers);
     const mockCore = createMockCore({
@@ -44,8 +44,8 @@ test("R01: before_agent_start suggests skill via message without altering system
   `);
 });
 
-test("R01, R07: before_agent_start ignores subagent, secret-bearing prompt, and invalid snapshots/confidence", () => {
-  runBunTest(`
+test("R01, R07: before_agent_start ignores subagent, secret-bearing prompt, and invalid snapshots/confidence", (t) => {
+  runBunTest(t, `
     const handlers = new Map();
     let decideCalls = 0;
     const mockPi = createMockPi(handlers, {
@@ -126,8 +126,8 @@ test("R01, R07: before_agent_start ignores subagent, secret-bearing prompt, and 
   `);
 });
 
-test("R01, R07, R08: before_agent_start honors opt-out, missing credentials, fallback status, and none choice", () => {
-  runBunTest(`
+test("R01, R07, R08: before_agent_start honors opt-out, missing credentials, fallback status, and none choice", (t) => {
+  runBunTest(t, `
     const handlers = new Map();
     let decideCalls = 0;
     const mockPi = createMockPi(handlers, {
@@ -213,8 +213,8 @@ test("R01, R07, R08: before_agent_start honors opt-out, missing credentials, fal
   `);
 });
 
-test("R01, R04: catalog fingerprint mismatch retains baseline", () => {
-  runBunTest(`
+test("R01, R04: catalog fingerprint mismatch retains baseline", (t) => {
+  runBunTest(t, `
     const handlers = new Map();
     let decideCalls = 0;
     const mockPi = createMockPi(handlers, {

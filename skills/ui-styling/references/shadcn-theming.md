@@ -2,6 +2,20 @@
 
 Theme configuration, CSS variables, dark mode, and component customization.
 
+## Navigation
+
+- [Dark Mode Setup](#dark-mode-setup)
+- [CSS Variable System](#css-variable-system)
+- [Tailwind Configuration](#tailwind-configuration)
+- [Color Customization](#color-customization)
+- [Component Customization](#component-customization)
+- [Base Color Presets](#base-color-presets)
+- [Style Variants](#style-variants)
+- [Radius Customization](#radius-customization)
+- [Best Practices](#best-practices)
+
+---
+
 ## Dark Mode Setup
 
 ### Next.js App Router

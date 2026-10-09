@@ -19,6 +19,7 @@ const DEFAULT_EXPIRY_DAYS = 30;
 
 export function parseControlArgs(argv = process.argv.slice(2)) {
   const args = {
+    help: false,
     command: null,
     home: process.env.HOME || process.env.USERPROFILE || process.cwd(),
     root: process.cwd(),
@@ -30,13 +31,13 @@ export function parseControlArgs(argv = process.argv.slice(2)) {
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--home" && argv[i + 1]) args.home = resolve(argv[++i]);
+    if (a === "--help" || a === "-h" || a === "help") args.help = true;
+    else if (a === "--home" && argv[i + 1]) args.home = resolve(argv[++i]);
     else if (a === "--root" && argv[i + 1]) args.root = resolve(argv[++i]);
     else if (a === "--report" && argv[i + 1]) args.report = resolve(argv[++i]);
     else if (a === "--catalog" && argv[i + 1]) args.catalog = resolve(argv[++i]);
     else if (!a.startsWith("--")) positional.push(a);
   }
-
   args.command = positional[0] || null;
   return args;
 }
@@ -283,6 +284,10 @@ export async function executeControl({
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const parsed = parseControlArgs();
+  if (parsed.help) {
+    console.log("Usage: jev-control.mjs <status|enable|disable> [--home <dir>] [--root <dir>] [--report <path>] [--catalog <path>]");
+    process.exit(0);
+  }
   if (!parsed.command) {
     console.error("Usage: jev-control.mjs <status|enable|disable> [--home <dir>] [--root <dir>] [--report <path>] [--catalog <path>]");
     process.exit(1);

@@ -1,9 +1,49 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
+import { fileURLToPath } from "node:url";
+import { installHarness } from "../install-harness.mjs";
+
+function transpileDeleteGuardTs(src) {
+  return src
+    .replace(/import\s+type\s*[\s\S]*?from\s*["'][^"']+["'];?/g, "")
+    .replace(/export\s+interface\s+[A-Za-z0-9_]+\s*\{[\s\S]*?\}/g, "")
+    .replace(/export const RULES: DestructiveRule\[\] =/, "export const RULES =")
+    .replace(/export function setInteractive\(value: boolean\): void \{/, "export function setInteractive(value) {")
+    .replace(/export function getInteractive\(\): boolean \{/, "export function getInteractive() {")
+    .replace(/export function matchDestructiveCommand\(cmd: string\): \{ what: string; rule\?: DestructiveRule \} \| null \{/, "export function matchDestructiveCommand(cmd) {")
+    .replace(/export function rmTargets\(\s*cmd: string,\s*home: string \| undefined =/, "export function rmTargets(\n  cmd,\n  home =")
+    .replace(/\): string\[\] \{/, ") {")
+    .replace(/async function runExecHelper\(\s*execFn: Function,\s*cmd: string,\s*args: string\[\],\s*timeoutMs: number\s*\): Promise<\{ stdout: string; stderr\?: string \} \| null> \{/, "async function runExecHelper(\n  execFn,\n  cmd,\n  args,\n  timeoutMs\n) {")
+    .replace(/const parseResult = \(res: unknown\): \{ stdout: string; stderr\?: string \} \| null => \{/, "const parseResult = (res) => {")
+    .replace(/export async function computeRmScope\(\s*cmd: string,\s*ctx\?: unknown,\s*home\?: string\s*\): Promise<string> \{/, "export async function computeRmScope(\n  cmd,\n  ctx,\n  home\n) {")
+    .replace(/export function buildDenyMessage\(what: string\): string \{/, "export function buildDenyMessage(what) {")
+    .replace(/export function extractCommand\(event: unknown\): string \| null \{/, "export function extractCommand(event) {")
+    .replace(/export function handleSessionStart\(event\?: unknown, ctx\?: unknown\): void \{/, "export function handleSessionStart(event, ctx) {")
+    .replace(/export async function handleToolCall\(\s*event: unknown,\s*ctx\?: unknown\s*\): Promise<DeleteGuardResult \| undefined> \{/, "export async function handleToolCall(\n  event,\n  ctx\n) {")
+    .replace(/let home: string \| undefined;/, "let home;")
+    .replace(/deleteGuardExtension\(pi: ExtensionAPI\): void \{/, "deleteGuardExtension(pi) {")
+    .replace(/\(event: SessionStartEvent, ctx: ExtensionContext\) => \{/, "(event, ctx) => {")
+    .replace(/\(event: ToolCallEvent, ctx: ExtensionContext\): Promise<ToolCallEventResult \| void> => \{/, "(event, ctx) => {");
+}
+
+async function loadDeleteGuard() {
+  try {
+    return await import("../../agent/extensions/nullform-delete-guard.ts");
+  } catch (err) {
+    if (err && (err.code === "ERR_UNKNOWN_FILE_EXTENSION" || String(err).includes("Unknown file extension"))) {
+      const targetPath = fileURLToPath(new URL("../../agent/extensions/nullform-delete-guard.ts", import.meta.url));
+      const src = readFileSync(targetPath, "utf8");
+      const js = transpileDeleteGuardTs(src);
+      return await import("data:text/javascript," + encodeURIComponent(js));
+    }
+    throw err;
+   }
+}
+
+const {
   RULES,
   matchDestructiveCommand,
   rmTargets,
@@ -15,8 +55,7 @@ import {
   setInteractive,
   getInteractive,
   createDeleteGuardExtension,
-} from "../../agent/extensions/nullform-delete-guard.ts";
-import { installHarness } from "../install-harness.mjs";
+} = await loadDeleteGuard();
 
 test("Rule 1 (rm recursive): matches recursive flags and rejects non-recursive rm", () => {
   const rule = RULES[0];

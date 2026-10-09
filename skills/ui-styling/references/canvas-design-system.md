@@ -2,6 +2,21 @@
 
 Visual design philosophy, systematic composition, and sophisticated visual communication.
 
+## Navigation
+
+- [Design Philosophy Approach](#design-philosophy-approach)
+- [Core Principles](#core-principles)
+- [Design Movement Examples](#design-movement-examples)
+- [Implementation Guidelines](#implementation-guidelines)
+- [Multi-Page Design Systems](#multi-page-design-systems)
+- [Execution Checklist](#execution-checklist)
+- [Quality Standards](#quality-standards)
+- [Refinement Process](#refinement-process)
+- [Output Format](#output-format)
+- [Use Cases](#use-cases)
+
+---
+
 ## Design Philosophy Approach
 
 Canvas design operates through two-phase process:

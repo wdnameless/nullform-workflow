@@ -2,6 +2,21 @@
 
 ARIA patterns, keyboard navigation, screen reader support, and accessible component usage.
 
+## Navigation
+
+- [Foundation: Radix UI Primitives](#foundation-radix-ui-primitives)
+- [Keyboard Navigation](#keyboard-navigation)
+- [Screen Reader Support](#screen-reader-support)
+- [Form Accessibility](#form-accessibility)
+- [Component-Specific Patterns](#component-specific-patterns)
+- [Color Contrast](#color-contrast)
+- [Focus Indicators](#focus-indicators)
+- [Motion and Animation](#motion-and-animation)
+- [Testing Checklist](#testing-checklist)
+- [Tools](#tools)
+
+---
+
 ## Foundation: Radix UI Primitives
 
 shadcn/ui built on Radix UI primitives - unstyled, accessible components following WAI-ARIA design patterns.
