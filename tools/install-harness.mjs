@@ -1,15 +1,19 @@
 #!/usr/bin/env node
+// defer: multi-harness adapters expansion | ceiling: 1000 lines | upgrade: split adapters into separate modules
 /**
  * tools/install-harness.mjs — Cross-platform orchestrator installer for any harness.
  *
  * Supported harnesses:
- *   - claude   (Claude Code -> CLAUDE.md)
- *   - codex    (Codex -> AGENTS.md)
- *   - opencode (OpenCode -> AGENTS.md + opencode.json)
- *   - cursor   (Cursor -> .cursor/rules/00-workflow.mdc)
- *   - omp      (Oh My Pi -> ~/.omp/agent/AGENTS.md)
- *   - all      (All adapters)
- *   - auto     (Auto-detect: ~/.claude, ~/.codex, ~/.opencode, ~/.cursor, omp in PATH; fallback: omp)
+ *   - claude    (Claude Code -> CLAUDE.md)
+ *   - codex     (Codex -> AGENTS.md)
+ *   - opencode  (OpenCode -> AGENTS.md + opencode.json)
+ *   - cursor    (Cursor -> .cursor/rules/00-workflow.mdc)
+ *   - omp       (Oh My Pi -> ~/.omp/agent/AGENTS.md)
+ *   - openclaw  (OpenClaw -> openclaw.json + AGENTS.md + SOUL.md + USER.md + skills)
+ *   - hermes    (Hermes -> config.yaml + AGENTS.md + skills)
+ *   - openhuman (OpenHuman -> AGENTS.md + copied skills)
+ *   - all       (All adapters)
+ *   - auto      (Auto-detect harness; fallback: omp)
  *
  * Options:
  *   --harness <name>    Target harness (default: auto)
@@ -42,7 +46,23 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 
-const SUPPORTED_HARNESSES = ["claude", "codex", "opencode", "cursor", "omp", "all", "auto"];
+const SUPPORTED_HARNESSES = [
+  "claude",
+  "codex",
+  "opencode",
+  "cursor",
+  "omp",
+  "openclaw",
+  "hermes",
+  "openhuman",
+  "all",
+  "auto",
+];
+
+function isStrictlyInside(parent, child) {
+  const rel = relative(resolve(parent), resolve(child));
+  return Boolean(rel && !rel.startsWith("..") && !isAbsolute(rel));
+}
 
 function isCommandInPath(cmd) {
   const pathEnv = process.env.PATH || "";
@@ -61,12 +81,17 @@ function isCommandInPath(cmd) {
   return false;
 }
 
-function detectHarness({ userHome = homedir() } = {}) {
+function detectHarness({ userHome = homedir(), env = process.env } = {}) {
+  const isDefaultHome = resolve(userHome) === resolve(homedir());
   if (existsSync(join(userHome, ".claude"))) return "claude";
   if (existsSync(join(userHome, ".codex"))) return "codex";
   if (existsSync(join(userHome, ".opencode"))) return "opencode";
   if (existsSync(join(userHome, ".cursor"))) return "cursor";
-  if (isCommandInPath("omp")) return "omp";
+  if (existsSync(join(userHome, ".openclaw", "openclaw.json")) || (isDefaultHome && isCommandInPath("openclaw"))) return "openclaw";
+  const hasHermesHome = env.HERMES_HOME && (isDefaultHome || isStrictlyInside(userHome, env.HERMES_HOME) || resolve(env.HERMES_HOME) === resolve(userHome));
+  if (existsSync(join(userHome, ".hermes", "config.yaml")) || hasHermesHome || (isDefaultHome && isCommandInPath("hermes"))) return "hermes";
+  if (existsSync(join(userHome, ".openhuman")) || (isDefaultHome && isCommandInPath("openhuman-core"))) return "openhuman";
+  if (isDefaultHome && isCommandInPath("omp")) return "omp";
   return "omp";
 }
 
@@ -80,6 +105,15 @@ function getDefaultRoot(harness, userHome) {
       return join(userHome, ".opencode", "workflow");
     case "cursor":
       return join(userHome, ".cursor", "workflow");
+    case "openclaw":
+      return join(userHome, ".openclaw", "workflow");
+    case "hermes": {
+      const isDefaultHome = resolve(userHome) === resolve(homedir());
+      const hermesBase = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
+      return join(hermesBase, "workflow");
+    }
+    case "openhuman":
+      return join(userHome, ".openhuman", "workflow");
     case "omp":
     case "all":
     case "auto":
@@ -157,6 +191,123 @@ function getOpencodeJson(existingPath) {
     cfg["$schema"] = "https://opencode.ai/config.json";
   }
   return JSON.stringify(cfg, null, 2) + "\n";
+}
+function getOpenclawSoul(slashRoot) {
+  return [
+    "# OpenClaw SOUL: NULLFORM WORKFLOW",
+    "",
+    "Identity: Orchestrator agent operating under NULLFORM WORKFLOW protocols.",
+    `- Law reference: ${slashRoot}/agent/AGENTS.md`,
+    "- Core stance: Correctness first, then maintainability. Minimal diffs.",
+    "- Scientific diagnosis: Tight reproducible red test before inspecting code.",
+    "- Ladder: reuse -> stdlib -> platform -> installed dep -> 1 line -> minimum.",
+    "- Return contract: STATUS | FILES | TESTS было->стало | CONCERNS (<=25 lines).",
+    "",
+  ].join("\n");
+}
+
+function getOpenclawUser(slashRoot) {
+  return [
+    "# OpenClaw USER: Context & Operating Preferences",
+    "",
+    `Target workspace: ${slashRoot}`,
+    "- Workflow execution: use `node tools/workflow.mjs` for task gating.",
+    "- Observability: dashboard URL available in `.workflow/dashboard.json`.",
+    "- Verification: verify all fixes before final response.",
+    "",
+  ].join("\n");
+}
+
+function getOpenclawJson(existingPath, slashRoot) {
+  let cfg = {};
+  if (existingPath && existsSync(existingPath)) {
+    try {
+      cfg = JSON.parse(readFileSync(existingPath, "utf8"));
+    } catch {}
+  }
+  if (!cfg.agents || typeof cfg.agents !== "object") cfg.agents = {};
+  if (!cfg.agents.entries || typeof cfg.agents.entries !== "object") cfg.agents.entries = {};
+  cfg.agents.entries.workflow = {
+    workspace: slashRoot,
+    name: "workflow",
+    description: "NULLFORM WORKFLOW Orchestrator Agent",
+    prompt: "AGENTS.md",
+  };
+  if (!cfg.mcp || typeof cfg.mcp !== "object") cfg.mcp = {};
+  if (!cfg.mcp.servers || typeof cfg.mcp.servers !== "object") cfg.mcp.servers = {};
+
+  const mcpExamplePath = join(REPO_ROOT, "agent", "mcp.json.example");
+  if (existsSync(mcpExamplePath)) {
+    try {
+      const ex = JSON.parse(readFileSync(mcpExamplePath, "utf8"));
+      for (const [name, entry] of Object.entries(ex.mcpServers || {})) {
+        if (!cfg.mcp.servers[name] && !JSON.stringify(entry).includes("__")) {
+          cfg.mcp.servers[name] = translateStdioEntry(entry);
+        }
+      }
+    } catch {}
+  }
+  return JSON.stringify(cfg, null, 2) + "\n";
+}
+
+function getHermesConfigYaml(existingPath, slashRoot) {
+  let existingContent = "";
+  if (existingPath && existsSync(existingPath)) {
+    try {
+      existingContent = readFileSync(existingPath, "utf8");
+    } catch {}
+  }
+  if (existingContent.includes("mcp_servers:")) {
+    if (!existingContent.includes("profiles:")) {
+      return (
+        existingContent +
+        "\nprofiles:\n  workflow:\n    name: \"workflow\"\n    description: \"NULLFORM WORKFLOW Orchestrator Agent\"\n    prompt: \"AGENTS.md\"\n"
+      );
+    }
+    return existingContent;
+  }
+
+  const lines = [
+    "# Hermes Agent Configuration — NULLFORM WORKFLOW",
+    "",
+    "profiles:",
+    "  workflow:",
+    "    name: \"workflow\"",
+    "    description: \"NULLFORM WORKFLOW Orchestrator Agent\"",
+    "    prompt: \"AGENTS.md\"",
+    "",
+    "mcp_servers:",
+  ];
+
+  const mcpExamplePath = join(REPO_ROOT, "agent", "mcp.json.example");
+  if (existsSync(mcpExamplePath)) {
+    try {
+      const ex = JSON.parse(readFileSync(mcpExamplePath, "utf8"));
+      for (const [name, entry] of Object.entries(ex.mcpServers || {})) {
+        if (!JSON.stringify(entry).includes("__")) {
+          const translated = translateStdioEntry(entry);
+          lines.push(`  ${name}:`);
+          if (translated.command) {
+            lines.push(`    command: "${translated.command.replace(/"/g, '\\"')}"`);
+          }
+          if (Array.isArray(translated.args) && translated.args.length > 0) {
+            lines.push("    args:");
+            for (const arg of translated.args) {
+              lines.push(`      - "${String(arg).replace(/"/g, '\\"')}"`);
+            }
+          }
+          if (translated.env && typeof translated.env === "object") {
+            lines.push("    env:");
+            for (const [k, v] of Object.entries(translated.env)) {
+              lines.push(`      ${k}: "${String(v).replace(/"/g, '\\"')}"`);
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return lines.join("\n") + "\n";
 }
 
 /**
@@ -315,10 +466,6 @@ export function translateStdioEntry(entry, platform = process.platform) {
 
 export const translateMcpEntry = translateStdioEntry;
 
-function isStrictlyInside(parent, child) {
-  const rel = relative(resolve(parent), resolve(child));
-  return Boolean(rel && !rel.startsWith("..") && !isAbsolute(rel));
-}
 
 function parseCliArgs(argv) {
   const options = {
@@ -394,7 +541,7 @@ function installHarness(options = {}) {
 
   const targetHarnesses =
     selectedHarness === "all"
-      ? ["claude", "codex", "opencode", "cursor", "omp"]
+      ? ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman"]
       : [selectedHarness];
 
   const plan = {
@@ -581,6 +728,70 @@ function installHarness(options = {}) {
         }
         break;
       }
+      case "openclaw": {
+        const rootAgents = join(targetRoot, "AGENTS.md");
+        const rootSoul = join(targetRoot, "SOUL.md");
+        const rootUser = join(targetRoot, "USER.md");
+        const rootJson = join(targetRoot, "openclaw.json");
+        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "OpenClaw NULLFORM WORKFLOW Adapter"));
+        writeAdapter(rootSoul, getOpenclawSoul(slashRoot));
+        writeAdapter(rootUser, getOpenclawUser(slashRoot));
+        writeAdapter(rootJson, getOpenclawJson(rootJson, slashRoot));
+
+        if (shouldWriteHome || options.dryRun) {
+          const homeOpenclaw = join(userHome, ".openclaw");
+          const homeJson = join(homeOpenclaw, "openclaw.json");
+          writeAdapter(homeJson, getOpenclawJson(homeJson, slashRoot));
+          const homeSkills = join(homeOpenclaw, "skills");
+          const skillsSource = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
+          plan.filesToCopy.push(
+            ...copyDirRecursive(skillsSource, homeSkills, slashRoot, options.dryRun)
+          );
+        }
+        break;
+      }
+      case "hermes": {
+        const rootAgents = join(targetRoot, "AGENTS.md");
+        const rootConfig = join(targetRoot, "config.yaml");
+        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter"));
+        writeAdapter(rootConfig, getHermesConfigYaml(rootConfig, slashRoot));
+
+        if (shouldWriteHome || options.dryRun) {
+          const isDefaultHome = resolve(userHome) === resolve(homedir());
+          const hermesHome = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
+          const homeConfig = join(hermesHome, "config.yaml");
+          writeAdapter(homeConfig, getHermesConfigYaml(homeConfig, slashRoot));
+          writeAdapter(join(hermesHome, "AGENTS.md"), getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter"));
+          const homeSkills = join(hermesHome, "skills");
+          const skillsSource = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
+          plan.filesToCopy.push(
+            ...copyDirRecursive(skillsSource, homeSkills, slashRoot, options.dryRun)
+          );
+        }
+        break;
+      }
+      case "openhuman": {
+        const rootAgents = join(targetRoot, "AGENTS.md");
+        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter"));
+
+        const agentDir = join(targetRoot, "agents", "workflow");
+        writeAdapter(join(agentDir, "AGENTS.md"), getMarkdownAdapter(slashRoot, "OpenHuman Workflow Agent"));
+        const agentSkills = join(agentDir, "skills");
+        const skillsSource = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
+        plan.filesToCopy.push(
+          ...copyDirRecursive(skillsSource, agentSkills, slashRoot, options.dryRun)
+        );
+
+        if (shouldWriteHome || options.dryRun) {
+          const homeOpenhuman = join(userHome, ".openhuman");
+          writeAdapter(join(homeOpenhuman, "AGENTS.md"), getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter"));
+          const homeSkills = join(homeOpenhuman, "skills");
+          plan.filesToCopy.push(
+            ...copyDirRecursive(skillsSource, homeSkills, slashRoot, options.dryRun)
+          );
+        }
+        break;
+      }
     }
   }
 
@@ -622,7 +833,7 @@ Usage:
   node tools/install-harness.mjs [options]
 
 Options:
-  --harness <name>    Harness to configure: claude, codex, opencode, cursor, omp, all, auto (default: auto)
+  --harness <name>    Harness to configure: claude, codex, opencode, cursor, omp, openclaw, hermes, openhuman, all, auto (default: auto)
   --root <dir>        Installation root directory (default: harness default directory)
   --user-home <dir>   User home directory override
   --dry-run           Preview installation plan without writing any files
@@ -691,4 +902,4 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
   main();
 }
 
-export { installHarness };
+export { installHarness, detectHarness, getDefaultRoot, SUPPORTED_HARNESSES };

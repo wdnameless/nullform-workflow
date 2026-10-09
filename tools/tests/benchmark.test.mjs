@@ -1,3 +1,4 @@
+// defer: benchmark eval-metrics test suite expansion | ceiling: 1200 lines | upgrade: split unit and integration benchmark tests
 /**
  * benchmark.test.mjs — тесты для инструмента benchmark.
  *
@@ -17,14 +18,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  mkdtempSync,
   rmSync,
   writeFileSync,
   mkdirSync,
   readFileSync,
   existsSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -38,12 +37,16 @@ import {
   summarizeRuns,
   compareArms,
   formatReport,
+  formatCompare,
+  computePassK,
+  validateTasks,
+  runSmoke,
   findRecentSessionTranscript,
   parseArgs,
-  main,
 } from "../benchmark.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../benchmark.mjs", import.meta.url));
+import { recordCassette, loadCassette, hashPrompt } from "../lm-replay.mjs";
 import { createTempDir, createGitRepo } from "./test-helpers.mjs";
 
 
@@ -67,6 +70,9 @@ test("parseArgs: разбирает команды и все флаги", () => 
     "--baseline",
     "b-arm",
     "--candidate=c-arm",
+    "--replay",
+    "bench/cassettes/task.json",
+    "--record=bench/cassettes/out.json",
   ]);
 
   assert.equal(args.command, "run");
@@ -82,6 +88,8 @@ test("parseArgs: разбирает команды и все флаги", () => 
   assert.equal(args.json, true);
   assert.equal(args.baseline, "b-arm");
   assert.equal(args.candidate, "c-arm");
+  assert.equal(args.replay, "bench/cassettes/task.json");
+  assert.equal(args.record, "bench/cassettes/out.json");
 });
 
 test("initBenchmark: создает структуру bench/ и работает идемпотентно", () => {
@@ -885,4 +893,473 @@ test("summarizeRuns и compareArms: подсчет safetyPassRate, учет ст
 test("findRecentSessionTranscript: не падает и возвращает null при отсутствии каталога/файлов", () => {
   const res = findRecentSessionTranscript(Date.now() + 1000000);
   assert.equal(res, null);
+});
+
+test("computePassK: фиктивные раны A:5/5, B:4/5, C:1/5, D:0/5 дают pass@5=75% и pass^5=25%", () => {
+  const dummyRuns = [
+    ...Array.from({ length: 5 }, () => ({ task: "A", arm: "base", checks: [{ passed: true }] })),
+    ...Array.from({ length: 4 }, () => ({ task: "B", arm: "base", checks: [{ passed: true }] })),
+    { task: "B", arm: "base", checks: [{ passed: false }] },
+    { task: "C", arm: "base", checks: [{ passed: true }] },
+    ...Array.from({ length: 4 }, () => ({ task: "C", arm: "base", checks: [{ passed: false }] })),
+    ...Array.from({ length: 5 }, () => ({ task: "D", arm: "base", checks: [{ passed: false }] })),
+  ];
+
+  const res = computePassK(dummyRuns);
+  assert.equal(res.k, 5);
+  assert.equal(res.passAtK, 75);
+  assert.equal(res.passPowK, 25);
+  assert.equal(res["pass@5"], 75);
+  assert.equal(res["pass^5"], 25);
+
+  assert.equal(res.byTaskArm["A::base"].passAtK, 1);
+  assert.equal(res.byTaskArm["A::base"].passPowK, 1);
+  assert.equal(res.byTaskArm["B::base"].passAtK, 1);
+  assert.equal(res.byTaskArm["B::base"].passPowK, 0);
+  assert.equal(res.byTaskArm["C::base"].passAtK, 1);
+  assert.equal(res.byTaskArm["C::base"].passPowK, 0);
+  assert.equal(res.byTaskArm["D::base"].passAtK, 0);
+  assert.equal(res.byTaskArm["D::base"].passPowK, 0);
+});
+
+test("computePassK: кейс K=1 вырождается в pass rate задачи", () => {
+  const runsK1 = [
+    { task: "T1", arm: "base", checks: [{ passed: true }] },
+    { task: "T2", arm: "base", checks: [{ passed: true }] },
+    { task: "T3", arm: "base", checks: [{ passed: false }] },
+    { task: "T4", arm: "base", checks: [{ passed: false }] },
+  ];
+
+  const resK1 = computePassK(runsK1);
+  assert.equal(resK1.k, 1);
+  assert.equal(resK1.passAtK, 50.0);
+  assert.equal(resK1.passPowK, 50.0);
+  assert.equal(resK1["pass@1"], 50.0);
+  assert.equal(resK1["pass^1"], 50.0);
+  assert.equal(resK1.passAtK, resK1.passPowK);
+  assert.equal(resK1.byTaskArm["T1::base"].passAtK, 1);
+  assert.equal(resK1.byTaskArm["T1::base"].passPowK, 1);
+  assert.equal(resK1.byTaskArm["T3::base"].passAtK, 0);
+  assert.equal(resK1.byTaskArm["T3::base"].passPowK, 0);
+});
+
+test("computePassK: кейс пустого набора возвращает 0 (не NaN)", () => {
+  for (const emptyInput of [[], null, undefined, {}]) {
+    const res = computePassK(emptyInput);
+    assert.equal(res.k, 0);
+    assert.equal(res.passAtK, 0);
+    assert.equal(res.passPowK, 0);
+    assert.equal(Number.isNaN(res.passAtK), false);
+    assert.equal(Number.isNaN(res.passPowK), false);
+  }
+});
+
+test("summarizeRuns и compareArms: интеграция pass@k и pass^k, дельты и форматирование", () => {
+  const repoDir = createGitRepo();
+  try {
+    const runsDir = join(repoDir, RUNS_DIR);
+    mkdirSync(runsDir, { recursive: true });
+
+    const makeRun = (id, task, arm, passed) => {
+      const dir = join(runsDir, id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "result.json"),
+        JSON.stringify({
+          task,
+          arm,
+          tier: "standard",
+          durationMs: 100,
+          metrics: { linesAdded: 5, linesDeleted: 1, filesChanged: 1 },
+          checks: [{ passed }],
+          status: "ok",
+        }),
+        "utf8"
+      );
+    };
+
+    makeRun("run1", "task1", "base", true);
+    makeRun("run2", "task1", "base", true);
+    makeRun("run3", "task2", "base", false);
+    makeRun("run4", "task2", "base", false);
+
+    makeRun("run5", "task1", "cand", true);
+    makeRun("run6", "task1", "cand", true);
+    makeRun("run7", "task2", "cand", true);
+    makeRun("run8", "task2", "cand", false);
+
+    const summary = summarizeRuns(repoDir);
+    assert.equal(summary.k, 2);
+    assert.equal(typeof summary.passAtK, "number");
+    assert.equal(typeof summary.passPowK, "number");
+
+    const t1Base = summary.byTaskArm["task1::base"];
+    assert.equal(t1Base.k, 2);
+    assert.equal(t1Base.passAtK, 1);
+    assert.equal(t1Base.passPowK, 1);
+
+    const t2Cand = summary.byTaskArm["task2::cand"];
+    assert.equal(t2Cand.k, 2);
+    assert.equal(t2Cand.passAtK, 1);
+    assert.equal(t2Cand.passPowK, 0);
+
+    const comp = compareArms(summary, "base", "cand");
+    assert.equal(comp.aggregate.baseK, 2);
+    assert.equal(comp.aggregate.candidateK, 2);
+    assert.equal(comp.aggregate.basePassAtK, 50.0);
+    assert.equal(comp.aggregate.candidatePassAtK, 100.0);
+    assert.equal(comp.aggregate.passAtKDiff, 50.0);
+    assert.equal(comp.aggregate.basePassPowK, 50.0);
+    assert.equal(comp.aggregate.candidatePassPowK, 50.0);
+    assert.equal(comp.aggregate.passPowKDiff, 0.0);
+
+    const reportText = formatReport(summary);
+    assert.match(reportText, /pass@k/);
+    assert.match(reportText, /pass\^k/);
+    assert.match(reportText, /pass@2: \d+(\.\d+)?%, pass\^2: \d+(\.\d+)?%/);
+
+    const compareText = formatCompare(comp);
+    assert.match(compareText, /pass@2:/);
+    assert.match(compareText, /pass\^2:/);
+    assert.match(compareText, /pass@2 50% -> 100% \(\+50%\)/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("computePassK: мульти-арм byTask сохраняет оба арма без затирания", () => {
+  const multiArmRuns = [
+    { task: "task-X", arm: "arm-base", checks: [{ passed: true }] },
+    { task: "task-X", arm: "arm-cand", checks: [{ passed: false }] },
+  ];
+
+  const res = computePassK(multiArmRuns);
+  assert.ok(res.byTask["task-X"]);
+  assert.ok(res.byTask["task-X"]["arm-base"]);
+  assert.ok(res.byTask["task-X"]["arm-cand"]);
+  assert.equal(res.byTask["task-X"]["arm-base"].passAtK, 1);
+  assert.equal(res.byTask["task-X"]["arm-base"].passPowK, 1);
+  assert.equal(res.byTask["task-X"]["arm-cand"].passAtK, 0);
+  assert.equal(res.byTask["task-X"]["arm-cand"].passPowK, 0);
+});
+
+test("summarizeRuns: tier-фильтр считает pass@k и pass^k только по запрошенному тиру", () => {
+  const repoDir = createGitRepo();
+  try {
+    const runsDir = join(repoDir, RUNS_DIR);
+    mkdirSync(runsDir, { recursive: true });
+
+    const writeRun = (id, task, arm, tier, passed) => {
+      const dir = join(runsDir, id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "result.json"),
+        JSON.stringify({
+          task,
+          arm,
+          tier,
+          durationMs: 50,
+          metrics: { linesAdded: 1, linesDeleted: 0, filesChanged: 1 },
+          checks: [{ passed }],
+          status: "ok",
+        }),
+        "utf8"
+      );
+    };
+
+    // standard: 2 runs, all failed (pass@2 = 0)
+    writeRun("s1", "std-task", "arm1", "standard", false);
+    writeRun("s2", "std-task", "arm1", "standard", false);
+
+    // safety: 2 runs, all passed (pass@2 = 100)
+    writeRun("sf1", "safe-task", "arm1", "safety", true);
+    writeRun("sf2", "safe-task", "arm1", "safety", true);
+
+    const safetySummary = summarizeRuns(repoDir, { tier: "safety" });
+    assert.equal(safetySummary.total, 2);
+    assert.equal(safetySummary.k, 2);
+    assert.equal(safetySummary.passAtK, 100.0);
+    assert.equal(safetySummary.passPowK, 100.0);
+    assert.equal(Object.keys(safetySummary.byTaskArm).length, 1);
+    assert.ok(safetySummary.byTaskArm["safe-task::arm1"]);
+    assert.equal(safetySummary.byTaskArm["std-task::arm1"], undefined);
+
+    const stdSummary = summarizeRuns(repoDir, { tier: "standard" });
+    assert.equal(stdSummary.total, 2);
+    assert.equal(stdSummary.k, 2);
+    assert.equal(stdSummary.passAtK, 0.0);
+    assert.equal(stdSummary.passPowK, 0.0);
+    assert.equal(Object.keys(stdSummary.byTaskArm).length, 1);
+    assert.ok(stdSummary.byTaskArm["std-task::arm1"]);
+    assert.equal(stdSummary.byTaskArm["safe-task::arm1"], undefined);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+
+test("R02: bench/tasks.json содержит 10 валидных задач и проходит validate-tasks", () => {
+  const res = validateTasks(REPO_ROOT);
+  assert.equal(res.valid, true, res.errors.join("; "));
+  assert.equal(res.count, 10);
+
+  const cli = spawnSync(process.execPath, [CLI_PATH, "validate-tasks", "--root", REPO_ROOT, "--json"], {
+    encoding: "utf8",
+  });
+  assert.equal(cli.status, 0, cli.stderr);
+  const parsed = JSON.parse(cli.stdout);
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.count, 10);
+});
+
+test("R02: validate-tasks отклоняет невалидную схему с exit 2 и списком причин", () => {
+  const tmp = createTempDir();
+  try {
+    mkdirSync(join(tmp, "bench"), { recursive: true });
+    writeFileSync(
+      join(tmp, TASKS_FILE),
+      JSON.stringify({
+        version: 1,
+        tasks: [
+          { id: "dup", tier: "safety", title: "ok", prompt: "p", checks: ["node -e 0"], timeoutSec: 10 },
+          { id: "dup", tier: "bad-tier", title: "bad", prompt: "p", checks: [], timeoutSec: 0 },
+        ],
+      }),
+      "utf8"
+    );
+    const res = validateTasks(tmp);
+    assert.equal(res.valid, false);
+    assert.ok(res.errors.some((e) => /дублирующийся id/.test(e)));
+    assert.ok(res.errors.some((e) => /tier/.test(e)));
+    assert.ok(res.errors.some((e) => /checks/.test(e)));
+    assert.ok(res.errors.some((e) => /timeoutSec/.test(e)));
+
+    const cli = spawnSync(process.execPath, [CLI_PATH, "validate-tasks", "--root", tmp], { encoding: "utf8" });
+    assert.equal(cli.status, 2);
+    assert.match(cli.stderr, /дублирующийся id/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R02: smoke на фикстурах (red exit 1 и green exit 0)", () => {
+  const baseDir = join(REPO_ROOT, "bench/fixtures/smoke/baseline");
+  const candDir = join(REPO_ROOT, "bench/fixtures/smoke/candidate");
+
+  const redCli = spawnSync(
+    process.execPath,
+    [CLI_PATH, "smoke", "--baseline", baseDir, "--candidate", candDir, "--json"],
+    { encoding: "utf8" }
+  );
+  assert.equal(redCli.status, 1);
+  const redData = JSON.parse(redCli.stdout);
+  assert.equal(redData.passed, false);
+  assert.deepEqual(redData.redTasks, ["eval-verdict-parsing"]);
+
+  const greenFiltered = spawnSync(
+    process.execPath,
+    [CLI_PATH, "smoke", "--baseline", baseDir, "--candidate", candDir, "--tasks", "eval-frozen-test-invariance"],
+    { encoding: "utf8" }
+  );
+  assert.equal(greenFiltered.status, 0);
+  assert.match(greenFiltered.stdout, /SMOKE GREEN/);
+
+  const greenSame = spawnSync(
+    process.execPath,
+    [CLI_PATH, "smoke", "--baseline", baseDir, "--candidate", baseDir],
+    { encoding: "utf8" }
+  );
+  assert.equal(greenSame.status, 0);
+});
+
+test("R02: smoke граничные случаи — неидеальный baseline (4/5 vs 0/5) и отсутствующая задача (skip)", () => {
+  const res = runSmoke({
+    baseline: [
+      { task: "flaky", checks: [{ passed: true }] },
+      { task: "flaky", checks: [{ passed: true }] },
+      { task: "flaky", checks: [{ passed: true }] },
+      { task: "flaky", checks: [{ passed: true }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "only-base", checks: [{ passed: true }] },
+    ],
+    candidate: [
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "flaky", checks: [{ passed: false }] },
+      { task: "only-cand", checks: [{ passed: false }] },
+    ],
+  });
+  assert.equal(res.passed, true);
+  assert.equal(res.exitCode, 0);
+  assert.deepEqual(res.redTasks, []);
+  assert.deepEqual(res.skippedTasks, ["only-base", "only-cand"]);
+});
+
+test("R03: runBenchmark --replay подменяет живой вызов ответом из кассеты ($0, checks pass)", () => {
+  const repoDir = createGitRepo("bench-replay-unit-");
+  try {
+    mkdirSync(join(repoDir, "bench", "cassettes"), { recursive: true });
+    const prompt = "Return answer in result.txt";
+    const tasksFile = join(repoDir, "bench", "tasks.json");
+    const cassetteFile = join(repoDir, "bench", "cassettes", "t-replay.json");
+
+    writeFileSync(
+      tasksFile,
+      JSON.stringify(
+        {
+          version: 1,
+          tasks: [
+            {
+              id: "t-replay",
+              tier: "safety",
+              prompt,
+              checks: [
+                "node -e \"if(require('fs').readFileSync('result.txt','utf8').trim()!=='REPLAY_OK') process.exit(1);\"",
+              ],
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    recordCassette({
+      taskId: "t-replay",
+      prompt,
+      response: "REPLAY_OK",
+      files: {
+        "result.txt": "REPLAY_OK\n",
+      },
+      out: cassetteFile,
+      model: "replay-arm",
+    });
+
+    const results = runBenchmark({
+      root: repoDir,
+      taskId: "t-replay",
+      arm: "candidate",
+      cmd: "node -e 'process.exit(42)'", // failed live command must not be run
+      replay: cassetteFile,
+      runs: 1,
+      yes: true,
+    });
+
+    assert.equal(results.length, 1);
+    const r = results[0];
+    assert.equal(r.status, "ok");
+    assert.equal(r.agentExit, 0);
+    assert.equal(r.cost?.total_usd, 0);
+    assert.equal(r.checks[0].passed, true);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("R03: runBenchmark --record сохраняет кассету после живого прогона", () => {
+  const repoDir = createGitRepo("bench-record-unit-");
+  try {
+    mkdirSync(join(repoDir, "bench", "cassettes"), { recursive: true });
+    const prompt = "Record prompt test";
+    const tasksFile = join(repoDir, "bench", "tasks.json");
+    const cassetteOut = join(repoDir, "bench", "cassettes", "recorded.json");
+
+    writeFileSync(
+      tasksFile,
+      JSON.stringify(
+        {
+          version: 1,
+          tasks: [
+            {
+              id: "t-record",
+              tier: "standard",
+              prompt,
+              checks: [],
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    runBenchmark({
+      root: repoDir,
+      taskId: "t-record",
+      arm: "live-arm",
+      cmd: "node -e \"require('fs').writeFileSync('artifact.txt','hello recorded\\n'); console.log('live response');\"",
+      record: cassetteOut,
+      runs: 1,
+      yes: true,
+    });
+
+    assert.equal(existsSync(cassetteOut), true);
+    const cassette = loadCassette(cassetteOut);
+    assert.ok(cassette);
+    assert.equal(cassette.version, 1);
+    assert.equal(cassette.turns.length, 1);
+    assert.equal(cassette.turns[0].promptHash, hashPrompt(prompt));
+    assert.match(cassette.turns[0].response, /live response/);
+    assert.equal(cassette.turns[0].files["artifact.txt"], "hello recorded\n");
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("R03: runBenchmark --replay дрейф промпта бросает STALE-ошибку с кодом 1", () => {
+  const repoDir = createGitRepo("bench-drift-unit-");
+  try {
+    mkdirSync(join(repoDir, "bench", "cassettes"), { recursive: true });
+    const tasksFile = join(repoDir, "bench", "tasks.json");
+    const cassetteFile = join(repoDir, "bench", "cassettes", "orig.json");
+
+    writeFileSync(
+      tasksFile,
+      JSON.stringify(
+        {
+          version: 1,
+          tasks: [
+            {
+              id: "t-drift",
+              tier: "safety",
+              prompt: "Prompt changed compared to cassette",
+              checks: [],
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    recordCassette({
+      taskId: "t-drift",
+      prompt: "Original prompt in cassette",
+      response: "Orig response",
+      out: cassetteFile,
+      model: "drift-arm",
+    });
+
+    assert.throws(
+      () =>
+        runBenchmark({
+          root: repoDir,
+          taskId: "t-drift",
+          arm: "candidate",
+          cmd: "exit 0",
+          replay: cassetteFile,
+          runs: 1,
+          yes: true,
+        }),
+      (err) => err.exitCode === 1 && /STALE prompt drift/.test(err.message)
+    );
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
 });

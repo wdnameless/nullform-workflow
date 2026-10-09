@@ -240,3 +240,39 @@ jobs:
             node tools/return-contract.mjs \
               tools/tests/fixtures/return-contract.fixture.md
           fi
+
+  bench-smoke:
+    name: Benchmark Smoke Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate bench/tasks.json schema
+        run: node tools/benchmark.mjs validate-tasks
+      - name: Verify smoke red path (expect exit 1)
+        run: |
+          set +e
+          node tools/benchmark.mjs smoke \
+            --baseline bench/fixtures/smoke/baseline \
+            --candidate bench/fixtures/smoke/candidate
+          CODE=$?
+          set -e
+          if [ "$CODE" -ne 1 ]; then
+            echo "Expected smoke red path to exit 1, got $CODE"
+            exit 1
+          fi
+      - name: Verify smoke green path (expect exit 0)
+        run: |
+          node tools/benchmark.mjs smoke \
+            --baseline bench/fixtures/smoke/baseline \
+            --candidate bench/fixtures/smoke/candidate \
+            --tasks eval-frozen-test-invariance
+          node tools/benchmark.mjs smoke \
+            --baseline bench/fixtures/smoke/baseline \
+            --candidate bench/fixtures/smoke/baseline
+      - name: Run benchmark unit tests
+        run: node --test tools/tests/benchmark.test.mjs
