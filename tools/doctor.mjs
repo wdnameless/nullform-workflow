@@ -5,6 +5,8 @@
  * Использование:
  *   node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet] [--probe]
  *
+ * defer: doctor monolithic harness auditor with release-drift | ceiling: 1800 lines | upgrade: split checks into separate check modules
+ *
  * Режимы:
  *   installed — когда <agent-dir>/.harness-root существует и указывает на текущий harness.
  *   repo — когда <agent-dir>/.harness-root отсутствует или указывает на другой путь.
@@ -12,8 +14,8 @@
  *
  * Проверки:
  *   node · harness-files · tools-syntax · tools-smoke · agent-wiring · skills ·
- *   prompt-baseline · configs · orphan-files · agents-drift ·
- *   provider-reachability (только с --probe).
+ *   prompt-baseline · configs · orphan-files · agents-drift · logs-hygiene ·
+ *   release-drift · provider-reachability (только с --probe).
  *
  * agents-drift (без сети):
  *   Распаковывает встроенных агентов OMP (`omp agents unpack` во временный каталог)
@@ -510,6 +512,8 @@ export function parseCliArgs(args) {
   let requirePlugins = false;
   let pruneLogs = false;
   let skipPluginCheck = false;
+  let releaseUrl = null;
+  let skipReleaseCheck = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--harness") {
@@ -532,6 +536,10 @@ export function parseCliArgs(args) {
       pruneLogs = true;
     } else if (arg === "--skip-plugin-check") {
       skipPluginCheck = true;
+    } else if (arg === "--release-url") {
+      releaseUrl = args[++i];
+    } else if (arg === "--skip-release-check") {
+      skipReleaseCheck = true;
     }
   }
 
@@ -549,12 +557,14 @@ export function parseCliArgs(args) {
     probe,
     requirePlugins,
     skipPluginCheck,
+    releaseUrl,
+    skipReleaseCheck,
     pruneLogs,
     help: false,
   };
 }
 
-export function runDoctor(options) {
+export function runDoctor(options) { // code-size:allow
   const { harness, agentDir, agentsHome, mode: requestedMode } = options;
   // Результат сетевого опроса приходит из main() (--probe); без него проверки нет.
   const probeResults = options.probeResults || null;
@@ -1434,6 +1444,66 @@ export function runDoctor(options) {
       }
     }
   }
+  // 14. check 'release-drift': сверка локального VERSION с GitHub latest release.
+  // WARN при отставании (никогда FAIL), SKIP при offline/отсутствии VERSION.
+  {
+    const id = "release-drift";
+    const versionPath = join(harness, "VERSION");
+    if (!existsSync(versionPath)) {
+      checks.push({
+        id,
+        status: "skip",
+        detail: `файл VERSION не найден (${versionPath}): проверка пропущена`,
+      });
+    } else {
+      let localVersion = "";
+      try {
+        localVersion = readFileSync(versionPath, "utf8").trim();
+      } catch (err) {
+        checks.push({
+          id,
+          status: "skip",
+          detail: `не удалось прочитать VERSION (${err.message}): проверка пропущена`,
+        });
+      }
+
+      if (localVersion) {
+        const releaseInfo = options.releaseInfo;
+        if (!releaseInfo) {
+          checks.push({
+            id,
+            status: "skip",
+            detail: "проверка релизов не выполнена (офлайн или локальный режим)",
+          });
+        } else if (releaseInfo.offline || releaseInfo.error) {
+          checks.push({
+            id,
+            status: "skip",
+            detail: `офлайн: не удалось получить данные о релизе (${releaseInfo.error || "сеть недоступна"})`,
+          });
+        } else if (releaseInfo.status === "drift") {
+          const latest = releaseInfo.latest || "релиза";
+          checks.push({
+            id,
+            status: "warn",
+            detail: `Локальная версия v${localVersion} отстает от релиза v${latest}. Запустите 'node tools/self-update.mjs update'`,
+          });
+        } else if (releaseInfo.status === "clean") {
+          checks.push({
+            id,
+            status: "pass",
+            detail: `Версия v${localVersion} актуальна (GitHub ${releaseInfo.latest || localVersion})`,
+          });
+        } else {
+          checks.push({
+            id,
+            status: "skip",
+            detail: `проверка релизов: ${releaseInfo.detail || "пропущена"}`,
+          });
+        }
+      }
+    }
+  }
 
   // Summary calculation
   const summary = {
@@ -1493,7 +1563,20 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   const probeResults = opts.probe ? await probeProviders(join(opts.agentDir, "models.yml")) : null;
-  const result = runDoctor({ ...opts, probeResults });
+  let releaseInfo = opts.releaseInfo || null;
+  if (!releaseInfo && !opts.skipReleaseCheck && existsSync(join(opts.harness, "VERSION"))) {
+    try {
+      const { checkRelease } = await import("./self-update.mjs");
+      releaseInfo = await checkRelease({
+        root: opts.harness,
+        apiUrl: opts.releaseUrl || process.env.NULLFORM_RELEASE_URL,
+        timeoutMs: 3000,
+      });
+    } catch (err) {
+      releaseInfo = { offline: true, error: err.message };
+    }
+  }
+  const result = runDoctor({ ...opts, probeResults, releaseInfo });
 
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
