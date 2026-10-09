@@ -6,6 +6,8 @@
  * измерение метрик (LOC, время, проверки, стоимость), отчёты и сравнение.
  *
  * Требования: Node 18+, LF, без внешних зависимостей.
+ *
+ * defer: benchmark harness expansion with eval-metrics pass@k | ceiling: 2000 lines | upgrade: split reporter and comparison modules
  */
 
 import {
@@ -777,6 +779,134 @@ export function readTaskTiers(root) {
 }
 
 /**
+ * Проверяет, решена ли задача в рамках прогона (все checks задачи pass).
+ * @param {object} res
+ * @returns {boolean}
+ */
+export function isRunPassed(res) {
+  if (!res || typeof res !== "object") return false;
+  if (typeof res.passed === "boolean") return res.passed;
+  if (Array.isArray(res.checks)) {
+    if (res.checks.length === 0) return res.status === "ok";
+    return res.checks.every((ch) => (typeof ch === "boolean" ? ch : Boolean(ch && ch.passed)));
+  }
+  return res.status === "ok";
+}
+
+/**
+ * Вычисляет метрики pass@k и pass^k на task×arm и по всему набору.
+ * K = фактическое число ранов в данных. При K=1 обе метрики равны pass rate.
+ * Пустой набор возвращает 0 (не NaN).
+ * @param {Array<object>|object} results
+ * @returns {object}
+ */
+export function computePassK(results) {
+  const emptyRes = {
+    k: 0,
+    passAtK: 0,
+    passPowK: 0,
+    totalTasks: 0,
+    byTaskArm: {},
+    byArm: {},
+    byTask: {},
+    "pass@k": 0,
+    "pass^k": 0,
+    "pass@0": 0,
+    "pass^0": 0,
+  };
+  if (!results) return emptyRes;
+
+  const rawGroups = new Map();
+  const pushRun = (task, arm, item) => {
+    const key = `${task}::${arm}`;
+    if (!rawGroups.has(key)) rawGroups.set(key, { task, arm, runs: [] });
+    rawGroups.get(key).runs.push(item);
+  };
+
+  if (Array.isArray(results)) {
+    if (results.length === 0) return emptyRes;
+    for (const item of results) {
+      if (!item || typeof item !== "object") continue;
+      pushRun(item.task || "unknown", item.arm || "default", item);
+    }
+  } else if (typeof results === "object") {
+    const source = results.byTaskArm && typeof results.byTaskArm === "object" ? results.byTaskArm : results;
+    const entries = Object.entries(source);
+    if (entries.length === 0) return emptyRes;
+    for (const [k, item] of entries) {
+      if (!item || typeof item !== "object") continue;
+      const parts = k.includes("::") ? k.split("::") : [item.task || k, item.arm || "default"];
+      const task = item.task || parts[0] || "unknown";
+      const arm = item.arm || parts[1] || "default";
+      pushRun(task, arm, item);
+    }
+  }
+
+  if (rawGroups.size === 0) return emptyRes;
+
+  const byTaskArm = {};
+  const byTask = {};
+  const armMap = new Map();
+
+  for (const [key, group] of rawGroups.entries()) {
+    const { task, arm, runs } = group;
+    const k = runs.length;
+    const passedRuns = runs.filter(isRunPassed).length;
+    const passAtK = k > 0 && passedRuns >= 1 ? 1 : 0;
+    const passPowK = k > 0 && passedRuns === k ? 1 : 0;
+    const groupResult = { task, arm, k, runs: k, passedRuns, passAtK, passPowK };
+    byTaskArm[key] = groupResult;
+    if (!byTask[task]) byTask[task] = {};
+    byTask[task][arm] = groupResult;
+    if (!armMap.has(arm)) armMap.set(arm, []);
+    armMap.get(arm).push(groupResult);
+  }
+
+  const allItems = Object.values(byTaskArm);
+  const totalTasks = allItems.length;
+  const actualK = totalTasks > 0 ? Math.max(0, ...allItems.map((it) => it.k)) : 0;
+  const passedAtKCount = allItems.filter((it) => it.passAtK === 1).length;
+  const passedPowKCount = allItems.filter((it) => it.passPowK === 1).length;
+  const passAtK = totalTasks > 0 ? Number(((passedAtKCount / totalTasks) * 100).toFixed(1)) : 0;
+  const passPowK = totalTasks > 0 ? Number(((passedPowKCount / totalTasks) * 100).toFixed(1)) : 0;
+
+  const byArm = {};
+  for (const [arm, items] of armMap.entries()) {
+    const armK = items.length > 0 ? Math.max(0, ...items.map((it) => it.k)) : 0;
+    const atK = items.filter((it) => it.passAtK === 1).length;
+    const powK = items.filter((it) => it.passPowK === 1).length;
+    byArm[arm] = {
+      arm,
+      k: armK,
+      passAtK: items.length > 0 ? Number(((atK / items.length) * 100).toFixed(1)) : 0,
+      passPowK: items.length > 0 ? Number(((powK / items.length) * 100).toFixed(1)) : 0,
+      totalTasks: items.length,
+      tasksPassedAtK: atK,
+      tasksPassedPowK: powK,
+    };
+  }
+
+  const out = {
+    k: actualK,
+    passAtK,
+    passPowK,
+    totalTasks,
+    tasksPassedAtK: passedAtKCount,
+    tasksPassedPowK: passedPowKCount,
+    byTaskArm,
+    byArm,
+    byTask,
+    "pass@k": passAtK,
+    "pass^k": passPowK,
+  };
+  if (actualK !== undefined && actualK !== null) {
+    out[`pass@${actualK}`] = passAtK;
+    out[`pass^${actualK}`] = passPowK;
+  }
+  return out;
+}
+
+/**
  * Агрегирует прогоны из bench/runs
  * @param {string} root
  * @param {object} [options={}]
@@ -805,7 +935,7 @@ export function summarizeRuns(root, options = {}) {
   let totalSafetyPassed = 0;
   let totalSafetyChecks = 0;
   const allCosts = [];
-
+  const rawRuns = [];
   for (const entry of entries) {
     if (options.runIds && !options.runIds.includes(entry)) continue;
     const resFile = join(runsDir, entry, "result.json");
@@ -829,6 +959,7 @@ export function summarizeRuns(root, options = {}) {
     if (tierFilter && runTier !== tierFilter) {
       continue;
     }
+    rawRuns.push(res);
 
     const key = `${res.task}::${res.arm}`;
     if (!byTaskArm[key]) {
@@ -894,9 +1025,16 @@ export function summarizeRuns(root, options = {}) {
     }
   }
 
+  const passK = computePassK(rawRuns);
+
   // Преобразуем списки в медианы и удобные сводные поля
   for (const key of Object.keys(byTaskArm)) {
     const g = byTaskArm[key];
+    const pk = passK.byTaskArm[key];
+    g.k = pk ? pk.k : g.runs;
+    g.passedRuns = pk ? pk.passedRuns : 0;
+    g.passAtK = pk ? pk.passAtK : 0;
+    g.passPowK = pk ? pk.passPowK : 0;
     g.medianDurationMs = Math.round(median(g.durations));
     g.medianLinesAdded = Math.round(median(g.linesAddedList));
     g.medianLinesDeleted = Math.round(median(g.linesDeletedList));
@@ -922,6 +1060,9 @@ export function summarizeRuns(root, options = {}) {
     safetyPassRate,
     costTotal,
     costMedian,
+    k: passK.k,
+    passAtK: passK.passAtK,
+    passPowK: passK.passPowK,
   };
 }
 
@@ -987,6 +1128,26 @@ export function compareArms(summary, baselineArm, candidateArm, options = {}) {
     if (obj.costMedian !== undefined && obj.costMedian !== null) return obj.costMedian;
     return null;
   };
+  const getPassAtK = (obj) => {
+    if (!obj) return 0;
+    if (typeof obj.passAtK === "number") return obj.passAtK;
+    if (obj.checksTotal > 0) return obj.checksPassed > 0 ? 1 : 0;
+    return 0;
+  };
+
+  const getPassPowK = (obj) => {
+    if (!obj) return 0;
+    if (typeof obj.passPowK === "number") return obj.passPowK;
+    if (obj.checksTotal > 0) return obj.checksPassed === obj.checksTotal ? 1 : 0;
+    return 0;
+  };
+
+  const getK = (obj) => {
+    if (!obj) return 0;
+    if (typeof obj.k === "number") return obj.k;
+    if (typeof obj.runs === "number") return obj.runs;
+    return 1;
+  };
 
   for (const taskId of Array.from(tasksSet).sort()) {
     const baseKey = `${taskId}::${baselineArm}`;
@@ -999,6 +1160,9 @@ export function compareArms(summary, baselineArm, candidateArm, options = {}) {
       baseline: base
         ? {
             runs: base.runs,
+            k: getK(base),
+            passAtK: getPassAtK(base),
+            passPowK: getPassPowK(base),
             medianDurationMs: base.medianDurationMs,
             medianLinesAdded: base.medianLinesAdded,
             checksPassed: base.checksPassed,
@@ -1015,6 +1179,9 @@ export function compareArms(summary, baselineArm, candidateArm, options = {}) {
       candidate: cand
         ? {
             runs: cand.runs,
+            k: getK(cand),
+            passAtK: getPassAtK(cand),
+            passPowK: getPassPowK(cand),
             medianDurationMs: cand.medianDurationMs,
             medianLinesAdded: cand.medianLinesAdded,
             checksPassed: cand.checksPassed,
@@ -1088,6 +1255,12 @@ export function compareArms(summary, baselineArm, candidateArm, options = {}) {
       const costDiff =
         baseCost !== null && candCost !== null ? Number((candCost - baseCost).toFixed(4)) : null;
 
+      const passAtKBase = getPassAtK(base);
+      const passAtKCandidate = getPassAtK(cand);
+      const passAtKDiff = passAtKCandidate - passAtKBase;
+      const passPowKBase = getPassPowK(base);
+      const passPowKCandidate = getPassPowK(cand);
+      const passPowKDiff = passPowKCandidate - passPowKBase;
       item.deltas = {
         linesDiff,
         linesPct: linesPct !== null ? Number(linesPct) : null,
@@ -1095,6 +1268,12 @@ export function compareArms(summary, baselineArm, candidateArm, options = {}) {
         durationPct: durPct !== null ? Number(durPct) : null,
         checksRateBase: Number((baseCheckRate * 100).toFixed(1)),
         checksRateCandidate: Number((candCheckRate * 100).toFixed(1)),
+        passAtKBase,
+        passAtKCandidate,
+        passAtKDiff,
+        passPowKBase,
+        passPowKCandidate,
+        passPowKDiff,
         safetyPassRateBase: baseSafetyRate,
         safetyPassRateCandidate: candSafetyRate,
         safetyPassRateDiff,
@@ -1145,6 +1324,20 @@ export function compareArms(summary, baselineArm, candidateArm, options = {}) {
       ? Number((((candCostTotal - baseCostTotal) / baseCostTotal) * 100).toFixed(1))
       : null;
 
+  const baseTasks = byTask.filter((t) => t.baseline);
+  const candTasks = byTask.filter((t) => t.candidate);
+  const baseK = baseTasks.length > 0 ? Math.max(0, ...baseTasks.map((t) => t.baseline.k)) : 0;
+  const candK = candTasks.length > 0 ? Math.max(0, ...candTasks.map((t) => t.candidate.k)) : 0;
+  const basePassAtKCount = baseTasks.filter((t) => t.baseline.passAtK === 1).length;
+  const basePassPowKCount = baseTasks.filter((t) => t.baseline.passPowK === 1).length;
+  const basePassAtK = baseTasks.length > 0 ? Number(((basePassAtKCount / baseTasks.length) * 100).toFixed(1)) : 0;
+  const basePassPowK = baseTasks.length > 0 ? Number(((basePassPowKCount / baseTasks.length) * 100).toFixed(1)) : 0;
+  const candPassAtKCount = candTasks.filter((t) => t.candidate.passAtK === 1).length;
+  const candPassPowKCount = candTasks.filter((t) => t.candidate.passPowK === 1).length;
+  const candidatePassAtK = candTasks.length > 0 ? Number(((candPassAtKCount / candTasks.length) * 100).toFixed(1)) : 0;
+  const candidatePassPowK = candTasks.length > 0 ? Number(((candPassPowKCount / candTasks.length) * 100).toFixed(1)) : 0;
+  const passAtKDiff = Number((candidatePassAtK - basePassAtK).toFixed(1));
+  const passPowKDiff = Number((candidatePassPowK - basePassPowK).toFixed(1));
   const aggregate = {
     baselineArm,
     candidateArm,
@@ -1169,6 +1362,14 @@ export function compareArms(summary, baselineArm, candidateArm, options = {}) {
     candidateCostTotal: hasCost ? Number(candCostTotal.toFixed(4)) : null,
     costDiff,
     costPct,
+    baseK,
+    candidateK: candK,
+    basePassAtK,
+    candidatePassAtK,
+    passAtKDiff,
+    basePassPowK,
+    candidatePassPowK,
+    passPowKDiff,
   };
 
   return { byTask, aggregate };
@@ -1186,8 +1387,8 @@ export function formatReport(summary) {
 
   const lines = [
     `=== Отчет о бенчмарках (всего прогонов: ${summary.total}) ===`,
-    "Задача | Арм | Прогонов | Время (медиана) | LOC (+/-) | Файлов | Проверки | Стоимость",
-    "---|---|---|---|---|---|---|---",
+    "Задача | Арм | Прогонов | Время (медиана) | LOC (+/-) | Файлов | Проверки | pass@k | pass^k | Стоимость",
+    "---|---|---|---|---|---|---|---|---|---",
   ];
 
   for (const item of Object.values(summary.byTaskArm)) {
@@ -1198,8 +1399,13 @@ export function formatReport(summary) {
           ? `$${item.costMedian}`
           : "-";
     lines.push(
-      `${item.task} | ${item.arm} | ${item.runs} | ${item.medianDurationMs}ms | +${item.medianLinesAdded}/-${item.medianLinesDeleted} | ${item.medianFilesChanged} | ${item.checksPassed}/${item.checksTotal} | ${costStr}`
+      `${item.task} | ${item.arm} | ${item.runs} | ${item.medianDurationMs}ms | +${item.medianLinesAdded}/-${item.medianLinesDeleted} | ${item.medianFilesChanged} | ${item.checksPassed}/${item.checksTotal} | ${item.passAtK ?? 0} | ${item.passPowK ?? 0} | ${costStr}`
     );
+  }
+
+  if (summary.passAtK !== undefined && summary.passAtK !== null) {
+    const kVal = summary.k || 1;
+    lines.push(`pass@${kVal}: ${summary.passAtK}%, pass^${kVal}: ${summary.passPowK}%`);
   }
 
   if (summary.safetyChecksTotal > 0) {
@@ -1214,6 +1420,96 @@ export function formatReport(summary) {
     lines.push(`Стоимость: всего $${summary.costTotal}${medPart}`);
   }
 
+  return lines.join("\n");
+}
+
+/**
+ * Форматирует отчет о сравнении двух армов для консольного вывода.
+ * @param {object} comparison
+ * @returns {string}
+ */
+export function formatCompare(comparison) {
+  if (!comparison || !comparison.byTask) {
+    return "Нет данных для сравнения.";
+  }
+
+  const baseArm = comparison.aggregate?.baselineArm || "base";
+  const candArm = comparison.aggregate?.candidateArm || "candidate";
+
+  const lines = [`=== Сравнение: ${baseArm} (базовый) vs ${candArm} (кандидат) ===`];
+  if (comparison.byTask.length === 0) {
+    lines.push("Нет общих данных для сравнения указанных армов.");
+    return lines.join("\n");
+  }
+
+  for (const item of comparison.byTask) {
+    lines.push(`\nЗадача: ${item.task}`);
+    if (!item.baseline) {
+      lines.push(`  Базовый арм '${baseArm}': нет данных`);
+    }
+    if (!item.candidate) {
+      lines.push(`  Кандидат '${candArm}': нет данных`);
+    }
+    if (item.baseline && item.candidate) {
+      const b = item.baseline;
+      const c = item.candidate;
+      const d = item.deltas;
+      const linesPctStr = d.linesPct !== null ? ` (${d.linesPct > 0 ? "+" : ""}${d.linesPct}%)` : "";
+      const durPctStr = d.durationPct !== null ? ` (${d.durationPct > 0 ? "+" : ""}${d.durationPct}%)` : "";
+
+      lines.push(`  LOC добавлено: ${b.medianLinesAdded} -> ${c.medianLinesAdded}${linesPctStr}`);
+      lines.push(`  Время: ${b.medianDurationMs}ms -> ${c.medianDurationMs}ms${durPctStr}`);
+      lines.push(
+        `  Проверки: ${b.checksPassed}/${b.checksTotal} (${d.checksRateBase}%) -> ${c.checksPassed}/${c.checksTotal} (${d.checksRateCandidate}%)`
+      );
+      const kVal = Math.max(b.k ?? 1, c.k ?? 1);
+      const signAt = (d.passAtKDiff ?? 0) > 0 ? "+" : "";
+      const signPow = (d.passPowKDiff ?? 0) > 0 ? "+" : "";
+      lines.push(`  pass@${kVal}: ${b.passAtK ?? 0} -> ${c.passAtK ?? 0} (дельта: ${signAt}${d.passAtKDiff ?? 0})`);
+      lines.push(`  pass^${kVal}: ${b.passPowK ?? 0} -> ${c.passPowK ?? 0} (дельта: ${signPow}${d.passPowKDiff ?? 0})`);
+      if (d.safetyPassRateBase !== null || d.safetyPassRateCandidate !== null) {
+        lines.push(
+          `  Safety pass rate: ${d.safetyPassRateBase ?? "-"}% -> ${d.safetyPassRateCandidate ?? "-"}%`
+        );
+      }
+      if (d.costDiff !== null && d.costDiff !== undefined) {
+        const cSign = d.costDiff > 0 ? "+" : "";
+        lines.push(
+          `  Стоимость: $${d.costBase ?? 0} -> $${d.costCandidate ?? 0} (дельта: ${cSign}$${d.costDiff})`
+        );
+      }
+    }
+  }
+
+  const agg = comparison.aggregate;
+  const parts = [];
+  if (agg.linesPct !== null) {
+    const sign = agg.linesPct > 0 ? "+" : "";
+    parts.push(`${sign}${agg.linesPct}% строк`);
+  }
+  if (agg.durationPct !== null) {
+    const sign = agg.durationPct > 0 ? "+" : "";
+    parts.push(`${sign}${agg.durationPct}% времени`);
+  }
+  if (agg.baseChecks && (agg.baseChecks.total > 0 || agg.candidateChecks?.total > 0)) {
+    parts.push(`checks ${agg.baseChecks.passed}/${agg.baseChecks.total} -> ${agg.candidateChecks.passed}/${agg.candidateChecks.total}`);
+  }
+  if (agg.basePassAtK !== undefined || agg.candidatePassAtK !== undefined) {
+    const kVal = Math.max(agg.baseK ?? 1, agg.candidateK ?? 1);
+    const signAt = agg.passAtKDiff > 0 ? "+" : "";
+    const signPow = agg.passPowKDiff > 0 ? "+" : "";
+    parts.push(`pass@${kVal} ${agg.basePassAtK ?? 0}% -> ${agg.candidatePassAtK ?? 0}% (${signAt}${agg.passAtKDiff}%)`);
+    parts.push(`pass^${kVal} ${agg.basePassPowK ?? 0}% -> ${agg.candidatePassPowK ?? 0}% (${signPow}${agg.passPowKDiff}%)`);
+  }
+  if (agg.baseSafetyPassRate !== null || agg.candidateSafetyPassRate !== null) {
+    parts.push(`safety ${agg.baseSafetyPassRate ?? 0}% -> ${agg.candidateSafetyPassRate ?? 0}%`);
+  }
+  if (agg.costDiff !== null && agg.costDiff !== undefined) {
+    const costSign = agg.costDiff > 0 ? "+" : "";
+    parts.push(`cost $${agg.baseCostTotal ?? 0} -> $${agg.candidateCostTotal ?? 0} (${costSign}$${agg.costDiff})`);
+  }
+
+  lines.push(`\nИтог: ${parts.length > 0 ? parts.join(", ") : "нет сравнимых метрик"}`);
   return lines.join("\n");
 }
 
@@ -1533,68 +1829,7 @@ export function main(argv = process.argv.slice(2)) {
         if (args.json) {
           console.log(JSON.stringify(comparison, null, 2));
         } else {
-          console.log(`=== Сравнение: ${args.baseline} (базовый) vs ${args.candidate} (кандидат) ===`);
-          if (comparison.byTask.length === 0) {
-            console.log("Нет общих данных для сравнения указанных армов.");
-            return 0;
-          }
-
-          for (const item of comparison.byTask) {
-            console.log(`\nЗадача: ${item.task}`);
-            if (!item.baseline) {
-              console.log(`  Базовый арм '${args.baseline}': нет данных`);
-            }
-            if (!item.candidate) {
-              console.log(`  Кандидат '${args.candidate}': нет данных`);
-            }
-            if (item.baseline && item.candidate) {
-              const b = item.baseline;
-              const c = item.candidate;
-              const d = item.deltas;
-              const linesPctStr = d.linesPct !== null ? ` (${d.linesPct > 0 ? "+" : ""}${d.linesPct}%)` : "";
-              const durPctStr = d.durationPct !== null ? ` (${d.durationPct > 0 ? "+" : ""}${d.durationPct}%)` : "";
-
-              console.log(`  LOC добавлено: ${b.medianLinesAdded} -> ${c.medianLinesAdded}${linesPctStr}`);
-              console.log(`  Время: ${b.medianDurationMs}ms -> ${c.medianDurationMs}ms${durPctStr}`);
-              console.log(
-                `  Проверки: ${b.checksPassed}/${b.checksTotal} (${d.checksRateBase}%) -> ${c.checksPassed}/${c.checksTotal} (${d.checksRateCandidate}%)`
-              );
-              if (d.safetyPassRateBase !== null || d.safetyPassRateCandidate !== null) {
-                console.log(
-                  `  Safety pass rate: ${d.safetyPassRateBase ?? "-"}% -> ${d.safetyPassRateCandidate ?? "-"}%`
-                );
-              }
-              if (d.costDiff !== null && d.costDiff !== undefined) {
-                const cSign = d.costDiff > 0 ? "+" : "";
-                console.log(
-                  `  Стоимость: $${d.costBase ?? 0} -> $${d.costCandidate ?? 0} (дельта: ${cSign}$${d.costDiff})`
-                );
-              }
-            }
-          }
-
-          const agg = comparison.aggregate;
-          const parts = [];
-          if (agg.linesPct !== null) {
-            const sign = agg.linesPct > 0 ? "+" : "";
-            parts.push(`${sign}${agg.linesPct}% строк`);
-          }
-          if (agg.durationPct !== null) {
-            const sign = agg.durationPct > 0 ? "+" : "";
-            parts.push(`${sign}${agg.durationPct}% времени`);
-          }
-          if (agg.baseChecks.total > 0 || agg.candidateChecks.total > 0) {
-            parts.push(`checks ${agg.baseChecks.passed}/${agg.baseChecks.total} -> ${agg.candidateChecks.passed}/${agg.candidateChecks.total}`);
-          }
-          if (agg.baseSafetyPassRate !== null || agg.candidateSafetyPassRate !== null) {
-            parts.push(`safety ${agg.baseSafetyPassRate ?? 0}% -> ${agg.candidateSafetyPassRate ?? 0}%`);
-          }
-          if (agg.costDiff !== null && agg.costDiff !== undefined) {
-            const costSign = agg.costDiff > 0 ? "+" : "";
-            parts.push(`cost $${agg.baseCostTotal ?? 0} -> $${agg.candidateCostTotal ?? 0} (${costSign}$${agg.costDiff})`);
-          }
-
-          console.log(`\nИтог: ${parts.length > 0 ? parts.join(", ") : "нет сравнимых метрик"}`);
+          console.log(formatCompare(comparison));
         }
         return 0;
       } catch (err) {
