@@ -5,8 +5,6 @@
  * Использование:
  *   node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet] [--probe]
  *
- * defer: doctor monolithic harness auditor with release-drift | ceiling: 1800 lines | upgrade: split checks into separate check modules
- *
  * Режимы:
  *   installed — когда <agent-dir>/.harness-root существует и указывает на текущий harness.
  *   repo — когда <agent-dir>/.harness-root отсутствует или указывает на другой путь.
@@ -42,66 +40,41 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { findPruneCandidates } from "./sync-prune.mjs";
 import { cleanYamlValue, parseModelsYaml, probeProvider } from "./oracle-model.mjs";
-
+import {
+  isCommandInPath,
+  preflightJsoncConfig,
+  preflightJson5Config,
+  preflightYamlConfig,
+  preflightManagedMarkers,
+  safeJsonErrorMessage,
+} from "./harness-config.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export const CORE_TOOLS = [
   "workflow.mjs", "review-evidence.mjs", "review-native-tools.mjs", "worktree-snapshot.mjs",
-  "prompt-lint.mjs", "skill-audit.mjs",
-  "skills-doctor.mjs",
-  "glossary.mjs",
-  "replay.mjs",
-  "codemap.mjs",
-  "return-contract.mjs",
-  "cache-policy.mjs",
-  "cache-doctor.mjs",
-  "context-inbox.mjs",
-  "domain-context.mjs",
-  "oracle-model.mjs",
-  "debt-ledger.mjs",
-  "benchmark.mjs",
-  "usage-audit.mjs",
-  "test-lens.mjs",
-  "code-size.mjs",
-  "auto-review.mjs",
-  "doctor.mjs",
-  "sync-prune.mjs",
-  "memory-cadence.mjs",
-  "mutation-test.mjs",
-  "gherkin-spec.mjs",
-  "dashboard.mjs",
-  "fix-plugin-windows.cjs",
-  "session_cost.py",
-  "verify.mjs",
-  "audit.ps1",
-  "sync.ps1",
-  "sync.mjs",
-  "sync-manifest.json",
-  "audit.sh",
-  "sync.sh",
+  "prompt-lint.mjs", "skill-audit.mjs", "skills-doctor.mjs", "glossary.mjs",
+  "replay.mjs", "codemap.mjs", "return-contract.mjs", "cache-policy.mjs",
+  "cache-doctor.mjs", "context-inbox.mjs", "domain-context.mjs", "oracle-model.mjs",
+  "debt-ledger.mjs", "benchmark.mjs", "usage-audit.mjs", "test-lens.mjs",
+  "code-size.mjs", "auto-review.mjs", "doctor.mjs", "sync-prune.mjs",
+  "memory-cadence.mjs", "mutation-test.mjs", "gherkin-spec.mjs", "dashboard.mjs",
+  "fix-plugin-windows.cjs", "session_cost.py", "verify.mjs", "audit.ps1",
+  "sync.ps1", "sync.mjs", "sync-manifest.json", "audit.sh", "sync.sh",
 ];
 
-/**
- * Обязательный набор определений ролей в `agent/agents` (имена файлов без `.md`).
- * `sonic` намеренно отсутствует: это наш сужающий форк (mechanical-only), он опционален.
- * Число файлов не проверяется сознательно — важно, что обязательные роли на месте,
- * иначе удаление или переименование роли проходит незамеченным за «>= 8».
- */
 export const REQUIRED_ROLES = [
-  "orchestrator",
-  "fixer",
-  "designer",
-  "oracle",
-  "librarian",
-  "explorer",
-  "reviewer",
+  "orchestrator", "fixer", "designer", "oracle", "librarian", "explorer", "reviewer",
 ];
 
 export function normalizePath(p) {
   if (!p) return "";
-  return resolve(p).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+  try {
+    return realpathSync(p).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+  } catch {
+    return resolve(p).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+  }
 }
 export function stripBom(text) {
   if (typeof text !== "string") return text;
@@ -502,73 +475,163 @@ export async function probeProviders(modelsYamlPath) {
 
 
 export function parseCliArgs(args) {
-  let harness = null;
-  let agentDir = null;
-  let agentsHome = null;
-  let mode = null;
-  let json = false;
-  let quiet = false;
-  let probe = false;
-  let requirePlugins = false;
-  let pruneLogs = false;
-  let skipPluginCheck = false;
-  let releaseUrl = null;
-  let skipReleaseCheck = false;
+  let harness = null, targetHarness = null, projectRoot = null, userHome = null;
+  let agentDir = null, agentsHome = null, mode = null, releaseUrl = null;
+  let json = false, quiet = false, probe = false, requirePlugins = false;
+  let pruneLogs = false, skipPluginCheck = false, skipReleaseCheck = false;
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--harness") {
-      harness = args[++i];
-    } else if (arg === "--agent-dir") {
-      agentDir = args[++i];
-    } else if (arg === "--agents-home") {
-      agentsHome = args[++i];
-    } else if (arg === "--mode") {
-      mode = args[++i];
-    } else if (arg === "--json") {
-      json = true;
-    } else if (arg === "--quiet") {
-      quiet = true;
-    } else if (arg === "--probe") {
-      probe = true;
-    } else if (arg === "--require-plugins") {
-      requirePlugins = true;
-    } else if (arg === "--prune-logs") {
-      pruneLogs = true;
-    } else if (arg === "--skip-plugin-check") {
-      skipPluginCheck = true;
-    } else if (arg === "--release-url") {
-      releaseUrl = args[++i];
-    } else if (arg === "--skip-release-check") {
-      skipReleaseCheck = true;
-    }
+    if (arg === "--harness") harness = args[++i];
+    else if (arg.startsWith("--harness=")) harness = arg.slice("--harness=".length);
+    else if (arg === "--target-harness") targetHarness = args[++i];
+    else if (arg.startsWith("--target-harness=")) targetHarness = arg.slice("--target-harness=".length);
+    else if (arg === "--project-root") projectRoot = args[++i];
+    else if (arg.startsWith("--project-root=")) projectRoot = arg.slice("--project-root=".length);
+    else if (arg === "--user-home") userHome = args[++i];
+    else if (arg.startsWith("--user-home=")) userHome = arg.slice("--user-home=".length);
+    else if (arg === "--agent-dir") agentDir = args[++i];
+    else if (arg.startsWith("--agent-dir=")) agentDir = arg.slice("--agent-dir=".length);
+    else if (arg === "--agents-home") agentsHome = args[++i];
+    else if (arg.startsWith("--agents-home=")) agentsHome = arg.slice("--agents-home=".length);
+    else if (arg === "--mode") mode = args[++i];
+    else if (arg.startsWith("--mode=")) mode = arg.slice("--mode=".length);
+    else if (arg === "--json") json = true;
+    else if (arg === "--quiet") quiet = true;
+    else if (arg === "--probe") probe = true;
+    else if (arg === "--require-plugins") requirePlugins = true;
+    else if (arg === "--prune-logs") pruneLogs = true;
+    else if (arg === "--skip-plugin-check") skipPluginCheck = true;
+    else if (arg === "--release-url") releaseUrl = args[++i];
+    else if (arg.startsWith("--release-url=")) releaseUrl = arg.slice("--release-url=".length);
+    else if (arg === "--skip-release-check") skipReleaseCheck = true;
   }
 
   const defaultHarness = resolve(__dirname, "..");
-  const home = homedir();
-  const defaultAgentDir = join(home, ".omp", "agent");
-  const defaultAgentsHome = join(home, ".agents");
+  const home = userHome ? resolve(userHome) : homedir();
   return {
     harness: harness ? resolve(harness) : defaultHarness,
-    agentDir: agentDir ? resolve(agentDir) : defaultAgentDir,
-    agentsHome: agentsHome ? resolve(agentsHome) : defaultAgentsHome,
-    mode,
-    json,
-    quiet,
-    probe,
-    requirePlugins,
-    skipPluginCheck,
-    releaseUrl,
-    skipReleaseCheck,
-    pruneLogs,
-    help: false,
+    targetHarness: targetHarness || null,
+    projectRoot: projectRoot ? resolve(projectRoot) : null,
+    userHome: home,
+    agentDir: agentDir ? resolve(agentDir) : join(home, ".omp", "agent"),
+    agentsHome: agentsHome ? resolve(agentsHome) : join(home, ".agents"),
+    mode, json, quiet, probe, requirePlugins, skipPluginCheck, releaseUrl, skipReleaseCheck, pruneLogs, help: false,
   };
 }
 
-export function runDoctor(options) { // code-size:allow
-  const { harness, agentDir, agentsHome, mode: requestedMode } = options;
-  // Результат сетевого опроса приходит из main() (--probe); без него проверки нет.
-  const probeResults = options.probeResults || null;
+function checkNonOmpHarness({ harness, targetHarness, userHome, projectRoot }) {
+  const hostCommands = {
+    claude: "claude", codex: "codex", opencode: "opencode", cursor: "cursor",
+    openclaw: "openclaw", hermes: "hermes", openhuman: "openhuman",
+  };
+  const cmd = hostCommands[targetHarness] || targetHarness;
+  const isAvailable = isCommandInPath(cmd) || (cmd === "openhuman" && isCommandInPath("openhuman-core"));
+  const checks = [{
+    id: "host-runtime",
+    status: isAvailable ? "pass" : "warn",
+    detail: isAvailable
+      ? `Хост '${cmd}' обнаружен в PATH (проверка синтаксиса и интеграции; валидация провайдера выполняется хостом)`
+      : `[SETUP] Исполняемый файл '${cmd}' не найден в PATH. Установите хост-приложение для полноценной работы`,
+  }];
 
+  const integrationErrors = [];
+  const checkMdAdapter = (p, label) => {
+    const text = readFileSync(p, "utf8");
+    try { preflightManagedMarkers(p, text); } catch (e) { integrationErrors.push(e.message); }
+    if (!text.includes("NULLFORM WORKFLOW") && !text.includes("AGENTS.md")) {
+      integrationErrors.push(`${label} не содержит инструкций NULLFORM WORKFLOW`);
+    }
+  };
+
+  if (targetHarness === "claude") {
+    const rootClaude = join(harness, "CLAUDE.md");
+    if (!existsSync(rootClaude)) integrationErrors.push("CLAUDE.md отсутствует в корне харнесса");
+    else checkMdAdapter(rootClaude, "CLAUDE.md");
+  } else if (targetHarness === "codex") {
+    const rootAgents = join(harness, "AGENTS.md");
+    if (!existsSync(rootAgents)) integrationErrors.push("AGENTS.md отсутствует в корне харнесса");
+    else checkMdAdapter(rootAgents, "AGENTS.md");
+  } else if (targetHarness === "opencode") {
+    const mds = [join(harness, "AGENTS.md"), join(userHome, ".config", "opencode", "AGENTS.md")].filter((p) => existsSync(p));
+    if (mds.length === 0) integrationErrors.push("AGENTS.md отсутствует в корне харнесса или ~/.config/opencode/AGENTS.md");
+    else for (const m of mds) checkMdAdapter(m, "AGENTS.md");
+    const cfgs = [
+      join(harness, "opencode.json"), join(harness, "opencode.jsonc"),
+      join(userHome, ".config", "opencode", "opencode.json"), join(userHome, ".config", "opencode", "opencode.jsonc"),
+      join(userHome, ".opencode", "opencode.json"), join(userHome, ".opencode", "opencode.jsonc"),
+    ].filter((p) => existsSync(p));
+    if (cfgs.length === 0) integrationErrors.push("opencode.json/opencode.jsonc отсутствует в корне харнесса или ~/.config/opencode");
+    else for (const f of cfgs) { try { preflightJsoncConfig(f); } catch (err) { integrationErrors.push(err.message); } }
+  } else if (targetHarness === "cursor") {
+    const cursorBase = projectRoot || harness;
+    const mdcFile = [
+      join(cursorBase, ".cursor", "rules", "00-workflow.mdc"),
+      join(harness, ".cursor", "rules", "00-workflow.mdc"),
+      join(userHome, ".cursor", "rules", "00-workflow.mdc"),
+    ].find((p) => existsSync(p));
+    if (!mdcFile) {
+      integrationErrors.push("Правило .cursor/rules/00-workflow.mdc не найдено");
+    } else {
+      const text = readFileSync(mdcFile, "utf8");
+      try { preflightManagedMarkers(mdcFile, text); } catch (e) { integrationErrors.push(e.message); }
+      if (!text.includes("alwaysApply: true")) integrationErrors.push("Правило .cursor/rules/00-workflow.mdc не содержит frontmatter 'alwaysApply: true'");
+    }
+  } else if (targetHarness === "openclaw") {
+    const cfgs = [join(harness, "openclaw.json"), join(userHome, ".openclaw", "openclaw.json")].filter((p) => existsSync(p));
+    if (cfgs.length === 0) integrationErrors.push("openclaw.json отсутствует в корне харнесса или ~/.openclaw/openclaw.json");
+    else for (const f of cfgs) {
+      try {
+        const parsed = preflightJson5Config(f);
+        if (!parsed.agents?.entries?.workflow?.workspace) integrationErrors.push("openclaw.json не содержит записи workflow в agents.entries с полем workspace");
+      } catch (err) { integrationErrors.push(err.message); }
+    }
+  } else if (targetHarness === "hermes") {
+    const hermesHome = process.env.HERMES_HOME || join(userHome, ".hermes");
+    const cfgs = [join(harness, "config.yaml"), join(hermesHome, "config.yaml")].filter((p) => existsSync(p));
+    if (cfgs.length === 0) integrationErrors.push("config.yaml отсутствует в корне харнесса или ~/.hermes/config.yaml");
+    else for (const f of cfgs) {
+      try {
+        const content = preflightYamlConfig(f);
+        if (!content.includes("mcp_servers:")) integrationErrors.push("config.yaml не содержит секции mcp_servers");
+      } catch (err) { integrationErrors.push(err.message); }
+    }
+  } else if (targetHarness === "openhuman") {
+    const mds = [join(harness, "AGENTS.md"), join(userHome, ".openhuman", "AGENTS.md"), join(harness, "agents", "workflow", "AGENTS.md")].filter((p) => existsSync(p));
+    if (mds.length === 0) integrationErrors.push("Инструкции OpenHuman (AGENTS.md) не найдены");
+    else for (const m of mds) checkMdAdapter(m, "AGENTS.md");
+  }
+
+  checks.push({
+    id: "harness-integration",
+    status: integrationErrors.length > 0 ? "fail" : "pass",
+    detail: integrationErrors.length > 0 ? integrationErrors.join("; ") : `Интеграция ${targetHarness} проверена и корректна`,
+  });
+  const skillsDir = join(harness, "skills");
+  checks.push({
+    id: "skills",
+    status: existsSync(skillsDir) ? "pass" : "fail",
+    detail: existsSync(skillsDir) ? `Папка навыков присутствует (${skillsDir})` : `Папка навыков отсутствует (${skillsDir})`,
+  });
+  return checks;
+}
+
+export function runDoctor(options) {
+  const { harness, agentDir, agentsHome, mode: requestedMode } = options;
+  const explicitTargetHarness = Boolean(options.targetHarness || options.harnessName);
+  const targetHarness = options.targetHarness || options.harnessName || "omp";
+  const userHome = options.userHome ? resolve(options.userHome) : homedir();
+  let projectRoot = options.projectRoot ? resolve(options.projectRoot) : null;
+  if (!projectRoot && options.userHome) {
+    try {
+      const stPath = join(userHome, ".nullform", "installation.json");
+      if (existsSync(stPath)) {
+        const st = JSON.parse(readFileSync(stPath, "utf8"));
+        if (typeof st?.projectRoot === "string" && st.projectRoot.trim()) projectRoot = resolve(st.projectRoot);
+      }
+    } catch {}
+  }
+  const probeResults = options.probeResults || null;
   const harnessRootFile = join(agentDir, ".harness-root");
   let hasHarnessRoot = false;
   let harnessRootMatches = false;
@@ -592,19 +655,13 @@ export function runDoctor(options) { // code-size:allow
   {
     const id = "node";
     const majorVersion = parseInt(process.versions.node.split(".")[0], 10);
-    if (majorVersion >= 18) {
-      checks.push({
-        id,
-        status: "pass",
-        detail: `Node.js v${process.versions.node} (>= 18)`,
-      });
-    } else {
-      checks.push({
-        id,
-        status: "fail",
-        detail: `Node.js v${process.versions.node} устарел (требуется >= 18)`,
-      });
-    }
+    checks.push({
+      id,
+      status: majorVersion >= 18 ? "pass" : "fail",
+      detail: majorVersion >= 18
+        ? `Node.js v${process.versions.node} (>= 18)`
+        : `Node.js v${process.versions.node} устарел (требуется >= 18)`,
+    });
   }
 
   // 2. check 'harness-files'
@@ -617,10 +674,11 @@ export function runDoctor(options) { // code-size:allow
 
     const agentsDir = join(harness, "agent", "agents");
     const roleNames = roleNamesIn(agentsDir);
-    for (const role of missingRequiredRoles(roleNames)) {
-      missing.push(`agent/agents/${role}.md (обязательная роль)`);
+    if (targetHarness === "omp") {
+      for (const role of missingRequiredRoles(roleNames)) {
+        missing.push(`agent/agents/${role}.md (обязательная роль)`);
+      }
     }
-
     const edFile = join(harness, "rules", "enterprise-directives.md");
     if (!existsSync(edFile)) missing.push("rules/enterprise-directives.md");
 
@@ -639,19 +697,13 @@ export function runDoctor(options) { // code-size:allow
     const paseoDir = join(harness, "paseo");
     if (!existsSync(paseoDir)) missing.push("paseo/");
 
-    if (missing.length === 0) {
-      checks.push({
-        id,
-        status: "pass",
-        detail: `Все обязательные файлы и директории харнесса присутствуют (обязательные роли: ${REQUIRED_ROLES.length}, всего определений: ${roleNames.length})`,
-      });
-    } else {
-      checks.push({
-        id,
-        status: "fail",
-        detail: `Отсутствуют обязательные файлы харнесса: ${missing.join(", ")}`,
-      });
-    }
+    checks.push({
+      id,
+      status: missing.length === 0 ? "pass" : "fail",
+      detail: missing.length === 0
+        ? `Все обязательные файлы и директории харнесса присутствуют (обязательные роли: ${REQUIRED_ROLES.length}, всего определений: ${roleNames.length})`
+        : `Отсутствуют обязательные файлы харнесса: ${missing.join(", ")}`,
+    });
   }
 
   // 3. check 'tools-syntax': core set present and node --check on all tools/*.mjs
@@ -692,23 +744,11 @@ export function runDoctor(options) { // code-size:allow
 
     if (missingCore.length > 0 || syntaxErrors.length > 0) {
       const details = [];
-      if (missingCore.length > 0) {
-        details.push(`отсутствуют обязательные инструменты: ${missingCore.join(", ")}`);
-      }
-      if (syntaxErrors.length > 0) {
-        details.push(`синтаксические ошибки в: ${syntaxErrors.join(", ")}`);
-      }
-      checks.push({
-        id,
-        status: "fail",
-        detail: details.join("; "),
-      });
+      if (missingCore.length > 0) details.push(`отсутствуют обязательные инструменты: ${missingCore.join(", ")}`);
+      if (syntaxErrors.length > 0) details.push(`синтаксические ошибки в: ${syntaxErrors.join(", ")}`);
+      checks.push({ id, status: "fail", detail: details.join("; ") });
     } else {
-      checks.push({
-        id,
-        status: "pass",
-        detail: `Все инструменты ядра присутствуют, синтаксис проверен (node --check)`,
-      });
+      checks.push({ id, status: "pass", detail: "Все инструменты ядра присутствуют, синтаксис проверен (node --check)" });
     }
   }
 
@@ -754,21 +794,16 @@ export function runDoctor(options) { // code-size:allow
       smokeErrors.push("debt-ledger.mjs не найден для smoke-теста");
     }
 
-    if (smokeErrors.length > 0) {
-      checks.push({
-        id,
-        status: "fail",
-        detail: smokeErrors.join("; "),
-      });
-    } else {
-      checks.push({
-        id,
-        status: "pass",
-        detail: "Smoke-тесты пройдены: prompt-lint fingerprint и debt-ledger scan успешны",
-      });
-    }
+    checks.push({
+      id,
+      status: smokeErrors.length > 0 ? "fail" : "pass",
+      detail: smokeErrors.length > 0
+        ? smokeErrors.join("; ")
+        : "Smoke-тесты пройдены: prompt-lint fingerprint и debt-ledger scan успешны",
+    });
   }
 
+  if (targetHarness === "omp") {
   // 5. check 'agent-wiring'
   {
     const id = "agent-wiring";
@@ -776,11 +811,7 @@ export function runDoctor(options) { // code-size:allow
       const note = !hasHarnessRoot
         ? "Режим repo: агентская директория не настроена (.harness-root отсутствует)"
         : `Режим repo: агентская директория привязана к другому харнессу (${harnessRootTarget})`;
-      checks.push({
-        id,
-        status: "warn",
-        detail: note,
-      });
+      checks.push({ id, status: "warn", detail: note });
     } else {
       const wiringErrors = [];
       const agentsMd = join(agentDir, "AGENTS.md");
@@ -825,19 +856,13 @@ export function runDoctor(options) { // code-size:allow
         wiringErrors.push(`${agentsHome}/rules/enterprise-directives.md отсутствует`);
       }
 
-      if (wiringErrors.length > 0) {
-        checks.push({
-          id,
-          status: "fail",
-          detail: wiringErrors.join("; "),
-        });
-      } else {
-        checks.push({
-          id,
-          status: "pass",
-          detail: `Проводка агента корректна (${installedRoles.length} определений ролей, обязательный набор полон; правила и AGENTS.md проверены)`,
-        });
-      }
+      checks.push({
+        id,
+        status: wiringErrors.length > 0 ? "fail" : "pass",
+        detail: wiringErrors.length > 0
+          ? wiringErrors.join("; ")
+          : `Проводка агента корректна (${installedRoles.length} определений ролей, обязательный набор полон; правила и AGENTS.md проверены)`,
+      });
     }
   }
 
@@ -865,20 +890,13 @@ export function runDoctor(options) { // code-size:allow
       // ERR_STREAM_DESTROYED (5 occurrences), so matching that string would report
       // an unpatched plugin as healthy.
       const guarded = text.includes("patched-epipe-handler");
-      if (guarded) {
-        checks.push({
-          id,
-          status: "pass",
-          detail: "патчи плагинов применены (pi-lens: EPIPE-глушитель)",
-        });
-      } else {
-        checks.push({
-          id,
-          status: "warn",
-          detail:
-            "pi-lens БЕЗ патча: обновление плагина сняло правки — запустите `node tools/fix-plugin-windows.cjs`",
-        });
-      }
+      checks.push({
+        id,
+        status: guarded ? "pass" : "warn",
+        detail: guarded
+          ? "патчи плагинов применены (pi-lens: EPIPE-глушитель)"
+          : "pi-lens БЕЗ патча: обновление плагина сняло правки — запустите `node tools/fix-plugin-windows.cjs`",
+      });
     }
   }
 
@@ -889,38 +907,26 @@ export function runDoctor(options) { // code-size:allow
     const installedSkills = join(agentsHome, "skills");
     let repoSkills = null;
     const repoClone = discoverRepoClone(harness);
-    if (repoClone && existsSync(join(repoClone, "skills"))) {
-      repoSkills = join(repoClone, "skills");
+    if (repoClone) {
+      if (existsSync(join(repoClone, "skills"))) {
+        repoSkills = join(repoClone, "skills");
+      }
     } else if ((mode === "repo" || isRepoTree(harness)) && existsSync(join(harness, "skills"))) {
       repoSkills = join(harness, "skills");
     }
 
     if (!existsSync(skillsDoctorPath)) {
-      checks.push({
-        id,
-        status: "fail",
-        detail: "tools/skills-doctor.mjs не найден",
-      });
+      checks.push({ id, status: "fail", detail: "tools/skills-doctor.mjs не найден" });
     } else if (!existsSync(installedSkills)) {
-      if (mode === "repo") {
-        checks.push({
-          id,
-          status: "warn",
-          detail: `Режим repo: установленная папка навыков не найдена (${installedSkills})`,
-        });
-      } else {
-        checks.push({
-          id,
-          status: "fail",
-          detail: `Установленная папка навыков не найдена (${installedSkills})`,
-        });
-      }
-    } else if (!repoSkills) {
       checks.push({
         id,
-        status: "warn",
-        detail: "parity не проверялась: нет копии репозитория",
+        status: mode === "repo" ? "warn" : "fail",
+        detail: mode === "repo"
+          ? `Режим repo: установленная папка навыков не найдена (${installedSkills})`
+          : `Установленная папка навыков не найдена (${installedSkills})`,
       });
+    } else if (!repoSkills) {
+      checks.push({ id, status: "warn", detail: "parity не проверялась: нет копии репозитория" });
     } else {
       const res = spawnSync(
         process.execPath,
@@ -932,11 +938,7 @@ export function runDoctor(options) { // code-size:allow
       const countsNote = match ? ` (${match[1]} установлено, ${match[2]} в репозитории)` : "";
 
       if (res.status === 0) {
-        checks.push({
-          id,
-          status: "pass",
-          detail: `Все проверки навыков пройдены${countsNote}`,
-        });
+        checks.push({ id, status: "pass", detail: `Все проверки навыков пройдены${countsNote}` });
       } else {
         // Parse individual problem lines: format from skills-doctor:
         //   <skill_name>  <kind>  <detail>
@@ -958,29 +960,15 @@ export function runDoctor(options) { // code-size:allow
         if (parsedProblems.length === 0) {
           // No structured problems parsed -> fail with tail of output
           const tail = out.trim().split("\n").slice(-3).join(" ").trim() || `код ${res.status}`;
-          checks.push({
-            id,
-            status: "fail",
-            detail: `skills-doctor завершился с кодом ${res.status}${countsNote}: ${tail}`,
-          });
+          checks.push({ id, status: "fail", detail: `skills-doctor завершился с кодом ${res.status}${countsNote}: ${tail}` });
         } else {
           const parityProblems = parsedProblems.filter((p) => p.kind === "parity");
           const failProblems = parsedProblems.filter((p) => p.kind !== "parity");
-
           if (failProblems.length > 0) {
             const failSummary = failProblems.map((p) => `${p.skill} (${p.kind}: ${p.detail})`).join("; ");
-            checks.push({
-              id,
-              status: "fail",
-              detail: `Обнаружены дефекты навыков${countsNote}: ${failSummary}`,
-            });
+            checks.push({ id, status: "fail", detail: `Обнаружены дефекты навыков${countsNote}: ${failSummary}` });
           } else {
-            // Only parity issues exist -> WARN
-            checks.push({
-              id,
-              status: "warn",
-              detail: `${parityProblems.length} parity (marketplace-managed drift is expected)${countsNote}`,
-            });
+            checks.push({ id, status: "warn", detail: `${parityProblems.length} parity (marketplace-managed drift is expected)${countsNote}` });
           }
         }
       }
@@ -992,39 +980,20 @@ export function runDoctor(options) { // code-size:allow
     const id = "prompt-baseline";
     const baselineFile = join(harness, ".prompt-lint", "baseline.json");
     if (!existsSync(baselineFile)) {
-      checks.push({
-        id,
-        status: "warn",
-        detail: "Файл .prompt-lint/baseline.json отсутствует (рекомендуется создать через baseline)",
-      });
+      checks.push({ id, status: "warn", detail: "Файл .prompt-lint/baseline.json отсутствует (рекомендуется создать через baseline)" });
     } else {
       const promptLintPath = join(harness, "tools", "prompt-lint.mjs");
       if (!existsSync(promptLintPath)) {
+        checks.push({ id, status: "fail", detail: "tools/prompt-lint.mjs не найден для проверки baseline" });
+      } else {
+        const res = spawnSync(process.execPath, [promptLintPath, "check", "--root", harness], { encoding: "utf8", windowsHide: true });
         checks.push({
           id,
-          status: "fail",
-          detail: "tools/prompt-lint.mjs не найден для проверки baseline",
+          status: res.status === 0 ? "pass" : "warn",
+          detail: res.status === 0
+            ? "Бейзлайн промптов актуален (дрейф не обнаружен)"
+            : `Обнаружен дрейф поверхностей промптов от бейзлайна (код ${res.status})`,
         });
-      } else {
-        const res = spawnSync(
-          process.execPath,
-          [promptLintPath, "check", "--root", harness],
-          { encoding: "utf8", windowsHide: true }
-        );
-        if (res.status === 0) {
-          checks.push({
-            id,
-            status: "pass",
-            detail: "Бейзлайн промптов актуален (дрейф не обнаружен)",
-          });
-        } else {
-          // Check if baseline drift occurred
-          checks.push({
-            id,
-            status: "warn",
-            detail: `Обнаружен дрейф поверхностей промптов от бейзлайна (код ${res.status})`,
-          });
-        }
       }
     }
   }
@@ -1038,42 +1007,46 @@ export function runDoctor(options) { // code-size:allow
     const mcpJson = join(agentDir, "mcp.json");
     if (existsSync(mcpJson)) {
       try {
-        const content = stripBom(readFileSync(mcpJson, "utf8"));
-        JSON.parse(content);
-        reported.push("mcp.json (валидный JSON)");
+        const parsed = JSON.parse(stripBom(readFileSync(mcpJson, "utf8")));
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          configError = "mcp.json не является валидным JSON-объектом";
+        } else {
+          reported.push("mcp.json (валидный JSON)");
+        }
       } catch (err) {
-        configError = `mcp.json не является валидным JSON: ${err.message}`;
+        configError = `mcp.json не является валидным JSON: ${safeJsonErrorMessage(err)}`;
       }
     }
-
     const modelsYml = join(agentDir, "models.yml");
     if (existsSync(modelsYml)) {
-      reported.push("models.yml (присутствует)");
+      try {
+        preflightYamlConfig(modelsYml);
+        reported.push("models.yml (присутствует)");
+      } catch (err) {
+        if (!configError) configError = `models.yml некорректен: ${err.message}`;
+      }
     }
-
     const configYml = join(agentDir, "config.yml");
     if (existsSync(configYml)) {
-      reported.push("config.yml (присутствует)");
+      try {
+        preflightYamlConfig(configYml);
+        reported.push("config.yml (присутствует)");
+      } catch (err) {
+        if (!configError) configError = `config.yml некорректен: ${err.message}`;
+      }
     }
-
     if (configError) {
+      checks.push({ id, status: "fail", detail: configError });
+    } else if (explicitTargetHarness && (!existsSync(modelsYml) || !existsSync(configYml))) {
       checks.push({
         id,
-        status: "fail",
-        detail: configError,
+        status: "warn",
+        detail: `[SETUP] Модели/провайдеры OMP (models.yml / config.yml) ещё не настроены${reported.length > 0 ? `; проверено: ${reported.join(", ")}` : ""}`,
       });
     } else if (reported.length > 0) {
-      checks.push({
-        id,
-        status: "pass",
-        detail: `Конфигурационные файлы: ${reported.join(", ")}`,
-      });
+      checks.push({ id, status: "pass", detail: `Конфигурационные файлы: ${reported.join(", ")}` });
     } else {
-      checks.push({
-        id,
-        status: "pass",
-        detail: "Конфигурационные файлы в agent-dir отсутствуют (не настроены)",
-      });
+      checks.push({ id, status: "pass", detail: "Конфигурационные файлы в agent-dir отсутствуют (не настроены)" });
     }
   }
 
@@ -1084,59 +1057,32 @@ export function runDoctor(options) { // code-size:allow
     const id = "plugins";
     const skippedMarker = join(harness, "agent", "plugins.skipped");
     if (options.skipPluginCheck) {
-      checks.push({
-        id,
-        status: "skip",
-        detail: "Проверка плагинов пропущена (--skip-plugin-check)",
-      });
+      checks.push({ id, status: "skip", detail: "Проверка плагинов пропущена (--skip-plugin-check)" });
     } else if (existsSync(skippedMarker)) {
-      checks.push({
-        id,
-        status: "skip",
-        detail: "плагины пропущены при установке (-SkipPlugins); установите и повторите",
-      });
+      checks.push({ id, status: "skip", detail: "плагины пропущены при установке (-SkipPlugins); установите и повторите" });
     } else {
       const manifestPath = join(harness, "agent", "plugins.json");
       const omp = options.runOmp || runOmp;
-
-      let declared = null;
-      let manifestError = null;
+      let declared = null, manifestError = null;
       if (!existsSync(manifestPath)) {
-        checks.push({
-          id,
-          status: "fail",
-          detail: "Манифест плагинов отсутствует (agent/plugins.json): требуемые плагины не определены",
-        });
+        checks.push({ id, status: "fail", detail: "Манифест плагинов отсутствует (agent/plugins.json): требуемые плагины не определены" });
       } else {
-      try {
-        declared = readPluginsManifest(manifestPath);
-      } catch (err) {
-        manifestError = err.message;
-      }
-
-      if (manifestError) {
-        checks.push({
-          id,
-          status: "fail",
-          detail: `Манифест плагинов не прочитан (${manifestPath}): ${manifestError}`,
-        });
-      } else if (declared.length === 0) {
-        checks.push({
-          id,
-          status: "pass",
-          detail: "Манифест плагинов пуст: устанавливать нечего",
-        });
-      } else {
-        const listed = omp(["plugin", "list", "--json"]);
-        const { installed, listError } = resolvePluginList(listed);
-
-        if (listError) {
-          checks.push({
-            id,
-            status: "fail",
-            detail: `Не удалось проверить установку плагинов: ${listError}. Проверьте вручную: omp plugin list --json`,
-          });
+        try { declared = readPluginsManifest(manifestPath); } catch (err) { manifestError = err.message; }
+        if (manifestError) {
+          checks.push({ id, status: "fail", detail: `Манифест плагинов не прочитан (${manifestPath}): ${manifestError}` });
+        } else if (declared.length === 0) {
+          checks.push({ id, status: "pass", detail: "Манифест плагинов пуст: устанавливать нечего" });
         } else {
+          const listed = omp(["plugin", "list", "--json"]);
+          const { installed, listError } = resolvePluginList(listed);
+          if (listError) {
+            const setupWarn = explicitTargetHarness && !options.requirePlugins;
+            checks.push({
+              id,
+              status: setupWarn ? "warn" : "fail",
+              detail: `${setupWarn ? "[SETUP] " : ""}Не удалось проверить установку плагинов: ${listError}. Проверьте вручную: omp plugin list --json`,
+            });
+          } else {
           const missing = declared.filter((p) => !installed.has(p.name));
           const extra = [...installed.keys()].filter((n) => !declared.some((p) => p.name === n));
 
@@ -1189,8 +1135,9 @@ export function runDoctor(options) { // code-size:allow
           }
 
           if (missingRequired.length > 0 || mismatchedRequired.length > 0) {
-            status = "fail";
-            detail = parts.join(". ");
+            const setupWarn = explicitTargetHarness && !options.requirePlugins;
+            status = setupWarn ? "warn" : "fail";
+            detail = `${setupWarn ? "[SETUP] " : ""}${parts.join(". ")}`;
           } else if (missingOptional.length > 0 || mismatchedOptional.length > 0) {
             status = options.requirePlugins ? "fail" : "warn";
             detail = parts.join(". ");
@@ -1220,53 +1167,29 @@ export function runDoctor(options) { // code-size:allow
   {
     const id = "orphan-files";
     if (isRepoTree(harness)) {
-      checks.push({
-        id,
-        status: "skip",
-        detail: "Харнесс является дистрибутивным репозиторием: файлов вне репозитория быть не может",
-      });
+      checks.push({ id, status: "skip", detail: "Харнесс является дистрибутивным репозиторием: файлов вне репозитория быть не может" });
     } else {
       const repoClone = discoverRepoClone(harness);
       if (!repoClone) {
-        checks.push({
-          id,
-          status: "skip",
-          detail: `Клон репозитория не обнаружен (${join(harness, "workflow-repo")}): сравнение не выполняется`,
-        });
+        checks.push({ id, status: "skip", detail: `Клон репозитория не обнаружен (${join(harness, "workflow-repo")}): сравнение не выполняется` });
       } else {
-        let orphans = [];
-        let readError = null;
+        let orphans = [], readError = null;
         try {
           orphans = findPruneCandidates({ harness, repo: repoClone }).filter((rel) => rel !== "agent/plugins.skipped");
-        } catch (err) {
-          readError = err.message;
-        }
+        } catch (err) { readError = err.message; }
         if (readError) {
-          checks.push({
-            id,
-            status: "warn",
-            detail: `Не удалось сравнить харнесс с репозиторием: ${readError}`,
-          });
+          checks.push({ id, status: "warn", detail: `Не удалось сравнить харнесс с репозиторием: ${readError}` });
         } else if (orphans.length === 0) {
-          checks.push({
-            id,
-            status: "pass",
-            detail: `Все файлы каталогов манифеста присутствуют в репозитории (${repoClone})`,
-          });
+          checks.push({ id, status: "pass", detail: `Все файлы каталогов манифеста присутствуют в репозитории (${repoClone})` });
         } else {
           const toolOrphans = orphans.filter((rel) => rel.startsWith("tools/"));
           const otherOrphans = orphans.filter((rel) => !rel.startsWith("tools/"));
-          const severity = toolOrphans.length > 0 ? "fail" : "warn";
           const parts = [];
-          if (toolOrphans.length > 0) {
-            parts.push(`tools/ (${toolOrphans.length}): ${summarizeList(toolOrphans)}`);
-          }
-          if (otherOrphans.length > 0) {
-            parts.push(`прочие (${otherOrphans.length}): ${summarizeList(otherOrphans)}`);
-          }
+          if (toolOrphans.length > 0) parts.push(`tools/ (${toolOrphans.length}): ${summarizeList(toolOrphans)}`);
+          if (otherOrphans.length > 0) parts.push(`прочие (${otherOrphans.length}): ${summarizeList(otherOrphans)}`);
           checks.push({
             id,
-            status: severity,
+            status: toolOrphans.length > 0 ? "fail" : "warn",
             detail: `${orphans.length} файл(ов) харнесса отсутствуют в репозитории — ${parts.join("; ")}`,
           });
         }
@@ -1316,19 +1239,13 @@ export function runDoctor(options) { // code-size:allow
             ? `. Наши агенты без встроенного аналога (${forks.length}): ${summarizeList(forks)}`
             : "";
 
-        if (drift.length > 0) {
-          checks.push({
-            id,
-            status: "warn",
-            detail: `Дрейф от встроенных агентов OMP (${drift.length}): ${summarizeList(drift)} — наш файл перекрывает встроенного (first-wins)${forkNote}`,
-          });
-        } else {
-          checks.push({
-            id,
-            status: "pass",
-            detail: `Определения ролей не разошлись со встроенными OMP (совпало: ${matched.length}, форков: ${forks.length})${forkNote}`,
-          });
-        }
+        checks.push({
+          id,
+          status: drift.length > 0 ? "warn" : "pass",
+          detail: drift.length > 0
+            ? `Дрейф от встроенных агентов OMP (${drift.length}): ${summarizeList(drift)} — наш файл перекрывает встроенного (first-wins)${forkNote}`
+            : `Определения ролей не разошлись со встроенными OMP (совпало: ${matched.length}, форков: ${forks.length})${forkNote}`,
+        });
       }
     } finally {
       if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -1338,18 +1255,15 @@ export function runDoctor(options) { // code-size:allow
   // 12. check 'logs-hygiene': аудит размера и количества сессионных логов в ~/.omp/logs/.
   {
     const id = "logs-hygiene";
-    const logsDir = join(homedir(), ".omp", "logs");
+    const logsHome = dirname(agentsHome);
+    const logsDir = join(logsHome, ".omp", "logs");
     if (!existsSync(logsDir)) {
-      checks.push({
-        id,
-        status: "pass",
-        detail: "Каталог логов отсутствует (~/.omp/logs): чисто",
-      });
+      checks.push({ id, status: "pass", detail: "Каталог логов отсутствует (~/.omp/logs): чисто" });
     } else {
       let files = [];
       try { files = readdirSync(logsDir); } catch {}
       let totalBytes = 0;
-      let staleFiles = [];
+      const staleFiles = [];
       const now = Date.now();
       const maxAgeMs = 14 * 24 * 60 * 60 * 1000;
       for (const f of files) {
@@ -1359,32 +1273,22 @@ export function runDoctor(options) { // code-size:allow
           if (now - st.mtimeMs > maxAgeMs) staleFiles.push({ name: f, path: join(logsDir, f) });
         } catch {}
       }
-
       if (options.pruneLogs && staleFiles.length > 0) {
         let pruned = 0;
         for (const sf of staleFiles) {
           try { rmSync(sf.path, { force: true }); pruned++; } catch {}
         }
-        checks.push({
-          id,
-          status: "pass",
-          detail: `Очищено ${pruned} лог-файлов старше 14 дней. Осталось: ${files.length - pruned}`,
-        });
+        checks.push({ id, status: "pass", detail: `Очищено ${pruned} лог-файлов старше 14 дней. Осталось: ${files.length - pruned}` });
       } else {
         const mb = (totalBytes / (1024 * 1024)).toFixed(1);
-        if (files.length > 1000 || totalBytes > 50 * 1024 * 1024) {
-          checks.push({
-            id,
-            status: "warn",
-            detail: `${files.length} файлов логов (${mb} МБ), ${staleFiles.length} старше 14 дней. Очистить: node tools/doctor.mjs --prune-logs`,
-          });
-        } else {
-          checks.push({
-            id,
-            status: "pass",
-            detail: `${files.length} файлов логов (${mb} МБ) в норме`,
-          });
-        }
+        const noisy = files.length > 1000 || totalBytes > 50 * 1024 * 1024;
+        checks.push({
+          id,
+          status: noisy ? "warn" : "pass",
+          detail: noisy
+            ? `${files.length} файлов логов (${mb} МБ), ${staleFiles.length} старше 14 дней. Очистить: node tools/doctor.mjs --prune-logs`
+            : `${files.length} файлов логов (${mb} МБ) в норме`,
+        });
       }
     }
   }
@@ -1397,30 +1301,19 @@ export function runDoctor(options) { // code-size:allow
     const unreachable = providerNames.filter((n) => probeResults.providers[n].reachable === false);
 
     if (!existsSync(configYml)) {
-      checks.push({
-        id,
-        status: "skip",
-        detail: `config.yml не найден (${configYml}): роли не сопоставлялись с провайдерами`,
-      });
+      checks.push({ id, status: "skip", detail: `config.yml не найден (${configYml}): роли не сопоставлялись с провайдерами` });
     } else {
       let roles = [];
       try {
         roles = parseRoleModels(readFileSync(configYml, "utf8"));
       } catch (err) {
-        roles = [];
-        checks.push({
-          id,
-          status: "warn",
-          detail: `config.yml не прочитан (${err.message}): роли не сопоставлялись с провайдерами`,
-        });
+        checks.push({ id, status: "warn", detail: `config.yml не прочитан (${err.message}): роли не сопоставлялись с провайдерами` });
       }
-
       const blockedRoles = roles.filter((r) => unreachable.includes(providerOfModel(r.model)));
       const unprobedRoles = roles.filter((r) => {
         const provider = providerOfModel(r.model);
         return provider !== null && !providerNames.includes(provider);
       });
-
       if (unreachable.length === 0) {
         const reachableList = providerNames.filter((n) => probeResults.providers[n].reachable === true);
         checks.push({
@@ -1429,13 +1322,8 @@ export function runDoctor(options) { // code-size:allow
           detail: `Провайдеры отвечают (${reachableList.length > 0 ? reachableList.join(", ") : "нет настроенных"})${unprobedNote(unprobedRoles, probeResults.notes)}`,
         });
       } else {
-        const unreachableDetail = unreachable
-          .map((n) => `${n} (${probeResults.providers[n].error})`)
-          .join("; ");
-        const rolesDetail =
-          blockedRoles.length > 0
-            ? blockedRoles.map((r) => `${r.role} [${r.model}]`).join(", ")
-            : "нет";
+        const unreachableDetail = unreachable.map((n) => `${n} (${probeResults.providers[n].error})`).join("; ");
+        const rolesDetail = blockedRoles.length > 0 ? blockedRoles.map((r) => `${r.role} [${r.model}]`).join(", ") : "нет";
         checks.push({
           id,
           status: "warn",
@@ -1444,62 +1332,36 @@ export function runDoctor(options) { // code-size:allow
       }
     }
   }
+  } else {
+    checks.push(...checkNonOmpHarness({ harness, targetHarness, userHome, projectRoot }));
+  }
   // 14. check 'release-drift': сверка локального VERSION с GitHub latest release.
   // WARN при отставании (никогда FAIL), SKIP при offline/отсутствии VERSION.
   {
     const id = "release-drift";
     const versionPath = join(harness, "VERSION");
     if (!existsSync(versionPath)) {
-      checks.push({
-        id,
-        status: "skip",
-        detail: `файл VERSION не найден (${versionPath}): проверка пропущена`,
-      });
+      checks.push({ id, status: "skip", detail: `файл VERSION не найден (${versionPath}): проверка пропущена` });
     } else {
       let localVersion = "";
       try {
         localVersion = readFileSync(versionPath, "utf8").trim();
       } catch (err) {
-        checks.push({
-          id,
-          status: "skip",
-          detail: `не удалось прочитать VERSION (${err.message}): проверка пропущена`,
-        });
+        checks.push({ id, status: "skip", detail: `не удалось прочитать VERSION (${err.message}): проверка пропущена` });
       }
-
       if (localVersion) {
         const releaseInfo = options.releaseInfo;
         if (!releaseInfo) {
-          checks.push({
-            id,
-            status: "skip",
-            detail: "проверка релизов не выполнена (офлайн или локальный режим)",
-          });
+          checks.push({ id, status: "skip", detail: "проверка релизов не выполнена (офлайн или локальный режим)" });
         } else if (releaseInfo.offline || releaseInfo.error) {
-          checks.push({
-            id,
-            status: "skip",
-            detail: `офлайн: не удалось получить данные о релизе (${releaseInfo.error || "сеть недоступна"})`,
-          });
+          checks.push({ id, status: "skip", detail: `офлайн: не удалось получить данные о релизе (${releaseInfo.error || "сеть недоступна"})` });
         } else if (releaseInfo.status === "drift") {
           const latest = releaseInfo.latest || "релиза";
-          checks.push({
-            id,
-            status: "warn",
-            detail: `Локальная версия v${localVersion} отстает от релиза v${latest}. Запустите 'node tools/self-update.mjs update'`,
-          });
+          checks.push({ id, status: "warn", detail: `Локальная версия v${localVersion} отстает от релиза v${latest}. Запустите 'nullform update'` });
         } else if (releaseInfo.status === "clean") {
-          checks.push({
-            id,
-            status: "pass",
-            detail: `Версия v${localVersion} актуальна (GitHub ${releaseInfo.latest || localVersion})`,
-          });
+          checks.push({ id, status: "pass", detail: `Версия v${localVersion} актуальна (релиз ${releaseInfo.latest || localVersion})` });
         } else {
-          checks.push({
-            id,
-            status: "skip",
-            detail: `проверка релизов: ${releaseInfo.detail || "пропущена"}`,
-          });
+          checks.push({ id, status: "skip", detail: `проверка релизов: ${releaseInfo.detail || "пропущена"}` });
         }
       }
     }
@@ -1518,6 +1380,8 @@ export function runDoctor(options) { // code-size:allow
   return {
     mode,
     harness,
+    targetHarness,
+    ...(projectRoot ? { projectRoot } : {}),
     agentDir,
     requirePlugins: options.requirePlugins === true,
     checks,

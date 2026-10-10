@@ -1,5 +1,17 @@
 [
   {
+    "rel": "package.json"
+  },
+  {
+    "rel": "VERSION"
+  },
+  {
+    "rel": "bin/nullform.mjs"
+  },
+  {
+    "rel": "tools/self-update.mjs"
+  },
+  {
     "rel": "agent/AGENTS.md"
   },
   {
@@ -170,6 +182,15 @@
   },
   {
     "rel": "tools/sync-manifest.json"
+  },
+  {
+    "rel": "tools/harness-config.mjs"
+  },
+  {
+    "rel": "tools/install-harness.mjs"
+  },
+  {
+    "rel": "tools/installation-state.mjs"
   },
   {
     "rel": "tools/verify.mjs"

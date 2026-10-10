@@ -1,0 +1,57 @@
+{
+  "name": "nullform-workflow",
+  "version": "1.1.0",
+  "description": "Portable engineering workflow harness for AI coding agents",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "nullform": "bin/nullform.mjs"
+  },
+  "engines": {
+    "node": ">=18.19.0"
+  },
+  "dependencies": {
+    "json5": "2.2.3",
+    "jsonc-parser": "3.3.1",
+    "yaml": "2.9.1"
+  },
+  "files": [
+    "VERSION",
+    "LICENSE",
+    "jev/LICENSE",
+    "README.md",
+    "CONTEXT.md",
+    ".code-size.baseline.json",
+    "secrets.example.env",
+    "verify.ps1",
+    "verify.sh",
+    "bin/nullform.mjs",
+    "agent/AGENTS.md",
+    "agent/plugins.json",
+    "agent/*.example*",
+    "agent/agents/**",
+    "agent/extensions/**",
+    "core/**",
+    "paseo/**",
+    "rules/**",
+    "skills/**",
+    "!skills/**/tests/**",
+    "!skills/**/.coverage",
+    "!skills/**/__pycache__/**",
+    "templates/**",
+    "tools/*.mjs",
+    "tools/*.cjs",
+    "tools/*.ts",
+    "tools/*.py",
+    "tools/*.ps1",
+    "tools/*.sh",
+    "tools/sync-manifest.json",
+    "!tools/npm-smoke.mjs",
+    "!tools/tests/**",
+    "!**/CODEMAP.md",
+    "!**/node_modules/**",
+    "!**/.tmp/**",
+    "!**/history/**",
+    "!**/bench/runs/**"
+  ]
+}

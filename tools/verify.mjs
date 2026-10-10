@@ -220,11 +220,13 @@ function checkSyncDrift(repoRoot, harnessRoot, userHome) {
   if (isWin) {
     r = runProc("powershell.exe", [
       "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", syncScript, "-HarnessRoot", harnessRoot,
+      ...(repoRoot ? ["-RepoRoot", repoRoot] : []),
       ...(agentsRoot ? ["-AgentsRoot", agentsRoot] : []), ...(agentDir ? ["-AgentDir", agentDir] : []),
     ], envOpt);
   } else {
     r = runProc(syncScript, [
       "--harness-root", harnessRoot,
+      ...(repoRoot ? ["--repo", repoRoot] : []),
       ...(agentsRoot ? ["--agents-root", agentsRoot] : []), ...(agentDir ? ["--agent-dir", agentDir] : []),
     ], envOpt);
   }

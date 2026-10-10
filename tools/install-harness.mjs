@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// defer: multi-harness adapters expansion | ceiling: 1000 lines | upgrade: split adapters into separate modules
 /**
  * tools/install-harness.mjs — Cross-platform orchestrator installer for any harness.
  *
@@ -16,326 +15,106 @@
  *   - auto      (Auto-detect harness; fallback: omp)
  *
  * Options:
- *   --harness <name>    Target harness (default: auto)
- *   --root <dir>        Installation root directory (default: harness default directory)
- *   --user-home <dir>   User home directory override
- *   --dry-run           Preview actions without writing to disk
- *   --json              Machine-readable JSON output
- *   --help, -h          Show help
+ *   --harness <name>      Target harness (default: auto)
+ *   --root <dir>          Installation root directory (default: harness default directory)
+ *   --project-root <dir>  Target project directory for project-scoped rules (e.g. Cursor)
+ *   --user-home <dir>     User home directory override
+ *   --dry-run             Preview actions without writing to disk
+ *   --json                Machine-readable JSON output
+ *   --help, -h            Show help
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  copyFileSync,
-  lstatSync,
-  readlinkSync,
-  symlinkSync,
-  unlinkSync,
-  realpathSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, copyFileSync, lstatSync, readlinkSync, symlinkSync, unlinkSync, realpathSync } from "node:fs";
 import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import {
+  MANAGED_START,
+  MANAGED_END,
+  RUNTIME_PARSER_DEPS,
+  resolveRuntimePackageDir,
+  preflightAllConfigs,
+  preflightJsoncConfig,
+  preflightJson5Config,
+  preflightYamlConfig,
+  resolveOpencodeConfigPaths,
+  applyManagedSection,
+  applyCursorMdc,
+  updateOpencodeJson,
+  updateOpenclawJson,
+  updateHermesConfigYaml,
+  getMarkdownAdapter,
+  getOpenclawSoul,
+  getOpenclawUser,
+  hashContent,
+  isCommandInPath,
+} from "./harness-config.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 
-const SUPPORTED_HARNESSES = [
-  "claude",
-  "codex",
-  "opencode",
-  "cursor",
-  "omp",
-  "openclaw",
-  "hermes",
-  "openhuman",
-  "all",
-  "auto",
-];
+const SUPPORTED_HARNESSES = ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman", "all", "auto"];
 
 function isStrictlyInside(parent, child) {
   const rel = relative(resolve(parent), resolve(child));
   return Boolean(rel && !rel.startsWith("..") && !isAbsolute(rel));
 }
 
-function isCommandInPath(cmd) {
-  const pathEnv = process.env.PATH || "";
-  const sep = process.platform === "win32" ? ";" : ":";
-  const extensions = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
-  const dirs = pathEnv.split(sep);
-  for (const dir of dirs) {
-    if (!dir) continue;
-    for (const ext of extensions) {
-      const full = join(dir, cmd + ext);
-      try {
-        if (existsSync(full)) return true;
-      } catch {}
-    }
-  }
-  return false;
-}
-
 function detectHarness({ userHome = homedir(), env = process.env } = {}) {
   const isDefaultHome = resolve(userHome) === resolve(homedir());
   if (existsSync(join(userHome, ".claude"))) return "claude";
   if (existsSync(join(userHome, ".codex"))) return "codex";
-  if (existsSync(join(userHome, ".opencode"))) return "opencode";
+  if (existsSync(join(userHome, ".config", "opencode")) || existsSync(join(userHome, ".opencode"))) return "opencode";
   if (existsSync(join(userHome, ".cursor"))) return "cursor";
   if (existsSync(join(userHome, ".openclaw", "openclaw.json")) || (isDefaultHome && isCommandInPath("openclaw"))) return "openclaw";
   const hasHermesHome = env.HERMES_HOME && (isDefaultHome || isStrictlyInside(userHome, env.HERMES_HOME) || resolve(env.HERMES_HOME) === resolve(userHome));
   if (existsSync(join(userHome, ".hermes", "config.yaml")) || hasHermesHome || (isDefaultHome && isCommandInPath("hermes"))) return "hermes";
-  if (existsSync(join(userHome, ".openhuman")) || (isDefaultHome && isCommandInPath("openhuman-core"))) return "openhuman";
+  if (existsSync(join(userHome, ".openhuman")) || (isDefaultHome && isCommandInPath("openhuman-core")) || (isDefaultHome && isCommandInPath("openhuman"))) return "openhuman";
   if (isDefaultHome && isCommandInPath("omp")) return "omp";
   return "omp";
 }
 
 function getDefaultRoot(harness, userHome) {
   switch (harness) {
-    case "claude":
-      return join(userHome, ".claude", "workflow");
-    case "codex":
-      return join(userHome, ".codex", "workflow");
+    case "claude": return join(userHome, ".claude", "workflow");
+    case "codex": return join(userHome, ".codex", "workflow");
     case "opencode":
-      return join(userHome, ".opencode", "workflow");
-    case "cursor":
-      return join(userHome, ".cursor", "workflow");
-    case "openclaw":
-      return join(userHome, ".openclaw", "workflow");
+      return existsSync(join(userHome, ".opencode"))
+        ? join(userHome, ".opencode", "workflow")
+        : join(userHome, ".config", "opencode", "workflow");
+    case "cursor": return join(userHome, ".cursor", "workflow");
+    case "openclaw": return join(userHome, ".openclaw", "workflow");
     case "hermes": {
       const isDefaultHome = resolve(userHome) === resolve(homedir());
       const hermesBase = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
       return join(hermesBase, "workflow");
     }
-    case "openhuman":
-      return join(userHome, ".openhuman", "workflow");
-    case "omp":
-    case "all":
-    case "auto":
-    default:
-      return join(userHome, "omp-workflow");
+    case "openhuman": return join(userHome, ".openhuman", "workflow");
+    default: return join(userHome, "omp-workflow");
   }
 }
 
-function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter") {
-  return [
-    `# ${title}`,
-    "",
-    `Полный свод законов и протокол оркестратора: ${slashRoot}/agent/AGENTS.md`,
-    "",
-    "## 1. Запуск задачи и гейты (T0–T3)",
-    "Перед изменением любых файлов определите tier и зафиксируйте задачу:",
-    `- \`node '${slashRoot}/tools/workflow.mjs' start --tier <T0|T1|T2|T3> --task "<описание>"\``,
-    `- \`node '${slashRoot}/tools/workflow.mjs' check\` (exit 1 при отсутствии обязательных артефактов)`,
-    `- \`node '${slashRoot}/tools/workflow.mjs' close\` (фиксирует завершение задачи)`,
-    "",
-    "Уровни (Lanes):",
-    "- `⚡ [T0 FAST]`: 1–2 известных файла, точечные правки, без OpenSpec/интервью/oracle.",
-    "- `🔧 [T1 STANDARD]`: 3+ файлов, микро-план в чате, 1–2 специалиста.",
-    "- `🚀 [T2 HEAVY]`: архитектура/новые модули. 4-Wave SDD: Wave 0 (интервью) -> манифест (R##) -> OpenSpec -> TDD build -> blind Oracle.",
-    "- `🌌 [T3 PROGRAM]`: мульти-фича программа (T2 на каждый слайс).",
-    "",
-    "## 2. Фиксация артефактов",
-    `- Манифест требований: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind manifest --path openspec/changes/<id>/manifest.md\``,
-    `- Спецификация/OpenSpec: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind openspec --path openspec/changes/<id>\``,
-    `- Границы и интерфейсы: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind interfaces --path openspec/changes/<id>/interfaces.md\``,
-    `- Вердикт оракула: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind oracle --detail "ACCEPT: <причина>"\``,
-    "## 3. Дашборд наблюдаемости",
-    "При `workflow.mjs start` автоматически запускается фоновый дашборд.",
-    "- URL хранится в `.workflow/dashboard.json`",
-    `- Получить URL: \`node '${slashRoot}/tools/dashboard.mjs' --url\``,
-    "",
-    "## 4. Базовые законы",
-    "- Честность: никаких заявлений о готовности без выполненных проверок.",
-    "- Анализ до кода: инвентаризация существующего кода (reuse > extend > create).",
-    "- Ladder решений: reuse -> stdlib -> platform -> installed dep -> 1 line -> minimum.",
-    "- Возвратный контракт (≤25 строк): STATUS | FILES | TESTS было->стало | CONCERNS.",
-    "",
-  ].join("\n");
-}
-
-function getCursorAdapter(slashRoot) {
-  return [
-    "---",
-    "description: NULLFORM WORKFLOW Rules",
-    "alwaysApply: true",
-    "---",
-    getMarkdownAdapter(slashRoot, "Cursor NULLFORM WORKFLOW Adapter"),
-  ].join("\n");
-}
-
-function getOpencodeJson(existingPath) {
-  let cfg = {};
-  if (existingPath && existsSync(existingPath)) {
-    try {
-      cfg = JSON.parse(readFileSync(existingPath, "utf8"));
-    } catch {}
-  }
-  if (!cfg.instructions) {
-    cfg.instructions = ["AGENTS.md"];
-  } else if (Array.isArray(cfg.instructions)) {
-    if (!cfg.instructions.includes("AGENTS.md")) {
-      cfg.instructions.push("AGENTS.md");
-    }
-  } else if (typeof cfg.instructions === "string") {
-    if (cfg.instructions !== "AGENTS.md") {
-      cfg.instructions = [cfg.instructions, "AGENTS.md"];
-    }
-  }
-  if (!cfg["$schema"]) {
-    cfg["$schema"] = "https://opencode.ai/config.json";
-  }
-  return JSON.stringify(cfg, null, 2) + "\n";
-}
-function getOpenclawSoul(slashRoot) {
-  return [
-    "# OpenClaw SOUL: NULLFORM WORKFLOW",
-    "",
-    "Identity: Orchestrator agent operating under NULLFORM WORKFLOW protocols.",
-    `- Law reference: ${slashRoot}/agent/AGENTS.md`,
-    "- Core stance: Correctness first, then maintainability. Minimal diffs.",
-    "- Scientific diagnosis: Tight reproducible red test before inspecting code.",
-    "- Ladder: reuse -> stdlib -> platform -> installed dep -> 1 line -> minimum.",
-    "- Return contract: STATUS | FILES | TESTS было->стало | CONCERNS (<=25 lines).",
-    "",
-  ].join("\n");
-}
-
-function getOpenclawUser(slashRoot) {
-  return [
-    "# OpenClaw USER: Context & Operating Preferences",
-    "",
-    `Target workspace: ${slashRoot}`,
-    "- Workflow execution: use `node tools/workflow.mjs` for task gating.",
-    "- Observability: dashboard URL available in `.workflow/dashboard.json`.",
-    "- Verification: verify all fixes before final response.",
-    "",
-  ].join("\n");
-}
-
-function getOpenclawJson(existingPath, slashRoot) {
-  let cfg = {};
-  if (existingPath && existsSync(existingPath)) {
-    try {
-      cfg = JSON.parse(readFileSync(existingPath, "utf8"));
-    } catch {}
-  }
-  if (!cfg.agents || typeof cfg.agents !== "object") cfg.agents = {};
-  if (!cfg.agents.entries || typeof cfg.agents.entries !== "object") cfg.agents.entries = {};
-  cfg.agents.entries.workflow = {
-    workspace: slashRoot,
-    name: "workflow",
-    description: "NULLFORM WORKFLOW Orchestrator Agent",
-    prompt: "AGENTS.md",
-  };
-  if (!cfg.mcp || typeof cfg.mcp !== "object") cfg.mcp = {};
-  if (!cfg.mcp.servers || typeof cfg.mcp.servers !== "object") cfg.mcp.servers = {};
-
-  const mcpExamplePath = join(REPO_ROOT, "agent", "mcp.json.example");
-  if (existsSync(mcpExamplePath)) {
-    try {
-      const ex = JSON.parse(readFileSync(mcpExamplePath, "utf8"));
-      for (const [name, entry] of Object.entries(ex.mcpServers || {})) {
-        if (!cfg.mcp.servers[name] && !JSON.stringify(entry).includes("__")) {
-          cfg.mcp.servers[name] = translateStdioEntry(entry);
-        }
-      }
-    } catch {}
-  }
-  return JSON.stringify(cfg, null, 2) + "\n";
-}
-
-function getHermesConfigYaml(existingPath, slashRoot) {
-  let existingContent = "";
-  if (existingPath && existsSync(existingPath)) {
-    try {
-      existingContent = readFileSync(existingPath, "utf8");
-    } catch {}
-  }
-  if (existingContent.includes("mcp_servers:")) {
-    if (!existingContent.includes("profiles:")) {
-      return (
-        existingContent +
-        "\nprofiles:\n  workflow:\n    name: \"workflow\"\n    description: \"NULLFORM WORKFLOW Orchestrator Agent\"\n    prompt: \"AGENTS.md\"\n"
-      );
-    }
-    return existingContent;
-  }
-
-  const lines = [
-    "# Hermes Agent Configuration — NULLFORM WORKFLOW",
-    "",
-    "profiles:",
-    "  workflow:",
-    "    name: \"workflow\"",
-    "    description: \"NULLFORM WORKFLOW Orchestrator Agent\"",
-    "    prompt: \"AGENTS.md\"",
-    "",
-    "mcp_servers:",
-  ];
-
-  const mcpExamplePath = join(REPO_ROOT, "agent", "mcp.json.example");
-  if (existsSync(mcpExamplePath)) {
-    try {
-      const ex = JSON.parse(readFileSync(mcpExamplePath, "utf8"));
-      for (const [name, entry] of Object.entries(ex.mcpServers || {})) {
-        if (!JSON.stringify(entry).includes("__")) {
-          const translated = translateStdioEntry(entry);
-          lines.push(`  ${name}:`);
-          if (translated.command) {
-            lines.push(`    command: "${translated.command.replace(/"/g, '\\"')}"`);
-          }
-          if (Array.isArray(translated.args) && translated.args.length > 0) {
-            lines.push("    args:");
-            for (const arg of translated.args) {
-              lines.push(`      - "${String(arg).replace(/"/g, '\\"')}"`);
-            }
-          }
-          if (translated.env && typeof translated.env === "object") {
-            lines.push("    env:");
-            for (const [k, v] of Object.entries(translated.env)) {
-              lines.push(`      ${k}: "${String(v).replace(/"/g, '\\"')}"`);
-            }
-          }
-        }
-      }
-    } catch {}
-  }
-
-  return lines.join("\n") + "\n";
-}
-
-/**
- * `<HARNESS>` is resolved ONLY inside prompt surfaces (agent/, rules/, skills/) —
- * the same scope install.ps1 and tools/sync.* use. Substituting it inside tools/
- * too would (a) make every installed tool differ from its repo template, so
- * `sync` reports permanent drift, and (b) let `sync --promote` write this
- * machine's absolute path back into the repository.
- */
 function isPromptSurface(srcPath) {
   const rel = relative(REPO_ROOT, srcPath);
   return /^(agent|rules|skills)[\\/]/.test(rel) || /(?:^|[\\/])(agent|rules|skills)[\\/]/.test(srcPath);
 }
 
+function renderSubstitutedText(srcPath, slashRoot) {
+  let content = readFileSync(srcPath, "utf8");
+  if (content.includes("<HARNESS>") && isPromptSurface(srcPath)) {
+    content = content.split("<HARNESS>").join(slashRoot);
+  }
+  return content;
+}
+
 function copyAndSubstitute(srcPath, destPath, slashRoot) {
-  // Installing over the source tree itself (`--root .` from the clone) must not
-  // rewrite the repository's own files: the repo ships prompt surfaces with the
-  // <HARNESS> placeholder, and substituting it there would leave a dirty clone
-  // and bake this machine's path into the canonical templates.
   if (resolve(srcPath) === resolve(destPath)) return;
 
   const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(srcPath);
   if (isText) {
-    let content = readFileSync(srcPath, "utf8");
-    if (content.includes("<HARNESS>") && isPromptSurface(srcPath)) {
-      content = content.split("<HARNESS>").join(slashRoot);
-    }
-    writeFileSync(destPath, content, "utf8");
+    writeFileSync(destPath, renderSubstitutedText(srcPath, slashRoot), "utf8");
   } else {
     copyFileSync(srcPath, destPath);
   }
@@ -375,19 +154,28 @@ function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false) {
 }
 
 /**
- * Link the role roster into the user home, falling back to a copy when the OS
- * refuses symlinks (Windows without Developer Mode/privilege). A REAL directory
- * at the destination is left untouched — it may hold the user's own agent defs —
- * and an existing link is only ever unlinked (unlink), never recursively
- * deleted, so the harness tree it points at can never be wiped through it.
+ * Copies runtime parser dependencies (yaml, json5, jsonc-parser) selectively
+ * into targetRoot/tools/node_modules without copying the developer node_modules tree.
+ */
+function copyRuntimeDeps(repoRoot, targetRoot, slashRoot, planOnly = false) {
+  const copied = [];
+  const destToolsNm = join(targetRoot, "tools", "node_modules");
+  for (const pkg of RUNTIME_PARSER_DEPS) {
+    const srcPkg = resolveRuntimePackageDir(pkg, repoRoot);
+    if (srcPkg && existsSync(srcPkg)) {
+      const destPkg = join(destToolsNm, pkg);
+      copied.push(...copyDirRecursive(srcPkg, destPkg, slashRoot, planOnly));
+    }
+  }
+  return copied;
+}
+/**
+ * Link role roster into destination. If destination is a real physical directory,
+ * missing mandatory role files are copied into place while leaving user definitions intact.
  */
 function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
   if (planOnly) return [destDir];
   try {
-    // lstat, not existsSync: existsSync follows the link and reports `false` for a
-    // DANGLING one (harness moved or deleted), after which mkdir on that path
-    // fails with ENOENT and the whole install aborts. A dangling link is exactly
-    // what a re-install after moving the harness finds, so detect and replace it.
     let stat = null;
     try {
       stat = lstatSync(destDir);
@@ -395,7 +183,25 @@ function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
       stat = null;
     }
     if (stat) {
-      if (!stat.isSymbolicLink()) return []; // a real dir: the user's own defs
+      if (!stat.isSymbolicLink()) {
+        const copied = [];
+        if (existsSync(linkTarget)) {
+          for (const entry of readdirSync(linkTarget, { withFileTypes: true })) {
+            if (entry.isFile()) {
+              const srcFile = join(linkTarget, entry.name);
+              const dstFile = join(destDir, entry.name);
+              if (!existsSync(dstFile)) {
+                if (!planOnly) {
+                  mkdirSync(dirname(dstFile), { recursive: true });
+                  copyAndSubstitute(srcFile, dstFile, slashRoot);
+                }
+                copied.push(dstFile);
+              }
+            }
+          }
+        }
+        return copied;
+      }
       if (existsSync(destDir) &&
           resolve(dirname(destDir), readlinkSync(destDir)) === resolve(linkTarget)) {
         return [];
@@ -411,32 +217,85 @@ function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
 }
 
 /**
- * Skills registry: ~/.agents/skills is the tree the harness actually loads, so
- * copying into the harness root alone installs nothing. Marketplace-locked
- * skills (installed and recorded in ~/.agents/.skill-lock.json) and skills the
- * operator disabled on purpose are skipped — an install must not desync the
- * lock file or resurrect what was pruned.
+ * Skills registry installer. Preserves human files by verifying against prior managed hashes.
  */
-function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false) {
+function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false, priorManaged = {}, outManaged = {}) {
   if (!existsSync(srcDir)) return [];
   const skip = new Set();
-  try {
-    const locked = JSON.parse(readFileSync(join(agentsHome, ".skill-lock.json"), "utf8"));
-    for (const name of Object.keys(locked.skills || {})) {
-      if (existsSync(join(destDir, name, "SKILL.md"))) skip.add(name);
-    }
-  } catch {}
-  try {
-    const disabled = JSON.parse(readFileSync(join(agentsHome, ".skills-disabled.json"), "utf8"));
-    for (const name of disabled.disabled || []) {
-      if (typeof name === "string") skip.add(name);
-    }
-  } catch {}
+  const lockCandidates = [
+    join(agentsHome, ".skill-lock.json"),
+    join(agentsHome, ".agents", ".skill-lock.json"),
+  ];
+  for (const lockPath of lockCandidates) {
+    try {
+      if (existsSync(lockPath)) {
+        const locked = JSON.parse(readFileSync(lockPath, "utf8").replace(/^\uFEFF/, "").trim());
+        for (const name of Object.keys(locked.skills || {})) {
+          if (existsSync(join(destDir, name, "SKILL.md"))) skip.add(name);
+        }
+      }
+    } catch {}
+  }
+  const disabledCandidates = [
+    join(agentsHome, ".skills-disabled.json"),
+    join(agentsHome, ".agents", ".skills-disabled.json"),
+  ];
+  for (const disabledPath of disabledCandidates) {
+    try {
+      if (existsSync(disabledPath)) {
+        const disabled = JSON.parse(readFileSync(disabledPath, "utf8").replace(/^\uFEFF/, "").trim());
+        for (const name of disabled.disabled || []) {
+          if (typeof name === "string") skip.add(name);
+        }
+      }
+    } catch {}
+  }
 
   const out = [];
+
+  function walkSkill(currentSrc, currentDest) {
+    const entries = readdirSync(currentSrc, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".tmp") continue;
+      const sPath = join(currentSrc, entry.name);
+      const dPath = join(currentDest, entry.name);
+
+      if (entry.isDirectory()) {
+        if (!planOnly) mkdirSync(dPath, { recursive: true });
+        walkSkill(sPath, dPath);
+      } else if (entry.isFile()) {
+        const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(sPath);
+        const deployedContent = isText ? renderSubstitutedText(sPath, slashRoot) : readFileSync(sPath);
+        const deployedHash = hashContent(deployedContent);
+
+        if (existsSync(dPath)) {
+          const currentContent = isText ? readFileSync(dPath, "utf8") : readFileSync(dPath);
+          const currentHash = hashContent(currentContent);
+          const priorHash = priorManaged[dPath];
+          if (priorHash) {
+            if (currentHash !== priorHash) {
+              outManaged[dPath] = priorHash;
+              continue;
+            }
+          } else {
+            if (currentHash !== deployedHash) {
+              continue;
+            }
+          }
+        }
+        out.push(dPath);
+        outManaged[dPath] = deployedHash;
+        if (!planOnly) {
+          mkdirSync(dirname(dPath), { recursive: true });
+          copyAndSubstitute(sPath, dPath, slashRoot);
+        }
+      }
+    }
+  }
+
   for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || skip.has(entry.name)) continue;
-    out.push(...copyDirRecursive(join(srcDir, entry.name), join(destDir, entry.name), slashRoot, planOnly));
+    walkSkill(join(srcDir, entry.name), join(destDir, entry.name));
   }
   return out;
 }
@@ -466,52 +325,187 @@ export function translateStdioEntry(entry, platform = process.platform) {
 
 export const translateMcpEntry = translateStdioEntry;
 
-
 function parseCliArgs(argv) {
-  const options = {
-    harness: "auto",
-    root: "",
-    userHome: "",
-    dryRun: false,
-    json: false,
-    help: false,
+  const options = { harness: "auto", root: "", projectRoot: "", userHome: "", dryRun: false, json: false, help: false };
+  const takeVal = (i, flag) => {
+    if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) throw new Error(`Missing value for ${flag}`);
+    return argv[i + 1];
   };
-
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--help" || arg === "-h") {
-      options.help = true;
-    } else if (arg === "--dry-run") {
-      options.dryRun = true;
-    } else if (arg === "--json") {
-      options.json = true;
-    } else if (arg === "--harness") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("Missing value for --harness");
+    if (arg === "--help" || arg === "-h") options.help = true;
+    else if (arg === "--dry-run") options.dryRun = true;
+    else if (arg === "--json") options.json = true;
+    else if (arg === "--harness") options.harness = takeVal(i++, "--harness");
+    else if (arg.startsWith("--harness=")) options.harness = arg.slice("--harness=".length);
+    else if (arg === "--root") options.root = takeVal(i++, "--root");
+    else if (arg.startsWith("--root=")) options.root = arg.slice("--root=".length);
+    else if (arg === "--project-root") options.projectRoot = takeVal(i++, "--project-root");
+    else if (arg.startsWith("--project-root=")) options.projectRoot = arg.slice("--project-root=".length);
+    else if (arg === "--user-home") options.userHome = takeVal(i++, "--user-home");
+    else if (arg.startsWith("--user-home=")) options.userHome = arg.slice("--user-home=".length);
+    else throw new Error(`Unknown option "${arg}"`);
+  }
+  return options;
+}
+
+function installOmpHomeAssets({ targetRoot, slashRoot, userHome, options, priorManaged, plan, writeAdapter, readExisting }) {
+  const homeAgentDir = join(userHome, ".omp", "agent");
+  const agentsHome = join(userHome, ".agents");
+  const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
+  const rawLaw = existsSync(lawSource)
+    ? readFileSync(lawSource, "utf8").split("<HARNESS>").join(slashRoot)
+    : getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law");
+  const homeAgentsFile = join(homeAgentDir, "AGENTS.md");
+  writeAdapter(homeAgentsFile, applyManagedSection(readExisting(homeAgentsFile), rawLaw));
+  writeAdapter(join(homeAgentDir, ".harness-root"), `${targetRoot}\n`);
+
+  const mcpTarget = join(homeAgentDir, "mcp.json");
+  if (!existsSync(mcpTarget)) {
+    try {
+      const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
+      for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
+        if (JSON.stringify(entry).includes("__")) {
+          delete cfg.mcpServers[name];
+        } else {
+          cfg.mcpServers[name] = translateStdioEntry(entry);
+        }
       }
-      options.harness = argv[++i];
-    } else if (arg.startsWith("--harness=")) {
-      options.harness = arg.slice("--harness=".length);
-    } else if (arg === "--root") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("Missing value for --root");
-      }
-      options.root = argv[++i];
-    } else if (arg.startsWith("--root=")) {
-      options.root = arg.slice("--root=".length);
-    } else if (arg === "--user-home") {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) {
-        throw new Error("Missing value for --user-home");
-      }
-      options.userHome = argv[++i];
-    } else if (arg.startsWith("--user-home=")) {
-      options.userHome = arg.slice("--user-home=".length);
-    } else {
-      throw new Error(`Unknown option "${arg}"`);
-    }
+      writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
+    } catch {}
   }
 
-  return options;
+  plan.filesToCopy.push(
+    ...installRoleRoster(join(targetRoot, "agent", "agents"), join(homeAgentDir, "agents"), slashRoot, options.dryRun)
+  );
+  for (const dst of [join(homeAgentDir, "rules"), join(agentsHome, "rules")]) {
+    plan.filesToCopy.push(...copyDirRecursive(join(targetRoot, "rules"), dst, slashRoot, options.dryRun));
+  }
+  plan.filesToCopy.push(
+    ...installSkills(join(targetRoot, "skills"), join(agentsHome, "skills"), slashRoot, agentsHome, options.dryRun, priorManaged, plan.managedFiles)
+  );
+  for (const extFile of ["nullform-jev.ts", "nullform-delete-guard.ts"]) {
+    const extSource = join(REPO_ROOT, "agent", "extensions", extFile);
+    const extDest = join(homeAgentDir, "extensions", extFile);
+    if (existsSync(extSource)) {
+      if (!options.dryRun) {
+        mkdirSync(dirname(extDest), { recursive: true });
+        copyFileSync(extSource, extDest);
+      }
+      plan.filesToCopy.push(extDest);
+    }
+  }
+}
+
+function applyOpencodeAdapter({ targetRoot, slashRoot, userHome, shouldWriteHome, writeAdapter, readExisting, copyHomeSkills }) {
+  const rootAgents = join(targetRoot, "AGENTS.md");
+  const rawAgents = getMarkdownAdapter(slashRoot, "OpenCode NULLFORM WORKFLOW Adapter");
+  writeAdapter(rootAgents, applyManagedSection(readExisting(rootAgents), rawAgents));
+  for (const rootJson of resolveOpencodeConfigPaths(targetRoot)) {
+    writeAdapter(rootJson, updateOpencodeJson(rootJson, preflightJsoncConfig(rootJson)));
+  }
+  if (shouldWriteHome) {
+    const configDir = join(userHome, ".config", "opencode");
+    const homeAgents = join(configDir, "AGENTS.md");
+    writeAdapter(homeAgents, applyManagedSection(readExisting(homeAgents), rawAgents));
+    for (const homeJson of resolveOpencodeConfigPaths(configDir)) {
+      writeAdapter(homeJson, updateOpencodeJson(homeJson, preflightJsoncConfig(homeJson)));
+    }
+    const legacyOpencodeDir = join(userHome, ".opencode");
+    if (existsSync(legacyOpencodeDir)) {
+      for (const legacyCfg of resolveOpencodeConfigPaths(legacyOpencodeDir)) {
+        if (existsSync(legacyCfg)) {
+          writeAdapter(legacyCfg, updateOpencodeJson(legacyCfg, preflightJsoncConfig(legacyCfg)));
+        }
+      }
+    }
+    copyHomeSkills(join(configDir, "skills"));
+  }
+}
+
+function applyHarnessAdapter(h, ctx) {
+  const { targetRoot, projectRoot, slashRoot, userHome, options, shouldWriteHome, writeAdapter, readExisting, copyHomeSkills, priorManaged, plan } = ctx;
+  switch (h) {
+    case "claude": {
+      const rawAdapter = getMarkdownAdapter(slashRoot, "Claude Code NULLFORM WORKFLOW Adapter");
+      writeAdapter(join(targetRoot, "CLAUDE.md"), applyManagedSection(readExisting(join(targetRoot, "CLAUDE.md")), rawAdapter));
+      if (shouldWriteHome) {
+        const homePath = join(userHome, ".claude", "CLAUDE.md");
+        writeAdapter(homePath, applyManagedSection(readExisting(homePath), rawAdapter));
+        copyHomeSkills(join(userHome, ".claude", "skills"));
+      }
+      break;
+    }
+    case "codex": {
+      const rawAdapter = getMarkdownAdapter(slashRoot, "Codex NULLFORM WORKFLOW Adapter");
+      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), rawAdapter));
+      if (shouldWriteHome) {
+        const homePath = join(userHome, ".codex", "AGENTS.md");
+        writeAdapter(homePath, applyManagedSection(readExisting(homePath), rawAdapter));
+        copyHomeSkills(join(userHome, ".codex", "skills"));
+      }
+      break;
+    }
+    case "opencode":
+      applyOpencodeAdapter(ctx);
+      break;
+    case "cursor": {
+      const rootMdc = join(projectRoot || targetRoot, ".cursor", "rules", "00-workflow.mdc");
+      writeAdapter(rootMdc, applyCursorMdc(readExisting(rootMdc), getMarkdownAdapter(slashRoot, "Cursor NULLFORM WORKFLOW Adapter")));
+      break;
+    }
+    case "omp": {
+      const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
+      const lawPath = join(targetRoot, "agent", "AGENTS.md");
+      const rawLaw = existsSync(lawSource)
+        ? readFileSync(lawSource, "utf8").split("<HARNESS>").join(slashRoot)
+        : getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law");
+      if (resolve(lawPath) !== resolve(lawSource)) writeAdapter(lawPath, rawLaw);
+      if (shouldWriteHome) installOmpHomeAssets({ targetRoot, slashRoot, userHome, options, priorManaged, plan, writeAdapter, readExisting });
+      break;
+    }
+    case "openclaw": {
+      const rootJson = join(targetRoot, "openclaw.json");
+      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenClaw NULLFORM WORKFLOW Adapter")));
+      writeAdapter(join(targetRoot, "SOUL.md"), applyManagedSection(readExisting(join(targetRoot, "SOUL.md")), getOpenclawSoul(slashRoot)));
+      writeAdapter(join(targetRoot, "USER.md"), applyManagedSection(readExisting(join(targetRoot, "USER.md")), getOpenclawUser(slashRoot)));
+      writeAdapter(rootJson, updateOpenclawJson(rootJson, preflightJson5Config(rootJson), slashRoot));
+      if (shouldWriteHome || options.dryRun) {
+        const homeJson = join(userHome, ".openclaw", "openclaw.json");
+        writeAdapter(homeJson, updateOpenclawJson(homeJson, preflightJson5Config(homeJson), slashRoot));
+        copyHomeSkills(join(userHome, ".openclaw", "skills"));
+      }
+      break;
+    }
+    case "hermes": {
+      const rootConfig = join(targetRoot, "config.yaml");
+      const mcpEx = join(REPO_ROOT, "agent", "mcp.json.example");
+      const rawHermes = getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter");
+      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), rawHermes));
+      writeAdapter(rootConfig, updateHermesConfigYaml(rootConfig, preflightYamlConfig(rootConfig), slashRoot, mcpEx, translateStdioEntry));
+      if (shouldWriteHome || options.dryRun) {
+        const hermesHome = (resolve(userHome) === resolve(homedir()) && process.env.HERMES_HOME) || join(userHome, ".hermes");
+        const homeConfig = join(hermesHome, "config.yaml");
+        writeAdapter(homeConfig, updateHermesConfigYaml(homeConfig, preflightYamlConfig(homeConfig), slashRoot, mcpEx, translateStdioEntry));
+        writeAdapter(join(hermesHome, "SOUL.md"), applyManagedSection(readExisting(join(hermesHome, "SOUL.md")), rawHermes));
+        writeAdapter(join(hermesHome, "AGENTS.md"), applyManagedSection(readExisting(join(hermesHome, "AGENTS.md")), rawHermes));
+        copyHomeSkills(join(hermesHome, "skills"));
+      }
+      break;
+    }
+    case "openhuman": {
+      const agentDir = join(targetRoot, "agents", "workflow");
+      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter")));
+      writeAdapter(join(agentDir, "AGENTS.md"), applyManagedSection(readExisting(join(agentDir, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman Workflow Agent")));
+      copyHomeSkills(join(agentDir, "skills"));
+      if (shouldWriteHome || options.dryRun) {
+        const homeOh = join(userHome, ".openhuman");
+        writeAdapter(join(homeOh, "AGENTS.md"), applyManagedSection(readExisting(join(homeOh, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter")));
+        copyHomeSkills(join(homeOh, "skills"));
+      }
+      break;
+    }
+  }
 }
 
 function installHarness(options = {}) {
@@ -531,6 +525,7 @@ function installHarness(options = {}) {
     ? resolve(options.root)
     : getDefaultRoot(selectedHarness, userHome);
   const slashRoot = targetRoot.replace(/\\/g, "/");
+  const projectRoot = options.projectRoot ? resolve(options.projectRoot) : null;
 
   if (isStrictlyInside(REPO_ROOT, targetRoot)) {
     throw new Error(
@@ -544,38 +539,29 @@ function installHarness(options = {}) {
       ? ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman"]
       : [selectedHarness];
 
+  preflightAllConfigs({ harnesses: targetHarnesses, targetRoot, projectRoot, userHome });
+
+  const priorManaged = options.managedFiles && typeof options.managedFiles === "object" ? options.managedFiles : {};
   const plan = {
     harness: selectedHarness,
     root: targetRoot,
+    ...(projectRoot ? { projectRoot } : {}),
     userHome,
     dryRun: Boolean(options.dryRun),
     filesToCopy: [],
     adapters: [],
+    managedFiles: {},
   };
 
-  // 1. Identify core files to copy
-  const coreDirs = ["agent", "rules", "tools", "core", "templates", "skills", "paseo"];
-  // install.ps1/install.sh deliberately stay behind: audit/sync decide whether a
-  // tree is a repo clone or an installed harness by looking for install.ps1, so
-  // shipping it into the harness would make a standalone install look like a repo.
-  const coreFiles = [
-    ".code-size.baseline.json",
-    "CONTEXT.md",
-    "README.md",
-    "secrets.example.env",
-    "verify.ps1",
-    "verify.sh",
-  ];
+  const coreDirs = ["agent", "rules", "tools", "core", "templates", "skills", "paseo", "bin"];
+  const coreFiles = ["VERSION", ".code-size.baseline.json", "CONTEXT.md", "README.md", "secrets.example.env", "verify.ps1", "verify.sh", "package.json"];
 
   for (const dir of coreDirs) {
     const srcDir = join(REPO_ROOT, dir);
-    const destDir = join(targetRoot, dir);
     if (existsSync(srcDir)) {
-      const copied = copyDirRecursive(srcDir, destDir, slashRoot, options.dryRun);
-      plan.filesToCopy.push(...copied);
+      plan.filesToCopy.push(...copyDirRecursive(srcDir, join(targetRoot, dir), slashRoot, options.dryRun));
     }
   }
-
   for (const file of coreFiles) {
     const srcFile = join(REPO_ROOT, file);
     const destFile = join(targetRoot, file);
@@ -588,216 +574,30 @@ function installHarness(options = {}) {
     }
   }
 
-  // 2. Identify & generate adapters
+  plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, options.dryRun));
+
   const writeAdapter = (filePath, content) => {
     plan.adapters.push(filePath);
+    plan.managedFiles[filePath] = hashContent(content);
     if (!options.dryRun) {
       mkdirSync(dirname(filePath), { recursive: true });
       writeFileSync(filePath, content, "utf8");
     }
   };
-
   const shouldWriteHome = Boolean(options.userHome || !options.root);
+  const readExisting = (p) => (existsSync(p) ? readFileSync(p, "utf8") : "");
+  const copyHomeSkills = (destDir) => {
+    const src = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
+    plan.filesToCopy.push(...installSkills(src, destDir, slashRoot, userHome, options.dryRun, priorManaged, plan.managedFiles));
+  };
 
   for (const h of targetHarnesses) {
-    switch (h) {
-      case "claude": {
-        const rootPath = join(targetRoot, "CLAUDE.md");
-        writeAdapter(rootPath, getMarkdownAdapter(slashRoot, "Claude Code NULLFORM WORKFLOW Adapter"));
-        if (shouldWriteHome) {
-          const homePath = join(userHome, ".claude", "CLAUDE.md");
-          writeAdapter(homePath, getMarkdownAdapter(slashRoot, "Claude Code NULLFORM WORKFLOW Adapter"));
-        }
-        break;
-      }
-      case "codex": {
-        const rootPath = join(targetRoot, "AGENTS.md");
-        writeAdapter(rootPath, getMarkdownAdapter(slashRoot, "Codex NULLFORM WORKFLOW Adapter"));
-        if (shouldWriteHome) {
-          const homePath = join(userHome, ".codex", "AGENTS.md");
-          writeAdapter(homePath, getMarkdownAdapter(slashRoot, "Codex NULLFORM WORKFLOW Adapter"));
-        }
-        break;
-      }
-      case "opencode": {
-        const rootAgents = join(targetRoot, "AGENTS.md");
-        const rootJson = join(targetRoot, "opencode.json");
-        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "OpenCode NULLFORM WORKFLOW Adapter"));
-        writeAdapter(rootJson, getOpencodeJson(rootJson));
-        if (shouldWriteHome) {
-          const homeAgents = join(userHome, ".opencode", "AGENTS.md");
-          const homeJson = join(userHome, ".opencode", "opencode.json");
-          writeAdapter(homeAgents, getMarkdownAdapter(slashRoot, "OpenCode NULLFORM WORKFLOW Adapter"));
-          writeAdapter(homeJson, getOpencodeJson(homeJson));
-        }
-        break;
-      }
-      case "cursor": {
-        const rootMdc = join(targetRoot, ".cursor", "rules", "00-workflow.mdc");
-        writeAdapter(rootMdc, getCursorAdapter(slashRoot));
-        if (shouldWriteHome) {
-          const homeMdc = join(userHome, ".cursor", "rules", "00-workflow.mdc");
-          writeAdapter(homeMdc, getCursorAdapter(slashRoot));
-        }
-        break;
-      }
-      case "omp": {
-        // agent/AGENTS.md is the FULL orchestrator law (copied above, <HARNESS>
-        // resolved). Never overwrite it with the short adapter: that would leave
-        // an installed harness whose law file is a stub while the real protocol
-        // file is replaced.
-        const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
-        const lawPath = join(targetRoot, "agent", "AGENTS.md");
-        const law = existsSync(lawSource)
-          ? readFileSync(lawSource, "utf8").split("<HARNESS>").join(slashRoot)
-          : getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law");
-        // In-place install (`--root .` from the clone): the harness root IS the
-        // repo, so leave the template's <HARNESS> placeholder alone — writing the
-        // resolved law back would dirty the clone and bake this machine's path
-        // into the canonical template.
-        if (resolve(lawPath) !== resolve(lawSource)) {
-          if (!options.dryRun) {
-            mkdirSync(dirname(lawPath), { recursive: true });
-            writeFileSync(lawPath, law, "utf8");
-          }
-          plan.adapters.push(lawPath);
-        }
-        if (shouldWriteHome) {
-          const homeAgentDir = join(userHome, ".omp", "agent");
-          const agentsHome = join(userHome, ".agents");
-          writeAdapter(join(homeAgentDir, "AGENTS.md"), law);
-          writeAdapter(join(homeAgentDir, ".harness-root"), `${targetRoot}\n`);
-          // Seed mcp.json from the example, as install.ps1 does. Without it the
-          // freshly installed harness fails its own verification (`mcp.json parses`
-          // and `mandatory MCP servers present`), and `chrome-devtools` — the one
-          // server marked mandatory — would never be declared on this path.
-          // Placeholder-valued servers are dropped: an absent server is better than
-          // one that fails to connect on every session boot.
-          const mcpTarget = join(homeAgentDir, "mcp.json");
-          if (!existsSync(mcpTarget)) {
-            try {
-              const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
-              // Drop any server still carrying an unsubstituted placeholder: there is
-              // no secrets.env on this path, so a kept entry would ship a literal
-              // `__X__` into mcp.json (which verification then flags) and fail to
-              // connect on every session boot.
-              for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
-                if (JSON.stringify(entry).includes("__")) {
-                  delete cfg.mcpServers[name];
-                } else {
-                  cfg.mcpServers[name] = translateStdioEntry(entry);
-                }
-              }
-              writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
-            } catch {}
-          }
-          // Without these the installed harness has no roles, no skills and no
-          // rules: OMP cannot start the orchestrator at all.
-          plan.filesToCopy.push(
-            ...installRoleRoster(
-              join(targetRoot, "agent", "agents"),
-              join(homeAgentDir, "agents"),
-              slashRoot,
-              options.dryRun
-            )
-          );
-          for (const dst of [join(homeAgentDir, "rules"), join(agentsHome, "rules")]) {
-            plan.filesToCopy.push(...copyDirRecursive(join(targetRoot, "rules"), dst, slashRoot, options.dryRun));
-          }
-          plan.filesToCopy.push(
-            ...installSkills(
-              join(targetRoot, "skills"),
-              join(agentsHome, "skills"),
-              slashRoot,
-              agentsHome,
-              options.dryRun
-            )
-          );
-          // Native OMP extensions (JEV assistance, delete-guard): installed idempotently
-          for (const extFile of ["nullform-jev.ts", "nullform-delete-guard.ts"]) {
-            const extSource = join(REPO_ROOT, "agent", "extensions", extFile);
-            const extDest = join(homeAgentDir, "extensions", extFile);
-            if (existsSync(extSource)) {
-              if (!options.dryRun) {
-                mkdirSync(dirname(extDest), { recursive: true });
-                copyFileSync(extSource, extDest);
-              }
-              plan.filesToCopy.push(extDest);
-            }
-          }
-        }
-        break;
-      }
-      case "openclaw": {
-        const rootAgents = join(targetRoot, "AGENTS.md");
-        const rootSoul = join(targetRoot, "SOUL.md");
-        const rootUser = join(targetRoot, "USER.md");
-        const rootJson = join(targetRoot, "openclaw.json");
-        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "OpenClaw NULLFORM WORKFLOW Adapter"));
-        writeAdapter(rootSoul, getOpenclawSoul(slashRoot));
-        writeAdapter(rootUser, getOpenclawUser(slashRoot));
-        writeAdapter(rootJson, getOpenclawJson(rootJson, slashRoot));
-
-        if (shouldWriteHome || options.dryRun) {
-          const homeOpenclaw = join(userHome, ".openclaw");
-          const homeJson = join(homeOpenclaw, "openclaw.json");
-          writeAdapter(homeJson, getOpenclawJson(homeJson, slashRoot));
-          const homeSkills = join(homeOpenclaw, "skills");
-          const skillsSource = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
-          plan.filesToCopy.push(
-            ...copyDirRecursive(skillsSource, homeSkills, slashRoot, options.dryRun)
-          );
-        }
-        break;
-      }
-      case "hermes": {
-        const rootAgents = join(targetRoot, "AGENTS.md");
-        const rootConfig = join(targetRoot, "config.yaml");
-        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter"));
-        writeAdapter(rootConfig, getHermesConfigYaml(rootConfig, slashRoot));
-
-        if (shouldWriteHome || options.dryRun) {
-          const isDefaultHome = resolve(userHome) === resolve(homedir());
-          const hermesHome = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
-          const homeConfig = join(hermesHome, "config.yaml");
-          writeAdapter(homeConfig, getHermesConfigYaml(homeConfig, slashRoot));
-          writeAdapter(join(hermesHome, "AGENTS.md"), getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter"));
-          const homeSkills = join(hermesHome, "skills");
-          const skillsSource = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
-          plan.filesToCopy.push(
-            ...copyDirRecursive(skillsSource, homeSkills, slashRoot, options.dryRun)
-          );
-        }
-        break;
-      }
-      case "openhuman": {
-        const rootAgents = join(targetRoot, "AGENTS.md");
-        writeAdapter(rootAgents, getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter"));
-
-        const agentDir = join(targetRoot, "agents", "workflow");
-        writeAdapter(join(agentDir, "AGENTS.md"), getMarkdownAdapter(slashRoot, "OpenHuman Workflow Agent"));
-        const agentSkills = join(agentDir, "skills");
-        const skillsSource = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
-        plan.filesToCopy.push(
-          ...copyDirRecursive(skillsSource, agentSkills, slashRoot, options.dryRun)
-        );
-
-        if (shouldWriteHome || options.dryRun) {
-          const homeOpenhuman = join(userHome, ".openhuman");
-          writeAdapter(join(homeOpenhuman, "AGENTS.md"), getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter"));
-          const homeSkills = join(homeOpenhuman, "skills");
-          plan.filesToCopy.push(
-            ...copyDirRecursive(skillsSource, homeSkills, slashRoot, options.dryRun)
-          );
-        }
-        break;
-      }
-    }
+    applyHarnessAdapter(h, {
+      targetRoot, projectRoot, slashRoot, userHome, options, shouldWriteHome,
+      writeAdapter, readExisting, copyHomeSkills, priorManaged, plan,
+    });
   }
 
-  // 3. Prompt-cache baseline, as install.ps1 does. Without it the first audit on a
-  // POSIX install reports `n/a (no baseline)` and later cache-prefix drift — the
-  // change that silently re-bills every session at full price — goes unnoticed.
   const promptLint = join(targetRoot, "tools", "prompt-lint.mjs");
   if (!options.dryRun && existsSync(promptLint)) {
     try {
@@ -807,16 +607,9 @@ function installHarness(options = {}) {
       plan.baselineRecorded = false;
     }
   }
-
   return plan;
 }
 
-/**
- * `prompt-lint baseline` scans ~/.agents too, so both HOME and USERPROFILE are
- * pointed at the user home being installed into — a sandbox install must not
- * record the operator's real machine, or the first audit reports every skill as
- * added/removed.
- */
 function runPromptLintBaseline(promptLint, harnessRoot, userHome) {
   spawnSync(process.execPath, [promptLint, "baseline", "--root", harnessRoot], {
     encoding: "utf8",
@@ -833,12 +626,13 @@ Usage:
   node tools/install-harness.mjs [options]
 
 Options:
-  --harness <name>    Harness to configure: claude, codex, opencode, cursor, omp, openclaw, hermes, openhuman, all, auto (default: auto)
-  --root <dir>        Installation root directory (default: harness default directory)
-  --user-home <dir>   User home directory override
-  --dry-run           Preview installation plan without writing any files
-  --json              Output result as JSON
-  --help, -h          Show this help message
+  --harness <name>      Harness to configure: claude, codex, opencode, cursor, omp, openclaw, hermes, openhuman, all, auto (default: auto)
+  --root <dir>          Installation root directory (default: harness default directory)
+  --project-root <dir>  Project root directory for project-scoped rules (e.g. Cursor)
+  --user-home <dir>     User home directory override
+  --dry-run             Preview installation plan without writing any files
+  --json                Output result as JSON
+  --help, -h            Show this help message
 `.trim());
 }
 
@@ -902,4 +696,4 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
   main();
 }
 
-export { installHarness, detectHarness, getDefaultRoot, SUPPORTED_HARNESSES };
+export { installHarness, detectHarness, getDefaultRoot, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath };

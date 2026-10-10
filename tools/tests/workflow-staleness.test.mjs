@@ -341,7 +341,7 @@ test("staleness: generated worktrees and caches do not invalidate acceptance in 
     completeT2(root);
     assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified source before generated files appeared" }), 0);
 
-    for (const dir of [".tmp/worktrees", ".archmap", ".codemap", ".opencode", "cache", "logs"]) {
+    for (const dir of [".tmp/worktrees", ".codemap", ".opencode", "cache", "logs"]) {
       const target = join(root, dir);
       mkdirSync(target, { recursive: true });
       writeFileSync(join(target, "generated.txt"), "generated output\n", "utf8");

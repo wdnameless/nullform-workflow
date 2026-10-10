@@ -12,6 +12,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  MANAGED_START,
+  MANAGED_END,
+  preflightManagedMarkers,
+  applyManagedSection,
+  extractManagedSection,
+} from './harness-config.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -494,6 +501,7 @@ function main() { // code-size:allow
 
   const ompAgents = path.join(agentDir, 'AGENTS.md');
   const harnessAgents = path.join(harnessRoot, 'agent', 'AGENTS.md');
+  const repoAgents = path.join(repoRoot, 'agent', 'AGENTS.md');
   const ompApplicable = !opts.only || opts.only.toLowerCase().includes('agents');
   if (ompApplicable) {
     if (!validatePathWithinRoot(ompAgents, agentDir)) {
@@ -502,6 +510,10 @@ function main() { // code-size:allow
     }
     if (!validatePathWithinRoot(harnessAgents, harnessRoot)) {
       console.error(`sync: REFUSED - harness law path "${harnessAgents}" escapes declared root "${harnessRoot}" or is an unresolved link`);
+      process.exit(2);
+    }
+    if (fs.existsSync(repoAgents) && !validatePathWithinRoot(repoAgents, repoRoot)) {
+      console.error(`sync: REFUSED - repo law path "${repoAgents}" escapes declared root "${repoRoot}" or is an unresolved link`);
       process.exit(2);
     }
   }
@@ -601,10 +613,50 @@ function main() { // code-size:allow
     checked++;
     const ompText = readNormalized(ompAgents);
     const harnessText = readNormalized(harnessAgents);
-    if (ompText !== harnessText) {
+    const slashHarness = harnessRoot.replace(/\\/g, '/');
+    const repoLawText = fs.existsSync(repoAgents) ? readNormalized(repoAgents) : null;
+    const canonicalLaw = repoLawText !== null
+      ? repoLawText.replaceAll('<HARNESS>', slashHarness)
+      : harnessText;
+
+    let isDrift = false;
+    let malformedError = null;
+    if (ompText === null) {
+      isDrift = true;
+    } else {
+      const hasStart = ompText.includes(MANAGED_START);
+      const hasEnd = ompText.includes(MANAGED_END);
+      if (hasStart || hasEnd) {
+        try {
+          preflightManagedMarkers(ompAgents, ompText);
+          const ompManaged = extractManagedSection(ompText, ompAgents);
+          const harnessManaged = extractManagedSection(harnessText, harnessAgents) ?? harnessText.trim();
+          const canonicalManaged = canonicalLaw !== null
+            ? (extractManagedSection(canonicalLaw, repoAgents) ?? canonicalLaw.trim())
+            : harnessManaged;
+          isDrift = (ompManaged !== harnessManaged) || (ompManaged !== canonicalManaged);
+        } catch (err) {
+          malformedError = err.message;
+          isDrift = true;
+        }
+      } else {
+        isDrift = (ompText !== harnessText) || (canonicalLaw !== null && ompText !== canonicalLaw);
+      }
+    }
+    if (isDrift) {
       if (opts.mode !== 'promote') drift.push('~/.omp/agent/AGENTS.md');
       if (opts.mode === 'deploy') {
-        const bak = backupLiveFile(ompAgents, harnessText, { dryRun: opts.dryRun });
+        if (malformedError) {
+          console.error(`sync: REFUSED - cannot deploy to ~/.omp/agent/AGENTS.md: ${malformedError}`);
+          process.exit(2);
+        }
+        const lawSourceForDeploy = canonicalLaw ?? harnessText;
+        const sourceManaged = extractManagedSection(lawSourceForDeploy, harnessAgents) ?? lawSourceForDeploy.trim();
+        let targetContent = lawSourceForDeploy;
+        if (ompText !== null && (ompText.includes(MANAGED_START) || ompText.includes(MANAGED_END))) {
+          targetContent = applyManagedSection(ompText, sourceManaged);
+        }
+        const bak = backupLiveFile(ompAgents, targetContent, { dryRun: opts.dryRun });
         if (bak) {
           if (!opts.quiet) {
             if (opts.dryRun) {
@@ -615,7 +667,7 @@ function main() { // code-size:allow
           }
         }
         if (!opts.dryRun) {
-          writeNormalized(ompAgents, harnessText);
+          writeNormalized(ompAgents, targetContent);
         }
         if (!opts.quiet) {
           if (opts.dryRun) {
@@ -628,7 +680,11 @@ function main() { // code-size:allow
         if (!opts.quiet) log("  [--] skip    ~/.omp/agent/AGENTS.md (resolved copy; promote the harness copy instead)");
       } else {
         if (!opts.quiet) {
-          log("  [XX] DRIFT   ~/.omp/agent/AGENTS.md (OMP loads this file; differs from the harness copy)");
+          if (malformedError) {
+            log(`  [XX] DRIFT   ~/.omp/agent/AGENTS.md (malformed managed markers: ${malformedError})`);
+          } else {
+            log("  [XX] DRIFT   ~/.omp/agent/AGENTS.md (OMP loads this file; differs from the harness copy)");
+          }
         } else {
           log("  [XX] DRIFT   ~/.omp/agent/AGENTS.md");
         }
@@ -770,7 +826,13 @@ function main() { // code-size:allow
   process.exit(1);
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
+const isMain = process.argv[1] && (() => {
+  try {
+    return fs.realpathSync(process.argv[1]).toLowerCase() === fs.realpathSync(fileURLToPath(import.meta.url)).toLowerCase();
+  } catch {
+    return path.resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
+  }
+})();
 if (isMain) {
   main();
 }
