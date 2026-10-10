@@ -403,3 +403,52 @@ test("stale user extension detects drift via liveRel and converges on deploy", (
     rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+test("managed block in OMP law copy preserves user text on deploy and ignores user text drift", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.repo, "agent", "AGENTS.md"), "initial law\n");
+    writeFileSync(join(f.harness, "agent", "AGENTS.md"), "initial law\n");
+    const userCopy = join(f.agentDir, "AGENTS.md");
+    mkdirSync(f.agentDir, { recursive: true });
+    writeFileSync(userCopy, "# User header\n\n<!-- BEGIN NULLFORM WORKFLOW -->\ninitial law\n<!-- END NULLFORM WORKFLOW -->\n\n# User footer\n");
+
+    // 1. Initial check is clean because managed section matches
+    const cleanCheck = f.run("--check", "--only", "AGENTS.md", "--json");
+    assert.equal(cleanCheck.status, 0, cleanCheck.stderr || cleanCheck.stdout);
+    assert.equal(JSON.parse(cleanCheck.stdout).ok, true);
+
+    // 2. Update law in repo and harness -> check detects drift
+    writeFileSync(join(f.repo, "agent", "AGENTS.md"), "updated law\n");
+    writeFileSync(join(f.harness, "agent", "AGENTS.md"), "updated law\n");
+    const driftCheck = f.run("--check", "--only", "AGENTS.md");
+    assert.equal(driftCheck.status, 1, driftCheck.stderr || driftCheck.stdout);
+    assert.match(driftCheck.stdout, /DRIFT\s+~\/.omp\/agent\/AGENTS\.md/);
+
+    // 3. Deploy replaces ONLY managed section, preserving user header and footer
+    const deployRes = f.run("--deploy", "--only", "AGENTS.md");
+    assert.equal(deployRes.status, 0, deployRes.stderr || deployRes.stdout);
+    const deployedText = readFileSync(userCopy, "utf8");
+    assert.ok(deployedText.includes("# User header"));
+    assert.ok(deployedText.includes("# User footer"));
+    assert.ok(deployedText.includes("updated law"));
+    assert.ok(!deployedText.includes("initial law"));
+
+    // 4. Check is clean again after deploy
+    const cleanAfter = f.run("--check", "--only", "AGENTS.md", "--json");
+    assert.equal(cleanAfter.status, 0);
+    assert.equal(JSON.parse(cleanAfter.stdout).ok, true);
+
+    // 5. Malformed markers fail closed on check and deploy
+    writeFileSync(userCopy, "# Broken\n<!-- BEGIN NULLFORM WORKFLOW -->\nno end delimiter\n");
+    const malformedCheck = f.run("--check", "--only", "AGENTS.md");
+    assert.equal(malformedCheck.status, 1);
+    assert.match(malformedCheck.stdout, /malformed managed markers/);
+
+    const malformedDeploy = f.run("--deploy", "--only", "AGENTS.md");
+    assert.equal(malformedDeploy.status, 2);
+    assert.match(malformedDeploy.stderr, /REFUSED/);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

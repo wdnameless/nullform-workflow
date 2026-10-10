@@ -24,6 +24,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
   `skills/`; both installers and both sync scripts must agree on that scope, or an
   installed harness reports permanent drift and `sync --promote` writes a
   machine-specific path back into the canonical templates.
+- **npm package** (`nullform-workflow`) — the distributable npm package exposing the unified CLI executable `nullform` (`init`, `doctor`, `update`). Targets Node.js `>=18.19.0` (`engines.node`) and packages runtime assets (`bin/`, `tools/`, `agent/`, `rules/`, `skills/`, `templates/`, `core/`, `paseo/`) with three pinned runtime parser dependencies justified by host native formats (`jsonc-parser` 3.3.1 for OpenCode JSONC, `json5` 2.2.3 for OpenClaw JSON5, and `yaml` 2.9.1 for Hermes YAML) for safe native configuration preservation at user trust boundaries; installs and upgrades globally via npm (including from a local `.tgz` or loopback/private registry, not publicly published to npmjs) without requiring a git repository or mutating user configuration during `npm install`.
+- **Installation identity** — the persisted record (`<userHome>/.nullform/installation.json`, schema version 1) of the operator's chosen harness (`claude`, `codex`, `opencode`, `cursor`, `omp`, `openclaw`, `hermes`, `openhuman`), target installation root directory, user home, active package version, optional `projectRoot` (for project-scoped adapters such as Cursor), and optional `managedFiles` ownership map. Saved only after a successful non-dry-run `nullform init` or `nullform update` to direct subsequent `nullform doctor` and `nullform update` runs without autodetection or storing user credentials.
 
 ## Work lanes
 

@@ -198,7 +198,7 @@ $agentsHome = Join-Path $UserHome ".agents"
 
 foreach ($d in @("$HarnessRoot\agent", "$HarnessRoot\agent\agents", "$HarnessRoot\agent\extensions",
                  "$HarnessRoot\tools", "$HarnessRoot\core", "$HarnessRoot\paseo", "$HarnessRoot\templates",
-                 "$HarnessRoot\rules",
+                 "$HarnessRoot\rules", "$HarnessRoot\bin",
                  $agentDir, "$agentDir\rules", "$agentDir\extensions",
                  "$agentsHome\rules", "$agentsHome\skills")) {
   New-Item -ItemType Directory -Force -Path $d | Out-Null
@@ -209,7 +209,45 @@ foreach ($d in @("$HarnessRoot\agent", "$HarnessRoot\agent\agents", "$HarnessRoo
 $slashRoot = $HarnessRoot.Replace([char]92, [char]47)   # backslash -> forward slash
 $agentsText = (Get-Content "$PSScriptRoot\agent\AGENTS.md" -Raw -Encoding UTF8).Replace('<HARNESS>', $slashRoot)
 WriteText "$HarnessRoot\agent\AGENTS.md" $agentsText
-WriteText "$agentDir\AGENTS.md" $agentsText
+$managedStart = "<!-- BEGIN NULLFORM WORKFLOW -->"
+$managedEnd = "<!-- END NULLFORM WORKFLOW -->"
+$managedBlock = "$managedStart`n$($agentsText.Trim())`n$managedEnd"
+if (Test-Path "$agentDir\AGENTS.md") {
+  $existing = Get-Content "$agentDir\AGENTS.md" -Raw -Encoding UTF8
+  $hasStart = $existing.Contains($managedStart)
+  $hasEnd = $existing.Contains($managedEnd)
+  if ($hasStart -or $hasEnd) {
+    $sIdx = $existing.IndexOf($managedStart)
+    $eIdx = $existing.IndexOf($managedEnd)
+    $sLast = $existing.LastIndexOf($managedStart)
+    $eLast = $existing.LastIndexOf($managedEnd)
+    if (-not $hasStart -or -not $hasEnd -or $sIdx -ne $sLast -or $eIdx -ne $eLast -or $eIdx -lt $sIdx) {
+      Die "Preflight failed: malformed managed markers in $agentDir\AGENTS.md"
+    }
+    $before = $existing.Substring(0, $sIdx)
+    $after = $existing.Substring($eIdx + $managedEnd.Length)
+    WriteText "$agentDir\AGENTS.md" "$before$managedBlock$after"
+  } elseif ($existing -match "^#\s+(ORCHESTRATOR LAW\b|Oh My Pi Orchestrator Law)") {
+    $endMarker = if ($existing -match "^#\s+ORCHESTRATOR LAW\b") {
+      "before ``skill://<name>`` resolves (its rules may already be embedded in the agent files above)."
+    } else {
+      "- Возвратный контракт (≤25 строк): STATUS | FILES | TESTS было->стало | CONCERNS."
+    }
+    $legacyEnd = $existing.IndexOf($endMarker)
+    if ($legacyEnd -ne -1) {
+      $legacyEnd += $endMarker.Length
+      $human = $existing.Substring($legacyEnd).TrimStart()
+      $finalText = if ($human) { "$managedBlock`n`n$human" } else { "$managedBlock`n" }
+      WriteText "$agentDir\AGENTS.md" $finalText
+    } else {
+      WriteText "$agentDir\AGENTS.md" "$($existing.TrimEnd())`n`n$managedBlock`n"
+    }
+  } else {
+    WriteText "$agentDir\AGENTS.md" "$($existing.TrimEnd())`n`n$managedBlock`n"
+  }
+} else {
+  WriteText "$agentDir\AGENTS.md" "$managedBlock`n"
+}
 # A one-line pointer, so agent defs can be located from any working directory.
 WriteText "$agentDir\.harness-root" ("$HarnessRoot" + [Environment]::NewLine)
 Copy-Item "$PSScriptRoot\agent\agents\*" "$HarnessRoot\agent\agents\" -Force -Recurse
@@ -240,6 +278,17 @@ Get-ChildItem "$HarnessRoot\agent\agents\*.md", "$HarnessRoot\rules\*.md" -Error
 Get-ChildItem -Path "$PSScriptRoot\tools" -Exclude 'node_modules' | ForEach-Object {
   Copy-Item $_.FullName "$HarnessRoot\tools\" -Force -Recurse
 }
+foreach ($pkg in @('yaml', 'json5', 'jsonc-parser')) {
+  $pkgSrc = Join-Path $PSScriptRoot "node_modules\$pkg"
+  if (-not (Test-Path $pkgSrc)) {
+    $pkgSrc = Join-Path $PSScriptRoot "tools\node_modules\$pkg"
+  }
+  if (Test-Path $pkgSrc) {
+    $pkgDst = Join-Path $HarnessRoot "tools\node_modules\$pkg"
+    New-Item -ItemType Directory -Force -Path (Split-Path $pkgDst -Parent) | Out-Null
+    Copy-Item $pkgSrc $pkgDst -Force -Recurse
+  }
+}
 
 # Copy core and paseo
 if (Test-Path "$PSScriptRoot\core") {
@@ -248,10 +297,13 @@ if (Test-Path "$PSScriptRoot\core") {
 if (Test-Path "$PSScriptRoot\paseo") {
   Copy-Item "$PSScriptRoot\paseo\*" "$HarnessRoot\paseo\" -Force -Recurse
 }
+if (Test-Path "$PSScriptRoot\bin") {
+  Copy-Item "$PSScriptRoot\bin\*" "$HarnessRoot\bin\" -Force -Recurse
+}
 
 # Also drop the repo-level scripts into the harness root, so an install made
 # without keeping the clone can still verify and audit itself.
-foreach ($f in 'VERSION', 'verify.ps1', 'verify.sh', 'README.md', 'CONTEXT.md', 'secrets.example.env') {
+foreach ($f in 'VERSION', 'verify.ps1', 'verify.sh', 'README.md', 'CONTEXT.md', 'secrets.example.env', 'package.json', '.code-size.baseline.json') {
   $src = Join-Path $PSScriptRoot $f
   if (Test-Path $src) { Copy-Item $src "$HarnessRoot\$f" -Force }
 }

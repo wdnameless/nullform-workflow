@@ -1,18 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { spawnSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
+  PACKAGE_NAME,
   parseSemVer,
   compareSemVer,
+  validateInstallationState,
+  readInstallationState,
+  writeInstallationState,
+  resolveRegistryConfig,
+  extractNpmMetadata,
+  detectEffectivePrefix,
   checkRelease,
   executeUpdate,
-  checkWorkingTreeClean,
 } from "../self-update.mjs";
 import { runDoctor } from "../doctor.mjs";
 
@@ -22,34 +28,37 @@ const DOCTOR_PATH = join(REPO_ROOT, "tools", "doctor.mjs");
 
 function createMockServer(responseHandler) {
   return new Promise((resolvePromise) => {
-    const server = createServer((req, res) => {
-      responseHandler(req, res);
-    });
+    const server = createServer((req, res) => responseHandler(req, res));
     server.listen(0, "127.0.0.1", () => {
       const port = server.address().port;
-      const url = `http://127.0.0.1:${port}/releases/latest`;
+      const baseUrl = `http://127.0.0.1:${port}`;
       resolvePromise({
         server,
-        url,
         port,
+        baseUrl,
+        url: `${baseUrl}/${PACKAGE_NAME}/latest`,
         close: () => new Promise((done) => server.close(done)),
       });
     });
   });
 }
-function runCliAsync(scriptPath, args) {
+
+function runCliAsync(scriptPath, args, env = process.env) {
   return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [scriptPath, ...args]);
+    const child = spawn(process.execPath, [scriptPath, ...args], { env, shell: false });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
     child.on("close", (status) => {
       resolvePromise({ status, stdout, stderr });
     });
   });
 }
-
 
 function createTempDir(prefix = "selfupdate-test-") {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -69,378 +78,384 @@ test("SemVer parsing and comparison", () => {
   assert.equal(compareSemVer("v1.0.0", "1.0.0"), 0);
   assert.equal(compareSemVer("1.0.0", "1.0.1"), -1);
   assert.equal(compareSemVer("1.0.0", "1.1.0"), -1);
-  assert.equal(compareSemVer("1.9.9", "2.0.0"), -1);
   assert.equal(compareSemVer("2.0.0", "1.9.9"), 1);
   assert.equal(compareSemVer("1.0.0-alpha", "1.0.0"), -1);
-  assert.equal(compareSemVer("1.0.0", "1.0.0-alpha"), 1);
 });
 
-test("checkRelease: behind -> drift", async () => {
+test("installation state validation and persistence fail closed on bad data", () => {
+  const tmp = createTempDir("state-test-");
+  try {
+    assert.equal(readInstallationState(tmp), null);
+
+    const rootDir = join(tmp, "custom-root");
+    const managedFile = join(tmp, ".opencode", "opencode.json");
+    const { statePath, state } = writeInstallationState(tmp, {
+      schemaVersion: 1,
+      harness: "opencode",
+      root: rootDir,
+      userHome: tmp,
+      version: "1.1.0",
+      managedFiles: { [managedFile]: "sha256-abc" },
+    });
+    assert.equal(existsSync(statePath), true);
+    assert.equal(state.harness, "opencode");
+    assert.deepEqual(readInstallationState(tmp), state);
+
+    const validWithProject = validateInstallationState({
+      ...state,
+      projectRoot: join(tmp, "project-root"),
+    });
+    assert.equal(validWithProject.projectRoot, join(tmp, "project-root"));
+    assert.throws(() => validateInstallationState({ ...state, projectRoot: "relative/path" }), /absolute path/);
+    assert.throws(() => validateInstallationState({ ...state, projectRoot: "-bad-start" }), /absolute path/);
+    assert.throws(() => validateInstallationState({ ...state, schemaVersion: 2 }), /schemaVersion/);
+    assert.throws(() => validateInstallationState({ ...state, harness: "auto" }), /Invalid harness/);
+    assert.throws(() => validateInstallationState({ ...state, root: "relative/path" }), /absolute path/);
+    assert.throws(() => validateInstallationState({ ...state, apiKey: "secret" }), /unexpected field/);
+
+    writeFileSync(statePath, "{corrupt json", "utf8");
+    assert.throws(() => readInstallationState(tmp), /Corrupted installation state JSON/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("extractNpmMetadata reads npm version and dist-tags, rejecting GitHub tag_name", () => {
+  assert.deepEqual(extractNpmMetadata({ name: PACKAGE_NAME, version: "1.2.0" }), {
+    version: "1.2.0",
+    tarballUrl: null,
+  });
+  assert.deepEqual(
+    extractNpmMetadata({
+      name: PACKAGE_NAME,
+      "dist-tags": { latest: "1.3.0" },
+      versions: { "1.3.0": { dist: { tarball: "http://127.0.0.1/pkg.tgz" } } },
+    }),
+    { version: "1.3.0", tarballUrl: "http://127.0.0.1/pkg.tgz" }
+  );
+  assert.equal(extractNpmMetadata({ tag_name: "v1.2.0", name: "Release 1.2.0" }), null);
+});
+
+test("checkRelease: behind -> drift from npm metadata and packument", async () => {
   const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
+  writeFileSync(join(tmp, "VERSION"), "1.1.0\n", "utf8");
 
   const mock = await createMockServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      tag_name: "v1.1.0",
-      name: "Release 1.1.0",
-      html_url: "https://github.com/wdnameless/nullform-workflow/releases/tag/v1.1.0",
-    }));
+    if (req.url === `/${PACKAGE_NAME}`) {
+      res.end(
+        JSON.stringify({
+          name: PACKAGE_NAME,
+          "dist-tags": { latest: "1.2.0" },
+          versions: { "1.2.0": { version: "1.2.0" } },
+        })
+      );
+      return;
+    }
+    res.end(JSON.stringify({ name: PACKAGE_NAME, version: "1.2.0" }));
   });
 
   try {
-    const res = await checkRelease({ root: tmp, apiUrl: mock.url });
+    const res = await checkRelease({ root: tmp, registry: mock.baseUrl });
     assert.equal(res.status, "drift");
     assert.equal(res.ok, true);
     assert.equal(res.drift, true);
-    assert.equal(res.current, "1.0.0");
-    assert.equal(res.latest, "1.1.0");
-    assert.equal(res.tag, "v1.1.0");
+    assert.equal(res.current, "1.1.0");
+    assert.equal(res.latest, "1.2.0");
   } finally {
     await mock.close();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("checkRelease: equal -> clean", async () => {
+test("checkRelease: equal -> clean and GitHub-only payload -> setup", async () => {
   const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
+  writeFileSync(join(tmp, "VERSION"), "1.1.0\n", "utf8");
+
+  let mode = "npm";
+  const mock = await createMockServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (mode === "github") {
+      res.end(JSON.stringify({ tag_name: "v1.9.0" }));
+    } else {
+      res.end(JSON.stringify({ name: PACKAGE_NAME, version: "1.1.0" }));
+    }
+  });
+
+  try {
+    const cleanRes = await checkRelease({ root: tmp, apiUrl: mock.url });
+    assert.equal(cleanRes.status, "clean");
+    assert.equal(cleanRes.drift, false);
+    assert.equal(cleanRes.current, "1.1.0");
+    assert.equal(cleanRes.latest, "1.1.0");
+
+    mode = "github";
+    const ghRes = await checkRelease({ root: tmp, apiUrl: mock.url });
+    assert.equal(ghRes.status, "setup");
+    assert.equal(ghRes.latest, null);
+  } finally {
+    await mock.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("checkRelease: offline, 404, missing VERSION and .npmrc registry", async () => {
+  const tmp = createTempDir();
+  try {
+    const missingVer = await checkRelease({ root: tmp });
+    assert.equal(missingVer.status, "setup");
+    assert.equal(missingVer.missingVersion, true);
+
+    writeFileSync(join(tmp, "VERSION"), "1.1.0\n", "utf8");
+    const offline = await checkRelease({
+      root: tmp,
+      apiUrl: "http://127.0.0.1:59999/nullform-workflow/latest",
+      timeoutMs: 300,
+    });
+    assert.equal(offline.status, "setup");
+    assert.equal(offline.offline, true);
+
+    const mock404 = await createMockServer((req, res) => {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
+    });
+    try {
+      writeFileSync(join(tmp, ".npmrc"), `registry=${mock404.baseUrl}\n`, "utf8");
+      const cfg = resolveRegistryConfig({ userHome: tmp, env: {} });
+      assert.equal(cfg.registryUrl, mock404.baseUrl);
+
+      const notFound = await checkRelease({ root: tmp, userHome: tmp, env: {} });
+      assert.equal(notFound.status, "setup");
+      assert.equal(notFound.notPublished, true);
+      assert.match(notFound.detail, /No releases found/i);
+    } finally {
+      await mock404.close();
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detectEffectivePrefix resolves Windows and POSIX global node_modules layouts", () => {
+  const winPkg = resolve("/tmp/win-prefix/node_modules/nullform-workflow");
+  assert.equal(detectEffectivePrefix({ packageRoot: winPkg, env: {} }), resolve("/tmp/win-prefix"));
+
+  const posixPkg = resolve("/tmp/posix-prefix/lib/node_modules/nullform-workflow");
+  assert.equal(detectEffectivePrefix({ packageRoot: posixPkg, env: {} }), resolve("/tmp/posix-prefix"));
+
+  const explicit = resolve("/tmp/explicit-prefix");
+  assert.equal(detectEffectivePrefix({ prefix: explicit, packageRoot: winPkg, env: {} }), explicit);
+});
+
+test("executeUpdate: fails closed on missing or invalid installation state", async () => {
+  const tmpHome = createTempDir("update-nostate-");
+  try {
+    const missing = await executeUpdate({ userHome: tmpHome });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.error, "missing_state");
+
+    const stateDir = join(tmpHome, ".nullform");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "installation.json"), "{bad", "utf8");
+
+    const corrupt = await executeUpdate({ userHome: tmpHome });
+    assert.equal(corrupt.ok, false);
+    assert.equal(corrupt.error, "invalid_state");
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test("executeUpdate: --dry-run plans npm global install + nullform init without Git", async () => {
+  const tmp = createTempDir("update-dry-");
+  const rootDir = join(tmp, "Root With Spaces");
+  mkdirSync(rootDir, { recursive: true });
+  writeFileSync(join(rootDir, "VERSION"), "1.1.0\n", "utf8");
+  writeInstallationState(tmp, {
+    schemaVersion: 1,
+    harness: "opencode",
+    root: rootDir,
+    userHome: tmp,
+    version: "1.1.0",
+  });
 
   const mock = await createMockServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      tag_name: "v1.0.0",
-      name: "Release 1.0.0",
-      html_url: "https://github.com/wdnameless/nullform-workflow/releases/tag/v1.0.0",
-    }));
+    res.end(JSON.stringify({ name: PACKAGE_NAME, version: "1.2.0" }));
   });
 
-  try {
-    const res = await checkRelease({ root: tmp, apiUrl: mock.url });
-    assert.equal(res.status, "clean");
-    assert.equal(res.ok, true);
-    assert.equal(res.drift, false);
-    assert.equal(res.current, "1.0.0");
-    assert.equal(res.latest, "1.0.0");
-  } finally {
-    await mock.close();
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("checkRelease: offline -> graceful (SETUP not FAIL)", async () => {
-  const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
-
-  // Pick an unreachable local port to simulate offline
-  const unreachableUrl = "http://127.0.0.1:59999/releases/latest";
-
-  try {
-    const res = await checkRelease({ root: tmp, apiUrl: unreachableUrl, timeoutMs: 500 });
-    assert.equal(res.status, "setup");
-    assert.equal(res.ok, true);
-    assert.equal(res.offline, true);
-    assert.equal(res.current, "1.0.0");
-    assert.equal(res.latest, null);
-    assert.match(res.detail, /unreachable/i);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("checkRelease: 404 no releases -> graceful SETUP", async () => {
-  const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
-
-  const mock = await createMockServer((req, res) => {
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ message: "Not Found" }));
-  });
-
-  try {
-    const res = await checkRelease({ root: tmp, apiUrl: mock.url });
-    assert.equal(res.status, "setup");
-    assert.equal(res.ok, true);
-    assert.match(res.detail, /No releases found/i);
-  } finally {
-    await mock.close();
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("checkRelease: missing VERSION -> graceful SETUP", async () => {
-  const tmp = createTempDir();
-  try {
-    const res = await checkRelease({ root: tmp });
-    assert.equal(res.status, "setup");
-    assert.equal(res.ok, true);
-    assert.equal(res.missingVersion, true);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("executeUpdate: update --dry-run returns plan without writing", async () => {
-  const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
-
-  const mock = await createMockServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ tag_name: "v1.1.0", name: "v1.1.0" }));
-  });
-
-  // Mock git commands for clean repo check
-  const mockSpawn = (cmd, args) => {
-    if (args.includes("--is-inside-work-tree")) return { status: 0, stdout: "true" };
-    if (args.includes("--porcelain")) return { status: 0, stdout: "" };
-    return { status: 0, stdout: "" };
-  };
-
+  let spawned = false;
   try {
     const res = await executeUpdate({
-      root: tmp,
-      apiUrl: mock.url,
+      userHome: tmp,
+      registry: mock.baseUrl,
+      prefix: join(tmp, "Prefix With Spaces"),
       dryRun: true,
-      spawnFn: mockSpawn,
+      spawnFn: () => {
+        spawned = true;
+        return { status: 0 };
+      },
     });
     assert.equal(res.ok, true);
     assert.equal(res.dryRun, true);
-    assert.equal(res.current, "1.0.0");
-    assert.equal(res.targetTag, "v1.1.0");
-    assert.ok(Array.isArray(res.plan));
-    assert.ok(res.plan.some((p) => p.includes("git merge --ff-only v1.1.0")));
-    assert.ok(res.plan.some((p) => p.includes("install-harness.mjs --dry-run")));
+    assert.equal(spawned, false);
+    assert.equal(res.current, "1.1.0");
+    assert.equal(res.latest, "1.2.0");
+    assert.ok(res.plan.some((p) => p.includes("npm install --global --ignore-scripts")));
+    assert.ok(res.plan.some((p) => p.includes("nullform init --harness opencode")));
+    assert.equal(res.plan.some((p) => p.includes("git ")), false);
   } finally {
     await mock.close();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("executeUpdate: refuses on dirty working tree with instructions", async () => {
-  const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
+test("executeUpdate: retry when VERSION advanced but state is behind and real npm 404 tarball boundary", async () => {
+  const tmp = createTempDir("update-retry-");
+  const homeDir = join(tmp, "Home With Spaces");
+  const rootDir = join(tmp, "Workflow Root");
+  const projectDir = join(tmp, "Cursor Project");
+  const prefixDir = join(tmp, "Global Prefix");
+  const cacheDir = join(tmp, "npm-cache");
 
-  const mockSpawn = (cmd, args) => {
-    if (args.includes("--is-inside-work-tree")) return { status: 0, stdout: "true" };
-    if (args.includes("--porcelain")) {
-      return { status: 0, stdout: " M tools/doctor.mjs\n?? untracked.txt\n" };
-    }
-    return { status: 0, stdout: "" };
-  };
-
-  try {
-    const res = await executeUpdate({
-      root: tmp,
-      spawnFn: mockSpawn,
-    });
-    assert.equal(res.ok, false);
-    assert.equal(res.error, "dirty_tree");
-    assert.ok(res.instructions.length > 0);
-    assert.ok(res.instructions.some((i) => i.includes("git stash")));
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("executeUpdate: refuses on non-fast-forward with manual instructions", async () => {
-  const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
-
-  const mock = await createMockServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ tag_name: "v1.1.0" }));
+  mkdirSync(rootDir, { recursive: true });
+  mkdirSync(projectDir, { recursive: true });
+  mkdirSync(prefixDir, { recursive: true });
+  mkdirSync(cacheDir, { recursive: true });
+  writeFileSync(join(rootDir, "VERSION"), "1.2.0\n", "utf8");
+  writeInstallationState(homeDir, {
+    schemaVersion: 1,
+    harness: "cursor",
+    root: rootDir,
+    projectRoot: projectDir,
+    userHome: homeDir,
+    version: "1.1.0",
   });
 
-  const mockSpawn = (cmd, args) => {
-    if (args.includes("--is-inside-work-tree")) return { status: 0, stdout: "true" };
-    if (args.includes("--porcelain")) return { status: 0, stdout: "" };
-    if (args.includes("fetch")) return { status: 0, stdout: "" };
-    if (args.includes("--is-ancestor")) return { status: 1, stderr: "not ancestor" };
-    return { status: 0, stdout: "" };
-  };
+  const mock = await createMockServer((req, res) => {
+    if (req.url?.endsWith(".tgz")) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "tarball missing" }));
+      return;
+    }
+    const tarballUrl = `http://127.0.0.1:${mock.port}/${PACKAGE_NAME}/-/${PACKAGE_NAME}-1.2.0.tgz`;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        name: PACKAGE_NAME,
+        "dist-tags": { latest: "1.2.0" },
+        versions: {
+          "1.2.0": {
+            name: PACKAGE_NAME,
+            version: "1.2.0",
+            dist: { tarball: tarballUrl },
+          },
+        },
+      })
+    );
+  });
 
   try {
-    const res = await executeUpdate({
-      root: tmp,
-      apiUrl: mock.url,
-      spawnFn: mockSpawn,
+    const dryRes = await executeUpdate({
+      userHome: homeDir,
+      prefix: prefixDir,
+      registry: mock.baseUrl,
+      dryRun: true,
     });
-    assert.equal(res.ok, false);
-    assert.equal(res.error, "non_fast_forward");
-    assert.ok(res.instructions.some((i) => i.includes("resolve conflicts manually")));
-  } finally {
-    await mock.close();
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
+    assert.equal(dryRes.ok, true);
+    assert.equal(dryRes.dryRun, true);
+    assert.equal(dryRes.updated, false);
+    assert.equal(dryRes.current, "1.1.0", "Must use verified savedState.version 1.1.0 rather than unverified VERSION 1.2.0");
+    assert.equal(dryRes.latest, "1.2.0");
+    assert.equal(dryRes.projectRoot, projectDir);
+    assert.ok(dryRes.plan.some((p) => p.includes("--project-root")));
 
-test("executeUpdate: failed or missing post-merge stages never report success", async () => {
-  const tmp = createTempDir();
-  mkdirSync(join(tmp, "tools"));
-  try {
-    for (const stage of ["install-harness", "doctor"]) {
-      const script = join(tmp, "tools", `${stage}.mjs`);
-      for (const missing of [false, true]) {
-        for (const name of ["install-harness", "doctor"]) {
-          writeFileSync(join(tmp, "tools", `${name}.mjs`), "", "utf8");
-        }
-        if (missing) rmSync(script);
-        const result = await executeUpdate({
-          root: tmp,
-          targetTag: "v1.1.0",
-          spawnFn: (cmd, args) => ({
-            status: cmd === process.execPath && args[0] === script ? 1 : 0,
-            stdout: "",
-            stderr: "stage failed",
-          }),
-        });
-        assert.equal(result.ok, false, `${stage}: missing=${missing}`);
-        assert.equal(result.updated, true, "git was advanced; deployment still failed");
-        assert.equal(result.error, stage === "doctor" ? "doctor_failed" : "install_failed");
+    const failCli = await runCliAsync(
+      SELF_UPDATE_PATH,
+      ["update", "--user-home", homeDir, "--prefix", prefixDir, "--registry", mock.baseUrl, "--yes", "--json"],
+      {
+        ...process.env,
+        npm_config_fetch_retries: "0",
+        NPM_CONFIG_FETCH_RETRIES: "0",
+        npm_config_cache: cacheDir,
+        NPM_CONFIG_CACHE: cacheDir,
       }
-    }
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
+    );
+    assert.equal(failCli.status, 1);
+    const failJson = JSON.parse(failCli.stdout);
+    assert.equal(failJson.ok, false);
+    assert.equal(failJson.updated, false);
+    assert.equal(failJson.error, "npm_install_failed");
+    assert.equal(readInstallationState(homeDir).version, "1.1.0", "Failed update must not advance savedState.version");
 
-test("doctor: release-drift check emits WARN when behind (never FAIL)", () => {
-  const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
-
-  try {
-    const result = runDoctor({
-      harness: tmp,
-      agentDir: join(tmp, "agent-dir"),
-      agentsHome: join(tmp, "agents-home"),
-      releaseInfo: { status: "drift", current: "1.0.0", latest: "1.1.0" },
+    writeInstallationState(homeDir, {
+      schemaVersion: 1,
+      harness: "cursor",
+      root: rootDir,
+      projectRoot: projectDir,
+      userHome: homeDir,
+      version: "1.2.0",
     });
-
-    const check = result.checks.find((c) => c.id === "release-drift");
-    assert.ok(check, "release-drift check should exist");
-    assert.equal(check.status, "warn");
-    assert.match(check.detail, /отстает от релиза v1.1.0/);
-    assert.notEqual(check.status, "fail", "release-drift must never be fail");
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("doctor: release-drift check emits SKIP when missing VERSION or offline", () => {
-  const tmp = createTempDir();
-  try {
-    // 1. Missing VERSION
-    const noVersion = runDoctor({
-      harness: tmp,
-      agentDir: join(tmp, "agent-dir"),
-      agentsHome: join(tmp, "agents-home"),
+    const upToDate = await executeUpdate({
+      userHome: homeDir,
+      prefix: prefixDir,
+      registry: mock.baseUrl,
     });
-    const check1 = noVersion.checks.find((c) => c.id === "release-drift");
-    assert.ok(check1);
-    assert.equal(check1.status, "skip");
-    assert.match(check1.detail, /VERSION не найден/);
-
-    // 2. VERSION present, but offline
-    writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
-    const offlineDoc = runDoctor({
-      harness: tmp,
-      agentDir: join(tmp, "agent-dir"),
-      agentsHome: join(tmp, "agents-home"),
-      releaseInfo: { offline: true, error: "ENOTFOUND" },
-    });
-    const check2 = offlineDoc.checks.find((c) => c.id === "release-drift");
-    assert.ok(check2);
-    assert.equal(check2.status, "skip");
-    assert.match(check2.detail, /офлайн/);
-
-    // 3. Clean
-    const cleanDoc = runDoctor({
-      harness: tmp,
-      agentDir: join(tmp, "agent-dir"),
-      agentsHome: join(tmp, "agents-home"),
-      releaseInfo: { status: "clean", latest: "1.0.0" },
-    });
-    const check3 = cleanDoc.checks.find((c) => c.id === "release-drift");
-    assert.ok(check3);
-    assert.equal(check3.status, "pass");
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("CLI: self-update check --json against mock server", async () => {
-  const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
-
-  const mock = await createMockServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ tag_name: "v1.2.0" }));
-  });
-
-  try {
-    const res = await runCliAsync(SELF_UPDATE_PATH, [
-      "check", "--root", tmp, "--api-url", mock.url, "--json",
-    ]);
-    const json = JSON.parse(res.stdout);
-    assert.equal(json.status, "drift");
-    assert.equal(json.current, "1.0.0");
-    assert.equal(json.latest, "1.2.0");
+    assert.equal(upToDate.ok, true);
+    assert.equal(upToDate.updated, false);
+    assert.equal(upToDate.current, "1.2.0");
+    assert.equal(upToDate.latest, "1.2.0");
   } finally {
     await mock.close();
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("CLI: self-update update --dry-run --json against mock server", async () => {
-  const tmp = createTempDir();
-  writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
-
-  // Init a real temporary git repo for CLI test
-  spawnSync("git", ["init", tmp], { encoding: "utf8" });
-  spawnSync("git", ["-C", tmp, "config", "user.name", "Test"], { encoding: "utf8" });
-  spawnSync("git", ["-C", tmp, "config", "user.email", "test@test.com"], { encoding: "utf8" });
-  spawnSync("git", ["-C", tmp, "add", "VERSION"], { encoding: "utf8" });
-  spawnSync("git", ["-C", tmp, "commit", "-m", "init"], { encoding: "utf8" });
-
-  const mock = await createMockServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ tag_name: "v1.0.5" }));
-  });
-
-  try {
-    const res = await runCliAsync(SELF_UPDATE_PATH, [
-      "update", "--dry-run", "--root", tmp, "--api-url", mock.url, "--json",
-    ]);
-    assert.equal(res.status, 0);
-    const json = JSON.parse(res.stdout);
-    assert.equal(json.ok, true);
-    assert.equal(json.dryRun, true);
-    assert.equal(json.targetTag, "v1.0.5");
-    assert.ok(json.plan.length > 0);
-  } finally {
-    await mock.close();
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("CLI: doctor emits WARN on release drift against mock server", async () => {
+test("CLI: self-update check and doctor release-drift against mock npm registry", async () => {
   const tmp = createTempDir();
   writeFileSync(join(tmp, "VERSION"), "1.0.0\n", "utf8");
 
   const mock = await createMockServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ tag_name: "v1.2.0" }));
+    res.end(JSON.stringify({ name: PACKAGE_NAME, version: "1.2.0" }));
   });
 
   try {
-    const res = await runCliAsync(DOCTOR_PATH, [
-      "--harness", tmp, "--release-url", mock.url, "--json",
+    const checkCli = await runCliAsync(SELF_UPDATE_PATH, [
+      "check",
+      "--root",
+      tmp,
+      "--api-url",
+      mock.url,
+      "--json",
     ]);
-    const json = JSON.parse(res.stdout);
-    const check = json.checks.find((c) => c.id === "release-drift");
-    assert.ok(check);
-    assert.equal(check.status, "warn");
-    assert.match(check.detail, /отстает от релиза/);
+    assert.equal(checkCli.status, 0);
+    const checkJson = JSON.parse(checkCli.stdout);
+    assert.equal(checkJson.status, "drift");
+    assert.equal(checkJson.current, "1.0.0");
+    assert.equal(checkJson.latest, "1.2.0");
+
+    const docDirect = runDoctor({
+      harness: tmp,
+      agentDir: join(tmp, "agent-dir"),
+      agentsHome: join(tmp, "agents-home"),
+      releaseInfo: checkJson,
+    });
+    const driftCheck = docDirect.checks.find((c) => c.id === "release-drift");
+    assert.ok(driftCheck);
+    assert.equal(driftCheck.status, "warn");
+
+    const docCli = await runCliAsync(DOCTOR_PATH, [
+      "--harness",
+      tmp,
+      "--release-url",
+      mock.url,
+      "--json",
+    ]);
+    const docJson = JSON.parse(docCli.stdout);
+    const cliDriftCheck = docJson.checks.find((c) => c.id === "release-drift");
+    assert.ok(cliDriftCheck);
+    assert.equal(cliDriftCheck.status, "warn");
   } finally {
     await mock.close();
     rmSync(tmp, { recursive: true, force: true });

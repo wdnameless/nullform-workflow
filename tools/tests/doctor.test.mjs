@@ -665,35 +665,21 @@ test("orphan-files: конфиги и сессионные каталоги не
   }
 });
 
-test("orphan-files: харнесс сам является репозиторием — SKIP", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-isrepo-"));
+test("orphan-files: харнесс является репозиторием или клон не обнаружен — SKIP", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-skip-"));
   try {
     const harness = createMockHarness(tmp);
+    const { json: noCloneJson } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
+    assert.equal(discoverRepoClone(harness), null);
+    assert.equal(checkOf(noCloneJson, "orphan-files").status, "skip");
+    assert.match(checkOf(noCloneJson, "orphan-files").detail, /Клон репозитория не обнаружен/);
+
     writeFileSync(join(harness, "install.ps1"), "# repo marker\n", "utf8");
     writeFileSync(join(harness, "agent/models.yml.example"), "providers: {}\n", "utf8");
-
-    const { json } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
-    const check = checkOf(json, "orphan-files");
-
+    const { json: repoJson } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
     assert.equal(isRepoTree(harness), true);
-    assert.equal(check.status, "skip");
-    assert.match(check.detail, /является дистрибутивным репозиторием/);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("orphan-files: клон репозитория не обнаружен — SKIP", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-noclone-"));
-  try {
-    const harness = createMockHarness(tmp);
-
-    const { json } = runDoctorCli(["--harness", harness, "--agent-dir", join(tmp, "agent-dir")]);
-    const check = checkOf(json, "orphan-files");
-
-    assert.equal(discoverRepoClone(harness), null);
-    assert.equal(check.status, "skip");
-    assert.match(check.detail, /Клон репозитория не обнаружен/);
+    assert.equal(checkOf(repoJson, "orphan-files").status, "skip");
+    assert.match(checkOf(repoJson, "orphan-files").detail, /является дистрибутивным репозиторием/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -886,7 +872,7 @@ test("provider-reachability: все провайдеры отвечают → PA
   }
 });
 
-test("provider-reachability: config.yml отсутствует → SKIP", () => {
+test("provider-reachability: config.yml отсутствует → SKIP (не FAIL)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-reach-noconfig-"));
   try {
     const harness = createMockHarness(tmp);
@@ -896,29 +882,15 @@ test("provider-reachability: config.yml отсутствует → SKIP", () => 
 
     const { json } = runDoctorCli(["--harness", harness, "--agent-dir", agentDir, "--probe"]);
     const check = checkOf(json, "provider-reachability");
-
     assert.equal(check.status, "skip");
     assert.match(check.detail, /config\.yml не найден/);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
 
-test("runDoctor: probeResults без config.yml не превращается в FAIL", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-reach-direct-"));
-  try {
-    const harness = createMockHarness(tmp);
-    const result = runDoctor({
-      harness,
-      agentDir: join(tmp, "agent-dir"),
-      agentsHome: join(tmp, "agents-home"),
-      mode: "repo",
+    const direct = runDoctor({
+      harness, agentDir, agentsHome: join(tmp, "agents-home"), mode: "repo",
       probeResults: { providers: { dead: { reachable: false, error: "fetch failed" } }, notes: [] },
     });
-
-    const check = result.checks.find((c) => c.id === "provider-reachability");
-    assert.equal(check.status, "skip");
-    assert.equal(result.summary.fail, 0);
+    assert.equal(checkOf(direct, "provider-reachability").status, "skip");
+    assert.equal(direct.summary.fail, 0);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1222,47 +1194,27 @@ test("plugins: без манифеста проверка дает FAIL (fail-cl
   }
 });
 
-test("plugins: --skip-plugin-check пропускает проверку плагинов (SKIP)", () => {
+test("plugins: --skip-plugin-check и маркер agent/plugins.skipped пропускают проверку плагинов (SKIP)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-skip-"));
   try {
     const harness = createMockHarness(tmp);
     rmSync(join(harness, "agent", "plugins.json"), { force: true });
-
-    const result = runDoctorWithOmp(tmp, {
+    const byFlag = runDoctorWithOmp(tmp, {
       skipPluginCheck: true,
       runOmp: () => ({ status: 127, stdout: "", stderr: "omp not found", error: null }),
     });
-    const check = checkOf(result, "plugins");
+    assert.equal(checkOf(byFlag, "plugins").status, "skip");
+    assert.match(checkOf(byFlag, "plugins").detail, /Проверка плагинов пропущена/);
+    assert.equal(byFlag.ok, true);
 
-    assert.equal(check.status, "skip");
-    assert.match(check.detail, /Проверка плагинов пропущена/);
-    assert.equal(result.summary.fail, 0);
-    assert.equal(result.ok, true);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-
-test("plugins: маркер agent/plugins.skipped пропускает проверку плагинов (SKIP)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-marker-"));
-  try {
-    const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [
-      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
-    ]);
+    writePluginsManifest(harness, [{ name: "pi-lens", spec: "pi-lens@4.2.1", required: true }]);
     writeFileSync(join(harness, "agent", "plugins.skipped"), "plugins skipped during install (-SkipPlugins)\n", "utf8");
-
-    // omp is not installed or returns empty, but marker exists -> skip
-    const result = runDoctorWithOmp(tmp, {
+    const byMarker = runDoctorWithOmp(tmp, {
       runOmp: () => ({ status: 127, stdout: "", stderr: "omp not found", error: null }),
     });
-    const check = checkOf(result, "plugins");
-
-    assert.equal(check.status, "skip");
-    assert.match(check.detail, /плагины пропущены при установке \(-SkipPlugins\)/);
-    assert.equal(result.summary.fail, 0);
-    assert.equal(result.ok, true);
+    assert.equal(checkOf(byMarker, "plugins").status, "skip");
+    assert.match(checkOf(byMarker, "plugins").detail, /плагины пропущены при установке \(-SkipPlugins\)/);
+    assert.equal(byMarker.ok, true);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1372,30 +1324,27 @@ test("plugins: ненулевой код omp plugin doctor → WARN с хвос�
   }
 });
 
-test("plugins: обязательный плагин с неверной версией → FAIL (ok: false)", () => {
+test("plugins: несоответствие или отсутствие версии обязательного плагина → FAIL (ok: false)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-req-ver-"));
   try {
     const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [
-      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
-    ]);
+    writePluginsManifest(harness, [{ name: "pi-lens", spec: "pi-lens@4.2.1", required: true }]);
 
-    const result = runDoctorWithOmp(tmp, {
-      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.0" }] }),
-    });
-    const check = checkOf(result, "plugins");
+    const mismatch = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.0" }] }) });
+    assert.equal(checkOf(mismatch, "plugins").status, "fail");
+    assert.match(checkOf(mismatch, "plugins").detail, /4\.2\.0 != 4\.2\.1/);
+    assert.equal(mismatch.ok, false);
 
-    assert.equal(check.status, "fail");
-    assert.match(check.detail, /Несоответствие версии обязательных плагинов/);
-    assert.match(check.detail, /4\.2\.0 != 4\.2\.1/);
-    assert.equal(result.summary.fail, 1);
-    assert.equal(result.ok, false);
+    const noVer = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: null }] }) });
+    assert.equal(checkOf(noVer, "plugins").status, "fail");
+    assert.match(checkOf(noVer, "plugins").detail, /Несоответствие версии обязательных плагинов/);
+    assert.equal(noVer.ok, false);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("plugins: опциональный плагин с неверной версией → WARN (ok: true)", () => {
+test("plugins: несоответствие или отсутствие версии опционального плагина → WARN (ok: true)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-opt-ver-"));
   try {
     const harness = createMockHarness(tmp);
@@ -1404,73 +1353,19 @@ test("plugins: опциональный плагин с неверной вер�
       { name: "pi-qq", spec: "pi-qq@0.1.17", required: false },
     ]);
 
-    const result = runDoctorWithOmp(tmp, {
-      runOmp: fakeOmp({
-        installed: [
-          { name: "pi-lens", version: "4.2.1" },
-          { name: "pi-qq", version: "0.1.10" },
-        ],
-      }),
+    const mismatch = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.1" }, { name: "pi-qq", version: "0.1.10" }] }),
     });
-    const check = checkOf(result, "plugins");
+    assert.equal(checkOf(mismatch, "plugins").status, "warn");
+    assert.match(checkOf(mismatch, "plugins").detail, /0\.1\.10 != 0\.1\.17/);
+    assert.equal(mismatch.ok, true);
 
-    assert.equal(check.status, "warn");
-    assert.match(check.detail, /Несоответствие версии опциональных плагинов/);
-    assert.match(check.detail, /0\.1\.10 != 0\.1\.17/);
-    assert.equal(result.summary.fail, 0);
-    assert.equal(result.ok, true);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("plugins: обязательный плагин без версии (name-only) → FAIL (ok: false)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-req-no-ver-"));
-  try {
-    const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [
-      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
-    ]);
-
-    const result = runDoctorWithOmp(tmp, {
-      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: null }] }),
+    const noVer = runDoctorWithOmp(tmp, {
+      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.1" }, { name: "pi-qq", version: null }] }),
     });
-    const check = checkOf(result, "plugins");
-
-    assert.equal(check.status, "fail");
-    assert.match(check.detail, /Несоответствие версии обязательных плагинов/);
-    assert.match(check.detail, /pi-lens/);
-    assert.equal(result.summary.fail, 1);
-    assert.equal(result.ok, false);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("plugins: опциональный плагин без версии (name-only) → WARN (ok: true)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-opt-no-ver-"));
-  try {
-    const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [
-      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
-      { name: "pi-qq", spec: "pi-qq@0.1.17", required: false },
-    ]);
-
-    const result = runDoctorWithOmp(tmp, {
-      runOmp: fakeOmp({
-        installed: [
-          { name: "pi-lens", version: "4.2.1" },
-          { name: "pi-qq", version: null },
-        ],
-      }),
-    });
-    const check = checkOf(result, "plugins");
-
-    assert.equal(check.status, "warn");
-    assert.match(check.detail, /Несоответствие версии опциональных плагинов/);
-    assert.match(check.detail, /pi-qq/);
-    assert.equal(result.summary.fail, 0);
-    assert.equal(result.ok, true);
+    assert.equal(checkOf(noVer, "plugins").status, "warn");
+    assert.match(checkOf(noVer, "plugins").detail, /Несоответствие версии опциональных плагинов/);
+    assert.equal(noVer.ok, true);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1574,6 +1469,84 @@ test("plugin-patches: снятый патч pi-lens → WARN (иначе кра�
     );
     const patched = runDoctor({ harness, agentDir: join(tmp, "agent-dir"), agentsHome, mode: "repo" });
     assert.equal(checkOf(patched, "plugin-patches").status, "pass");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("doctor with targetHarness: opencode accepts JSONC and opencode.jsonc, rejects invalid JSON5, omits OMP checks", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-opencode-"));
+  try {
+    const harness = createMockHarness(tmp);
+    writeFileSync(join(harness, "AGENTS.md"), "<!-- BEGIN NULLFORM WORKFLOW -->\n# OpenCode NULLFORM WORKFLOW\n<!-- END NULLFORM WORKFLOW -->\n", "utf8");
+    writeFileSync(join(harness, "opencode.jsonc"), [
+      "{",
+      "  // Valid OpenCode JSONC with comments and trailing comma",
+      '  "$schema": "https://opencode.ai/config.json",',
+      '  "model": "anthropic/claude-sonnet-4",',
+      "}",
+    ].join("\n"), "utf8");
+
+    const result = runDoctor({
+      harness, targetHarness: "opencode", userHome: tmp,
+      agentDir: join(tmp, "agent-dir"), agentsHome: join(tmp, "agents-home"),
+    });
+    assert.equal(result.targetHarness, "opencode");
+    for (const ompId of ["plugins", "agent-wiring", "plugin-patches", "agents-drift", "logs-hygiene", "configs"]) {
+      assert.equal(checkOf(result, ompId), undefined, `OMP check ${ompId} must be omitted for opencode`);
+    }
+    assert.equal(checkOf(result, "harness-integration").status, "pass");
+    assert.ok(["pass", "warn"].includes(checkOf(result, "host-runtime").status));
+
+    const canary = "sk-secret-never-leak-999";
+    writeFileSync(join(harness, "opencode.jsonc"), `{ unquotedKey: "${canary}" }`, "utf8");
+    const badRes = runDoctor({
+      harness, targetHarness: "opencode", userHome: tmp,
+      agentDir: join(tmp, "agent-dir"), agentsHome: join(tmp, "agents-home"),
+    });
+    const badCheck = checkOf(badRes, "harness-integration");
+    assert.equal(badCheck.status, "fail", "Invalid JSON5 unquoted key must fail JSONC check");
+    assert.equal(badCheck.detail.includes(canary), false, "Secret canary must not leak in error detail");
+    assert.equal(badRes.ok, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("doctor with targetHarness: cursor projectRoot, openclaw JSON5, release-drift, and explicit omp SETUP", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-multi-target-"));
+  try {
+    const { harness, agentDir, agentsHome } = createInstalledFixture(tmp);
+    writeFileSync(join(harness, "VERSION"), "1.0.0\n", "utf8");
+
+    const projectRoot = join(tmp, "cursor-project");
+    const mdcPath = join(projectRoot, ".cursor", "rules", "00-workflow.mdc");
+    mkdirSync(dirname(mdcPath), { recursive: true });
+    writeFileSync(mdcPath, "---\nalwaysApply: true\n---\n\n<!-- BEGIN NULLFORM WORKFLOW -->\n# Cursor\n<!-- END NULLFORM WORKFLOW -->\n", "utf8");
+
+    const cursorRes = runDoctor({
+      harness, targetHarness: "cursor", projectRoot, userHome: tmp, agentDir, agentsHome,
+      releaseInfo: { status: "drift", current: "1.0.0", latest: "1.1.0" },
+    });
+    assert.equal(checkOf(cursorRes, "harness-integration").status, "pass");
+    assert.equal(checkOf(cursorRes, "release-drift").status, "warn");
+    assert.match(checkOf(cursorRes, "release-drift").detail, /nullform update/i);
+
+    writeFileSync(join(harness, "openclaw.json"), `// JSON5\n{\n  agents: { entries: { workflow: { workspace: "${tmp.replace(/\\/g, "/")}" } } }\n}\n`, "utf8");
+    const clawRes = runDoctor({ harness, targetHarness: "openclaw", userHome: tmp, agentDir, agentsHome });
+    assert.equal(checkOf(clawRes, "harness-integration").status, "pass");
+
+    rmSync(join(agentDir, "models.yml"), { force: true });
+    const ompExplicit = runDoctor({
+      harness, targetHarness: "omp", userHome: tmp, agentDir, agentsHome,
+      builtinAgentsDir: join(tmp, "no-builtin"),
+      runOmp: fakeOmp({ installed: [] }),
+    });
+    assert.equal(ompExplicit.ok, true, "Explicit targetHarness omp treats missing host plugins/models as SETUP warn");
+    assert.equal(checkOf(ompExplicit, "plugins").status, "warn");
+    assert.match(checkOf(ompExplicit, "plugins").detail, /\[SETUP\]/);
+    assert.equal(checkOf(ompExplicit, "configs").status, "warn");
+    assert.match(checkOf(ompExplicit, "configs").detail, /\[SETUP\]/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

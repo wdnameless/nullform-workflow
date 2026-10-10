@@ -6,7 +6,7 @@
 **Portable engineering workflow harness for AI coding agents — hard gates over promises, verified tests over "done", live observability over guesswork.**  
 **Переносимый инженерный каркас разработки для ИИ-агентов: строгие гейты вместо обещаний, проверенные тесты вместо «готово», наблюдаемость вместо догадок.**
 
-Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for **Claude Code**, **Codex**, **OpenCode**, **Cursor**, **OpenClaw**, **Hermes**, and **OpenHuman** on Windows, Linux, and macOS. Zero external npm dependencies (Node.js 18+ stdlib only) · 8 specialized roles · 70 skills · 34 CLI tools · 29 install & 15 audit checks.
+Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for **Claude Code**, **Codex**, **OpenCode**, **Cursor**, **OpenClaw**, **Hermes**, and **OpenHuman** on Windows, Linux, and macOS. Requires Node.js `>=18.19.0` with three pinned native-config parser dependencies justified by host formats (`jsonc-parser@3.3.1` for OpenCode JSONC, `json5@2.2.3` for OpenClaw JSON5, `yaml@2.9.1` for Hermes YAML) · 8 specialized roles · 70 skills · 34 CLI tools · 29 install & 15 audit checks.
 
 ![NULLFORM WORKFLOW Live Dashboard](docs/assets/dashboard-graph.jpg)
 
@@ -16,73 +16,79 @@ Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for 
 
 ### Quickstart (3 Steps)
 
-**1. Clone the repository**
+**1. Install the package** (delivered as verified `.tgz` archive; package not publicly published to npmjs):
 ```bash
-git clone https://github.com/wdnameless/nullform-workflow.git "$HOME/nullform-src"
-cd "$HOME/nullform-src"
+npm install -g --ignore-scripts ./nullform-workflow-1.1.0.tgz
+# Source clone fallback remains supported for contributors:
+# git clone https://github.com/wdnameless/nullform-workflow.git && cd nullform-workflow
 ```
 
-**2. Install the adapter for your harness** (`omp|claude|codex|opencode|cursor|openclaw|hermes|openhuman|all` or `auto`)
+**2. Select and configure your harness** (`claude|codex|opencode|cursor|omp|openclaw|hermes|openhuman`):
 ```bash
-node tools/install-harness.mjs --harness auto --root .
-# Or full OMP + Paseo + MCP fleet setup on Windows:
-# powershell -ExecutionPolicy Bypass -File install.ps1 -SecretsFile secrets.env
+# Interactive selection menu:
+nullform init
+
+# Or non-interactive explicit installation (one of the 8 supported harnesses):
+nullform init --harness opencode --yes
+# For Cursor (project-scoped rules in <project>/.cursor/rules/00-workflow.mdc; no global ~/.cursor/rules/ on disk):
+nullform init --harness cursor --project-root . --yes
 ```
 
 **3. Verify environment & run your first gated task**
 ```bash
-node tools/doctor.mjs --harness .
-node tools/workflow.mjs start --tier T1 --task "smoke check"
-node tools/workflow.mjs artifact --kind recon --detail "environment verified"
-node tools/workflow.mjs close
+nullform doctor
+# Invoke workflow tools from the installed root (e.g. ~/.config/opencode/workflow for opencode, or your custom --root):
+node ~/.config/opencode/workflow/tools/workflow.mjs start --tier T1 --task "smoke check"
+node ~/.config/opencode/workflow/tools/workflow.mjs artifact --kind recon --detail "environment verified"
+node ~/.config/opencode/workflow/tools/workflow.mjs close
 ```
 
 ### One-Phrase Install (Agent Prompt)
 
-Copy-paste this prompt to your AI coding agent (OMP, Claude Code, Cursor, OpenCode, OpenClaw, Hermes, OpenHuman, Codex). The agent inspects environment markers, identifies the active harness, displays a dry-run component table, and asks for confirmation before applying:
+Copy-paste this prompt to your AI coding agent (OMP, Claude Code, Cursor, OpenCode, OpenClaw, Hermes, OpenHuman, Codex). The agent inspects environment markers, identifies the active harness among the 8 supported choices, previews the planned writes via `nullform init --dry-run`, and asks for confirmation before applying:
 
 ```text
-You are an installer agent for NULLFORM WORKFLOW.
+You are an installer agent for the `nullform-workflow` npm CLI (`nullform`).
 Follow these steps strictly:
 
-1. DETECT HARNESS & SUPPORTED ENVIRONMENTS:
-   - Dynamically inspect supported harnesses from CLI help (do NOT hardcode the list):
-     Run: `node tools/install-harness.mjs --help`
-   - Detect the host harness strictly in priority order:
-     Step 1.1: Explicit environment markers:
-       • omp: `omp` binary in PATH, `~/.omp/` directory, `OMP_CONFIG_DIR`, or running inside an OMP session (`proc://`, `agent://`, `skill://`, `xd://`).
-       • openclaw: `~/.openclaw/openclaw.json` or `openclaw` in PATH.
-       • hermes: `~/.hermes/config.yaml`, `$HERMES_HOME`, or `hermes` in PATH.
-       • openhuman: `~/.openhuman/` or `openhuman-core` in PATH.
-       • claude: `~/.claude/` or `claude` in PATH.
-       • codex: `~/.codex/` or `codex` in PATH.
-       • opencode: `~/.opencode/` or `opencode` in PATH.
-       • cursor: `~/.cursor/` or `cursor` in PATH.
-     Step 1.2: Fallback auto-detection:
-       If multiple or ambiguous markers exist, run `node tools/install-harness.mjs --harness auto --dry-run` (invokes detectHarness).
-   - If still uncertain, suggest the most probable harness and ask the user to pick from the `--help` list.
+1. INSTALL PACKAGE & INSPECT SUPPORTED HARNESSES:
+   - Ensure `nullform` is installed globally from the verified tarball if not already in PATH:
+     `npm install -g --ignore-scripts ./nullform-workflow-1.1.0.tgz`
+   - Inspect CLI options and the 8 supported harness choices (`claude`, `codex`, `opencode`, `cursor`, `omp`, `openclaw`, `hermes`, `openhuman`):
+     Run: `nullform --help`
+   - Identify the host harness from explicit environment markers:
+     • omp: `omp` binary in PATH, `~/.omp/` directory, `OMP_CONFIG_DIR`, or running inside an OMP session (`proc://`, `agent://`, `skill://`, `xd://`).
+     • openclaw: `~/.openclaw/openclaw.json` or `openclaw` in PATH.
+     • hermes: `~/.hermes/config.yaml`, `$HERMES_HOME`, or `hermes` in PATH.
+     • openhuman: `~/.openhuman/` or `openhuman-core` in PATH.
+     • claude: `~/.claude/` or `claude` in PATH.
+     • codex: `~/.codex/` or `codex` in PATH.
+     • opencode: `~/.config/opencode/` or `opencode` in PATH.
+     • cursor: `.cursor/` in project or `cursor` in PATH (rules are project-scoped; pass `--project-root <dir>`).
+   - If multiple or ambiguous markers exist, suggest the most probable harness and ask the user to choose one of the 8 explicit harnesses from `nullform --help`.
 
 2. DRY-RUN PREVIEW & COMPONENT TABLE:
-   - ALWAYS perform a dry-run first before touching files on disk:
-     `node tools/install-harness.mjs --harness <detected_harness> --dry-run`
-   - Present a clear table showing what will be installed for <detected_harness> (per-harness set):
+   - ALWAYS run a dry-run preview first before modifying any files on disk:
+     `nullform init --harness <detected_harness> --dry-run`
+   - Present a clear table showing what will be installed for <detected_harness>:
      | Component | Installed path & format for <detected_harness> |
      |---|---|
-     | Skills | Target directory: omp (`~/.agents/skills/`), openclaw (`~/.openclaw/skills/` & `~/.agents/skills/`), hermes (`$HERMES_HOME/skills/`), openhuman (copied into `agents/<id>/skills/`), etc. |
-     | Agents & Roles | Law & roles: omp (`~/.omp/agent/agents`), openclaw (`openclaw.json` entries + `AGENTS.md`/`SOUL.md`/`USER.md`), hermes (`AGENTS.md` + profiles), openhuman (`AGENTS.md` + AgentSpec), claude/codex/opencode/cursor (`CLAUDE.md`/`AGENTS.md`/`00-workflow.mdc`) |
-     | Rules & Methodology | Workflow rules in `rules/`, `~/.agents/rules/`, or `.cursor/rules/` |
-     | MCP Configuration | MCP config key: `mcp.servers` (openclaw), `mcp_servers` (hermes), `mcp` (opencode), `mcpServers` (claude, cursor, codex), or `mcp.json` (omp) |
-     | Core CLI Tools | `tools/`, `templates/`, `CONTEXT.md` in project root |
+     | Skills | Target directory: omp (`~/.agents/skills/`), claude (`~/.claude/skills/`), codex (`~/.codex/skills/`), opencode (`~/.config/opencode/skills/`), openclaw (`~/.openclaw/skills/`), hermes (`~/.hermes/skills/`), openhuman (physical copies in `~/.openhuman/skills/` and `<root>/agents/workflow/skills/`, no symlinks) |
+     | Agents & Roles | Managed adapter block (`<!-- BEGIN NULLFORM WORKFLOW -->`) preserving user text in `CLAUDE.md`, `AGENTS.md`, `~/.hermes/SOUL.md`, or `<project>/.cursor/rules/00-workflow.mdc`; full roster in `~/.omp/agent/agents` for omp |
+     | Native Config & MCP | Preserves existing settings & keys in `~/.config/opencode/opencode.json[c]`, `~/.openclaw/openclaw.json` (JSON5 `agents.entries.workflow`), `~/.hermes/config.yaml` (YAML `mcp_servers:`), `~/.openhuman/config.toml` (TOML), or `~/.omp/agent/mcp.json` |
+     | Core CLI Tools & State | Workflow runtime in `<installed_root>/tools/` and persisted identity in `~/.nullform/installation.json` |
 
 3. USER CONFIRMATION:
-   - Display the detected harness, target root, and the component table.
+   - Display the selected harness, target installation root (`<installed_root>`), and the component table.
    - Ask for explicit user confirmation before applying any changes.
 
-4. APPLY INSTALLATION:
+4. APPLY INSTALLATION & VERIFY:
    - Upon confirmation, execute:
-     `node tools/install-harness.mjs --harness <detected_harness>`
-   - Verify health: `node tools/doctor.mjs --harness .`
-   - Report status and next steps (`node tools/workflow.mjs start --tier T1 --task "smoke check"`).
+     `nullform init --harness <detected_harness> --yes`
+   - Verify installation health:
+     `nullform doctor`
+   - Report status and next steps using the installed root path:
+     `node <installed_root>/tools/workflow.mjs start --tier T1 --task "smoke check"`
 ```
 
 ### Work Tiers (T0–T3)
@@ -148,18 +154,21 @@ Three habits borrowed from Matt Pocock's Skills v1.3 video ([transcript](https:/
 
 ### Release updates
 
-Run `node tools/self-update.mjs check` or `update --dry-run` from the git clone.
-`update` fetches the latest **published release tag**, requires a clean tracked
-working tree and a fast-forward, then reinstalls and runs doctor. An existing OMP
-installation keeps the root registered in `~/.omp/agent/.harness-root`; doctor
-checks that installed tree. Both installers and sync ship `VERSION` and the updater.
-Failed or missing install/doctor stages return exit 1, even if git already advanced;
-there is no automatic rollback. Required OMP plugins must already be installed.
-After fixing a failed deployment, use `update --force` to retry even if the clone's
-version already matches the release.
-This is notification plus an explicit update command, not a background updater.
-Commits pushed without a new GitHub release are not detected as a newer version.
+Updates are driven through npm package distribution:
 
+```bash
+# Check available release and preview changes:
+nullform update --dry-run
+
+# Apply update across global executable and saved harness installation:
+nullform update --yes
+```
+
+`nullform update` reads version metadata from the configured npm registry (or private/loopback endpoint), reinstalls the global package via `npm install -g`, and invokes the new package executable to re-apply and verify the saved harness installation (`~/.nullform/installation.json`).
+- **No Git requirement**: Operates without a git clone, git working tree, or GitHub release tags.
+- **Data preservation**: User instructions, custom configurations, secret tokens, and unrelated files are preserved.
+- **Failure behavior**: If registry resolution, npm installation, or doctor verification fails, the process exits with a nonzero code and makes no false success claims; no silent partial state is persisted.
+- **Capability limits**: Requires Node.js `>=18.19.0` (`package.json` `engines.node`) and three pinned parser dependencies justified by host native formats (`jsonc-parser@3.3.1` for OpenCode JSONC, `json5@2.2.3` for OpenClaw JSON5, and `yaml@2.9.1` for Hermes YAML) for safe native config preservation at user trust boundaries. Public npmjs publishing is excluded in this release (distributed via verified `.tgz` or private/loopback registry). The update process is completely Git-free (no Git public updater; queries npm registry metadata and invokes real `npm install -g`). Host CLI runtimes (OMP, Claude Code, OpenCode, Cursor, OpenClaw, Hermes, OpenHuman, Codex) and API credentials are external prerequisites; missing host binaries or disabled host loaders are reported honestly as `SETUP`, not `FAIL`. Cursor rules (`.cursor/rules/00-workflow.mdc`) require a project context (`--project-root` or `--root`). No background daemon or automatic session restart.
 ### Key Commands & Architecture Links
 
 - **Core Protocol & 4-Wave SDD**: [`core/PORTABLE.md`](core/PORTABLE.md) — harness-agnostic specification, roles (`orchestrator`, `designer`, `fixer`, `oracle`, `reviewer`, `librarian`, `explorer`, `sonic`), Lean A→B→A stage rhythm, and evidence protocol.
@@ -182,79 +191,79 @@ Commits pushed without a new GitHub release are not detected as a newer version.
 
 ### Быстрый старт (3 шага)
 
-**1. Склонируйте репозиторий**
+**1. Установите пакет** (поставляется как проверенный архив `.tgz`; в публичный npmjs в этом релизе не публикуется):
 ```bash
-git clone https://github.com/wdnameless/nullform-workflow.git "$HOME/nullform-src"
-cd "$HOME/nullform-src"
+npm install -g --ignore-scripts ./nullform-workflow-1.1.0.tgz
+# Для разработчиков по-прежнему доступна установка из исходников:
+# git clone https://github.com/wdnameless/nullform-workflow.git && cd nullform-workflow
 ```
 
-**2. Установите адаптер под ваш харнесс** (`omp|claude|codex|opencode|cursor|openclaw|hermes|openhuman|all` или `auto`)
+**2. Выберите и настройте харнесс** (`claude|codex|opencode|cursor|omp|openclaw|hermes|openhuman`):
 ```bash
-./install.sh --harness auto --root .
-# Или на любой ОС через Node.js:
-node tools/install-harness.mjs --harness auto --root .
-# Полная установка OMP (плагины, MCP-флот, Paseo) на Windows:
-# powershell -ExecutionPolicy Bypass -File install.ps1 -SecretsFile secrets.env
+# Интерактивное меню выбора:
+nullform init
+
+# Или явный запуск без интерактива (один из 8 поддерживаемых харнессов):
+nullform init --harness opencode --yes
+# Для Cursor (правила <project>/.cursor/rules/00-workflow.mdc привязаны к проекту; глобального ~/.cursor/rules/ нет):
+nullform init --harness cursor --project-root . --yes
 ```
 
 **3. Проверьте установку и запустите первую задачу**
 ```bash
-node tools/doctor.mjs --harness .
-node tools/workflow.mjs start --tier T1 --task "проба"
-node tools/workflow.mjs artifact --kind recon --detail "проверка окружения и инструментов"
-node tools/workflow.mjs close
+nullform doctor
+# Запускайте инструменты workflow из установленного корня (например ~/.config/opencode/workflow для opencode или ваш --root):
+node ~/.config/opencode/workflow/tools/workflow.mjs start --tier T1 --task "проба"
+node ~/.config/opencode/workflow/tools/workflow.mjs artifact --kind recon --detail "проверка окружения и инструментов"
+node ~/.config/opencode/workflow/tools/workflow.mjs close
 ```
 
 ### Установка одной фразой
 
-Скопируйте и передайте этот промпт вашему ИИ-агенту (в любой среде: OMP, Claude Code, Cursor, OpenCode, OpenClaw, Hermes, OpenHuman, Codex). Агент определит текущий харнесс хоста, покажет предпросмотр компонентов и запросит подтверждение перед запуском установки:
+Скопируйте и передайте этот промпт вашему ИИ-агенту (в любой среде: OMP, Claude Code, Cursor, OpenCode, OpenClaw, Hermes, OpenHuman, Codex). Агент определит активный харнесс из 8 поддерживаемых вариантов, выполнит безопасный предпросмотр `nullform init --dry-run` и запросит подтверждение перед установкой:
 
 ```text
-Ты — агент установки и настройки NULLFORM WORKFLOW в текущем окружении.
+Ты — агент установки и настройки пакета `nullform-workflow` (CLI `nullform`).
 Выполни установку строго по следующим шагам без самодеятельности:
 
-1. ДЕТЕКТ ХАРНЕССА И СПИСКА ПОДДЕРЖИВАЕМЫХ СРЕД:
-   - Получи актуальный список поддерживаемых харнессов динамически из справки установщика (НЕ хардкодь список):
-     Запусти: `node tools/install-harness.mjs --help`
-   - Определи активный харнесс хоста строго в следующем порядке приоритета:
-     Шаг 1.1 (Явные маркеры окружения, переменных и файловой системы):
-       • omp: наличие бинарника `omp` в PATH, каталога `~/.omp/` (или `%USERPROFILE%/.omp`), переменной окружения `OMP_CONFIG_DIR`, либо текущая сессия запущена в среде OMP (доступны схемы URIs: `proc://`, `agent://`, `skill://`, `xd://`).
-       • openclaw: наличие конфигурации `~/.openclaw/openclaw.json` (или `%USERPROFILE%/.openclaw/openclaw.json`) либо команды `openclaw` в PATH.
-       • hermes: наличие `~/.hermes/config.yaml`, переменной `$HERMES_HOME` либо команды `hermes` в PATH.
-       • openhuman: наличие каталога `~/.openhuman/` либо бинарника `openhuman-core` в PATH.
-       • claude: наличие каталога `~/.claude/` либо команды `claude` в PATH.
-       • codex: наличие каталога `~/.codex/` либо команды `codex` в PATH.
-       • opencode: наличие каталога `~/.opencode/` либо команды `opencode` в PATH.
-       • cursor: наличие каталога `~/.cursor/` либо команды `cursor` в PATH.
-     Шаг 1.2 (Запасной вариант детекта):
-       Если явных маркеров несколько или однозначного совпадения нет, запусти встроенную функцию автоопределения detectHarness через CLI:
-       `node tools/install-harness.mjs --harness auto --dry-run`
-   - Если харнесс всё равно не удалось определить со 100% уверенностью, назови наиболее вероятный и запроси у пользователя выбор одного из вариантов из вывода `--help`.
+1. УСТАНОВКА ПАКЕТА И ОПРЕДЕЛЕНИЕ ХАРНЕССА:
+   - Если команда `nullform` ещё не доступна в PATH, установи глобальный пакет из проверенного архива:
+     `npm install -g --ignore-scripts ./nullform-workflow-1.1.0.tgz`
+   - Проверь доступные команды и 8 поддерживаемых харнессов (`claude`, `codex`, `opencode`, `cursor`, `omp`, `openclaw`, `hermes`, `openhuman`):
+     Запусти: `nullform --help`
+   - Определи активный харнесс хоста по явным маркерам окружения:
+     • omp: наличие бинарника `omp` в PATH, каталога `~/.omp/`, переменной `OMP_CONFIG_DIR`, либо активная сессия OMP (`proc://`, `agent://`, `skill://`, `xd://`).
+     • openclaw: наличие `~/.openclaw/openclaw.json` либо команды `openclaw` в PATH.
+     • hermes: наличие `~/.hermes/config.yaml`, `$HERMES_HOME` либо команды `hermes` в PATH.
+     • openhuman: наличие `~/.openhuman/` либо `openhuman-core` в PATH.
+     • claude: наличие `~/.claude/` либо команды `claude` в PATH.
+     • codex: наличие `~/.codex/` либо команды `codex` в PATH.
+     • opencode: наличие `~/.config/opencode/` либо команды `opencode` в PATH.
+     • cursor: наличие `.cursor/` в проекте либо команды `cursor` в PATH (правила проектные; передавай `--project-root <dir>`).
+   - Если маркеров несколько или однозначного совпадения нет, назови наиболее вероятный вариант и попроси пользователя явно выбрать один из 8 харнессов из вывода `nullform --help`.
 
 2. DRY-RUN ПРЕДПРОСМОТР И ТАБЛИЦА КОМПОНЕНТОВ:
-   - ОБЯЗАТЕЛЬНО выполни dry-run запуск первым шагом до внесения каких-либо изменений на диск:
-     `node tools/install-harness.mjs --harness <определённый_харнесс> --dry-run` (при необходимости используй `--json` для парсинга плана).
-   - Сформируй и покажи пользователю наглядную таблицу компонентов, которые будут установлены для выбранного харнесса (per-harness набор):
+   - ОБЯЗАТЕЛЬНО выполни dry-run предпросмотр до внесения любых изменений на диск:
+     `nullform init --harness <определённый_харнесс> --dry-run`
+   - Покажи пользователю таблицу компонентов для <определённый_харнесс>:
      | Компонент | Назначение и путь установки для <определённый_харнесс> |
      |---|---|
-     | Навыки (skills) | Каталог установки: omp (`~/.agents/skills/`), openclaw (`~/.openclaw/skills/` и `~/.agents/skills/`), hermes (`$HERMES_HOME/skills/`), openhuman (копирование без симлинков в `agents/<id>/skills/`), базовые инструкции |
-     | Агенты и роли (agents/roles) | Роли и законы: omp (`~/.omp/agent/agents` и `agent/AGENTS.md`), openclaw (`openclaw.json` entries + `AGENTS.md`/`SOUL.md`/`USER.md`), hermes (`AGENTS.md` + profiles в `config.yaml`), openhuman (`AGENTS.md` + AgentSpec), claude/codex/opencode/cursor (`CLAUDE.md`/`AGENTS.md`/`00-workflow.mdc`) |
-     | Правила и методологии (rules) | Правила workflow: `rules/` -> `~/.omp/agent/rules/`, `~/.agents/rules/` или `.cursor/rules/` |
-     | MCP-интеграция | Конфиг серверов: ключ `mcp.servers` (openclaw), `mcp_servers` (hermes), `mcp` (opencode), `mcpServers` (claude, cursor, codex) или `mcp.json` (omp) |
-     | Ядро инструментов | `tools/` (workflow, doctor, sync, review, verify), `templates/`, `CONTEXT.md` в корне целевого проекта |
+     | Навыки (skills) | Каталог: omp (`~/.agents/skills/`), claude (`~/.claude/skills/`), codex (`~/.codex/skills/`), opencode (`~/.config/opencode/skills/`), openclaw (`~/.openclaw/skills/`), hermes (`~/.hermes/skills/`), openhuman (физические копии в `~/.openhuman/skills/` и `<root>/agents/workflow/skills/` без симлинков) |
+     | Агенты и инструкции | Управляемый блок (`<!-- BEGIN NULLFORM WORKFLOW -->`) с сохранением пользовательского текста в `CLAUDE.md`, `AGENTS.md`, `~/.hermes/SOUL.md` или `<project>/.cursor/rules/00-workflow.mdc`; роли в `~/.omp/agent/agents` для omp |
+     | Конфигурация и MCP | Сохранение существующих настроек и ключей в `~/.config/opencode/opencode.json[c]`, `~/.openclaw/openclaw.json` (JSON5 `agents.entries.workflow`), `~/.hermes/config.yaml` (YAML `mcp_servers:`), `~/.openhuman/config.toml` (TOML) или `~/.omp/agent/mcp.json` |
+     | Ядро и состояние | Инструменты в `<installed_root>/tools/` и сохранённый профиль установки в `~/.nullform/installation.json` |
 
 3. ЗАПРОС ПОДТВЕРЖДЕНИЯ У ПОЛЬЗОВАТЕЛЯ:
-   - Выведи пользователю:
-     1) Определённый харнесс.
-     2) Целевой путь установки (`--root`).
-     3) Таблицу компонентов из шага 2.
-   - Задай прямой вопрос и запроси явное подтверждение (да/нет) перед применением установки.
+   - Выведи пользователю выбранный харнесс, целевой путь установки (`<installed_root>`) и таблицу компонентов.
+   - Запроси явное подтверждение (да/нет) перед применением изменений.
 
-4. ПРИМЕНЕНИЕ УСТАНОВКИ:
-   - Только после получения явного согласия пользователя выполни установку:
-     `node tools/install-harness.mjs --harness <определённый_харнесс>`
-   - Запусти верификацию: `node tools/doctor.mjs --harness .`
-   - Выведи результат и инструкцию по запуску первой задачи (`node tools/workflow.mjs start --tier T1 --task "smoke check"`).
+4. ПРИМЕНЕНИЕ УСТАНОВКИ И ПРОВЕРКА:
+   - Только после явного согласия пользователя выполни:
+     `nullform init --harness <определённый_харнесс> --yes`
+   - Запусти диагностику выбранного харнесса:
+     `nullform doctor`
+   - Выведи результат и команду запуска первой задачи из установленного корня:
+     `node <installed_root>/tools/workflow.mjs start --tier T1 --task "smoke check"`
 ```
 
 ### Ярусы задач (T0–T3)
@@ -312,15 +321,21 @@ node tools/jev-control.mjs disable
 
 ### Обновление релизов
 
-Из git-клона: `node tools/self-update.mjs check`, затем `update --dry-run` или `update`.
-Обновление ориентируется на **опубликованный GitHub Release**, а не на свежие коммиты.
-Нужны чистые отслеживаемые файлы и fast-forward. Для настроенного OMP сохраняется
-путь из `~/.omp/agent/.harness-root`, после переустановки doctor проверяет live-дерево.
-`VERSION` и updater входят в установку и sync. Ошибка установки/doctor даёт exit 1;
-git к этому моменту мог обновиться, автоматического отката нет. Обязательные плагины
-OMP должны быть установлены заранее. Фонового обновления без команды нет.
-После устранения причины сбоя используйте `update --force`: версия клона уже могла
-совпасть с релизом, хотя установка ещё не завершена.
+Обновления управляются через npm-пакет и команду `nullform update`:
+
+```bash
+# Проверка и предпросмотр доступного обновления:
+nullform update --dry-run
+
+# Применение обновления глобального пакета и сохранённой установки:
+nullform update --yes
+```
+
+`nullform update` запрашивает метаданные версии из настроенного npm-реестра (или приватного/локального зеркала), обновляет глобальный исполняемый файл через `npm install -g` и запускает новый бинарник для перепроверки и синхронизации сохранённой установки (`~/.nullform/installation.json`).
+- **Без Git**: Работает автономно без git-клона, локального репозитория и GitHub-тегов.
+- **Сохранение данных**: Пользовательские инструкции, настройки, токены/секреты и сторонние файлы сохраняются без изменений.
+- **Поведение при сбоях**: При ошибке реестра, npm или проверки doctor процесс завершается с ненулевым кодом и не рапортует об успешном обновлении; скрытый откат не выполняется.
+- **Границы и требования**: Требуется Node.js `>=18.19.0` (`package.json` `engines.node`) и три зафиксированных парсера нативных конфигураций под форматы хостов (`jsonc-parser@3.3.1` для OpenCode JSONC, `json5@2.2.3` для OpenClaw JSON5, `yaml@2.9.1` для Hermes YAML). Публикация в публичный npmjs не входит в этот релиз (поставка через проверенный `.tgz` или приватный/локальный реестр). Механизм обновления полностью автономен от Git (нет Git-апдейтера; используются метаданные npm-реестра и `npm install -g`). Исполняемые файлы хостов (OMP, Claude Code, OpenCode, Cursor, OpenClaw, Hermes, OpenHuman, Codex) и ключи доступа — внешние зависимости; отсутствующие рантаймы хостов честно помечаются как `SETUP`, а не `FAIL`. Правила Cursor (`.cursor/rules/00-workflow.mdc`) требуют проектного контекста (`--project-root` или `--root`). Фоновый демон отсутствует.
 
 ### Документация, канон и инструменты
 
