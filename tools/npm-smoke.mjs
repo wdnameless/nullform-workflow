@@ -510,6 +510,14 @@ async function verifyRegistryUpgrade(ctx, registry, v11TarballPath, pkgJson) {
   writeFileSync(join(v12Source, "package.json"), JSON.stringify(v12Pkg, null, 2) + "\n", "utf8");
   writeFileSync(join(v12Source, "VERSION"), "1.2.0\n", "utf8");
 
+  const opencodeSkills = join(ctx.spaceBase, "home_opencode", ".config", "opencode", "skills");
+  const ownedSkillFile = join(opencodeSkills, "ui-ux-pro-max", "scripts", "core.py");
+  const userSkillFile = join(opencodeSkills, "ui-ux-pro-max", "scripts", "validate_data.py");
+  assert.ok(existsSync(ownedSkillFile), "R03: Owned skill asset should exist prior to update");
+  assert.ok(existsSync(userSkillFile), "R03: Skill asset to be edited should exist prior to update");
+  writeFileSync(userSkillFile, "# User edit to validate_data.py preserved\n", "utf8");
+  writeFileSync(join(v12Source, "skills", "ui-ux-pro-max", "scripts", "core.py"), "# Upgraded core.py v1.2.0\n", "utf8");
+  writeFileSync(join(v12Source, "skills", "ui-ux-pro-max", "scripts", "validate_data.py"), "# Upgraded validate_data.py v1.2.0\n", "utf8");
   assert.equal((await ctx.runNpm(["pack", "--ignore-scripts", "--pack-destination", ctx.tempPackDir], v12Source)).status, 0);
   const v12TarballPath = join(ctx.tempPackDir, "nullform-workflow-1.2.0.tgz");
   assert.ok(existsSync(v12TarballPath), "R06: v1.2.0 tarball missing");
@@ -534,6 +542,10 @@ async function verifyRegistryUpgrade(ctx, registry, v11TarballPath, pkgJson) {
   assert.ok(readFileSync(join(opencodeHome, ".config", "opencode", "AGENTS.md"), "utf8").includes("Preserve human top note for opencode verbatim."));
   assert.ok(readFileSync(join(opencodeHome, ".config", "opencode", "opencode.json"), "utf8").includes("sk-secret-opencode-98765"));
 
+  assert.equal(readFileSync(ownedSkillFile, "utf8"), "# Upgraded core.py v1.2.0\n", "R03/R04/R06: Unchanged owned asset should update to v1.2.0");
+  assert.equal(readFileSync(userSkillFile, "utf8"), "# User edit to validate_data.py preserved\n", "R03/R04/R06: User-edited asset should not be overwritten");
+  assert.ok(updatedState.managedFiles?.[ownedSkillFile], "R03/R05: Owned skill file hash should be recorded in managedFiles");
+  assert.ok(updatedState.managedFiles?.[userSkillFile], "R03/R05: User skill file prior hash should be preserved in managedFiles");
   const cursorHome = join(ctx.spaceBase, "home_cursor");
   const cursorRoot = join(ctx.spaceBase, "root_cursor");
   const cursorProject = join(ctx.spaceBase, "project_cursor");

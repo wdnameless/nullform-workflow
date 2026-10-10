@@ -240,6 +240,7 @@ export function sanitizeError(msg) {
   if (!msg || typeof msg !== "string") return "";
   return msg
     .replace(/(https?:\/\/)([^:@\s]+):([^@\s]+)@/g, "$1$2:***@")
-    .replace(/(?:_authToken|token|secret|password|bearer|auth)[:=]\s*([a-zA-Z0-9_\-\.]+)/gi, "$1=***")
-    .replace(/Bearer\s+([a-zA-Z0-9_\-\.]+)/gi, "Bearer ***");
+    .replace(/(https?:\/\/)([^:@\s]+)@/g, "$1***@")
+    .replace(/(_authToken|_auth|token|secret|password|bearer|auth)[:=]\s*(?:[a-zA-Z0-9_\-\.~+/=]+)/gi, "$1=***")
+    .replace(/Bearer\s+(?:[a-zA-Z0-9_\-\.~+/=]+)/gi, "Bearer ***");
 }

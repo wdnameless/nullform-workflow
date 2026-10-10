@@ -20,7 +20,7 @@ Built for **Oh My Pi (OMP)** and **Paseo** with portable adapter generators for 
 ```bash
 npm install -g --ignore-scripts ./nullform-workflow-1.1.0.tgz
 # Source clone fallback remains supported for contributors:
-# git clone https://github.com/wdnameless/nullform-workflow.git && cd nullform-workflow
+# git clone https://github.com/wdnameless/nullform-workflow.git && cd nullform-workflow && npm ci
 ```
 
 **2. Select and configure your harness** (`claude|codex|opencode|cursor|omp|openclaw|hermes|openhuman`):
@@ -195,7 +195,7 @@ nullform update --yes
 ```bash
 npm install -g --ignore-scripts ./nullform-workflow-1.1.0.tgz
 # Для разработчиков по-прежнему доступна установка из исходников:
-# git clone https://github.com/wdnameless/nullform-workflow.git && cd nullform-workflow
+# git clone https://github.com/wdnameless/nullform-workflow.git && cd nullform-workflow && npm ci
 ```
 
 **2. Выберите и настройте харнесс** (`claude|codex|opencode|cursor|omp|openclaw|hermes|openhuman`):

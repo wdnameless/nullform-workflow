@@ -222,18 +222,34 @@ function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
 function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false, priorManaged = {}, outManaged = {}) {
   if (!existsSync(srcDir)) return [];
   const skip = new Set();
-  try {
-    const locked = JSON.parse(readFileSync(join(agentsHome, ".skill-lock.json"), "utf8"));
-    for (const name of Object.keys(locked.skills || {})) {
-      if (existsSync(join(destDir, name, "SKILL.md"))) skip.add(name);
-    }
-  } catch {}
-  try {
-    const disabled = JSON.parse(readFileSync(join(agentsHome, ".skills-disabled.json"), "utf8"));
-    for (const name of disabled.disabled || []) {
-      if (typeof name === "string") skip.add(name);
-    }
-  } catch {}
+  const lockCandidates = [
+    join(agentsHome, ".skill-lock.json"),
+    join(agentsHome, ".agents", ".skill-lock.json"),
+  ];
+  for (const lockPath of lockCandidates) {
+    try {
+      if (existsSync(lockPath)) {
+        const locked = JSON.parse(readFileSync(lockPath, "utf8").replace(/^\uFEFF/, "").trim());
+        for (const name of Object.keys(locked.skills || {})) {
+          if (existsSync(join(destDir, name, "SKILL.md"))) skip.add(name);
+        }
+      }
+    } catch {}
+  }
+  const disabledCandidates = [
+    join(agentsHome, ".skills-disabled.json"),
+    join(agentsHome, ".agents", ".skills-disabled.json"),
+  ];
+  for (const disabledPath of disabledCandidates) {
+    try {
+      if (existsSync(disabledPath)) {
+        const disabled = JSON.parse(readFileSync(disabledPath, "utf8").replace(/^\uFEFF/, "").trim());
+        for (const name of disabled.disabled || []) {
+          if (typeof name === "string") skip.add(name);
+        }
+      }
+    } catch {}
+  }
 
   const out = [];
 
@@ -249,27 +265,26 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false,
         walkSkill(sPath, dPath);
       } else if (entry.isFile()) {
         const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(sPath);
-        const expectedText = isText ? renderSubstitutedText(sPath, slashRoot) : null;
+        const deployedContent = isText ? renderSubstitutedText(sPath, slashRoot) : readFileSync(sPath);
+        const deployedHash = hashContent(deployedContent);
+
         if (existsSync(dPath)) {
+          const currentContent = isText ? readFileSync(dPath, "utf8") : readFileSync(dPath);
+          const currentHash = hashContent(currentContent);
           const priorHash = priorManaged[dPath];
           if (priorHash) {
-            const currentHash = hashContent(readFileSync(dPath, "utf8"));
             if (currentHash !== priorHash) {
               outManaged[dPath] = priorHash;
               continue;
             }
-          } else if (expectedText !== null) {
-            if (readFileSync(dPath, "utf8") !== expectedText) {
+          } else {
+            if (currentHash !== deployedHash) {
               continue;
             }
-          } else {
-            continue;
           }
         }
         out.push(dPath);
-        if (expectedText !== null) {
-          outManaged[dPath] = hashContent(expectedText);
-        }
+        outManaged[dPath] = deployedHash;
         if (!planOnly) {
           mkdirSync(dirname(dPath), { recursive: true });
           copyAndSubstitute(sPath, dPath, slashRoot);

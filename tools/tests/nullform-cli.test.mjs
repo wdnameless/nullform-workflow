@@ -425,3 +425,166 @@ test("init preserves prior verified state when structural doctor validation fail
     rmSync(tmpHome, { recursive: true, force: true });
   }
 });
+
+test("doctor CLI rejects invalid --harness (auto, all, typo) with exit code 2 and invalid_harness error", async () => {
+  const tmpHome = createTempDir("nullform-doctor-bad-harness-");
+  try {
+    writeInstallationState(tmpHome, {
+      schemaVersion: 1,
+      harness: "omp",
+      root: join(tmpHome, "omp-root"),
+      userHome: tmpHome,
+      version: "1.0.0",
+    });
+
+    for (const badHarness of ["auto", "all", "typo"]) {
+      const ioJson = createIO("", false);
+      const codeJson = await main(
+        ["doctor", "--harness", badHarness, "--root", join(tmpHome, "custom-root"), "--user-home", tmpHome, "--json"],
+        ioJson
+      );
+      assert.equal(codeJson, 2, `Invalid harness "${badHarness}" must exit with code 2 in JSON mode`);
+      const parsed = JSON.parse(ioJson.getStdout());
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.error, "invalid_harness");
+
+      const ioText = createIO("", false);
+      const codeText = await main(
+        ["doctor", "--harness", badHarness, "--user-home", tmpHome],
+        ioText
+      );
+      assert.equal(codeText, 2, `Invalid harness "${badHarness}" must exit with code 2 in text mode`);
+      assert.ok(ioText.getStderr().includes("invalid_harness") || ioText.getStderr().includes(`Invalid --harness "${badHarness}"`));
+    }
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test("init does not persist old projectRoot or borrow managedFiles when switching harness", async () => {
+  const tmpHome = createTempDir("nullform-init-switch-");
+  const cursorProject = join(tmpHome, "cursor-project");
+  mkdirSync(cursorProject, { recursive: true });
+
+  try {
+    writeInstallationState(tmpHome, {
+      schemaVersion: 1,
+      harness: "cursor",
+      root: join(tmpHome, "cursor-root"),
+      projectRoot: cursorProject,
+      userHome: tmpHome,
+      version: "1.0.0",
+      managedFiles: {
+        [join(cursorProject, ".cursor", "rules", "00-workflow.mdc")]: "hash-cursor-123",
+      },
+    });
+
+    let capturedPlanOptions = null;
+    const ioSwitch = createIO("", false);
+    const codeSwitch = await main(
+      ["init", "--harness", "opencode", "--user-home", tmpHome, "--yes", "--json"],
+      {
+        ...ioSwitch,
+        installHarness(opts) {
+          capturedPlanOptions = opts;
+          return {
+            harness: opts.harness,
+            root: opts.root,
+            ...(opts.projectRoot ? { projectRoot: opts.projectRoot } : {}),
+            userHome: opts.userHome,
+            filesToCopy: [],
+            adapters: [],
+            managedFiles: { [join(opts.root, "AGENTS.md")]: "hash-opencode-456" },
+          };
+        },
+        runDoctor() {
+          return { ok: true, checks: [], summary: { pass: 1, fail: 0, warn: 0, skip: 0 } };
+        },
+      }
+    );
+    assert.equal(codeSwitch, 0);
+    assert.equal(capturedPlanOptions.projectRoot, undefined, "installHarness must not receive old host projectRoot");
+    assert.equal(capturedPlanOptions.managedFiles, undefined, "installHarness must not borrow old host managedFiles");
+
+    const newState = readInstallationState(tmpHome);
+    assert.equal(newState.harness, "opencode");
+    assert.equal(newState.projectRoot, undefined, "New installation state must not persist old cursor projectRoot");
+    assert.deepEqual(newState.managedFiles, { [join(capturedPlanOptions.root, "AGENTS.md")]: "hash-opencode-456" });
+
+    const opencodeProject = join(tmpHome, "opencode-explicit-project");
+    mkdirSync(opencodeProject, { recursive: true });
+    let capturedExplicitOptions = null;
+    const ioExplicit = createIO("", false);
+    const codeExplicit = await main(
+      ["init", "--harness", "opencode", "--project-root", opencodeProject, "--user-home", tmpHome, "--yes", "--json"],
+      {
+        ...ioExplicit,
+        installHarness(opts) {
+          capturedExplicitOptions = opts;
+          return {
+            harness: opts.harness,
+            root: opts.root,
+            projectRoot: opts.projectRoot,
+            userHome: opts.userHome,
+            filesToCopy: [],
+            adapters: [],
+            managedFiles: { [join(opts.root, "AGENTS.md")]: "hash-opencode-789" },
+          };
+        },
+        runDoctor() {
+          return { ok: true, checks: [], summary: { pass: 1, fail: 0, warn: 0, skip: 0 } };
+        },
+      }
+    );
+    assert.equal(codeExplicit, 0);
+    assert.equal(capturedExplicitOptions.projectRoot, resolve(opencodeProject));
+    const explicitState = readInstallationState(tmpHome);
+    assert.equal(explicitState.projectRoot, resolve(opencodeProject));
+
+    let capturedSameHostOptions = null;
+    const ioSame = createIO("", false);
+    const codeSame = await main(
+      ["init", "--harness", "opencode", "--user-home", tmpHome, "--yes", "--json"],
+      {
+        ...ioSame,
+        installHarness(opts) {
+          capturedSameHostOptions = opts;
+          return {
+            harness: opts.harness,
+            root: opts.root,
+            projectRoot: opts.projectRoot,
+            userHome: opts.userHome,
+            filesToCopy: [],
+            adapters: [],
+            managedFiles: opts.managedFiles,
+          };
+        },
+        runDoctor() {
+          return { ok: true, checks: [], summary: { pass: 1, fail: 0, warn: 0, skip: 0 } };
+        },
+      }
+    );
+    assert.equal(codeSame, 0);
+    assert.equal(capturedSameHostOptions.projectRoot, resolve(opencodeProject), "Same harness must preserve saved projectRoot");
+    assert.deepEqual(capturedSameHostOptions.managedFiles, { [join(capturedExplicitOptions.root, "AGENTS.md")]: "hash-opencode-789" }, "Same harness must preserve managedFiles");
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test("user CLI errors redact synthetic canary tokens", async () => {
+  const canaryToken = "SYNTHETIC_CANARY_SECRET_FAIL_12345";
+  const io = createIO("", false);
+  const code = await main(
+    ["init", "--harness", "omp", "--root", `/nonexistent/${canaryToken}`, "--user-home", `/home/${canaryToken}/_authToken=${canaryToken}`, "--yes"],
+    {
+      ...io,
+      installHarness() {
+        throw new Error(`Authentication failure with token: ${canaryToken}`);
+      },
+    }
+  );
+  assert.equal(code, 1);
+  assert.ok(!io.getStderr().includes(canaryToken), "Synthetic canary must not appear in CLI error output");
+  assert.ok(io.getStderr().includes("token=***"), "Safe diagnostic label token=*** must be retained");
+});

@@ -19,6 +19,7 @@ import {
   detectEffectivePrefix,
   checkRelease,
   executeUpdate,
+  sanitizeError,
 } from "../self-update.mjs";
 import { runDoctor } from "../doctor.mjs";
 
@@ -460,4 +461,31 @@ test("CLI: self-update check and doctor release-drift against mock npm registry"
     await mock.close();
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test("sanitizeError redacts tokens, passwords, and URL credentials while keeping safe labels", () => {
+  const canary1 = "SYNTHETIC_CANARY_AUTH_TOKEN_99182";
+  const canary2 = "SYNTHETIC_CANARY_USER_SECRET_77213";
+  const canary3 = "SYNTHETIC_CANARY_BEARER_88341";
+  const canary4 = "SYNTHETIC_CANARY_URL_CRED_11452";
+
+  const tokenInput = `npm ERR! 401 Unauthorized: //registry.npmjs.org/:_authToken=${canary1}`;
+  const sanitizedToken = sanitizeError(tokenInput);
+  assert.ok(!sanitizedToken.includes(canary1), "Synthetic token canary must be redacted");
+  assert.ok(sanitizedToken.includes("_authToken=***"), "Safe label _authToken must be retained");
+
+  const passInput = `database connection failed: password=${canary2}`;
+  const sanitizedPass = sanitizeError(passInput);
+  assert.ok(!sanitizedPass.includes(canary2), "Synthetic password canary must be redacted");
+  assert.ok(sanitizedPass.includes("password=***"), "Safe label password must be retained");
+
+  const bearerInput = `Authorization header invalid: Bearer ${canary3}`;
+  const sanitizedBearer = sanitizeError(bearerInput);
+  assert.ok(!sanitizedBearer.includes(canary3), "Synthetic bearer canary must be redacted");
+  assert.ok(sanitizedBearer.includes("Bearer ***"), "Safe label Bearer must be retained");
+
+  const urlInput = `Failed to fetch from https://testuser:${canary4}@registry.example.org/pkg`;
+  const sanitizedUrl = sanitizeError(urlInput);
+  assert.ok(!sanitizedUrl.includes(canary4), "Synthetic URL credential canary must be redacted");
+  assert.ok(sanitizedUrl.includes("https://testuser:***@registry.example.org/pkg"), "URL username must be retained");
 });

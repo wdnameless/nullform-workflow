@@ -24,6 +24,7 @@ import {
   parseSemVer,
   checkRelease,
   executeUpdate,
+  sanitizeError,
 } from "../tools/self-update.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -37,6 +38,7 @@ export {
   validateInstallationState,
   readInstallationState,
   writeInstallationState,
+  sanitizeError,
 };
 
 export const HARNESS_MENU_ITEMS = [
@@ -278,9 +280,13 @@ function loadUserState(options, env) {
   return { userHome, state: readInstallationState(userHome) };
 }
 function emitJsonOrText(output, errOut, isJson, payload, textMsg, toStderr = true) {
-  if (isJson) output.write(JSON.stringify(payload, null, 2) + "\n");
-  else if (toStderr) errOut.write(textMsg);
-  else output.write(textMsg);
+  const safeMsg = typeof textMsg === "string" ? sanitizeError(textMsg) : textMsg;
+  const safePayload = payload && typeof payload === "object" && typeof payload.detail === "string"
+    ? { ...payload, detail: sanitizeError(payload.detail) }
+    : payload;
+  if (isJson) output.write(JSON.stringify(safePayload, null, 2) + "\n");
+  else if (toStderr) errOut.write(safeMsg);
+  else output.write(safeMsg);
 }
 
 function printInitSuccess(output, options, { ok, readiness, selectedHarness, savedState, statePath, plan, doctorResult }) {
@@ -365,29 +371,29 @@ export async function runInit(options = {}, deps = {}) {
     if (harnessRes.error) return harnessRes.error;
     const selectedHarness = harnessRes.harness;
 
+    const isSameHarness = Boolean(existingState && existingState.harness === selectedHarness);
     const targetRoot = options.root
       ? resolve(options.root)
-      : existingState && existingState.harness === selectedHarness && existingState.root
+      : isSameHarness && existingState.root
         ? resolve(existingState.root)
         : getDefaultRoot(selectedHarness, userHome);
     const projectRoot = options.projectRoot
       ? resolve(options.projectRoot)
-      : existingState?.projectRoot
+      : isSameHarness && existingState.projectRoot
         ? resolve(existingState.projectRoot)
         : selectedHarness === "cursor"
           ? resolve(process.cwd())
           : null;
+    const priorManaged = isSameHarness && existingState?.managedFiles ? existingState.managedFiles : undefined;
+
+    const runInstall = (dryRun) => installFn({
+      harness: selectedHarness, root: targetRoot, ...(projectRoot ? { projectRoot } : {}),
+      userHome, dryRun, ...(priorManaged ? { managedFiles: priorManaged } : {}),
+    });
 
     let previewPlan;
     try {
-      previewPlan = installFn({
-        harness: selectedHarness,
-        root: targetRoot,
-        ...(projectRoot ? { projectRoot } : {}),
-        userHome,
-        dryRun: true,
-        managedFiles: existingState?.managedFiles,
-      });
+      previewPlan = runInstall(true);
     } catch (err) {
       emitJsonOrText(output, errOut, options.json, { ok: false, stage: "preflight", error: "install_failed", detail: err.message }, `Error: ${err.message}\n`);
       return 1;
@@ -416,14 +422,7 @@ export async function runInit(options = {}, deps = {}) {
 
     let plan;
     try {
-      plan = installFn({
-        harness: selectedHarness,
-        root: targetRoot,
-        ...(projectRoot ? { projectRoot } : {}),
-        userHome,
-        dryRun: false,
-        managedFiles: existingState?.managedFiles,
-      });
+      plan = runInstall(false);
     } catch (err) {
       emitJsonOrText(output, errOut, options.json, { ok: false, stage: "install", error: "install_failed", detail: err.message }, `Error: ${err.message}\n`);
       return 1;
@@ -450,7 +449,7 @@ export async function runInit(options = {}, deps = {}) {
       ...(finalProjectRoot ? { projectRoot: resolve(finalProjectRoot) } : {}),
       userHome,
       version: readPackageVersion(PACKAGE_ROOT),
-      ...(plan.managedFiles || existingState?.managedFiles ? { managedFiles: plan.managedFiles || existingState?.managedFiles } : {}),
+      ...(plan.managedFiles || priorManaged ? { managedFiles: plan.managedFiles || priorManaged } : {}),
     };
 
     let statePath = null;
@@ -483,29 +482,26 @@ export async function runDoctorCommand(options = {}, deps = {}) {
     userHome = loaded.userHome;
     savedState = loaded.state;
   } catch (err) {
-    if (options.json) output.write(JSON.stringify({ ok: false, error: "invalid_state", detail: err.message }, null, 2) + "\n");
-    else errOut.write(`doctor error: ${err.message}\n`);
+    const safeMsg = sanitizeError(err.message);
+    if (options.json) output.write(JSON.stringify({ ok: false, error: "invalid_state", detail: safeMsg }, null, 2) + "\n");
+    else errOut.write(`doctor error: ${safeMsg}\n`);
     return 1;
   }
 
-  let targetHarness = options.targetHarness || null;
-  let installedRoot = options.root ? resolve(options.root) : null;
-  if (options.harness) {
-    if (HARNESS_CHOICES.includes(options.harness)) targetHarness = targetHarness || options.harness;
-    else installedRoot = installedRoot || resolve(options.harness);
+  const checkHarness = options.harness !== null && options.harness !== undefined ? options.harness : options.targetHarness;
+  if (checkHarness && !HARNESS_CHOICES.includes(checkHarness)) {
+    const msg = `Invalid --harness "${checkHarness}". Choose one of: ${HARNESS_CHOICES.join(", ")}`;
+    if (options.json) output.write(JSON.stringify({ ok: false, error: "invalid_harness", detail: msg }, null, 2) + "\n");
+    else errOut.write(`doctor error: ${msg}\n`);
+    return 2;
   }
+  let targetHarness = checkHarness || null;
+  let installedRoot = options.root ? resolve(options.root) : null;
   if (savedState) {
     targetHarness = targetHarness || savedState.harness;
     if (!installedRoot) installedRoot = targetHarness === savedState.harness ? savedState.root : getDefaultRoot(targetHarness, userHome);
   } else if (targetHarness && !installedRoot) {
     installedRoot = getDefaultRoot(targetHarness, userHome);
-  }
-
-  if (targetHarness && !HARNESS_CHOICES.includes(targetHarness)) {
-    const msg = `Invalid target harness "${targetHarness}". Expected one of: ${HARNESS_CHOICES.join(", ")}`;
-    if (options.json) output.write(JSON.stringify({ ok: false, error: "invalid_harness", detail: msg }, null, 2) + "\n");
-    else errOut.write(`doctor error: ${msg}\n`);
-    return 2;
   }
   if (!installedRoot || !targetHarness) {
     const msg = `No saved installation found at ${getStateFilePath(userHome)}. Run 'nullform init' first or specify --harness and --root.`;
@@ -529,9 +525,10 @@ export async function runDoctorCommand(options = {}, deps = {}) {
     }
   }
 
+  const isSameSavedHarness = Boolean(savedState && savedState.harness === targetHarness);
   const projectRoot = options.projectRoot
     ? resolve(options.projectRoot)
-    : savedState?.projectRoot
+    : isSameSavedHarness && savedState.projectRoot
       ? resolve(savedState.projectRoot)
       : targetHarness === "cursor"
         ? resolve(process.cwd())
@@ -618,7 +615,7 @@ Init Options:
 
 Doctor Options:
   --user-home <dir>  User home directory containing .nullform/installation.json
-  --harness <name>   Override harness or root path
+  --harness <name>   Target harness: ${HARNESS_CHOICES.join(", ")}
   --root <dir>       Override installed workflow root
   --project-root <d> Override project root directory
   --release-url <u>  Check release drift against npm metadata endpoint
@@ -646,7 +643,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   try {
     options = parseCliArgs(argv);
   } catch (err) {
-    errOut.write(`Error: ${err.message}\n`);
+    errOut.write(`Error: ${sanitizeError(err.message)}\n`);
     return 2;
   }
 
@@ -657,7 +654,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       else output.write(`${ver}\n`);
       return 0;
     } catch (err) {
-      errOut.write(`Error: ${err.message}\n`);
+      errOut.write(`Error: ${sanitizeError(err.message)}\n`);
       return 1;
     }
   }
@@ -686,7 +683,7 @@ if (
   })()
 ) {
   main().then((code) => { process.exitCode = code; }, (err) => {
-    process.stderr.write(`nullform: unhandled error: ${err.message}\n`);
+    process.stderr.write(`nullform: unhandled error: ${sanitizeError(err.message)}\n`);
     process.exitCode = 2;
   });
 }
