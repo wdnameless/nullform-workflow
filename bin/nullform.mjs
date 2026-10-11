@@ -137,7 +137,7 @@ export function parseCliArgs(argv = []) {
 
   let command = null;
   for (const pos of parsed.positionals) {
-    if (pos === "init" || pos === "doctor" || pos === "update" || pos === "capabilities" || pos === "evidence" || pos === "workflow") {
+    if (pos === "init" || pos === "doctor" || pos === "update" || pos === "capabilities" || pos === "evidence") {
       if (command && command !== pos) throw new Error(`Unexpected command "${pos}" after "${command}"`);
       command = pos;
     } else {

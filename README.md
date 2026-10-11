@@ -12,7 +12,7 @@ Portable engineering harness for AI coding agents — 8 roles · 70 skills · 8 
 
 ## Install
 
-Requires Node.js `>=18.19.0`. *Release status: package is prepared for public npm release, currently unpublished on registry.*
+Requires Node.js `>=18.19.0`. Public npm distribution requires certified authenticated release:
 
 ```bash
 npm install -g --ignore-scripts nullform-workflow
