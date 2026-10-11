@@ -23,10 +23,10 @@ jobs:
           # Fetch full history if needed for diffs / previous commit comparison
           fetch-depth: 0
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           # cache: 'npm' # Uncomment if root package-lock.json exists
 
       - name: Validate OpenSpec changes
@@ -82,7 +82,7 @@ jobs:
         # Includes review-integrity native-proof/security consumer regressions.
         run: |
           if [ -d "tools/tests" ]; then
-            node --test tools/tests/*.test.mjs
+            node --test --test-concurrency=2 tools/tests/*.test.mjs
           fi
 
       - name: Code size gate

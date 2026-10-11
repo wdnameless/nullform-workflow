@@ -357,6 +357,7 @@ export function recordBenchmarkRun({
   baseSha,
   cost,
   arm,
+  model,
 }) {
   if (!out) return;
   const outPath = isAbsolute(out) ? out : resolve(absRoot || ".", out);
@@ -368,7 +369,8 @@ export function recordBenchmarkRun({
 
   const cassette = {
     version: 1,
-    model: arm || "recorded",
+    model: (typeof model === "string" && model.trim()) || "recorded",
+    ...(arm ? { arm } : {}),
     recordedAt: new Date().toISOString(),
     turns: [
       {
@@ -403,6 +405,7 @@ export function executeReplayTurn({ replay, absRoot, prompt, repoDir }) {
     stderr: "",
     exitCode: 0,
     status: "ok",
+    usage: hit.usage || null,
   };
 }
 

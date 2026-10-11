@@ -48,6 +48,7 @@ import {
   preflightManagedMarkers,
   safeJsonErrorMessage,
 } from "./harness-config.mjs";
+import { checkVersionAlignment, checkHarnessCapabilities } from "./harness-capabilities.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -617,10 +618,20 @@ function checkNonOmpHarness({ harness, targetHarness, userHome, projectRoot }) {
 }
 
 export function runDoctor(options) {
-  const { harness, agentDir, agentsHome, mode: requestedMode } = options;
+  const { harness, mode: requestedMode } = options;
   const explicitTargetHarness = Boolean(options.targetHarness || options.harnessName);
   const targetHarness = options.targetHarness || options.harnessName || "omp";
   const userHome = options.userHome ? resolve(options.userHome) : homedir();
+  const agentDir = options.agentDir
+    ? resolve(options.agentDir)
+    : targetHarness === "omp"
+      ? join(userHome, ".omp", "agent")
+      : null;
+  const agentsHome = options.agentsHome
+    ? resolve(options.agentsHome)
+    : targetHarness === "omp"
+      ? join(userHome, ".agents")
+      : null;
   let projectRoot = options.projectRoot ? resolve(options.projectRoot) : null;
   if (!projectRoot && options.userHome) {
     try {
@@ -632,22 +643,33 @@ export function runDoctor(options) {
     } catch {}
   }
   const probeResults = options.probeResults || null;
-  const harnessRootFile = join(agentDir, ".harness-root");
   let hasHarnessRoot = false;
   let harnessRootMatches = false;
   let harnessRootTarget = "";
 
-  if (existsSync(harnessRootFile)) {
-    hasHarnessRoot = true;
-    try {
-      harnessRootTarget = stripBom(readFileSync(harnessRootFile, "utf8")).trim();
-      harnessRootMatches = normalizePath(harnessRootTarget) === normalizePath(harness);
-    } catch {
-      harnessRootMatches = false;
+  if (agentDir) {
+    const harnessRootFile = join(agentDir, ".harness-root");
+    if (existsSync(harnessRootFile)) {
+      hasHarnessRoot = true;
+      try {
+        harnessRootTarget = stripBom(readFileSync(harnessRootFile, "utf8")).trim();
+        harnessRootMatches = normalizePath(harnessRootTarget) === normalizePath(harness);
+      } catch {
+        harnessRootMatches = false;
+      }
     }
   }
 
-  const isInstalledDetected = hasHarnessRoot && harnessRootMatches;
+  const isInstalledDetected = targetHarness === "omp"
+    ? (hasHarnessRoot && harnessRootMatches)
+    : (existsSync(harness) && (
+        existsSync(join(harness, "VERSION")) ||
+        existsSync(join(harness, "AGENTS.md")) ||
+        existsSync(join(harness, "CLAUDE.md")) ||
+        existsSync(join(harness, "openclaw.json")) ||
+        existsSync(join(harness, "config.yaml")) ||
+        Boolean(projectRoot && existsSync(join(projectRoot, ".cursor")))
+      ));
   const mode = requestedMode || (isInstalledDetected ? "installed" : "repo");
   const checks = [];
 
@@ -1366,6 +1388,9 @@ export function runDoctor(options) {
       }
     }
   }
+  // 15. check 'version-alignment' & 16. check 'harness-capabilities'
+  checks.push(checkVersionAlignment({ harness, userHome, activePid: options.activePid }));
+  checks.push(checkHarnessCapabilities(targetHarness));
 
   // Summary calculation
   const summary = {
@@ -1382,7 +1407,7 @@ export function runDoctor(options) {
     harness,
     targetHarness,
     ...(projectRoot ? { projectRoot } : {}),
-    agentDir,
+    ...(agentDir ? { agentDir } : {}),
     requirePlugins: options.requirePlugins === true,
     checks,
     summary,
@@ -1394,7 +1419,7 @@ export function printHumanReport(result, quiet) {
   const { mode, harness, agentDir, checks, summary, ok } = result;
 
   if (!quiet) {
-    console.log(`\ndoctor: режим=${mode} харнесс=${harness}\nагентская директория=${agentDir}\n`);
+    console.log(`\ndoctor: режим=${mode} харнесс=${harness}\nагентская директория=${agentDir || "не требуется (non-omp)"}\n`);
     for (const c of checks) {
       const tag = c.status.toUpperCase().padEnd(4);
       let symbol = "•";

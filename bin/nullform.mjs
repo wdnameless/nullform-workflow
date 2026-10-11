@@ -13,6 +13,9 @@ import { parseArgs } from "node:util";
 import { installHarness, SUPPORTED_HARNESSES } from "../tools/install-harness.mjs";
 import { getDefaultRoot } from '../tools/installation-state.mjs';
 import { runDoctor, probeProviders, printHumanReport } from "../tools/doctor.mjs";
+import { runWorkflowCli } from "../tools/workflow.mjs";
+import { acquireDeploymentLock, releaseDeploymentLock, DeploymentJournal } from "../tools/deployment-journal.mjs";
+import { getCapabilitiesInfo, checkVersionAlignment } from "../tools/harness-capabilities.mjs";
 import {
   PACKAGE_NAME,
   HARNESS_CHOICES,
@@ -82,6 +85,15 @@ export function readPackageVersion(root = PACKAGE_ROOT) {
 }
 
 export function parseCliArgs(argv = []) {
+  if (Array.isArray(argv) && argv.length > 0 && argv[0] === "workflow") {
+    return {
+      command: "workflow",
+      workflowArgs: argv.slice(1),
+      json: argv.includes("--json"),
+      help: argv.includes("--help") || argv.includes("-h"),
+    };
+  }
+
   const options = {
     help: { type: "boolean", short: "h" },
     version: { type: "boolean", short: "v" },
@@ -126,7 +138,7 @@ export function parseCliArgs(argv = []) {
 
   let command = null;
   for (const pos of parsed.positionals) {
-    if (pos === "init" || pos === "doctor" || pos === "update") {
+    if (pos === "init" || pos === "doctor" || pos === "update" || pos === "capabilities" || pos === "evidence" || pos === "workflow") {
       if (command && command !== pos) throw new Error(`Unexpected command "${pos}" after "${command}"`);
       command = pos;
     } else {
@@ -263,6 +275,8 @@ export async function promptConfirmPlan(plan, { session, output = process.stdout
 
 function summarizeDoctorReadiness(res) {
   const checks = Array.isArray(res?.checks) ? res.checks : [];
+  if (checks.some((c) => c.divergence === "pending" || c.status === "pending" || c.pending)) return "pending";
+  if (checks.some((c) => c.divergence === "recoverable" || c.status === "recoverable" || c.recoverable)) return "recoverable";
   if (!res?.ok || checks.some((c) => c.status === "fail")) return "fail";
   if (checks.some((c) => c.status === "setup")) return "setup";
   if (checks.some((c) => c.status === "warn")) return "warn";
@@ -430,51 +444,83 @@ export async function runInit(options = {}, deps = {}) {
     }
 
     let plan;
+    let lock = null;
+    let journal = null;
     try {
-      plan = runInstall(false);
+      lock = acquireDeploymentLock({ userHome, targetRoot, harness: selectedHarness });
+      journal = new DeploymentJournal({
+        userHome,
+        targetRoot,
+        projectRoot,
+        harness: selectedHarness,
+        targetVersion: readPackageVersion(PACKAGE_ROOT),
+      });
+      journal.start();
+
+      plan = installFn({
+        harness: selectedHarness, root: targetRoot, ...(projectRoot ? { projectRoot } : {}),
+        userHome, dryRun: false, ...(priorManaged ? { managedFiles: priorManaged } : {}),
+        lock, journal, deferLock: true,
+      });
     } catch (err) {
+      if (journal) journal.rollback(err.message);
+      if (lock) lock.release();
       const safeMsg = sanitizeError(err.message);
       emitJsonOrText(output, errOut, options.json, { ok: false, stage: "install", error: "install_failed", detail: safeMsg }, `Error: ${safeMsg}\n`);
       return 1;
     }
 
-    const finalProjectRoot = plan.projectRoot || projectRoot;
-    const doctorResult = doctorFn({
-      harness: resolve(plan.root || targetRoot),
-      targetHarness: selectedHarness,
-      ...(finalProjectRoot ? { projectRoot: resolve(finalProjectRoot) } : {}),
-      userHome,
-      agentDir: join(userHome, ".omp", "agent"),
-      agentsHome: join(userHome, ".agents"),
-      mode: "installed",
-      releaseInfo: null,
-    });
-    const readiness = summarizeDoctorReadiness(doctorResult);
-    const ok = Boolean(doctorResult.ok);
+    try {
+      const finalProjectRoot = plan.projectRoot || projectRoot;
+      const doctorResult = doctorFn({
+        harness: resolve(plan.root || targetRoot),
+        targetHarness: selectedHarness,
+        ...(finalProjectRoot ? { projectRoot: resolve(finalProjectRoot) } : {}),
+        userHome,
+        agentDir: join(userHome, ".omp", "agent"),
+        agentsHome: join(userHome, ".agents"),
+        mode: "installed",
+        releaseInfo: null,
+        activePid: process.pid,
+      });
+      const ok = Boolean(doctorResult.ok);
 
-    const targetState = {
-      schemaVersion: 1,
-      harness: selectedHarness,
-      root: resolve(plan.root || targetRoot),
-      ...(finalProjectRoot ? { projectRoot: resolve(finalProjectRoot) } : {}),
-      userHome,
-      version: readPackageVersion(PACKAGE_ROOT),
-      ...(plan.managedFiles || priorManaged ? { managedFiles: plan.managedFiles || priorManaged } : {}),
-    };
+      const targetState = {
+        schemaVersion: 1,
+        harness: selectedHarness,
+        root: resolve(plan.root || targetRoot),
+        ...(finalProjectRoot ? { projectRoot: resolve(finalProjectRoot) } : {}),
+        userHome,
+        version: readPackageVersion(PACKAGE_ROOT),
+        ...(plan.managedFiles || priorManaged ? { managedFiles: plan.managedFiles || priorManaged } : {}),
+      };
 
-    let statePath = null;
-    let savedState = null;
-    if (ok) {
-      const writeRes = writeInstallationState(userHome, targetState);
-      statePath = writeRes.statePath;
-      savedState = writeRes.state;
-    } else {
-      savedState = existingState || targetState;
-      statePath = existingState ? getStateFilePath(userHome) : null;
+      let statePath = null;
+      let savedState = null;
+      if (ok) {
+        journal.commit(targetState);
+        statePath = getStateFilePath(userHome);
+        savedState = targetState;
+        const alignCheck = checkVersionAlignment({
+          harness: resolve(plan.root || targetRoot),
+          userHome,
+          packageRoot: PACKAGE_ROOT,
+        });
+        const idx = doctorResult.checks.findIndex((c) => c.id === "version-alignment");
+        if (idx !== -1) doctorResult.checks[idx] = alignCheck;
+        else doctorResult.checks.push(alignCheck);
+      } else {
+        journal.rollback("doctor_failed");
+        savedState = existingState || targetState;
+        statePath = existingState ? getStateFilePath(userHome) : null;
+      }
+
+      const finalReadiness = summarizeDoctorReadiness(doctorResult);
+      printInitSuccess(output, options, { ok, readiness: finalReadiness, selectedHarness, savedState, statePath, plan, doctorResult });
+      return ok ? 0 : 1;
+    } finally {
+      if (lock) lock.release();
     }
-
-    printInitSuccess(output, options, { ok, readiness, selectedHarness, savedState, statePath, plan, doctorResult });
-    return ok ? 0 : 1;
   } finally {
     session.close();
   }
@@ -607,6 +653,82 @@ export async function runUpdateCommand(options = {}, deps = {}) {
   return res.ok ? 0 : 1;
 }
 
+export async function runWorkflowCommand(workflowArgs = [], deps = {}) {
+  const workflowFn = deps.runWorkflowCli || runWorkflowCli;
+  return workflowFn(workflowArgs, { cwd: deps.cwd || process.cwd() });
+}
+
+export { getCapabilitiesInfo };
+
+export async function runCapabilitiesCommand(options = {}, deps = {}) {
+  const output = deps.stdout || process.stdout;
+  const env = deps.env || process.env;
+  const userHome = resolveUserHomePath(options, env);
+  const info = (deps.getCapabilitiesInfo || getCapabilitiesInfo)({ userHome, env });
+
+  if (options.json) {
+    output.write(JSON.stringify(info, null, 2) + "\n");
+  } else {
+    output.write(`=== NULLFORM WORKFLOW Capabilities ===\n\n`);
+    output.write(`Configuration Adapters (${info.configurationAdapters.length} supported):\n`);
+    for (const a of info.adapters) {
+      output.write(`  - ${a.id.padEnd(10)}: Configuration deployment supported (in PATH: ${a.present ? "yes" : "no"})\n`);
+    }
+    output.write(`\nCore Workflow Gates:\n`);
+    output.write(`  - Runtime:  Node.js (zero OMP or Bun requirement)\n`);
+    output.write(`  - Commands: ${info.coreWorkflowGates.commands.join(", ")}\n`);
+    output.write(`\nAutomated Review Execution:\n`);
+    output.write(`  - Supported: ONLY 'omp' with Bun\n`);
+    output.write(`  - Other 7 adapters: Refuses before dispatch (configuration deployment only)\n`);
+  }
+  return 0;
+}
+
+export async function runEvidenceCommand(options = {}, deps = {}) {
+  const output = deps.stdout || process.stdout;
+  const errOut = deps.stderr || process.stderr;
+  const root = options.root ? resolve(options.root) : process.cwd();
+
+  try {
+    let readQualityEvidence, formatQualityEvidence;
+    if (deps.readQualityEvidence) {
+      readQualityEvidence = deps.readQualityEvidence;
+      formatQualityEvidence = deps.formatQualityEvidence;
+    } else {
+      const mod = await import("../tools/quality-evidence.mjs");
+      readQualityEvidence = mod.readQualityEvidence;
+      formatQualityEvidence = mod.formatQualityEvidence;
+    }
+
+    const evidence = await readQualityEvidence({ root });
+    if (!evidence || evidence.status === "error" || evidence.error) {
+      const errObj = evidence || { ok: false, status: "error", error: "evidence_unavailable", detail: "Quality evidence unavailable or invalid" };
+      if (options.json) {
+        output.write(JSON.stringify(errObj, null, 2) + "\n");
+      } else {
+        errOut.write(`evidence error: ${errObj.detail || errObj.error || "Quality evidence unavailable"}\n`);
+      }
+      return 1;
+    }
+
+    if (options.json) {
+      output.write(JSON.stringify(evidence, null, 2) + "\n");
+    } else {
+      const formatted = typeof formatQualityEvidence === "function" ? formatQualityEvidence(evidence) : JSON.stringify(evidence, null, 2);
+      output.write(formatted.endsWith("\n") ? formatted : formatted + "\n");
+    }
+    return 0;
+  } catch (err) {
+    const safeMsg = sanitizeError(err.message);
+    if (options.json) {
+      output.write(JSON.stringify({ ok: false, status: "error", error: "evidence_unavailable", detail: safeMsg }, null, 2) + "\n");
+    } else {
+      errOut.write(`evidence error: ${safeMsg}\n`);
+    }
+    return 1;
+  }
+}
+
 export function printCliHelp(output = process.stdout) {
   let ver = "unknown";
   try { ver = readPackageVersion(PACKAGE_ROOT); } catch {}
@@ -617,13 +739,19 @@ Usage:
   nullform init [options]
   nullform doctor [options]
   nullform update [options]
+  nullform workflow <command> [args...]
+  nullform capabilities [options]
+  nullform evidence [options]
   nullform --version
   nullform --help
 
 Commands:
-  init      Select harness (interactive menu or --harness), preview plan, install adapter & save state
-  doctor    Verify installed workflow assets and selected native harness integration
-  update    Check npm registry, update global package and re-apply saved installation
+  init          Select harness (interactive menu or --harness), preview plan, install adapter & save state
+  doctor        Verify installed workflow assets and selected native harness integration
+  update        Check npm registry, update global package and re-apply saved installation
+  workflow      Execute core workflow gates (start, suggest, artifact, check, status, close, check-ci, stage-b, metrics)
+  capabilities  Inspect supported configuration adapters, core workflow runtime, and execution boundaries
+  evidence      Report verifiable development quality evidence and historical limitations
 
 Init Options:
   --harness <name>   Target harness: ${HARNESS_CHOICES.join(", ")}
@@ -653,6 +781,22 @@ Update Options:
   --force            Reinstall even if already on latest version
   --yes, -y          Non-interactive confirmation
   --json             Output structured JSON result
+
+Workflow Usage:
+  nullform workflow start --tier <T0|T1|T2|T3> --task "..."
+  nullform workflow check
+  nullform workflow close
+  nullform workflow artifact --kind <manifest|openspec|interfaces|oracle> --path <path>
+  nullform workflow check-ci --tier T2 --change <name>
+  nullform workflow status
+  nullform workflow metrics
+
+Capabilities Options:
+  --json             Output structured JSON capabilities report
+
+Evidence Options:
+  --root <dir>       Project root or installed harness directory (default: current directory)
+  --json             Output structured JSON evidence report
 `.trim() + "\n");
 }
 
@@ -688,6 +832,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (options.command === "init") return runInit(options, deps);
   if (options.command === "doctor") return runDoctorCommand(options, deps);
   if (options.command === "update") return runUpdateCommand(options, deps);
+  if (options.command === "workflow") return runWorkflowCommand(options.workflowArgs, deps);
+  if (options.command === "capabilities") return runCapabilitiesCommand(options, deps);
+  if (options.command === "evidence") return runEvidenceCommand(options, deps);
 
   errOut.write(`Error: Unknown command "${options.command}"\n`);
   return 2;

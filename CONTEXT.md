@@ -130,7 +130,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Stage B** — the simplifying second phase in the A→B→A delivery rhythm. After meeting specifications and passing tests in Stage A, the agent executes an explicit compression and deduplication pass, preserving test invariance while achieving neutral or negative net lines of code (`net: -N lines`).
 
 - **Skill benefit evaluation** — reproducible, controlled comparison of workflow and review skills using isolated baseline (no skill) and candidate (target skill) sessions with identical real task inputs, measuring actual defect detection, false positives, task satisfaction, duration, and token usage within a hard $1 cost ceiling.
-## Tooling
+- **Quality evidence** — `tools/quality-evidence.mjs` exports `readQualityEvidence({root})` and `formatQualityEvidence(evidence)` to inspect retained paired historical comparisons and financial boundaries without live network or model dispatch. Validates session uniqueness, equal paired fixtures, terminal stops/failures, counters, and catalog tariffs. Reports an honest `not-proven` claim status, preserving equal and adverse outcomes, and fails closed with an error status on corruption or missing sources rather than fabricating positive claims.
+- **Evidence summary** — `core/quality-evidence.summary.json`. A sanitized, source-bound summary packaged under `core/` representing retained native observations across four constructed task pairs on a single model with single repetition. Exposes explicit limitations, accounting distinctions (catalog prices vs unverified provider invoices), and adverse candidate terminations without unproven positive quality assertions.
 
 - **Codemap** — `CODEMAP.md` per folder plus `.codemap/state.json` (hashes), built
   by `tools/codemap.mjs`. Maps **structure**; `CONTEXT.md` names **concepts**.

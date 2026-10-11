@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -354,9 +355,10 @@ export function preflightAllConfigs({ harnesses, targetRoot, projectRoot, userHo
       markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(targetRoot, "SOUL.md"), join(targetRoot, "USER.md"), join(userHome, ".openclaw", "AGENTS.md"));
     }
     if (is("hermes")) {
-      configsToPreflight.push({ path: join(targetRoot, "config.yaml"), type: "yaml" }, { path: join(userHome, ".hermes", "config.yaml"), type: "yaml" });
-      if (process.env.HERMES_HOME) configsToPreflight.push({ path: join(process.env.HERMES_HOME, "config.yaml"), type: "yaml" });
-      markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(userHome, ".hermes", "SOUL.md"), join(userHome, ".hermes", "AGENTS.md"));
+      const isDefaultHome = resolve(userHome) === resolve(homedir());
+      const hermesHome = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
+      configsToPreflight.push({ path: join(targetRoot, "config.yaml"), type: "yaml" }, { path: join(hermesHome, "config.yaml"), type: "yaml" });
+      markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(hermesHome, "SOUL.md"), join(hermesHome, "AGENTS.md"));
     }
     if (is("openhuman")) {
       markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(targetRoot, "agents", "workflow", "AGENTS.md"), join(userHome, ".openhuman", "AGENTS.md"));
@@ -518,9 +520,7 @@ export function updateOpencodeJson(existingPath, preflightedJson) {
   }
 
   const cfg = preflightedJson ? structuredClone(preflightedJson) : {};
-  if (!cfg["$schema"]) {
-    cfg["$schema"] = "https://opencode.ai/config.json";
-  }
+  if (!cfg["$schema"]) cfg["$schema"] = "https://opencode.ai/config.json";
   return JSON.stringify(cfg, null, 2) + "\n";
 }
 
@@ -559,9 +559,9 @@ export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter
     "",
     "## 1. Запуск задачи и гейты (T0–T3)",
     "Перед изменением любых файлов определите tier и зафиксируйте задачу:",
-    `- \`node '${slashRoot}/tools/workflow.mjs' start --tier <T0|T1|T2|T3> --task "<описание>"\``,
-    `- \`node '${slashRoot}/tools/workflow.mjs' check\` (exit 1 при отсутствии обязательных артефактов)`,
-    `- \`node '${slashRoot}/tools/workflow.mjs' close\` (фиксирует завершение задачи)`,
+    `- \`nullform workflow start --tier <T0|T1|T2|T3> --task "<описание>"\` (или \`node '${slashRoot}/tools/workflow.mjs' start ...\`)`,
+    `- \`nullform workflow check\` (exit 1 при отсутствии обязательных артефактов)`,
+    `- \`nullform workflow close\` (фиксирует завершение задачи)`,
     "",
     "Уровни (Lanes):",
     "- `⚡ [T0 FAST]`: 1–2 известных файла, точечные правки, без OpenSpec/интервью/oracle.",
@@ -570,17 +570,20 @@ export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter
     "- `🌌 [T3 PROGRAM]`: мульти-фича программа (T2 на каждый слайс).",
     "",
     "## 2. Фиксация артефактов",
-    `- Манифест требований: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind manifest --path openspec/changes/<id>/manifest.md\``,
-    `- Спецификация/OpenSpec: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind openspec --path openspec/changes/<id>\``,
-    `- Границы и интерфейсы: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind interfaces --path openspec/changes/<id>/interfaces.md\``,
-    `- Вердикт оракула: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind oracle --detail "ACCEPT: <причина>"\``,
+    `- Манифест требований: \`nullform workflow artifact --kind manifest --path openspec/changes/<id>/manifest.md\``,
+    `- Спецификация/OpenSpec: \`nullform workflow artifact --kind openspec --path openspec/changes/<id>\``,
+    `- Границы и интерфейсы: \`nullform workflow artifact --kind interfaces --path openspec/changes/<id>/interfaces.md\``,
+    `- Вердикт оракула: \`nullform workflow artifact --kind oracle --detail "ACCEPT: <причина>"\``,
     "",
     "## 3. Дашборд наблюдаемости",
     "При `workflow.mjs start` автоматически запускается фоновый дашборд.",
     "- URL хранится в `.workflow/dashboard.json`",
     `- Получить URL: \`node '${slashRoot}/tools/dashboard.mjs' --url\``,
     "",
-    "## 4. Базовые законы",
+    "## 4. Возможности и лимиты адаптеров",
+    "- 8 адаптеров для настройки; базовые гейты Node-native (без OMP/Bun); automated review только для OMP с Bun.",
+    "",
+    "## 5. Базовые законы",
     "- Честность: никаких заявлений о готовности без выполненных проверок.",
     "- Анализ до кода: инвентаризация существующего кода (reuse > extend > create).",
     "- Ladder решений: reuse -> stdlib -> platform -> installed dep -> 1 line -> minimum.",
@@ -608,7 +611,7 @@ export function getOpenclawUser(slashRoot) {
     "# OpenClaw USER: Context & Operating Preferences",
     "",
     `Target workspace: ${slashRoot}`,
-    "- Workflow execution: use `node tools/workflow.mjs` for task gating.",
+    "- Workflow execution: use `nullform workflow` (or `node tools/workflow.mjs`) for task gating.",
     "- Observability: dashboard URL available in `.workflow/dashboard.json`.",
     "- Verification: verify all fixes before final response.",
     "",
@@ -683,13 +686,11 @@ export function isCommandInPath(cmd) {
   const pathEnv = process.env.PATH || "";
   const sep = process.platform === "win32" ? ";" : ":";
   const extensions = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
-  const dirs = pathEnv.split(sep);
-  for (const dir of dirs) {
+  for (const dir of pathEnv.split(sep)) {
     if (!dir) continue;
     for (const ext of extensions) {
-      const full = join(dir, cmd + ext);
       try {
-        if (existsSync(full)) return true;
+        if (existsSync(join(dir, cmd + ext))) return true;
       } catch {}
     }
   }

@@ -15,9 +15,15 @@ The user selected public npm release, no additional paid A/B experiments, permis
 - [x] (2026-10-12 01:48 UTC+8) Read-only release/evidence research reconciled; GitHub public ADMIN access available, npm authorization absent.
 - [x] (2026-10-12 01:48 UTC+8) Verbatim manifest, proposal, interfaces, task graph and three capability specs authored under openspec/changes/portable-product-release.
 - [x] (2026-10-12 02:07 UTC+8) Strict OpenSpec valid; independent evidence/deployment coverage ACCEPT after four material deployment/publication gaps were closed.
-- [ ] RuntimeOwner implement recoverable installation, atomic identity, public core CLI and honest feature capabilities.
-- [ ] CertificationOwner implement supplied-archive package certification, hosted maintained-version matrix and secure public release workflow.
-- [ ] EvidenceOwner implement honest historical assessment, necessary replay/provenance repairs and managed instructions/docs.
+- [x] Parent exercised evidence/capabilities CLI, adversarial recovery and provenance scenarios; focused deterministic suite54/54 and offline native SDK checks4/4 passed before later integration.
+- [x] Initial full suite753tests699pass54fail exposed doctor flag, Hermes home leakage, Cursor re-ownership and moved-helper defects. Root corrections verified through actual consumers; no gate waivers.
+- [x] Current runtime/archive21/21 and evidence/replay27/27 pass,0skip. Actual Node-only public CLI installation/doctor/T1 lifecycle succeeds with paths containing spaces; selected non-OMP review refuses before dispatch.
+- [x] Final frozen full suite752/752,0fail0skip (artifact://5631). Deleted two incidental literal-copy/fake-archive tests; real behavior checks unchanged.
+- [x] Supplied-archive npm lifecycle succeeds for all eight configuration adapters, repeat application, data-preservation boundaries and real loopback-registry upgrade1.2.0->1.3.0. Sequential scheduling passed under full-suite load with existing deadlines; Node SHA256/SHA512 verifies original bytes and rejects modified bytes.
+- [x] CI run+uses collision and certified-workflow identity check corrected; all three workflows parse with valid executable steps. Actual hosted results remain pending.
+- [x] RuntimeOwner implements recoverable installation, atomic identity, public core CLI and honest selected-client capability gates; focused and real CLI checks observed.
+- [x] CertificationOwner implements source-bound supplied-archive certification, maintained hosted matrix and secure release workflow. Actual local payload binding passed; remote platform execution is still pending.
+- [x] EvidenceOwner implements source-bound historical assessment, replay/model provenance repairs and honest public documentation; source mutation cases and actual evidence CLI observed.
 - [ ] Parent integrate, exercise real surfaces, run complete deterministic tests, freeze StageA tests and complete implementation review/StageB.
 - [ ] Obtain blind current acceptance and actual hosted platform results.
 - [ ] Complete user-controlled npm authorization, publish the exact certified archive, and verify registry installation/integrity.
@@ -29,6 +35,8 @@ The prior local suite is green, but CI tests source installation on Node18/20, n
 Retained observed-eight-sessions.json contains four constructed task pairs, one model, one repetition. Three review pairs have equal accuracy; candidate review tariff is0.00665775USD versus baseline0.0033195USD. Workflow baseline has five recorded requests and succeeds at0.0051855USD; candidate has six requests and fails without final report at0.01945125USD. bench/README.md incorrectly calls baseline one request: fix the documentation, not the raw record. These samples prove no general current quality benefit.
 
 The ledger has18settled requests,0unsettled,statusok and0.0362235USD of SDK-catalog tariff under its1USDceiling. The actual provider invoice is not independently verified. No reset, synthetic success transcript or fresh paid comparison is permitted. Repository mapping includes generated benchmark clones; do not treat them as current production source.
+
+The integrated public evidence command returns claimStatus:not-proven and the original source hash c4817077f4d2c4dcbdb979a6664c0759feeadafde441a9d5be9a474bd7afcce2. npm whoami still returns ENEEDAUTH; the stale web-login process was stopped without entering credentials. Restart authorization only when a verified candidate is ready.
 
 ## Decision Log
 

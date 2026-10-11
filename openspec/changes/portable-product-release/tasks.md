@@ -8,13 +8,13 @@
 
 ## Parallel implementation frontier
 
-- [ ] B01 RuntimeOwner: transactional/recoverable deployment, atomic identity, interruption/concurrency coverage, Node-native workflow CLI and explicit capability/readiness gates. R01-R04,R08,R09. blocked-by: P03.
-- [ ] B02 CertificationOwner: version/metadata agreement, frozen tarball input to real npm smoke, modern hosted OS/Node matrix, exact artifact/source/integrity certificates and secure release workflow. R03,R04,R06,R07,R09. blocked-by: P03.
-- [ ] B03 EvidenceOwner: validate/report existing paired outcomes and historical limitation, correct five-request baseline documentation, fix reproduced replay/provenance flaws without fake fresh sessions, align managed source instructions/docs with actual capability and claims. R02,R04,R05,R07-R09. blocked-by: P03.
+- [x] B01 RuntimeOwner: transactional/recoverable deployment, atomic identity, interruption/concurrency coverage, Node-native workflow CLI and explicit capability/readiness gates. R01-R04,R08,R09. Observed runtime/archive21/21, data-integrity/doctor consumers in full754run, actual Node-only public CLI lifecycle; no native execution claim for other adapters.
+- [x] B02 CertificationOwner: implement version/metadata agreement, supplied immutable archive smoke/certification, maintained hosted matrix and secure publication gates. R03,R04,R06,R07,R09. Local actual eight-adapter npm lifecycle and source-bound archive verification passed; hosted execution remains V03.
+- [x] B03 EvidenceOwner: validate/report existing paired outcomes and historical limitation, correct five-request baseline documentation, fix replay/model attribution without fake fresh sessions, align managed docs/licenses with actual capabilities and claims. R02,R04,R05,R07-R09. Observed evidence/replay27/27 and real evidence CLI; claimStatus not-proven, retained ledger/raw source unchanged.
 
 ## Parent reconciliation and gates
 
-- [ ] V01: Integrate complete return contracts and affected callers; exercise actual CLI/package/recovery/evidence paths and run full deterministic suite including no-network native SDK checks where available. R01-R09. blocked-by: B01,B02,B03.
+- [x] V01: Complete owned returns integrated; actual Node-only CLI, adversarial recovery, evidence and supplied-package npm lifecycle observed. Full frozen Node suite752/752,0fail0skip (artifact://5631), offline native SDK4/4, no paid comparison. R01-R09.
 - [ ] V02: Recorded native implementation review; freeze Stage-A tests, apply one simplification pass or record honest lean-already, verify identical tests. R01-R09. blocked-by: V01.
 - [ ] V03: Push draft reviewed integration PR, run actual hosted immutable-package matrix, collect raw results and artifact digests; no local-only platform claims. R03,R04,R06,R09. blocked-by: V02.
 - [ ] V04: Blind release-candidate oracle against original manifest and running certified artifact, explicitly distinguishing prepublication capability from still-pending external publication; double independent acceptance if flash/fallback and not proven lite. R01-R09. blocked-by: V03.

@@ -24,6 +24,12 @@ Hosted repository wdnameless/nullform-workflow is PUBLIC, defaultmaster, viewerA
 
 Existing evidence source: openspec/changes/skill-benefit-evaluation/evidence/observed-eight-sessions.json. Four constructed task pairs, one model, one repetition: three review pairs equal accuracy; workflow baseline5recorded requests succeeds, candidate6requests fails without final report. Source ledger retains18settled requests (including a separate network-proof request),0unsettled,cumulative SDK tariff0.0362235USD. These are limited historical observations, not a current release efficacy certificate or independently verified provider invoice.
 
+## Acceptance phases
+
+Release-candidate acceptance precedes registry publication. It evaluates R01-R05,R07-R09 against the running certified candidate, and R06's executable publication preconditions: immutable archive, observed hosted certification, independent acceptance and an explicit authenticated-publisher prerequisite. A candidate ACCEPT is not evidence that publication or postpublication installation already occurred.
+
+Final program acceptance follows actual publication and must additionally verify R06's registry version, integrity and fresh registry installation. Missing authorization or registry evidence keeps final program acceptance incomplete; candidate acceptance cannot replace it.
+
 ## Scope ownership
 
 The parent owns manifest/specs/interfaces/progress/git and verification reconciliation. Runtime, certification/release and evidence/managed-prompt implementation use disjoint isolated writers after interface agreement. Every ticket traces to these R## rows; no speculative features or quality claims are added.

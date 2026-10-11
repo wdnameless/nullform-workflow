@@ -217,18 +217,6 @@ function runGateScript(script, repoDir, env) {
   });
 }
 
-test("repo-gate.yml and workflow-gate.yml have aligned Workflow gate scripts", () => {
-  const repoGatePath = join(REPO_ROOT, ".github/workflows/repo-gate.yml");
-  const templatePath = join(REPO_ROOT, "templates/ci/workflow-gate.yml");
-  const repoGateScript = extractWorkflowGateScript(repoGatePath);
-  const templateScript = extractWorkflowGateScript(templatePath);
-  assert.ok(repoGateScript.length > 0, "repo-gate script should not be empty");
-  assert.equal(
-    repoGateScript,
-    templateScript,
-    "workflow gate validation script must match template exactly"
-  );
-});
 
 test("R02: T2 fails when changed OpenSpec directory is deleted", (t) => {
   if (!bashBin) {

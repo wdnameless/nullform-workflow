@@ -2,7 +2,7 @@
  * tools/installation-state.mjs — Installation identity, deployment preflight, npm transport, and SemVer utilities.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, lstatSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, lstatSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { resolve, join, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from 'node:os';
@@ -180,8 +180,45 @@ export function readInstallationState(userHome) {
 export function writeInstallationState(userHome, state) {
   const statePath = getStateFilePath(userHome);
   const validated = validateInstallationState(state);
-  mkdirSync(dirname(statePath), { recursive: true });
-  writeFileSync(statePath, JSON.stringify(validated, null, 2) + "\n", "utf8");
+  const dir = dirname(statePath);
+  mkdirSync(dir, { recursive: true });
+  const tmpPath = join(dir, `.installation.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+  const content = JSON.stringify(validated, null, 2) + "\n";
+  const fd = openSync(tmpPath, "w");
+  try {
+    writeSync(fd, content, 0, "utf8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+
+  if (process.platform === "win32") {
+    const bakPath = join(dir, `.installation.bak.${process.pid}.${Date.now()}`);
+    let backedUp = false;
+    try {
+      if (existsSync(statePath)) {
+        renameSync(statePath, bakPath);
+        backedUp = true;
+      }
+      renameSync(tmpPath, statePath);
+      if (backedUp) {
+        try { unlinkSync(bakPath); } catch {}
+      }
+    } catch (err) {
+      if (backedUp && existsSync(bakPath)) {
+        try { renameSync(bakPath, statePath); } catch {}
+      }
+      try { unlinkSync(tmpPath); } catch {}
+      throw err;
+    }
+  } else {
+    try {
+      renameSync(tmpPath, statePath);
+    } catch (err) {
+      try { unlinkSync(tmpPath); } catch {}
+      throw err;
+    }
+  }
   return { statePath, state: validated };
 }
 

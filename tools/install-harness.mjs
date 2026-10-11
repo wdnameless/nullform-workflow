@@ -29,9 +29,11 @@ import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, preflightAllConfigs, preflightJsoncConfig, preflightJson5Config, preflightYamlConfig, resolveOpencodeConfigPaths, applyManagedSection, applyCursorMdc, updateOpencodeJson, updateOpenclawJson, updateHermesConfigYaml, getMarkdownAdapter, getOpenclawSoul, getOpenclawUser, hashContent, isCommandInPath } from "./harness-config.mjs";
+import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, preflightAllConfigs, hashContent, isCommandInPath } from "./harness-config.mjs";
+import { applyHarnessAdapter } from "./harness-adapters.mjs";
 import { validateRootPath } from './worktree-snapshot.mjs';
 import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement } from './installation-state.mjs';
+import { acquireDeploymentLock, releaseDeploymentLock, DeploymentJournal, safeAtomicWrite } from './deployment-journal.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -72,63 +74,61 @@ function renderSubstitutedText(srcPath, slashRoot) {
   return content;
 }
 
-function copyAndSubstitute(srcPath, destPath, slashRoot) {
+function copyAndSubstitute(srcPath, destPath, slashRoot, journal = null) {
   if (resolve(srcPath) === resolve(destPath) || (existsSync(destPath) && realpathSync(srcPath) === realpathSync(destPath))) return;
 
   const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(srcPath);
-  if (isText) {
-    writeFileSync(destPath, renderSubstitutedText(srcPath, slashRoot), "utf8");
-  } else {
-    copyFileSync(srcPath, destPath);
-  }
+  const content = isText ? renderSubstitutedText(srcPath, slashRoot) : readFileSync(srcPath);
+  if (journal) journal.recordBeforeWrite(destPath, content);
+  safeAtomicWrite(destPath, content, isText ? "utf8" : undefined);
+  if (journal) journal.recordWritten(destPath, hashContent(content));
 }
 
-function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false) { const copied = [];
-if (!existsSync(srcDir)) return copied;
+function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false, journal = null) {
+  const copied = [];
+  if (!existsSync(srcDir)) return copied;
 
-function walk(currentSrc, currentDest) {
-  
-
-  const entries = readdirSync(currentSrc, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "__tmp__" ||
-        entry.name === "__pycache__" || entry.name === ".tmp") {
-      continue;
-    }
-    const srcPath = join(currentSrc, entry.name);
-    const destPath = join(currentDest, entry.name);
-
-    if (entry.isDirectory()) {
-      
-      if (!planOnly) {
-        mkdirSync(destPath, { recursive: true });
+  function walk(currentSrc, currentDest) {
+    const entries = readdirSync(currentSrc, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "__tmp__" ||
+          entry.name === "__pycache__" || entry.name === ".tmp") {
+        continue;
       }
-      walk(srcPath, destPath);
-    } else if (entry.isFile()) {
-      copied.push(destPath);
-      if (!planOnly) {
-        mkdirSync(dirname(destPath), { recursive: true });
-        copyAndSubstitute(srcPath, destPath, slashRoot);
+      const srcPath = join(currentSrc, entry.name);
+      const destPath = join(currentDest, entry.name);
+
+      if (entry.isDirectory()) {
+        if (!planOnly) {
+          mkdirSync(destPath, { recursive: true });
+        }
+        walk(srcPath, destPath);
+      } else if (entry.isFile()) {
+        copied.push(destPath);
+        if (!planOnly) {
+          mkdirSync(dirname(destPath), { recursive: true });
+          copyAndSubstitute(srcPath, destPath, slashRoot, journal);
+        }
       }
     }
   }
-}
 
-walk(srcDir, destDir);
-return copied; }
+  walk(srcDir, destDir);
+  return copied;
+}
 
 /**
  * Copies runtime parser dependencies (yaml, json5, jsonc-parser) selectively
  * into targetRoot/tools/node_modules without copying the developer node_modules tree.
  */
-function copyRuntimeDeps(repoRoot, targetRoot, slashRoot, planOnly = false) {
+function copyRuntimeDeps(repoRoot, targetRoot, slashRoot, planOnly = false, journal = null) {
   const copied = [];
   const destToolsNm = join(targetRoot, "tools", "node_modules");
   for (const pkg of RUNTIME_PARSER_DEPS) {
     const srcPkg = resolveRuntimePackageDir(pkg, repoRoot);
     if (srcPkg && existsSync(srcPkg)) {
       const destPkg = join(destToolsNm, pkg);
-      copied.push(...copyDirRecursive(srcPkg, destPkg, slashRoot, planOnly));
+      copied.push(...copyDirRecursive(srcPkg, destPkg, slashRoot, planOnly, journal));
     }
   }
   return copied;
@@ -137,7 +137,7 @@ function copyRuntimeDeps(repoRoot, targetRoot, slashRoot, planOnly = false) {
  * Link role roster into destination. If destination is a real physical directory,
  * missing mandatory role files are copied into place while leaving user definitions intact.
  */
-function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
+function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false, journal = null) {
   if (planOnly) return [destDir];
   try {
     let stat = null;
@@ -157,7 +157,7 @@ function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
               if (!existsSync(dstFile)) {
                 if (!planOnly) {
                   mkdirSync(dirname(dstFile), { recursive: true });
-                  copyAndSubstitute(srcFile, dstFile, slashRoot);
+                  copyAndSubstitute(srcFile, dstFile, slashRoot, journal);
                 }
                 copied.push(dstFile);
               }
@@ -170,20 +170,24 @@ function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
           resolve(dirname(destDir), readlinkSync(destDir)) === resolve(linkTarget)) {
         return [];
       }
+      if (journal) journal.recordBeforeUnlink(destDir);
       unlinkSync(destDir);
+      if (journal) journal.recordUnlinked(destDir);
     }
     mkdirSync(dirname(destDir), { recursive: true });
+    if (journal) journal.recordBeforeSymlink(destDir, linkTarget);
     symlinkSync(linkTarget, destDir, process.platform === "win32" ? "junction" : "dir");
+    if (journal) journal.recordSymlinked(destDir);
     return [destDir];
   } catch {
-    return copyDirRecursive(linkTarget, destDir, slashRoot, false);
+    return copyDirRecursive(linkTarget, destDir, slashRoot, false, journal);
   }
 }
 
 /**
  * Skills registry installer. Preserves human files by verifying against prior managed hashes.
  */
-function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false, priorManaged = {}, outManaged = {}, extra = {}) {
+function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false, priorManaged = {}, outManaged = {}, extra = {}, journal = null) {
   if (!existsSync(srcDir)) return [];
   
   const skip = new Set();
@@ -223,8 +227,6 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false,
   const out = [];
 
   function walkSkill(currentSrc, currentDest) {
-    
-
     const entries = readdirSync(currentSrc, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".tmp") continue;
@@ -232,7 +234,6 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false,
       const dPath = join(currentDest, entry.name);
 
       if (entry.isDirectory()) {
-        
         if (!planOnly) mkdirSync(dPath, { recursive: true });
         walkSkill(sPath, dPath);
       } else if (entry.isFile()) {
@@ -254,12 +255,17 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false,
               continue;
             }
           }
+          if (currentHash === deployedHash) {
+            out.push(dPath);
+            outManaged[dPath] = deployedHash;
+            continue;
+          }
         }
         out.push(dPath);
         outManaged[dPath] = deployedHash;
         if (!planOnly) {
           mkdirSync(dirname(dPath), { recursive: true });
-          copyAndSubstitute(sPath, dPath, slashRoot);
+          copyAndSubstitute(sPath, dPath, slashRoot, journal);
         }
       }
     }
@@ -321,164 +327,6 @@ function parseCliArgs(argv) {
   return options;
 }
 
-function installOmpHomeAssets({ targetRoot, slashRoot, userHome, options, priorManaged, plan, writeAdapter, readExisting }) {
-  const homeAgentDir = join(userHome, ".omp", "agent");
-  const agentsHome = join(userHome, ".agents");
-  const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
-  const rawLaw = existsSync(lawSource)
-    ? readFileSync(lawSource, "utf8").split("<HARNESS>").join(slashRoot)
-    : getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law");
-  const homeAgentsFile = join(homeAgentDir, "AGENTS.md");
-  writeAdapter(homeAgentsFile, applyManagedSection(readExisting(homeAgentsFile), rawLaw));
-  writeAdapter(join(homeAgentDir, ".harness-root"), `${targetRoot}\n`);
-
-  const mcpTarget = join(homeAgentDir, "mcp.json");
-  if (!existsSync(mcpTarget)) {
-    try {
-      const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
-      for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
-        if (JSON.stringify(entry).includes("__")) {
-          delete cfg.mcpServers[name];
-        } else {
-          cfg.mcpServers[name] = translateStdioEntry(entry);
-        }
-      }
-      writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
-    } catch {}
-  }
-
-  plan.filesToCopy.push(
-    ...installRoleRoster(join(targetRoot, "agent", "agents"), join(homeAgentDir, "agents"), slashRoot, options.dryRun)
-  );
-  for (const dst of [join(homeAgentDir, "rules"), join(agentsHome, "rules")]) {
-    plan.filesToCopy.push(...copyDirRecursive(join(targetRoot, "rules"), dst, slashRoot, options.dryRun));
-  }
-  plan.filesToCopy.push(
-    ...installSkills(join(targetRoot, "skills"), join(agentsHome, "skills"), slashRoot, agentsHome, options.dryRun, priorManaged, plan.managedFiles)
-  );
-  for (const extFile of ["nullform-jev.ts", "nullform-delete-guard.ts"]) {
-    const extSource = join(REPO_ROOT, "agent", "extensions", extFile);
-    const extDest = join(homeAgentDir, "extensions", extFile);
-    if (existsSync(extSource)) {
-      if (!options.dryRun) {
-        mkdirSync(dirname(extDest), { recursive: true });
-        copyFileSync(extSource, extDest);
-      }
-      plan.filesToCopy.push(extDest);
-    }
-  }
-}
-
-function applyOpencodeAdapter({ targetRoot, slashRoot, userHome, shouldWriteHome, writeAdapter, readExisting, copyHomeSkills }) {
-  const rootAgents = join(targetRoot, "AGENTS.md");
-  const rawAgents = getMarkdownAdapter(slashRoot, "OpenCode NULLFORM WORKFLOW Adapter");
-  writeAdapter(rootAgents, applyManagedSection(readExisting(rootAgents), rawAgents));
-  for (const rootJson of resolveOpencodeConfigPaths(targetRoot)) {
-    writeAdapter(rootJson, updateOpencodeJson(rootJson, preflightJsoncConfig(rootJson)));
-  }
-  if (shouldWriteHome) {
-    const configDir = join(userHome, ".config", "opencode");
-    const homeAgents = join(configDir, "AGENTS.md");
-    writeAdapter(homeAgents, applyManagedSection(readExisting(homeAgents), rawAgents));
-    for (const homeJson of resolveOpencodeConfigPaths(configDir)) {
-      writeAdapter(homeJson, updateOpencodeJson(homeJson, preflightJsoncConfig(homeJson)));
-    }
-    const legacyOpencodeDir = join(userHome, ".opencode");
-    if (existsSync(legacyOpencodeDir)) {
-      for (const legacyCfg of resolveOpencodeConfigPaths(legacyOpencodeDir)) {
-        if (existsSync(legacyCfg)) {
-          writeAdapter(legacyCfg, updateOpencodeJson(legacyCfg, preflightJsoncConfig(legacyCfg)));
-        }
-      }
-    }
-    copyHomeSkills(join(configDir, "skills"));
-  }
-}
-
-function applyHarnessAdapter(h, ctx) {
-  const { targetRoot, projectRoot, slashRoot, userHome, options, shouldWriteHome, writeAdapter, readExisting, copyHomeSkills, priorManaged, plan } = ctx;
-  switch (h) {
-    case "claude": {
-      const rawAdapter = getMarkdownAdapter(slashRoot, "Claude Code NULLFORM WORKFLOW Adapter");
-      writeAdapter(join(targetRoot, "CLAUDE.md"), applyManagedSection(readExisting(join(targetRoot, "CLAUDE.md")), rawAdapter));
-      if (shouldWriteHome) {
-        const homePath = join(userHome, ".claude", "CLAUDE.md");
-        writeAdapter(homePath, applyManagedSection(readExisting(homePath), rawAdapter));
-        copyHomeSkills(join(userHome, ".claude", "skills"));
-      }
-      break;
-    }
-    case "codex": {
-      const rawAdapter = getMarkdownAdapter(slashRoot, "Codex NULLFORM WORKFLOW Adapter");
-      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), rawAdapter));
-      if (shouldWriteHome) {
-        const homePath = join(userHome, ".codex", "AGENTS.md");
-        writeAdapter(homePath, applyManagedSection(readExisting(homePath), rawAdapter));
-        copyHomeSkills(join(userHome, ".codex", "skills"));
-      }
-      break;
-    }
-    case "opencode":
-      applyOpencodeAdapter(ctx);
-      break;
-    case "cursor": {
-      const rootMdc = join(projectRoot || targetRoot, ".cursor", "rules", "00-workflow.mdc");
-      writeAdapter(rootMdc, applyCursorMdc(readExisting(rootMdc), getMarkdownAdapter(slashRoot, "Cursor NULLFORM WORKFLOW Adapter")));
-      break;
-    }
-    case "omp": {
-      const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
-      const lawPath = join(targetRoot, "agent", "AGENTS.md");
-      const rawLaw = existsSync(lawSource)
-        ? readFileSync(lawSource, "utf8").split("<HARNESS>").join(slashRoot)
-        : getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law");
-      if (resolve(lawPath) !== resolve(lawSource)) writeAdapter(lawPath, rawLaw);
-      if (shouldWriteHome) installOmpHomeAssets({ targetRoot, slashRoot, userHome, options, priorManaged, plan, writeAdapter, readExisting });
-      break;
-    }
-    case "openclaw": {
-      const rootJson = join(targetRoot, "openclaw.json");
-      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenClaw NULLFORM WORKFLOW Adapter")));
-      writeAdapter(join(targetRoot, "SOUL.md"), applyManagedSection(readExisting(join(targetRoot, "SOUL.md")), getOpenclawSoul(slashRoot)));
-      writeAdapter(join(targetRoot, "USER.md"), applyManagedSection(readExisting(join(targetRoot, "USER.md")), getOpenclawUser(slashRoot)));
-      writeAdapter(rootJson, updateOpenclawJson(rootJson, preflightJson5Config(rootJson), slashRoot));
-      if (shouldWriteHome || options.dryRun) {
-        const homeJson = join(userHome, ".openclaw", "openclaw.json");
-        writeAdapter(homeJson, updateOpenclawJson(homeJson, preflightJson5Config(homeJson), slashRoot));
-        copyHomeSkills(join(userHome, ".openclaw", "skills"));
-      }
-      break;
-    }
-    case "hermes": {
-      const rootConfig = join(targetRoot, "config.yaml");
-      const mcpEx = join(REPO_ROOT, "agent", "mcp.json.example");
-      const rawHermes = getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter");
-      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), rawHermes));
-      writeAdapter(rootConfig, updateHermesConfigYaml(rootConfig, preflightYamlConfig(rootConfig), slashRoot, mcpEx, translateStdioEntry));
-      if (shouldWriteHome || options.dryRun) {
-        const hermesHome = (resolve(userHome) === resolve(homedir()) && process.env.HERMES_HOME) || join(userHome, ".hermes");
-        const homeConfig = join(hermesHome, "config.yaml");
-        writeAdapter(homeConfig, updateHermesConfigYaml(homeConfig, preflightYamlConfig(homeConfig), slashRoot, mcpEx, translateStdioEntry));
-        writeAdapter(join(hermesHome, "SOUL.md"), applyManagedSection(readExisting(join(hermesHome, "SOUL.md")), rawHermes));
-        writeAdapter(join(hermesHome, "AGENTS.md"), applyManagedSection(readExisting(join(hermesHome, "AGENTS.md")), rawHermes));
-        copyHomeSkills(join(hermesHome, "skills"));
-      }
-      break;
-    }
-    case "openhuman": {
-      const agentDir = join(targetRoot, "agents", "workflow");
-      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter")));
-      writeAdapter(join(agentDir, "AGENTS.md"), applyManagedSection(readExisting(join(agentDir, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman Workflow Agent")));
-      copyHomeSkills(join(agentDir, "skills"));
-      if (shouldWriteHome || options.dryRun) {
-        const homeOh = join(userHome, ".openhuman");
-        writeAdapter(join(homeOh, "AGENTS.md"), applyManagedSection(readExisting(join(homeOh, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter")));
-        copyHomeSkills(join(homeOh, "skills"));
-      }
-      break;
-    }
-  }
-}
 
 function installHarness(options = {}) {
   const userHome = options.userHome
@@ -527,85 +375,148 @@ function installHarness(options = {}) {
 
   preflightAllConfigs({ harnesses: targetHarnesses, targetRoot, projectRoot, userHome });
 
-  const priorManaged = options.managedFiles && typeof options.managedFiles === "object" ? options.managedFiles : {};
-  const plan = {
-    harness: selectedHarness,
-    root: targetRoot,
-    ...(projectRoot ? { projectRoot } : {}),
-    userHome,
-    dryRun: Boolean(options.dryRun),
-    filesToCopy: [],
-    adapters: [],
-    managedFiles: {},
-  };
+  let lock = null;
+  let journal = null;
+  const shouldManageLock = !options.dryRun && !options.lock;
 
-  const isCursorActive = targetHarnesses.includes("cursor");
-  const coreDirs = getCoreDirs(isCursorActive);
-  
-
-  for (const dir of coreDirs) {
-    const srcDir = join(REPO_ROOT, dir);
-    if (existsSync(srcDir)) {
-      plan.filesToCopy.push(...copyDirRecursive(srcDir, join(targetRoot, dir), slashRoot, options.dryRun));
-    }
-  }
-  for (const file of CORE_FILES) { const srcFile = join(REPO_ROOT, file);
-  const destFile = join(targetRoot, file);
-  if (existsSync(srcFile)) {
-    plan.filesToCopy.push(destFile);
-    if (!options.dryRun) {
-      mkdirSync(dirname(destFile), { recursive: true });
-      copyAndSubstitute(srcFile, destFile, slashRoot);
-    }
-  } }
-
-  if (isCursorActive) {
-    const srcSkills = join(REPO_ROOT, "skills");
-    const destSkills = join(targetRoot, "skills");
-    plan.filesToCopy.push(
-      ...installSkills(srcSkills, destSkills, slashRoot, agentsHome, options.dryRun, priorManaged, plan.managedFiles, {
-        targetRoot,
-        projectRoot,
-      })
-    );
-  }
-
-  plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, options.dryRun));
-
-  const writeAdapter = (filePath, content) => {
-    plan.adapters.push(filePath);
-    plan.managedFiles[filePath] = hashContent(content);
-    if (!options.dryRun) {
-      mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, content, "utf8");
-    }
-  };
-  const readExisting = (p) => (existsSync(p) ? readFileSync(p, "utf8") : "");
-  const copyHomeSkills = (destDir) => {
-    const src = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
-    plan.filesToCopy.push(...installSkills(src, destDir, slashRoot, userHome, options.dryRun, priorManaged, plan.managedFiles, {
+  if (!options.dryRun) {
+    lock = options.lock || acquireDeploymentLock({ userHome, targetRoot, harness: selectedHarness, dryRun: options.dryRun });
+    journal = options.journal || new DeploymentJournal({
+      userHome,
       targetRoot,
       projectRoot,
-    }));
-  };
-
-  for (const h of targetHarnesses) {
-    applyHarnessAdapter(h, {
-      targetRoot, projectRoot, slashRoot, userHome, options, shouldWriteHome,
-      writeAdapter, readExisting, copyHomeSkills, priorManaged, plan,
+      harness: selectedHarness,
+      targetVersion: options.targetVersion,
+      dryRun: options.dryRun,
     });
+    journal.start();
   }
 
-  const promptLint = join(targetRoot, "tools", "prompt-lint.mjs");
-  if (!options.dryRun && existsSync(promptLint)) {
-    try {
-      runPromptLintBaseline(promptLint, targetRoot, userHome);
-      plan.baselineRecorded = true;
-    } catch {
-      plan.baselineRecorded = false;
+  try {
+    const priorManaged = options.managedFiles && typeof options.managedFiles === "object" ? options.managedFiles : {};
+    const plan = {
+      harness: selectedHarness,
+      root: targetRoot,
+      ...(projectRoot ? { projectRoot } : {}),
+      userHome,
+      dryRun: Boolean(options.dryRun),
+      filesToCopy: [],
+      adapters: [],
+      managedFiles: {},
+      lock,
+      journal,
+    };
+
+    const isCursorActive = targetHarnesses.includes("cursor");
+    const coreDirs = getCoreDirs(isCursorActive);
+
+    for (const dir of coreDirs) {
+      const srcDir = join(REPO_ROOT, dir);
+      if (existsSync(srcDir)) {
+        plan.filesToCopy.push(...copyDirRecursive(srcDir, join(targetRoot, dir), slashRoot, options.dryRun, journal));
+      }
+    }
+
+    for (const file of CORE_FILES) {
+      const srcFile = join(REPO_ROOT, file);
+      const destFile = join(targetRoot, file);
+      if (existsSync(srcFile)) {
+        const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(srcFile);
+        const deployedContent = isText ? renderSubstitutedText(srcFile, slashRoot) : readFileSync(srcFile);
+        const deployedHash = hashContent(deployedContent);
+        if (existsSync(destFile)) {
+          const currentContent = isText ? readFileSync(destFile, "utf8") : readFileSync(destFile);
+          const currentHash = hashContent(currentContent);
+          const priorHash = priorManaged[destFile];
+          if (priorHash) {
+            if (currentHash !== priorHash) {
+              plan.managedFiles[destFile] = priorHash;
+              continue;
+            }
+          } else {
+            if (currentHash !== deployedHash) {
+              continue;
+            }
+          }
+          if (currentHash === deployedHash) {
+            plan.filesToCopy.push(destFile);
+            plan.managedFiles[destFile] = deployedHash;
+            continue;
+          }
+        }
+        plan.filesToCopy.push(destFile);
+        plan.managedFiles[destFile] = deployedHash;
+        if (!options.dryRun) {
+          mkdirSync(dirname(destFile), { recursive: true });
+          copyAndSubstitute(srcFile, destFile, slashRoot, journal);
+        }
+      }
+    }
+
+    if (isCursorActive) {
+      const srcSkills = join(REPO_ROOT, "skills");
+      const destSkills = join(targetRoot, "skills");
+      plan.filesToCopy.push(
+        ...installSkills(srcSkills, destSkills, slashRoot, agentsHome, options.dryRun, priorManaged, plan.managedFiles, {
+          targetRoot,
+          projectRoot,
+        }, journal)
+      );
+    }
+
+    plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, options.dryRun, journal));
+
+    const writeAdapter = (filePath, content) => {
+      plan.adapters.push(filePath);
+      const hash = hashContent(content);
+      plan.managedFiles[filePath] = hash;
+      if (!options.dryRun) {
+        if (journal) journal.recordBeforeWrite(filePath, content);
+        mkdirSync(dirname(filePath), { recursive: true });
+        safeAtomicWrite(filePath, content, "utf8");
+        if (journal) journal.recordWritten(filePath, hash);
+      }
+    };
+    const readExisting = (p) => (existsSync(p) ? readFileSync(p, "utf8") : "");
+    const copyHomeSkills = (destDir) => {
+      const src = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
+      plan.filesToCopy.push(...installSkills(src, destDir, slashRoot, userHome, options.dryRun, priorManaged, plan.managedFiles, {
+        targetRoot,
+        projectRoot,
+      }, journal));
+    };
+
+    for (const h of targetHarnesses) {
+      applyHarnessAdapter(h, {
+        targetRoot, projectRoot, slashRoot, userHome, options, shouldWriteHome,
+        writeAdapter, readExisting, copyHomeSkills, priorManaged, plan, journal,
+        copyDirRecursive, installSkills, installRoleRoster, translateStdioEntry,
+      });
+    }
+
+    const promptLint = join(targetRoot, "tools", "prompt-lint.mjs");
+    if (!options.dryRun && existsSync(promptLint)) {
+      try {
+        runPromptLintBaseline(promptLint, targetRoot, userHome);
+        plan.baselineRecorded = true;
+      } catch {
+        plan.baselineRecorded = false;
+      }
+    }
+    return plan;
+  } catch (err) {
+    if (journal && !options.dryRun) {
+      journal.rollback(err.message);
+    }
+    if (shouldManageLock && lock) {
+      lock.release();
+    }
+    throw err;
+  } finally {
+    if (shouldManageLock && !options.deferLock && lock) {
+      lock.release();
     }
   }
-  return plan;
 }
 
 function runPromptLintBaseline(promptLint, harnessRoot, userHome) {
