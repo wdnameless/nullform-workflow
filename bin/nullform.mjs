@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
-import { installHarness, getDefaultRoot, SUPPORTED_HARNESSES } from "../tools/install-harness.mjs";
+import { installHarness, SUPPORTED_HARNESSES } from "../tools/install-harness.mjs";
+import { getDefaultRoot } from '../tools/installation-state.mjs';
 import { runDoctor, probeProviders, printHumanReport } from "../tools/doctor.mjs";
 import {
   PACKAGE_NAME,
@@ -25,6 +26,7 @@ import {
   checkRelease,
   executeUpdate,
   sanitizeError,
+  sanitizeResultObject,
 } from "../tools/self-update.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -281,8 +283,13 @@ function loadUserState(options, env) {
 }
 function emitJsonOrText(output, errOut, isJson, payload, textMsg, toStderr = true) {
   const safeMsg = typeof textMsg === "string" ? sanitizeError(textMsg) : textMsg;
-  const safePayload = payload && typeof payload === "object" && typeof payload.detail === "string"
-    ? { ...payload, detail: sanitizeError(payload.detail) }
+  const safePayload = payload && typeof payload === "object"
+    ? Object.fromEntries(
+        Object.entries(payload).map(([k, v]) => [
+          k,
+          typeof v === "string" ? sanitizeError(v) : Array.isArray(v) ? v.map((x) => (typeof x === "string" ? sanitizeError(x) : x)) : v,
+        ])
+      )
     : payload;
   if (isJson) output.write(JSON.stringify(safePayload, null, 2) + "\n");
   else if (toStderr) errOut.write(safeMsg);
@@ -361,7 +368,8 @@ export async function runInit(options = {}, deps = {}) {
     userHome = loaded.userHome;
     existingState = loaded.state;
   } catch (err) {
-    emitJsonOrText(output, errOut, options.json, { ok: false, error: "invalid_state", detail: err.message }, `Error: ${err.message}\n`);
+    const safeMsg = sanitizeError(err.message);
+    emitJsonOrText(output, errOut, options.json, { ok: false, error: "invalid_state", detail: safeMsg }, `Error: ${safeMsg}\n`);
     return 1;
   }
 
@@ -395,7 +403,8 @@ export async function runInit(options = {}, deps = {}) {
     try {
       previewPlan = runInstall(true);
     } catch (err) {
-      emitJsonOrText(output, errOut, options.json, { ok: false, stage: "preflight", error: "install_failed", detail: err.message }, `Error: ${err.message}\n`);
+      const safeMsg = sanitizeError(err.message);
+      emitJsonOrText(output, errOut, options.json, { ok: false, stage: "preflight", error: "install_failed", detail: safeMsg }, `Error: ${safeMsg}\n`);
       return 1;
     }
 
@@ -424,7 +433,8 @@ export async function runInit(options = {}, deps = {}) {
     try {
       plan = runInstall(false);
     } catch (err) {
-      emitJsonOrText(output, errOut, options.json, { ok: false, stage: "install", error: "install_failed", detail: err.message }, `Error: ${err.message}\n`);
+      const safeMsg = sanitizeError(err.message);
+      emitJsonOrText(output, errOut, options.json, { ok: false, stage: "install", error: "install_failed", detail: safeMsg }, `Error: ${safeMsg}\n`);
       return 1;
     }
 
@@ -566,22 +576,33 @@ export async function runUpdateCommand(options = {}, deps = {}) {
   const errOut = deps.stderr || process.stderr;
   const updateFn = deps.executeUpdate || executeUpdate;
 
-  const res = await updateFn({
-    userHome: options.userHome, root: options.root, projectRoot: options.projectRoot, harness: options.harness, prefix: options.prefix,
-    registry: options.registry, apiUrl: options.apiUrl || options.releaseUrl, timeoutMs: options.timeoutMs,
-    dryRun: options.dryRun, force: options.force, yes: options.yes, packageRoot: PACKAGE_ROOT,
-    argv1: process.argv[1], env: deps.env || process.env, spawnFn: deps.spawnFn, fetchFn: deps.fetchFn,
-  });
+  let res;
+  try {
+    res = await updateFn({
+      userHome: options.userHome, root: options.root, projectRoot: options.projectRoot, harness: options.harness, prefix: options.prefix,
+      registry: options.registry, apiUrl: options.apiUrl || options.releaseUrl, timeoutMs: options.timeoutMs,
+      dryRun: options.dryRun, force: options.force, yes: options.yes, packageRoot: PACKAGE_ROOT,
+      argv1: process.argv[1], env: deps.env || process.env, spawnFn: deps.spawnFn, fetchFn: deps.fetchFn,
+    });
+  } catch (err) {
+    const safeMsg = sanitizeError(err.message);
+    const errPayload = { ok: false, updated: false, error: "update_failed", detail: safeMsg };
+    if (options.json) output.write(JSON.stringify(errPayload, null, 2) + "\n");
+    else errOut.write(`nullform update error: [update_failed] ${safeMsg}\n`);
+    return 1;
+  }
 
-  if (options.json) output.write(JSON.stringify(res, null, 2) + "\n");
-  else if (!res.ok) errOut.write(`nullform update error: [${res.error}] ${res.detail}\n`);
+  const safeRes = sanitizeResultObject(res);
+
+  if (options.json) output.write(JSON.stringify(safeRes, null, 2) + "\n");
+  else if (!res.ok) errOut.write(`nullform update error: [${safeRes.error}] ${safeRes.detail}\n`);
   else if (res.dryRun) {
-    output.write(`[dry-run] Update plan for ${PACKAGE_NAME}@${res.latest}:\n`);
-    for (const step of res.plan || []) output.write(`  - ${step}\n`);
+    output.write(`[dry-run] Update plan for ${PACKAGE_NAME}@${safeRes.latest}:\n`);
+    for (const step of safeRes.plan || []) output.write(`  - ${step}\n`);
   } else if (res.updated) {
-    output.write(`Updated ${PACKAGE_NAME} from v${res.from} to v${res.to} (${res.harness} at ${res.root}).\n`);
+    output.write(`Updated ${PACKAGE_NAME} from v${safeRes.from} to v${safeRes.to} (${safeRes.harness} at ${safeRes.root}).\n`);
   } else {
-    output.write(`${res.detail}\n`);
+    output.write(`${safeRes.detail}\n`);
   }
   return res.ok ? 0 : 1;
 }

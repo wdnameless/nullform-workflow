@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { resolveNpmRunner } from './installation-state.mjs';
 import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isSecretOrCredentialPath, isStructuralExcludedPath, isAcceptancePath } from './worktree-snapshot.mjs';
 
 function git(root, args) {
@@ -121,9 +122,18 @@ export function inspectProduct(options, requests) {
 export function executeProduct({ root, productCommand }) {
   if (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(x => typeof x !== 'string' || x.includes('\0')) || !productCommand[0].trim()) throw new Error('No operator-authorized product command');
   const before = sourceDigest(root);
-  const result = spawnSync(productCommand[0], productCommand.slice(1), { cwd: root, encoding: 'utf8', shell: false, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
+  let command = productCommand[0], args = productCommand.slice(1);
+  if (process.platform === 'win32' && /^(?:npm|npx)(?:\.cmd)?$/i.test(command)) {
+    const runner = resolveNpmRunner();
+    if (!runner.usesNode) throw new Error('Native npm execution requires npm-cli.js; install npm alongside Node.js');
+    const cli = /^npx/i.test(command) ? runner.prefixArgs[0].replace(/npm-cli\.js$/i, 'npx-cli.js') : runner.prefixArgs[0];
+    if (!existsSync(cli)) throw new Error('Native npm entrypoint is missing');
+    command = runner.command;
+    args = [cli, ...args];
+  }
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', shell: false, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
   if (sourceDigest(root) !== before) throw new Error('Product command mutated source; read-only execution violated');
-  if (result.error || result.status === null) throw new Error('Product execution failed or timed out');
+  if (result.error || result.status === null) throw new Error(`Product execution failed or timed out${result.error?.code ? ` (${result.error.code})` : ''}`);
   return JSON.stringify({ exitCode: result.status, stdout: result.stdout, stderr: result.stderr });
 }
 export default function (pi) {

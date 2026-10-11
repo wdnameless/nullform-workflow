@@ -12,6 +12,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { validatePathWithinScope } from './worktree-snapshot.mjs';
 import {
   MANAGED_START,
   MANAGED_END,
@@ -303,125 +304,14 @@ function isUnusableRoot(rootPath) {
   return parsed.root === resolved || parsed.base === '';
 }
 
-function normalizePath(p) {
-  let resolved = path.resolve(p);
-  if (resolved.startsWith('\\\\?\\')) {
-    resolved = resolved.slice(4);
-  }
-  return resolved;
-}
 
-function isInsideOrEqual(parent, child) {
-  const normParent = normalizePath(parent);
-  const normChild = normalizePath(child);
-  const p = process.platform === 'win32' ? normParent.toLowerCase() : normParent;
-  const c = process.platform === 'win32' ? normChild.toLowerCase() : normChild;
-  if (p === c) return true;
-  const prefix = p.endsWith(path.sep) ? p : p + path.sep;
-  return c.startsWith(prefix);
-}
-function resolveRealPath(p) {
-  try {
-    const real = fs.realpathSync.native ? fs.realpathSync.native(p) : fs.realpathSync(p);
-    return normalizePath(real);
-  } catch {
-    return null;
-  }
-}
 
-function getCanonicalPath(targetPath) {
-  let curr = path.resolve(targetPath);
-  const tail = [];
-  while (true) {
-    let stat = null;
-    try {
-      stat = fs.lstatSync(curr);
-    } catch (e) {
-      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') throw e;
-    }
-    if (stat !== null) {
-      const real = resolveRealPath(curr);
-      if (real !== null) {
-        return normalizePath(path.join(real, ...tail));
-      }
-      if (stat.isSymbolicLink()) {
-        return null;
-      }
-      return normalizePath(path.join(curr, ...tail));
-    }
-    const parent = path.dirname(curr);
-    if (parent === curr) {
-      return normalizePath(targetPath);
-    }
-    tail.unshift(path.basename(curr));
-    curr = parent;
-  }
-}
 
-function validatePathWithinRoot(targetPath, declaredRoot) {
-  const normDeclared = normalizePath(declaredRoot);
-  let declStat = null;
-  try {
-    declStat = fs.lstatSync(normDeclared);
-  } catch (err) {
-    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
-      return false;
-    }
-  }
-  if (declStat && declStat.isSymbolicLink()) {
-    const realRoot = resolveRealPath(normDeclared);
-    if (!realRoot) {
-      return false;
-    }
-  }
 
-  const canonicalRoot = getCanonicalPath(normDeclared);
-  if (!canonicalRoot) return false;
-  const normTarget = normalizePath(targetPath);
-  const rel = path.relative(normDeclared, normTarget);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) {
-    return false;
-  }
 
-  const parts = rel.split(path.sep).filter(Boolean);
-  let current = normDeclared;
-  let lastExistingReal = canonicalRoot;
 
-  for (let i = 0; i < parts.length; i++) {
-    current = path.join(current, parts[i]);
-    let stat = null;
-    try {
-      stat = fs.lstatSync(current);
-    } catch (err) {
-      if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
-        return false;
-      }
-    }
 
-    if (stat !== null) {
-      const real = resolveRealPath(current);
-      if (real === null) {
-        return false;
-      }
-      if (!isInsideOrEqual(canonicalRoot, real)) {
-        return false;
-      }
-      lastExistingReal = real;
-    } else {
-      if (!isInsideOrEqual(canonicalRoot, lastExistingReal)) {
-        return false;
-      }
-      const remaining = parts.slice(i);
-      const plannedTarget = normalizePath(path.join(lastExistingReal, ...remaining));
-      if (!isInsideOrEqual(canonicalRoot, plannedTarget)) {
-        return false;
-      }
-      break;
-    }
-  }
 
-  return true;
-}
 
 function substituteHarnessRoot(text, harnessRoot) {
   const slashHarness = harnessRoot.replace(/\\/g, '/');
@@ -489,11 +379,11 @@ function main() { // code-size:allow
     const livePath = path.join(liveRoot, ...(entry.liveRel || entry.rel).split('/'));
     const repoPath = path.join(repoRoot, ...entry.rel.split('/'));
 
-    if (!validatePathWithinRoot(livePath, liveRoot)) {
+    if (!validatePathWithinScope(livePath, liveRoot, null, true)) {
       console.error(`sync: REFUSED - live path "${livePath}" escapes declared root "${liveRoot}" or is an unresolved link`);
       process.exit(2);
     }
-    if (!validatePathWithinRoot(repoPath, repoRoot)) {
+    if (!validatePathWithinScope(repoPath, repoRoot, null, true)) {
       console.error(`sync: REFUSED - repo path "${repoPath}" escapes declared root "${repoRoot}" or is an unresolved link`);
       process.exit(2);
     }
@@ -504,15 +394,15 @@ function main() { // code-size:allow
   const repoAgents = path.join(repoRoot, 'agent', 'AGENTS.md');
   const ompApplicable = !opts.only || opts.only.toLowerCase().includes('agents');
   if (ompApplicable) {
-    if (!validatePathWithinRoot(ompAgents, agentDir)) {
+    if (!validatePathWithinScope(ompAgents, agentDir, null, true)) {
       console.error(`sync: REFUSED - agent law path "${ompAgents}" escapes declared root "${agentDir}" or is an unresolved link`);
       process.exit(2);
     }
-    if (!validatePathWithinRoot(harnessAgents, harnessRoot)) {
+    if (!validatePathWithinScope(harnessAgents, harnessRoot, null, true)) {
       console.error(`sync: REFUSED - harness law path "${harnessAgents}" escapes declared root "${harnessRoot}" or is an unresolved link`);
       process.exit(2);
     }
-    if (fs.existsSync(repoAgents) && !validatePathWithinRoot(repoAgents, repoRoot)) {
+    if (fs.existsSync(repoAgents) && !validatePathWithinScope(repoAgents, repoRoot, null, true)) {
       console.error(`sync: REFUSED - repo law path "${repoAgents}" escapes declared root "${repoRoot}" or is an unresolved link`);
       process.exit(2);
     }

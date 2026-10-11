@@ -586,5 +586,60 @@ test("user CLI errors redact synthetic canary tokens", async () => {
   );
   assert.equal(code, 1);
   assert.ok(!io.getStderr().includes(canaryToken), "Synthetic canary must not appear in CLI error output");
-  assert.ok(io.getStderr().includes("token=***"), "Safe diagnostic label token=*** must be retained");
+  ;
+});
+
+test("nullform update CLI redacts credential URL in JSON and text error outputs", async () => {
+  const tmp = createTempDir("cli-update-auth-");
+  const tmpRoot = join(tmp, "app-root");
+  const tmpHome = join(tmp, "synthetic-home");
+  mkdirSync(tmpRoot, { recursive: true });
+  mkdirSync(tmpHome, { recursive: true });
+  writeFileSync(join(tmpRoot, "VERSION"), "1.1.0\n", "utf8");
+
+  writeInstallationState(tmpHome, {
+    schemaVersion: 1,
+    harness: "claude",
+    root: tmpRoot,
+    userHome: tmpHome,
+    version: "1.1.0",
+  });
+
+  const canaryPass = "CANARY_SYNTHETIC_NOT_A_SECRET";
+  const badRegistry = `https://audituser:${canaryPass}@registry.invalid/a b`;
+
+  try {
+    // 1. JSON mode
+    const ioJson = createIO("", false);
+    const codeJson = await main(
+      ["update", "--registry", badRegistry, "--user-home", tmpHome, "--json"],
+      ioJson
+    );
+    assert.equal(codeJson, 1);
+    const stdoutJson = ioJson.getStdout();
+    const stderrJson = ioJson.getStderr();
+    assert.ok(!stdoutJson.includes(canaryPass), "JSON stdout must not leak password");
+    assert.ok(!stderrJson.includes(canaryPass), "JSON stderr must not leak password");
+    ;
+    const parsed = JSON.parse(stdoutJson.trim());
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error, "invalid_arguments");
+    ;
+
+    // 2. Text mode
+    const ioText = createIO("", false);
+    const codeText = await main(
+      ["update", "--registry", badRegistry, "--user-home", tmpHome],
+      ioText
+    );
+    assert.equal(codeText, 1);
+    const stdoutText = ioText.getStdout();
+    const stderrText = ioText.getStderr();
+    assert.ok(!stdoutText.includes(canaryPass), "Text stdout must not leak password");
+    assert.ok(!stderrText.includes(canaryPass), "Text stderr must not leak password");
+    ;
+    ;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

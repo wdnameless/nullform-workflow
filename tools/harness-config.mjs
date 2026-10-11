@@ -421,25 +421,35 @@ export function applyManagedSection(existingContent, newManagedContent, defaultP
 
   // Exact prior known un-marked markdown adapter / law block migration
   const legacyBlockRules = [
-    {
-      matchStart: (s) =>
-        /^#\s+(?:[A-Za-z0-9 ]+)?(?:NULLFORM WORKFLOW|Oh My Pi Orchestrator Law|OpenHuman Workflow Agent)/i.test(s) ||
-        s.includes("Полный свод законов и протокол оркестратора:"),
-      endMarker: "- Возвратный контракт (≤25 строк): STATUS | FILES | TESTS было->стало | CONCERNS.",
-    },
-    {
-      matchStart: (s) => /^#\s+ORCHESTRATOR LAW\b/i.test(s),
-      endMarker: "before `skill://<name>` resolves (its rules may already be embedded in the agent files above).",
-    },
-    {
-      matchStart: (s) => /^#\s+OpenClaw SOUL:\s+NULLFORM WORKFLOW/i.test(s),
-      endMarker: "- Return contract: STATUS | FILES | TESTS было->стало | CONCERNS (<=25 lines).",
-    },
-    {
-      matchStart: (s) => /^#\s+OpenClaw USER:\s+Context & Operating Preferences/i.test(s),
-      endMarker: "- Verification: verify all fixes before final response.",
-    },
-  ];
+      {
+        matchStart: s => {
+          const text = s.replace(/\r\n/g, '\n');
+          const match = /^# ([^\n]+)\n\nПолный свод законов и протокол оркестратора: ([^\n]+)\/agent\/AGENTS\.md\n/.exec(text);
+          return Boolean(match && text.startsWith(getMarkdownAdapter(match[2], match[1]).trimEnd()));
+        },
+        endMarker: '- Возвратный контракт (≤25 строк): STATUS | FILES | TESTS было->стало | CONCERNS.',
+      },
+      {
+        matchStart: s => (() => { const text = s.replace(/\r\n/g, '\n'), known = trimmedManaged.replace(/\r\n/g, '\n'); const pattern = /^Full protocol: `([^`\n]+)\/agent\/agents\/orchestrator\.md`/m; const oldRoot = pattern.exec(text)?.[1], newRoot = pattern.exec(known)?.[1]; return Boolean(oldRoot && newRoot && text.startsWith(known.split(newRoot).join(oldRoot))); })(),
+        endMarker: 'before `skill://<name>` resolves (its rules may already be embedded in the agent files above).',
+      },
+      {
+        matchStart: s => {
+          const text = s.replace(/\r\n/g, '\n');
+          const match = /^- Law reference: (.+)\/agent\/AGENTS\.md$/m.exec(text);
+          return Boolean(match && text.startsWith(getOpenclawSoul(match[1]).trimEnd()));
+        },
+        endMarker: '- Return contract: STATUS | FILES | TESTS было->стало | CONCERNS (<=25 lines).',
+      },
+      {
+        matchStart: s => {
+          const text = s.replace(/\r\n/g, '\n');
+          const match = /^Target workspace: (.+)$/m.exec(text);
+          return Boolean(match && text.startsWith(getOpenclawUser(match[1]).trimEnd()));
+        },
+        endMarker: '- Verification: verify all fixes before final response.',
+      },
+    ];
 
   for (const rule of legacyBlockRules) {
     const contractIdx = existingContent.indexOf(rule.endMarker);
@@ -657,7 +667,13 @@ export function updateHermesConfigYaml(existingPath, preflightedContent, slashRo
  * Calculates a SHA-256 hash of text content.
  */
 export function hashContent(content) {
-  return createHash("sha256").update(content, "utf8").digest("hex");
+  const hash = createHash("sha256");
+  if (Buffer.isBuffer(content)) {
+    hash.update(content);
+  } else {
+    hash.update(String(content), "utf8");
+  }
+  return hash.digest("hex");
 }
 
 /**

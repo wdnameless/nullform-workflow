@@ -1655,7 +1655,33 @@ function validateCheckCiOracleFiles(root, relChangeDir) {
   return { ok: true, oracleRelForCommit };
 }
 
+function checkPushEvidence(root, flags) {
+  const baseRef = flags['base-ref'] || flags.baseRef || flags['base_ref'];
+  if (!baseRef || /^0+$/.test(baseRef)) {
+    console.error('workflow check-ci: push requires a resolvable previous commit in --base-ref; use a reviewed PR to initialize the branch.');
+    return 1;
+  }
+  const changedFiles = getBaseDiffFiles(root, baseRef);
+  if (!changedFiles) return 1;
+  const changes = [...new Set(changedFiles.map(path => /^openspec\/changes\/([A-Za-z0-9_-]+)\//.exec(path)?.[1]).filter(Boolean))];
+  if (changes.length) {
+    for (const change of changes) {
+      const tier = existsSync(join(root, 'openspec', 'changes', change, 'worktrees.md')) ? 'T3' : 'T2';
+      if (cmdCheckCi(root, { tier, change, 'base-ref': baseRef }) !== 0) return 1;
+    }
+    return 0;
+  }
+  if (changedFiles.length > 9) {
+    console.error(`workflow check-ci: push changes ${changedFiles.length} files; committed T2/T3 acceptance evidence is required.`);
+    return 1;
+  }
+  const tier = changedFiles.length <= 2 ? 'T0' : 'T1';
+  const recon = ['.workflow-recon.md', 'recon.md', ...changedFiles.filter(path => /(?:^|\/)(?:recon|\.workflow-recon)\.md$/i.test(path))].find(path => existsSync(join(root, path)));
+  return cmdCheckCi(root, { tier, recon, 'base-ref': baseRef });
+}
+
 function cmdCheckCi(root, flags) {
+  if (flags.push) return checkPushEvidence(root, flags);
   let tier = null;
   if (flags.labels !== undefined) {
     const raw = Array.isArray(flags.labels) ? flags.labels : String(flags.labels).split(/[\s,]+/);
@@ -1885,6 +1911,7 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
       console.log("  node workflow.mjs metrics [--root .]");
       console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
       console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
+            console.log("  node workflow.mjs check-ci --push --base-ref <previous-commit>");
       console.log("  node workflow.mjs review-run --role <reviewer|oracle> --change <name> --model <provider/model> --base-ref <base> [--product-command <JSON argv>] [--redo]");
       console.log("  node workflow.mjs stage-b --change <name> --phase <before|after> --test-cmd \"<cmd>\" [--disposition <lean-already|simplified>]");
       if (cmd !== undefined) code = 2;

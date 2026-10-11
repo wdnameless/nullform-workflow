@@ -21,6 +21,8 @@ nullform doctor          # verify installation health
 nullform update          # update via npm, no git needed
 ```
 
+Private registries use npm's `.npmrc` authentication. `nullform update --dry-run` previews the upgrade.
+
 Headless (Cursor rules are project-scoped):
 
 ```bash
@@ -35,6 +37,7 @@ Developers: `git clone https://github.com/wdnameless/nullform-workflow.git && cd
 ```bash
 nullform doctor
 node <installed_root>/tools/workflow.mjs start --tier T1 --task "smoke check"
+node <installed_root>/tools/workflow.mjs artifact --kind recon --detail "Files: chosen task files; acceptance: run the task smoke check before close."
 node <installed_root>/tools/workflow.mjs close
 ```
 
@@ -47,7 +50,7 @@ node <installed_root>/tools/workflow.mjs close
 
 ## Why it works
 
-- **Evidence PRs** — Summary → Evidence (exact command + raw output) → Merge danger → Blast radius. No evidence, no merge.
+- **Lane gates** — PRs and pushes to `main`/`master` validate tier artifacts; T1 requires committed recon, T2/T3 require current review receipts.
 - **Blind oracle** — independent acceptance against your verbatim requirements and the running product, never against our spec.
 - **Session retro** — ranks real session logs by hidden waste (`node tools/session-retro.mjs scan`).
 - **JEV hints** — a tiny decision model suggests one installed skill before a turn (≥0.80 confidence, else silence). Cost −93.9% vs a classifier call; details in [`docs/jev.md`](docs/jev.md).
@@ -55,7 +58,7 @@ node <installed_root>/tools/workflow.mjs close
 ## Reference
 
 - Spec: [`core/PORTABLE.md`](core/PORTABLE.md) · Glossary: [`CONTEXT.md`](CONTEXT.md) · Roles: [`agent/agents/`](agent/agents/)
-- Gates: `node tools/verify.mjs --profile verify|audit` · Tests: `node --test tools/tests/*.test.mjs`
+- Gates: `node tools/verify.mjs --profile verify` (or `--profile audit`) · Tests: `node --test tools/tests/*.test.mjs`
 - Dashboard: `node tools/dashboard.mjs --url`
 
 ## License

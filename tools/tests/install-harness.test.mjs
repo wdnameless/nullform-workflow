@@ -4,7 +4,7 @@ import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -12,7 +12,7 @@ const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 const SH_PATH = resolve(REPO_ROOT, "install.sh");
 import { createTempDir } from "./test-helpers.mjs";
 import { detectHarness } from "../install-harness.mjs";
-import { preflightJson5Config, preflightJsoncConfig } from "../harness-config.mjs";
+import { preflightJson5Config, preflightJsoncConfig, applyManagedSection } from "../harness-config.mjs";
 function getBashPath() {
   const candidates = process.platform === "win32"
     ? ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "bash.exe", "bash"]
@@ -659,3 +659,4 @@ test("consumer regression: malformed markers, malformed YAML, and complex YAML a
     rmSync(tempHome, { recursive: true, force: true });
   }
 });
+

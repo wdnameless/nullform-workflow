@@ -1,11 +1,14 @@
 /**
- * tools/installation-state.mjs — Installation state persistence, schema validation, and SemVer utilities.
+ * tools/installation-state.mjs — Installation identity, deployment preflight, npm transport, and SemVer utilities.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, lstatSync } from "node:fs";
 import { resolve, join, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SUPPORTED_HARNESSES } from "./install-harness.mjs";
+import { homedir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { validatePathWithinScope, isInsideOrEqual, resolveRealPath, getCanonicalPath } from './worktree-snapshot.mjs';
+import { RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, resolveOpencodeConfigPaths } from './harness-config.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -13,9 +16,7 @@ const REPO_ROOT = resolve(__dirname, "..");
 
 export const PACKAGE_NAME = "nullform-workflow";
 
-export const CONCRETE_HARNESSES = Object.freeze(
-  SUPPORTED_HARNESSES.filter((h) => h !== "all" && h !== "auto")
-);
+export const CONCRETE_HARNESSES = Object.freeze(['claude', 'codex', 'opencode', 'cursor', 'omp', 'openclaw', 'hermes', 'openhuman']);
 export const HARNESS_CHOICES = CONCRETE_HARNESSES;
 
 const ALLOWED_STATE_KEYS = new Set([
@@ -113,7 +114,7 @@ export function validateInstallationState(state) {
   }
   for (const key of Object.keys(state)) {
     if (!ALLOWED_STATE_KEYS.has(key)) {
-      throw new Error(`Installation state contains unexpected field "${key}"`);
+      throw new Error(`Installation state contains unexpected field "${sanitizeError(key)}"`);
     }
   }
   if (state.schemaVersion !== 1) {
@@ -121,7 +122,7 @@ export function validateInstallationState(state) {
   }
   if (typeof state.harness !== "string" || !CONCRETE_HARNESSES.includes(state.harness)) {
     throw new Error(
-      `Invalid harness in installation state: ${JSON.stringify(state.harness)}. Expected one of: ${CONCRETE_HARNESSES.join(", ")}`
+      `Invalid harness in installation state: ${JSON.stringify(sanitizeError(String(state.harness)))}. Expected one of: ${CONCRETE_HARNESSES.join(", ")}`
     );
   }
   if (typeof state.root !== "string" || !state.root.trim() || !isAbsolute(state.root) || /[\x00\r\n]/.test(state.root)) {
@@ -150,7 +151,7 @@ export function validateInstallationState(state) {
   }
   const sem = parseSemVer(state.version);
   if (!sem) {
-    throw new Error(`Invalid version in installation state: ${JSON.stringify(state.version)}`);
+    throw new Error(`Invalid version in installation state: ${JSON.stringify(sanitizeError(String(state.version)))}`);
   }
   const managedFiles = validateManagedFilesMap(state.managedFiles);
 
@@ -171,7 +172,7 @@ export function readInstallationState(userHome) {
   try {
     parsed = JSON.parse(readFileSync(statePath, "utf8"));
   } catch (err) {
-    throw new Error(`Corrupted installation state JSON at ${statePath}: ${err.message}`);
+    throw new Error(`Corrupted installation state JSON at ${sanitizeError(statePath)}: ${sanitizeError(err.message)}`);
   }
   return validateInstallationState(parsed);
 }
@@ -237,10 +238,246 @@ export function resolveInstalledBinPath(effectivePrefix) {
 }
 
 export function sanitizeError(msg) {
-  if (!msg || typeof msg !== "string") return "";
+  if (!msg || typeof msg !== 'string') return '';
   return msg
-    .replace(/(https?:\/\/)([^:@\s]+):([^@\s]+)@/g, "$1$2:***@")
-    .replace(/(https?:\/\/)([^:@\s]+)@/g, "$1***@")
-    .replace(/(_authToken|_auth|token|secret|password|bearer|auth)[:=]\s*(?:[a-zA-Z0-9_\-\.~+/=]+)/gi, "$1=***")
-    .replace(/Bearer\s+(?:[a-zA-Z0-9_\-\.~+/=]+)/gi, "Bearer ***");
+    .replace(/((?:https?|git\+https?|ssh):\/\/)([^:@\r\n]*):([^@\r\n]+)@/g, (_, scheme, user) => `${scheme}${user}:***@`)
+    .replace(/((?:https?|git\+https?|ssh):\/\/)([^:@\s]+)@/g, (_, scheme) => `${scheme}***@`)
+    .replace(/(?:\/\/)([^:@\r\n]*):([^@\r\n]+)@/g, (_, user) => `//${user}:***@`)
+    .replace(/(?:\/\/)([^:@\s]+)@/g, '//***@')
+    .replace(/(_authToken|_auth|token|secret|password|bearer|auth)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"',;]+)/gi, (_, label) => `${label}=***`)
+    .replace(/Bearer\s+["']?(?:[^\s"',;]+)["']?/gi, 'Bearer ***');
 }
+export const CORE_FILES = Object.freeze(["VERSION", ".code-size.baseline.json", "CONTEXT.md", "README.md", "secrets.example.env", "verify.ps1", "verify.sh", "package.json"]);
+export function getCoreDirs(isCursorActive) { return isCursorActive
+  ? ["agent", "rules", "tools", "core", "templates", "paseo", "bin"]
+  : ["agent", "rules", "tools", "core", "templates", "skills", "paseo", "bin"]; }
+export function preflightFilesystemConfinement({
+  harnesses,
+  targetRoot,
+  projectRoot,
+  userHome,
+  agentsHome,
+  shouldWriteHome,
+  options,
+}) {
+  const pathCache = new Map();
+    const source = getCanonicalPath(REPO_ROOT, pathCache), target = getCanonicalPath(targetRoot, pathCache);
+    if (source && target && isInsideOrEqual(source, target) && !isInsideOrEqual(target, source)) throw new Error(`Cannot install harness into a subdirectory of the repository root ("${targetRoot}").`);
+  const check = (targetPath, scope) => {
+    if (!validatePathWithinScope(targetPath, scope, pathCache)) {
+      throw new Error(
+        `Preflight failed: destination path "${targetPath}" escapes declared root "${scope}" or is an unresolved link`
+      );
+    }
+  };
+
+  const checkTree = (src, dest, scope) => {
+    check(dest, scope);
+    if (!existsSync(src)) return;
+    for (const entry of readdirSync(src, { withFileTypes: true })) {
+      if (["node_modules", ".git", "__tmp__", "__pycache__", ".tmp"].includes(entry.name)) continue;
+      const childDest = join(dest, entry.name);
+      if (entry.isDirectory()) checkTree(join(src, entry.name), childDest, scope);
+      else if (entry.isFile()) check(childDest, scope);
+    }
+  };
+  for (const dir of getCoreDirs(harnesses.includes("cursor"))) {
+    checkTree(join(REPO_ROOT, dir), join(targetRoot, dir), targetRoot);
+  }
+  for (const file of CORE_FILES) {
+    if (existsSync(join(REPO_ROOT, file))) check(join(targetRoot, file), targetRoot);
+  }
+  for (const pkg of RUNTIME_PARSER_DEPS) {
+    const src = resolveRuntimePackageDir(pkg, REPO_ROOT);
+    if (src) checkTree(src, join(targetRoot, "tools", "node_modules", pkg), targetRoot);
+  }
+  if (harnesses.includes("cursor")) {
+    checkTree(join(REPO_ROOT, "skills"), join(targetRoot, "skills"), targetRoot);
+  }
+  const checkHomeSkills = (dest, scope) => checkTree(join(REPO_ROOT, "skills"), dest, scope);
+
+  for (const h of harnesses) {
+    if (h === "claude") {
+      check(join(targetRoot, "CLAUDE.md"), targetRoot);
+      if (shouldWriteHome) {
+        check(join(userHome, ".claude", "CLAUDE.md"), userHome);
+        checkHomeSkills(join(userHome, ".claude", "skills"), userHome);
+      }
+    }
+    if (h === "codex") {
+      check(join(targetRoot, "AGENTS.md"), targetRoot);
+      if (shouldWriteHome) {
+        check(join(userHome, ".codex", "AGENTS.md"), userHome);
+        checkHomeSkills(join(userHome, ".codex", "skills"), userHome);
+      }
+    }
+    if (h === "opencode") {
+      check(join(targetRoot, "AGENTS.md"), targetRoot);
+      for (const p of resolveOpencodeConfigPaths(targetRoot)) check(p, targetRoot);
+      if (shouldWriteHome) {
+        const cfgDir = join(userHome, ".config", "opencode");
+        check(join(cfgDir, "AGENTS.md"), userHome);
+        for (const p of resolveOpencodeConfigPaths(cfgDir)) check(p, userHome);
+        const legacyDir = join(userHome, ".opencode");
+        if (existsSync(legacyDir)) {
+          for (const p of resolveOpencodeConfigPaths(legacyDir)) check(p, userHome);
+        }
+        checkHomeSkills(join(cfgDir, "skills"), userHome);
+      }
+    }
+    if (h === "cursor") {
+      const cursorTarget = projectRoot || targetRoot;
+      check(join(cursorTarget, ".cursor", "rules", "00-workflow.mdc"), cursorTarget);
+    }
+    if (h === "omp") {
+      check(join(targetRoot, "agent", "AGENTS.md"), targetRoot);
+      if (shouldWriteHome) {
+        const homeAgentDir = join(userHome, ".omp", "agent");
+        check(join(homeAgentDir, "AGENTS.md"), userHome);
+        check(join(homeAgentDir, ".harness-root"), userHome);
+        check(join(homeAgentDir, "mcp.json"), userHome);
+        checkTree(join(REPO_ROOT, "rules"), join(homeAgentDir, "rules"), userHome);
+        checkTree(join(REPO_ROOT, "rules"), join(agentsHome, "rules"), userHome);
+        checkHomeSkills(join(agentsHome, "skills"), userHome);
+        check(join(homeAgentDir, "extensions", "nullform-jev.ts"), userHome);
+        check(join(homeAgentDir, "extensions", "nullform-delete-guard.ts"), userHome);
+
+        const destAgents = join(homeAgentDir, "agents");
+        const legitimateTarget = join(targetRoot, "agent", "agents");
+        if (existsSync(destAgents)) {
+          let st = null;
+          try { st = lstatSync(destAgents); } catch {}
+          if (st && st.isSymbolicLink()) {
+            const rl = resolveRealPath(destAgents);
+            if (rl !== resolveRealPath(legitimateTarget)) {
+              if (!rl || !isInsideOrEqual(userHome, rl)) {
+                throw new Error(
+                  `Preflight failed: destination path "${destAgents}" escapes declared root "${userHome}" or is an unresolved link`
+                );
+              }
+            }
+          } else {
+            checkTree(join(REPO_ROOT, "agent", "agents"), destAgents, userHome);
+          }
+        } else {
+          checkTree(join(REPO_ROOT, "agent", "agents"), destAgents, userHome);
+        }
+      }
+    }
+    if (h === "openclaw") {
+      check(join(targetRoot, "AGENTS.md"), targetRoot);
+      check(join(targetRoot, "SOUL.md"), targetRoot);
+      check(join(targetRoot, "USER.md"), targetRoot);
+      check(join(targetRoot, "openclaw.json"), targetRoot);
+      if (shouldWriteHome || options.dryRun) {
+        check(join(userHome, ".openclaw", "openclaw.json"), userHome);
+        checkHomeSkills(join(userHome, ".openclaw", "skills"), userHome);
+      }
+    }
+    if (h === "hermes") {
+      check(join(targetRoot, "AGENTS.md"), targetRoot);
+      check(join(targetRoot, "config.yaml"), targetRoot);
+      const isDefaultHome = resolve(userHome) === resolve(homedir());
+      const hermesHome = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
+      if (shouldWriteHome || options.dryRun) {
+        check(join(hermesHome, "config.yaml"), hermesHome);
+        check(join(hermesHome, "SOUL.md"), hermesHome);
+        check(join(hermesHome, "AGENTS.md"), hermesHome);
+        checkHomeSkills(join(hermesHome, "skills"), hermesHome);
+      }
+    }
+    if (h === "openhuman") {
+      check(join(targetRoot, "AGENTS.md"), targetRoot);
+      const agentDir = join(targetRoot, "agents", "workflow");
+      check(join(agentDir, "AGENTS.md"), targetRoot);
+      checkHomeSkills(join(agentDir, "skills"), targetRoot);
+      if (shouldWriteHome || options.dryRun) {
+        check(join(userHome, ".openhuman", "AGENTS.md"), userHome);
+        checkHomeSkills(join(userHome, ".openhuman", "skills"), userHome);
+      }
+    }
+  }
+}
+function validateBatchArgs(command, args) {
+  const isWin = process.platform === "win32";
+  const isBatch = isWin && /\.(cmd|bat)$/i.test(command);
+  if (isBatch) {
+    for (const arg of args) {
+      if (typeof arg === "string" && /[&|<>^%\r\n]/.test(arg)) {
+        throw new Error(`Unsafe argument for batch command: "${sanitizeError(arg)}" contains shell metacharacters`);
+      }
+    }
+  }
+  return { isWin, isBatch };
+}
+export function spawnAsync(command, args, { cwd, env, timeoutMs } = {}) { let validated;
+try { validated = validateBatchArgs(command, args); } catch (error) { return Promise.reject(error); }
+return new Promise(resolveRun => {
+  const output = { stdout: '', stderr: '' };
+  let child, timer, timedOut = false, overflow = false, bytes = 0;
+  try { child = spawn(command, args, { cwd: cwd && existsSync(cwd) ? cwd : process.cwd(), env, shell: validated.isBatch, windowsHide: validated.isWin }); }
+  catch (error) { resolveRun({ status: 1, ...output, error }); return; }
+  const collect = key => chunk => {
+    bytes += Buffer.byteLength(chunk);
+    if (bytes > 8 * 1024 * 1024) { overflow = true; child.kill('SIGKILL'); return; }
+    output[key] += chunk;
+  };
+  child.stdout?.setEncoding('utf8').on('data', collect('stdout'));
+  child.stderr?.setEncoding('utf8').on('data', collect('stderr'));
+  if (timeoutMs > 0) timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
+  child.on('error', error => { clearTimeout(timer); resolveRun({ status: 1, ...output, error, stderr: sanitizeError(error.message) }); });
+  child.on('close', status => {
+    clearTimeout(timer);
+    resolveRun({ status: timedOut || overflow ? 1 : status ?? 1, ...output, ...(timedOut ? { stderr: 'ETIMEDOUT: npm metadata command exceeded timeout' } : overflow ? { stderr: 'npm metadata output exceeded 8 MiB' } : {}) });
+  });
+}); }
+export function resolveNpmRunner(options = {}) {
+  const env = options.env || process.env;
+  const execPath = options.execPath || process.execPath;
+  const nodeDir = dirname(execPath);
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const pathDirs = (env.PATH || env.Path || "").split(pathSep).filter(Boolean);
+
+  const candidates = [
+    options.npmCliJs,
+    env.npm_execpath,
+    join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"),
+    resolve(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    ...pathDirs.flatMap((dir) => [
+      join(dir, "node_modules", "npm", "bin", "npm-cli.js"),
+      resolve(dir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    ]),
+  ].filter((c) => typeof c === "string" && /\.[cm]?js$/i.test(c));
+
+  for (const cliPath of candidates) {
+    try {
+      if (existsSync(cliPath)) return { command: execPath, prefixArgs: [cliPath], usesNode: true };
+    } catch {}
+  }
+  return { command: process.platform === "win32" ? "npm.cmd" : "npm", prefixArgs: [], usesNode: false };
+}
+export function spawnSafe(spawnFn, command, args, rootDir, env) { const { isWin, isBatch } = validateBatchArgs(command, args);
+return spawnFn(command, args, {
+  cwd: existsSync(rootDir) ? rootDir : process.cwd(),
+  env,
+  encoding: "utf8",
+  shell: isBatch,
+  windowsHide: isWin,
+}); }
+export function getDefaultRoot(harness, userHome) { switch (harness) {
+  case "claude": return join(userHome, ".claude", "workflow");
+  case "codex": return join(userHome, ".codex", "workflow");
+  case "opencode":
+    return existsSync(join(userHome, ".opencode"))
+      ? join(userHome, ".opencode", "workflow")
+      : join(userHome, ".config", "opencode", "workflow");
+  case "cursor": return join(userHome, ".cursor", "workflow");
+  case "openclaw": return join(userHome, ".openclaw", "workflow");
+  case "hermes": {
+    const isDefaultHome = resolve(userHome) === resolve(homedir());
+    const hermesBase = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
+    return join(hermesBase, "workflow");
+  }
+  case "openhuman": return join(userHome, ".openhuman", "workflow");
+  default: return join(userHome, "omp-workflow");
+} }

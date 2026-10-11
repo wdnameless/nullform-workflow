@@ -116,12 +116,17 @@ jobs:
               tools/tests/fixtures/return-contract.fixture.md
           fi
       - name: Workflow gate validation
-        if: github.event_name == 'pull_request'
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
           BASE_REF: '${{ github.base_ref
             || github.event.repository.default_branch }}'
         run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            node tools/workflow.mjs check-ci --push --base-ref "$PUSH_BASE"
+            exit $?
+          fi
           TIER_LABELS=$(
             echo "$LABELS_JSON" \
               | jq -r '.[].name // empty' \

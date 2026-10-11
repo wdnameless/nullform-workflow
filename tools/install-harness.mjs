@@ -29,33 +29,15 @@ import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import {
-  MANAGED_START,
-  MANAGED_END,
-  RUNTIME_PARSER_DEPS,
-  resolveRuntimePackageDir,
-  preflightAllConfigs,
-  preflightJsoncConfig,
-  preflightJson5Config,
-  preflightYamlConfig,
-  resolveOpencodeConfigPaths,
-  applyManagedSection,
-  applyCursorMdc,
-  updateOpencodeJson,
-  updateOpenclawJson,
-  updateHermesConfigYaml,
-  getMarkdownAdapter,
-  getOpenclawSoul,
-  getOpenclawUser,
-  hashContent,
-  isCommandInPath,
-} from "./harness-config.mjs";
+import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, preflightAllConfigs, preflightJsoncConfig, preflightJson5Config, preflightYamlConfig, resolveOpencodeConfigPaths, applyManagedSection, applyCursorMdc, updateOpencodeJson, updateOpenclawJson, updateHermesConfigYaml, getMarkdownAdapter, getOpenclawSoul, getOpenclawUser, hashContent, isCommandInPath } from "./harness-config.mjs";
+import { validateRootPath } from './worktree-snapshot.mjs';
+import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement } from './installation-state.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 
-const SUPPORTED_HARNESSES = ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman", "all", "auto"];
+const SUPPORTED_HARNESSES = [...CONCRETE_HARNESSES, 'all', 'auto'];
 
 function isStrictlyInside(parent, child) {
   const rel = relative(resolve(parent), resolve(child));
@@ -76,25 +58,6 @@ function detectHarness({ userHome = homedir(), env = process.env } = {}) {
   return "omp";
 }
 
-function getDefaultRoot(harness, userHome) {
-  switch (harness) {
-    case "claude": return join(userHome, ".claude", "workflow");
-    case "codex": return join(userHome, ".codex", "workflow");
-    case "opencode":
-      return existsSync(join(userHome, ".opencode"))
-        ? join(userHome, ".opencode", "workflow")
-        : join(userHome, ".config", "opencode", "workflow");
-    case "cursor": return join(userHome, ".cursor", "workflow");
-    case "openclaw": return join(userHome, ".openclaw", "workflow");
-    case "hermes": {
-      const isDefaultHome = resolve(userHome) === resolve(homedir());
-      const hermesBase = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
-      return join(hermesBase, "workflow");
-    }
-    case "openhuman": return join(userHome, ".openhuman", "workflow");
-    default: return join(userHome, "omp-workflow");
-  }
-}
 
 function isPromptSurface(srcPath) {
   const rel = relative(REPO_ROOT, srcPath);
@@ -110,7 +73,7 @@ function renderSubstitutedText(srcPath, slashRoot) {
 }
 
 function copyAndSubstitute(srcPath, destPath, slashRoot) {
-  if (resolve(srcPath) === resolve(destPath)) return;
+  if (resolve(srcPath) === resolve(destPath) || (existsSync(destPath) && realpathSync(srcPath) === realpathSync(destPath))) return;
 
   const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(srcPath);
   if (isText) {
@@ -120,38 +83,39 @@ function copyAndSubstitute(srcPath, destPath, slashRoot) {
   }
 }
 
-function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false) {
-  const copied = [];
-  if (!existsSync(srcDir)) return copied;
+function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false) { const copied = [];
+if (!existsSync(srcDir)) return copied;
 
-  function walk(currentSrc, currentDest) {
-    const entries = readdirSync(currentSrc, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "__tmp__" ||
-          entry.name === "__pycache__" || entry.name === ".tmp") {
-        continue;
+function walk(currentSrc, currentDest) {
+  
+
+  const entries = readdirSync(currentSrc, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "__tmp__" ||
+        entry.name === "__pycache__" || entry.name === ".tmp") {
+      continue;
+    }
+    const srcPath = join(currentSrc, entry.name);
+    const destPath = join(currentDest, entry.name);
+
+    if (entry.isDirectory()) {
+      
+      if (!planOnly) {
+        mkdirSync(destPath, { recursive: true });
       }
-      const srcPath = join(currentSrc, entry.name);
-      const destPath = join(currentDest, entry.name);
-
-      if (entry.isDirectory()) {
-        if (!planOnly) {
-          mkdirSync(destPath, { recursive: true });
-        }
-        walk(srcPath, destPath);
-      } else if (entry.isFile()) {
-        copied.push(destPath);
-        if (!planOnly) {
-          mkdirSync(dirname(destPath), { recursive: true });
-          copyAndSubstitute(srcPath, destPath, slashRoot);
-        }
+      walk(srcPath, destPath);
+    } else if (entry.isFile()) {
+      copied.push(destPath);
+      if (!planOnly) {
+        mkdirSync(dirname(destPath), { recursive: true });
+        copyAndSubstitute(srcPath, destPath, slashRoot);
       }
     }
   }
-
-  walk(srcDir, destDir);
-  return copied;
 }
+
+walk(srcDir, destDir);
+return copied; }
 
 /**
  * Copies runtime parser dependencies (yaml, json5, jsonc-parser) selectively
@@ -219,28 +183,33 @@ function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false) {
 /**
  * Skills registry installer. Preserves human files by verifying against prior managed hashes.
  */
-function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false, priorManaged = {}, outManaged = {}) {
+function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false, priorManaged = {}, outManaged = {}, extra = {}) {
   if (!existsSync(srcDir)) return [];
+  
   const skip = new Set();
-  const lockCandidates = [
-    join(agentsHome, ".skill-lock.json"),
-    join(agentsHome, ".agents", ".skill-lock.json"),
-  ];
-  for (const lockPath of lockCandidates) {
+  const searchRoots = [
+    agentsHome,
+    agentsHome && join(agentsHome, ".agents"),
+    extra.targetRoot,
+    extra.targetRoot && join(extra.targetRoot, ".agents"),
+    extra.projectRoot,
+    extra.projectRoot && join(extra.projectRoot, ".agents"),
+  ].filter(Boolean);
+
+  for (const root of searchRoots) {
+    const lockPath = join(root, ".skill-lock.json");
     try {
       if (existsSync(lockPath)) {
         const locked = JSON.parse(readFileSync(lockPath, "utf8").replace(/^\uFEFF/, "").trim());
         for (const name of Object.keys(locked.skills || {})) {
-          if (existsSync(join(destDir, name, "SKILL.md"))) skip.add(name);
+          if (existsSync(join(destDir, name, "SKILL.md")) || existsSync(join(srcDir, name, "SKILL.md"))) {
+            skip.add(name);
+          }
         }
       }
     } catch {}
-  }
-  const disabledCandidates = [
-    join(agentsHome, ".skills-disabled.json"),
-    join(agentsHome, ".agents", ".skills-disabled.json"),
-  ];
-  for (const disabledPath of disabledCandidates) {
+
+    const disabledPath = join(root, ".skills-disabled.json");
     try {
       if (existsSync(disabledPath)) {
         const disabled = JSON.parse(readFileSync(disabledPath, "utf8").replace(/^\uFEFF/, "").trim());
@@ -254,6 +223,8 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false,
   const out = [];
 
   function walkSkill(currentSrc, currentDest) {
+    
+
     const entries = readdirSync(currentSrc, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".tmp") continue;
@@ -261,6 +232,7 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false,
       const dPath = join(currentDest, entry.name);
 
       if (entry.isDirectory()) {
+        
         if (!planOnly) mkdirSync(dPath, { recursive: true });
         walkSkill(sPath, dPath);
       } else if (entry.isFile()) {
@@ -521,11 +493,13 @@ function installHarness(options = {}) {
   }
 
   const selectedHarness = rawHarness === "auto" ? detectHarness({ userHome }) : rawHarness;
-  const targetRoot = options.root
+  const rawTargetRoot = options.root
     ? resolve(options.root)
     : getDefaultRoot(selectedHarness, userHome);
+  const targetRoot = validateRootPath(rawTargetRoot);
   const slashRoot = targetRoot.replace(/\\/g, "/");
-  const projectRoot = options.projectRoot ? resolve(options.projectRoot) : null;
+  const projectRoot = options.projectRoot ? validateRootPath(resolve(options.projectRoot)) : null;
+  const agentsHome = join(userHome, ".agents");
 
   if (isStrictlyInside(REPO_ROOT, targetRoot)) {
     throw new Error(
@@ -538,6 +512,18 @@ function installHarness(options = {}) {
     selectedHarness === "all"
       ? ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman"]
       : [selectedHarness];
+
+  const shouldWriteHome = Boolean(options.userHome || !options.root);
+
+  preflightFilesystemConfinement({
+    harnesses: targetHarnesses,
+    targetRoot,
+    projectRoot,
+    userHome,
+    agentsHome,
+    shouldWriteHome,
+    options,
+  });
 
   preflightAllConfigs({ harnesses: targetHarnesses, targetRoot, projectRoot, userHome });
 
@@ -553,8 +539,9 @@ function installHarness(options = {}) {
     managedFiles: {},
   };
 
-  const coreDirs = ["agent", "rules", "tools", "core", "templates", "skills", "paseo", "bin"];
-  const coreFiles = ["VERSION", ".code-size.baseline.json", "CONTEXT.md", "README.md", "secrets.example.env", "verify.ps1", "verify.sh", "package.json"];
+  const isCursorActive = targetHarnesses.includes("cursor");
+  const coreDirs = getCoreDirs(isCursorActive);
+  
 
   for (const dir of coreDirs) {
     const srcDir = join(REPO_ROOT, dir);
@@ -562,16 +549,25 @@ function installHarness(options = {}) {
       plan.filesToCopy.push(...copyDirRecursive(srcDir, join(targetRoot, dir), slashRoot, options.dryRun));
     }
   }
-  for (const file of coreFiles) {
-    const srcFile = join(REPO_ROOT, file);
-    const destFile = join(targetRoot, file);
-    if (existsSync(srcFile)) {
-      plan.filesToCopy.push(destFile);
-      if (!options.dryRun) {
-        mkdirSync(dirname(destFile), { recursive: true });
-        copyAndSubstitute(srcFile, destFile, slashRoot);
-      }
+  for (const file of CORE_FILES) { const srcFile = join(REPO_ROOT, file);
+  const destFile = join(targetRoot, file);
+  if (existsSync(srcFile)) {
+    plan.filesToCopy.push(destFile);
+    if (!options.dryRun) {
+      mkdirSync(dirname(destFile), { recursive: true });
+      copyAndSubstitute(srcFile, destFile, slashRoot);
     }
+  } }
+
+  if (isCursorActive) {
+    const srcSkills = join(REPO_ROOT, "skills");
+    const destSkills = join(targetRoot, "skills");
+    plan.filesToCopy.push(
+      ...installSkills(srcSkills, destSkills, slashRoot, agentsHome, options.dryRun, priorManaged, plan.managedFiles, {
+        targetRoot,
+        projectRoot,
+      })
+    );
   }
 
   plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, options.dryRun));
@@ -584,11 +580,13 @@ function installHarness(options = {}) {
       writeFileSync(filePath, content, "utf8");
     }
   };
-  const shouldWriteHome = Boolean(options.userHome || !options.root);
   const readExisting = (p) => (existsSync(p) ? readFileSync(p, "utf8") : "");
   const copyHomeSkills = (destDir) => {
     const src = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
-    plan.filesToCopy.push(...installSkills(src, destDir, slashRoot, userHome, options.dryRun, priorManaged, plan.managedFiles));
+    plan.filesToCopy.push(...installSkills(src, destDir, slashRoot, userHome, options.dryRun, priorManaged, plan.managedFiles, {
+      targetRoot,
+      projectRoot,
+    }));
   };
 
   for (const h of targetHarnesses) {
@@ -696,4 +694,4 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
   main();
 }
 
-export { installHarness, detectHarness, getDefaultRoot, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath };
+export { installHarness, detectHarness, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath };

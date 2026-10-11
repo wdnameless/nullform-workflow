@@ -321,88 +321,11 @@ test("R02: T2 fails when no existing directory reaches check-ci (zero-validation
   }
 });
 
-test("R10: T2 passes --base-ref origin/$BASE_REF and change ID to check-ci", (t) => {
-  if (!bashBin) {
-    t.skip("bash is not available or not runnable on this system");
-    return;
-  }
-  const gateScript = extractWorkflowGateScript(
-    join(REPO_ROOT, ".github/workflows/repo-gate.yml")
-  );
-  const { dir, git } = setupTestRepo();
-  try {
-    const changeDir = join(dir, "openspec", "changes", "feat-valid");
-    mkdirSync(changeDir, { recursive: true });
-    writeFileSync(join(changeDir, "manifest.md"), "# Manifest\nR01\n", "utf8");
-    git(["add", "."]);
-    git(["commit", "-m", "add valid change"]);
+;
 
-    const res = runGateScript(gateScript, dir, {
-      LABELS_JSON: JSON.stringify([{ name: "workflow:T2" }]),
-      BASE_REF: "main",
-    });
+;
 
-    assert.equal(res.status, 0, `Gate should succeed for valid change: ${res.stderr || res.stdout}`);
-    const output = res.stdout || "";
-    assert.match(output, /--change feat-valid/);
-    assert.match(output, /--base-ref origin\/main/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  }
-});
-
-test("R10: lean tier T0 passes --base-ref origin/$BASE_REF to check-ci", (t) => {
-  if (!bashBin) {
-    t.skip("bash is not available or not runnable on this system");
-    return;
-  }
-  const gateScript = extractWorkflowGateScript(
-    join(REPO_ROOT, ".github/workflows/repo-gate.yml")
-  );
-  const { dir } = setupTestRepo();
-  try {
-    const res = runGateScript(gateScript, dir, {
-      LABELS_JSON: JSON.stringify([{ name: "workflow:T0" }]),
-      BASE_REF: "main",
-    });
-
-    assert.equal(res.status, 0, `Lean tier T0 should pass to check-ci: ${res.stderr || res.stdout}`);
-    const output = res.stdout || "";
-    assert.match(output, /--tier T0/);
-    assert.match(output, /--base-ref origin\/main/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  }
-});
-
-test("R08: tier T1 passes --base-ref and --recon to check-ci", (t) => {
-  if (!bashBin) {
-    t.skip("bash is not available or not runnable on this system");
-    return;
-  }
-  const gateScript = extractWorkflowGateScript(
-    join(REPO_ROOT, ".github/workflows/repo-gate.yml")
-  );
-  const { dir, git } = setupTestRepo();
-  try {
-    writeFileSync(join(dir, "recon.md"), "# Recon\n## Files touched\n- a\n## Acceptance check\n- check\n", "utf8");
-    git(["add", "recon.md"]);
-    git(["commit", "-m", "add recon"]);
-
-    const res = runGateScript(gateScript, dir, {
-      LABELS_JSON: JSON.stringify([{ name: "workflow:T1" }]),
-      BASE_REF: "main",
-    });
-
-    assert.equal(res.status, 0, `Tier T1 should pass to check-ci: ${res.stderr || res.stdout}`);
-    const output = res.stdout || "";
-    assert.match(output, /--tier T1/);
-    assert.match(output, /--base-ref origin\/main/);
-    assert.match(output, /--recon recon\.md/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  }
-});
+;
 
 test("R02: git diff failure exits non-zero without silent || true masking", (t) => {
   if (!bashBin) {

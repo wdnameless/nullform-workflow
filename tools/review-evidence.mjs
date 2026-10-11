@@ -8,7 +8,7 @@ import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, 
 
 export const EVIDENCE_FILE = 'review-evidence.json';
 export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
-export const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
+export const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)[ \t]*(?:(?:#+[ \t]*)?\*{0,2}Verdict:?\*{0,2}:?[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]|$|[.,])|\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]*[.,]?[ \t]*\r?$))|\|[ \t]*\*{0,2}Verdict:?\*{0,2}:?[ \t]*\|[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}\b/im;
 export { isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath };
 export const computeFileHash = hashFile;
 export const computeSourceDigest = sourceDigest;
@@ -17,8 +17,8 @@ export function computeEventProjectionHash(value) { return createHash('sha256').
 export function isPositiveOracleVerdict(text) { return typeof text === 'string' && POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text); }
 export function isNegativeOracleVerdict(text) { return typeof text === 'string' && NEGATIVE_VERDICT_RE.test(text); }
 export function isOracleEvidenceFilename(path) { return /^oracle(-+[a-z0-9]+)*\.md$/i.test(basename(String(path || ''))) || basename(String(path || '')).toLowerCase() === 'acceptance.md'; }
-export function computeManifestHash(root, changeId) { return hashFile(join(changeDirectory(root, changeId), 'manifest.md')); }
-export function computeRolePromptHash(root, role) { return hashFile(safeFile(root, join('agent', 'agents', `${role}.md`))); }
+export function computeManifestHash(root, changeId) { return hashFile(join(changeDirectory(root, changeId), 'manifest.md'), true); }
+export function computeRolePromptHash(root, role) { return hashFile(safeFile(root, join('agent', 'agents', `${role}.md`)), true); }
 export function getPorcelainStatusRaw(root) {
   try { return git(root, ['-c', 'core.quotepath=false', 'status', '--porcelain', '-z', '-uall', '--', '.']); } catch { return null; }
 }
@@ -237,7 +237,7 @@ export function runReviewRecord(options) {
   if (productCommand !== null && (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(p => typeof p !== 'string' || p.includes('\0')) || !productCommand[0].trim())) throw new Error('product-command must be a JSON argv array');
   if (role === 'oracle' && !ompRunner && !productCommand) throw new Error('Oracle requires --product-command JSON argv to exercise product');
   const dir = changeDirectory(root, changeId);
-  const manifestHash = hashFile(safeFile(root, join('openspec', 'changes', changeId, 'manifest.md')));
+  const manifestHash = hashFile(safeFile(root, join('openspec', 'changes', changeId, 'manifest.md')), true);
   const rolePromptHash = computeRolePromptHash(root, role);
   const source = sourceDigest(root), tests = testFilesHash(root);
   const data = loadReviewEvidence(dir) || { version: 2, changeId, reviewer: null, stageB: null, oracles: [], history: [] };
