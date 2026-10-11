@@ -1,0 +1,1020 @@
+{
+  "version": 2,
+  "changeId": "portable-product-release",
+  "reviewer": {
+    "role": "reviewer",
+    "context": {
+      "role": "reviewer",
+      "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+      "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+      "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+      "testFilesHash": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+      "baseRef": "c1b29e26224d0a3e7a0e4c5bf1752f10b8afc72f",
+      "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+      "promptHash": "79efb2e526f236f2c5a920cf3d6a7d264fde22ce001d87c3336858fc0225c2ad",
+      "productCommandHash": "b731f8251bba58c17d111fe124b0c8eb5a871cf711d3768a3a782eae82d150ec"
+    },
+    "productExecutions": [
+      {
+        "commandHash": "b731f8251bba58c17d111fe124b0c8eb5a871cf711d3768a3a782eae82d150ec",
+        "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+        "exitCode": 0,
+        "startedAt": "2026-10-11T23:40:44.511Z",
+        "completedAt": "2026-10-11T23:40:46.596Z",
+        "outputHash": "c49b2ca4f73f77242555c09b92b5f671f32cbd09909cb943e5e68b66a89ccc5a"
+      }
+    ],
+    "sessionId": "01a12d56-ee26-7134-9760-742b0a572e89",
+    "provider": "nullform-gateway",
+    "model": "gemini-3.8-flash-high",
+    "isFallback": false,
+    "usage": {
+      "input": 318630,
+      "output": 4804,
+      "cacheRead": 4419168,
+      "cacheWrite": 0,
+      "totalTokens": 4742602,
+      "costUsd": 0.5884250999999998,
+      "costSource": "native-fixed-tariff"
+    },
+    "report": "{\n  \"findings\": [\n    {\n      \"title\": \"Remove redundant workflow branch in parseCliArgs positional loop\",\n      \"body\": \"In bin/nullform.mjs, parseCliArgs immediately returns early when argv[0] === 'workflow' to preserve subsequent args for runWorkflowCli without util.parseArgs validation. The subsequent check pos === 'workflow' in the positionals loop is redundant dead code for standard CLI usage, and if invoked with preceding flags like '--json workflow', command is set to 'workflow' while options.workflowArgs remains undefined. Suggested replacement: remove '|| pos === \\\"workflow\\\"' from the positional command validator.\",\n      \"priority\": 3,\n      \"confidence\": 0.95,\n      \"file_path\": \"bin/nullform.mjs\",\n      \"line_start\": 139,\n      \"line_end\": 143\n    }\n  ],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review confirms the patch satisfies all requirements R01–R09 with robust data-preservation, certification, and evidence boundaries. R01 («стабильную»): DeploymentJournal and exclusive locking in tools/deployment-journal.mjs provide recoverable write-ahead logging and atomic state commit, preserving human notes and config across failure, process kill, and concurrent execution. R02 («крутую систему»): Public nullform CLI cleanly exposes 'workflow', 'capabilities', and 'evidence'; core workflow gates run Node-native without OMP/Bun; unsupported review on non-OMP hosts refuses before dispatch. R03 («можно легко везде развернть»): Single immutable tarball is verified and certified across Linux, Windows, macOS on Node 22/24 LTS via tools/certify-package.mjs and GitHub Actions matrix across all 8 configuration adapters without conflating config deployment with native model execution. R04 («без костылей»): Standard npm installation with pinned dependencies (json5@2.2.3, jsonc-parser@3.3.1, yaml@2.9.1), broad secret redaction in sanitizeError, and zero runtime hacks. R05 («реально доказательно улучшало качество разработки»): tools/quality-evidence.mjs validates retained historical pairs (3 review pairs with equal 3/3 accuracy at ~2x candidate tariff, 1 workflow pair failing at 6-turn cap without report) and reports explicit claimStatus 'not-proven' with 6 clear limitations. R06 («Публичный npm-релиз»): tools/publish-release.mjs enforces immutable tarball checks, 6-cell matrix certificates, current-source oracle acceptance, and npm authentication/OIDC context. R07 («Без дополнительных платных запусков»): 0 additional paid inference calls; historical spend ledger retains 18 settled requests ($0.0362235 USD, $1.00 ceiling). R08 («Да, workflow-промпты проекта»): Adapter markdown templates updated to reference 'nullform workflow'; personal keys and machine settings untouched. R09 («Да, выпуск без недоказанных claims»): Release criteria grounded in portable technical correctness and honest reporting. Lean lens: shrink redundant 'workflow' branch in bin/nullform.mjs line 140 (net: -1 lines possible; core runtime and certification modules are lean already).\",\n  \"overall_confidence_score\": 0.98\n}",
+    "stopReason": "stop",
+    "startedAt": "2026-10-11T23:40:34.214Z",
+    "completedAt": "2026-10-11T23:46:30.508Z",
+    "verdict": "ACCEPT",
+    "nativeVerdict": "correct",
+    "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+    "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+    "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+    "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+    "testFilesHash": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+    "baseRef": "c1b29e26224d0a3e7a0e4c5bf1752f10b8afc72f",
+    "exitCode": 0,
+    "nativeProjection": {
+      "role": "reviewer",
+      "context": {
+        "role": "reviewer",
+        "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+        "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+        "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+        "testFilesHash": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+        "baseRef": "c1b29e26224d0a3e7a0e4c5bf1752f10b8afc72f",
+        "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+        "promptHash": "79efb2e526f236f2c5a920cf3d6a7d264fde22ce001d87c3336858fc0225c2ad",
+        "productCommandHash": "b731f8251bba58c17d111fe124b0c8eb5a871cf711d3768a3a782eae82d150ec"
+      },
+      "productExecutions": [
+        {
+          "commandHash": "b731f8251bba58c17d111fe124b0c8eb5a871cf711d3768a3a782eae82d150ec",
+          "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+          "exitCode": 0,
+          "startedAt": "2026-10-11T23:40:44.511Z",
+          "completedAt": "2026-10-11T23:40:46.596Z",
+          "outputHash": "c49b2ca4f73f77242555c09b92b5f671f32cbd09909cb943e5e68b66a89ccc5a"
+        }
+      ],
+      "sessionId": "01a12d56-ee26-7134-9760-742b0a572e89",
+      "provider": "nullform-gateway",
+      "model": "gemini-3.8-flash-high",
+      "isFallback": false,
+      "usage": {
+        "input": 318630,
+        "output": 4804,
+        "cacheRead": 4419168,
+        "cacheWrite": 0,
+        "totalTokens": 4742602,
+        "costUsd": 0.5884250999999998,
+        "costSource": "native-fixed-tariff"
+      },
+      "report": "{\n  \"findings\": [\n    {\n      \"title\": \"Remove redundant workflow branch in parseCliArgs positional loop\",\n      \"body\": \"In bin/nullform.mjs, parseCliArgs immediately returns early when argv[0] === 'workflow' to preserve subsequent args for runWorkflowCli without util.parseArgs validation. The subsequent check pos === 'workflow' in the positionals loop is redundant dead code for standard CLI usage, and if invoked with preceding flags like '--json workflow', command is set to 'workflow' while options.workflowArgs remains undefined. Suggested replacement: remove '|| pos === \\\"workflow\\\"' from the positional command validator.\",\n      \"priority\": 3,\n      \"confidence\": 0.95,\n      \"file_path\": \"bin/nullform.mjs\",\n      \"line_start\": 139,\n      \"line_end\": 143\n    }\n  ],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review confirms the patch satisfies all requirements R01–R09 with robust data-preservation, certification, and evidence boundaries. R01 («стабильную»): DeploymentJournal and exclusive locking in tools/deployment-journal.mjs provide recoverable write-ahead logging and atomic state commit, preserving human notes and config across failure, process kill, and concurrent execution. R02 («крутую систему»): Public nullform CLI cleanly exposes 'workflow', 'capabilities', and 'evidence'; core workflow gates run Node-native without OMP/Bun; unsupported review on non-OMP hosts refuses before dispatch. R03 («можно легко везде развернть»): Single immutable tarball is verified and certified across Linux, Windows, macOS on Node 22/24 LTS via tools/certify-package.mjs and GitHub Actions matrix across all 8 configuration adapters without conflating config deployment with native model execution. R04 («без костылей»): Standard npm installation with pinned dependencies (json5@2.2.3, jsonc-parser@3.3.1, yaml@2.9.1), broad secret redaction in sanitizeError, and zero runtime hacks. R05 («реально доказательно улучшало качество разработки»): tools/quality-evidence.mjs validates retained historical pairs (3 review pairs with equal 3/3 accuracy at ~2x candidate tariff, 1 workflow pair failing at 6-turn cap without report) and reports explicit claimStatus 'not-proven' with 6 clear limitations. R06 («Публичный npm-релиз»): tools/publish-release.mjs enforces immutable tarball checks, 6-cell matrix certificates, current-source oracle acceptance, and npm authentication/OIDC context. R07 («Без дополнительных платных запусков»): 0 additional paid inference calls; historical spend ledger retains 18 settled requests ($0.0362235 USD, $1.00 ceiling). R08 («Да, workflow-промпты проекта»): Adapter markdown templates updated to reference 'nullform workflow'; personal keys and machine settings untouched. R09 («Да, выпуск без недоказанных claims»): Release criteria grounded in portable technical correctness and honest reporting. Lean lens: shrink redundant 'workflow' branch in bin/nullform.mjs line 140 (net: -1 lines possible; core runtime and certification modules are lean already).\",\n  \"overall_confidence_score\": 0.98\n}",
+      "stopReason": "stop",
+      "startedAt": "2026-10-11T23:40:34.214Z",
+      "completedAt": "2026-10-11T23:46:30.508Z",
+      "verdict": "ACCEPT",
+      "nativeVerdict": "correct",
+      "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+      "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+      "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+      "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+      "testFilesHash": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+      "baseRef": "c1b29e26224d0a3e7a0e4c5bf1752f10b8afc72f",
+      "exitCode": 0
+    },
+    "nativeEvents": [
+      {
+        "type": "session",
+        "id": "01a12d56-ee26-7134-9760-742b0a572e89",
+        "timestamp": "2026-10-11T23:40:34.214Z"
+      },
+      {
+        "type": "model_change",
+        "model": "gemini-3.8-flash-high",
+        "provider": "nullform-gateway",
+        "isFallback": false,
+        "timestamp": "2026-10-11T23:40:35.045Z"
+      },
+      {
+        "type": "custom",
+        "customType": "workflow-review-context",
+        "timestamp": "2026-10-11T23:40:35.097Z",
+        "data": {
+          "role": "reviewer",
+          "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+          "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+          "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+          "testFilesHash": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+          "baseRef": "c1b29e26224d0a3e7a0e4c5bf1752f10b8afc72f",
+          "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+          "promptHash": "79efb2e526f236f2c5a920cf3d6a7d264fde22ce001d87c3336858fc0225c2ad",
+          "productCommandHash": "b731f8251bba58c17d111fe124b0c8eb5a871cf711d3768a3a782eae82d150ec"
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:40:44.505Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762038967,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 45336,
+            "output": 19,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 45355,
+            "cost": {
+              "total": 0.03407325
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1762492",
+              "name": "exercise_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "custom",
+        "customType": "workflow-product-execution",
+        "timestamp": "2026-10-11T23:40:46.596Z",
+        "data": {
+          "commandHash": "b731f8251bba58c17d111fe124b0c8eb5a871cf711d3768a3a782eae82d150ec",
+          "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+          "exitCode": 0,
+          "startedAt": "2026-10-11T23:40:44.511Z",
+          "completedAt": "2026-10-11T23:40:46.596Z",
+          "outputHash": "c49b2ca4f73f77242555c09b92b5f671f32cbd09909cb943e5e68b66a89ccc5a"
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:40:55.315Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762046629,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 3054,
+            "output": 211,
+            "cacheRead": 43308,
+            "cacheWrite": 0,
+            "totalTokens": 46573,
+            "cost": {
+              "total": 0.00632985
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1472075",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:41:04.141Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762056216,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 12667,
+            "output": 234,
+            "cacheRead": 44443,
+            "cacheWrite": 0,
+            "totalTokens": 57344,
+            "cost": {
+              "total": 0.013710975
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1682585",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:41:12.865Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762065456,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 12498,
+            "output": 231,
+            "cacheRead": 55169,
+            "cacheWrite": 0,
+            "totalTokens": 67898,
+            "cost": {
+              "total": 0.014377425
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1839880",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:41:24.417Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762080006,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 12626,
+            "output": 241,
+            "cacheRead": 65712,
+            "cacheWrite": 0,
+            "totalTokens": 78579,
+            "cost": {
+              "total": 0.01530165
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1249236",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:41:32.372Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762086522,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 11128,
+            "output": 230,
+            "cacheRead": 76362,
+            "cacheWrite": 0,
+            "totalTokens": 87720,
+            "cost": {
+              "total": 0.014935650000000002
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1680647",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:41:40.211Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762096020,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 12461,
+            "output": 232,
+            "cacheRead": 85516,
+            "cacheWrite": 0,
+            "totalTokens": 98209,
+            "cost": {
+              "total": 0.016629449999999997
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1080194",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:41:51.185Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762105226,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9782,
+            "output": 224,
+            "cacheRead": 95980,
+            "cacheWrite": 0,
+            "totalTokens": 105986,
+            "cost": {
+              "total": 0.015375
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1098926",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:41:58.669Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762113206,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 8901,
+            "output": 225,
+            "cacheRead": 103757,
+            "cacheWrite": 0,
+            "totalTokens": 112883,
+            "cost": {
+              "total": 0.015301275
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1068184",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:42:08.878Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762122389,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10628,
+            "output": 241,
+            "cacheRead": 110659,
+            "cacheWrite": 0,
+            "totalTokens": 121528,
+            "cost": {
+              "total": 0.017174175
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1259900",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:42:23.066Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762132580,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 11737,
+            "output": 206,
+            "cacheRead": 119291,
+            "cacheWrite": 0,
+            "totalTokens": 131234,
+            "cost": {
+              "total": 0.018522075
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1962179",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:42:30.480Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762145185,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 8623,
+            "output": 244,
+            "cacheRead": 129013,
+            "cacheWrite": 0,
+            "totalTokens": 137880,
+            "cost": {
+              "total": 0.017058225
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_870182",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:42:37.435Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762153631,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 11543,
+            "output": 180,
+            "cacheRead": 135633,
+            "cacheWrite": 0,
+            "totalTokens": 147356,
+            "cost": {
+              "total": 0.019504725
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1409475",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:42:45.670Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762161653,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10470,
+            "output": 205,
+            "cacheRead": 145166,
+            "cacheWrite": 0,
+            "totalTokens": 155841,
+            "cost": {
+              "total": 0.0195087
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1228129",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:42:54.896Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762168746,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9809,
+            "output": 257,
+            "cacheRead": 153621,
+            "cacheWrite": 0,
+            "totalTokens": 163687,
+            "cost": {
+              "total": 0.019842075
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1202549",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:43:02.534Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762178116,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9486,
+            "output": 167,
+            "cacheRead": 161412,
+            "cacheWrite": 0,
+            "totalTokens": 171065,
+            "cost": {
+              "total": 0.01984665
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1904321",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:43:18.660Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762183647,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 6998,
+            "output": 52,
+            "cacheRead": 168868,
+            "cacheWrite": 0,
+            "totalTokens": 175918,
+            "cost": {
+              "total": 0.0181086
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1080785",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:43:25.307Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762201016,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10001,
+            "output": 52,
+            "cacheRead": 173848,
+            "cacheWrite": 0,
+            "totalTokens": 183901,
+            "cost": {
+              "total": 0.02073435
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1254376",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:43:31.551Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762206155,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9301,
+            "output": 55,
+            "cacheRead": 181827,
+            "cacheWrite": 0,
+            "totalTokens": 191183,
+            "cost": {
+              "total": 0.020819024999999998
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1225121",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:43:36.110Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762212492,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 4743,
+            "output": 54,
+            "cacheRead": 189087,
+            "cacheWrite": 0,
+            "totalTokens": 193884,
+            "cost": {
+              "total": 0.017941275
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1206893",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:43:43.762Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762217123,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 4786,
+            "output": 55,
+            "cacheRead": 191789,
+            "cacheWrite": 0,
+            "totalTokens": 196630,
+            "cost": {
+              "total": 0.018179925
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1895008",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:43:50.537Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762224947,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 11603,
+            "output": 54,
+            "cacheRead": 194561,
+            "cacheWrite": 0,
+            "totalTokens": 206218,
+            "cost": {
+              "total": 0.023496825
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_850227",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:43:56.328Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762232304,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 4604,
+            "output": 52,
+            "cacheRead": 204122,
+            "cacheWrite": 0,
+            "totalTokens": 208778,
+            "cost": {
+              "total": 0.01895715
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1339430",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:44:03.677Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762239624,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 8120,
+            "output": 52,
+            "cacheRead": 206698,
+            "cacheWrite": 0,
+            "totalTokens": 214870,
+            "cost": {
+              "total": 0.02178735
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1905039",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:44:20.488Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762246218,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9017,
+            "output": 56,
+            "cacheRead": 212792,
+            "cacheWrite": 0,
+            "totalTokens": 221865,
+            "cost": {
+              "total": 0.02293215
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1207367",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:44:28.081Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762261146,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 7969,
+            "output": 55,
+            "cacheRead": 219779,
+            "cacheWrite": 0,
+            "totalTokens": 227803,
+            "cost": {
+              "total": 0.022666425
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1200681",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:44:51.005Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762269688,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10882,
+            "output": 58,
+            "cacheRead": 225728,
+            "cacheWrite": 0,
+            "totalTokens": 236668,
+            "cost": {
+              "total": 0.0253086
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1765098",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:45:12.020Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762293283,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9601,
+            "output": 58,
+            "cacheRead": 234584,
+            "cacheWrite": 0,
+            "totalTokens": 244243,
+            "cost": {
+              "total": 0.02501205
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_767342",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:45:52.526Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762313234,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 8153,
+            "output": 49,
+            "cacheRead": 242154,
+            "cacheWrite": 0,
+            "totalTokens": 250356,
+            "cost": {
+              "total": 0.024460049999999997
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_1816586",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-11T23:46:30.508Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791762353724,
+          "stopReason": "stop",
+          "usage": {
+            "input": 12103,
+            "output": 755,
+            "cacheRead": 248289,
+            "cacheWrite": 0,
+            "totalTokens": 261147,
+            "cost": {
+              "total": 0.030530175
+            }
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"findings\": [\n    {\n      \"title\": \"Remove redundant workflow branch in parseCliArgs positional loop\",\n      \"body\": \"In bin/nullform.mjs, parseCliArgs immediately returns early when argv[0] === 'workflow' to preserve subsequent args for runWorkflowCli without util.parseArgs validation. The subsequent check pos === 'workflow' in the positionals loop is redundant dead code for standard CLI usage, and if invoked with preceding flags like '--json workflow', command is set to 'workflow' while options.workflowArgs remains undefined. Suggested replacement: remove '|| pos === \\\"workflow\\\"' from the positional command validator.\",\n      \"priority\": 3,\n      \"confidence\": 0.95,\n      \"file_path\": \"bin/nullform.mjs\",\n      \"line_start\": 139,\n      \"line_end\": 143\n    }\n  ],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review confirms the patch satisfies all requirements R01–R09 with robust data-preservation, certification, and evidence boundaries. R01 («стабильную»): DeploymentJournal and exclusive locking in tools/deployment-journal.mjs provide recoverable write-ahead logging and atomic state commit, preserving human notes and config across failure, process kill, and concurrent execution. R02 («крутую систему»): Public nullform CLI cleanly exposes 'workflow', 'capabilities', and 'evidence'; core workflow gates run Node-native without OMP/Bun; unsupported review on non-OMP hosts refuses before dispatch. R03 («можно легко везде развернть»): Single immutable tarball is verified and certified across Linux, Windows, macOS on Node 22/24 LTS via tools/certify-package.mjs and GitHub Actions matrix across all 8 configuration adapters without conflating config deployment with native model execution. R04 («без костылей»): Standard npm installation with pinned dependencies (json5@2.2.3, jsonc-parser@3.3.1, yaml@2.9.1), broad secret redaction in sanitizeError, and zero runtime hacks. R05 («реально доказательно улучшало качество разработки»): tools/quality-evidence.mjs validates retained historical pairs (3 review pairs with equal 3/3 accuracy at ~2x candidate tariff, 1 workflow pair failing at 6-turn cap without report) and reports explicit claimStatus 'not-proven' with 6 clear limitations. R06 («Публичный npm-релиз»): tools/publish-release.mjs enforces immutable tarball checks, 6-cell matrix certificates, current-source oracle acceptance, and npm authentication/OIDC context. R07 («Без дополнительных платных запусков»): 0 additional paid inference calls; historical spend ledger retains 18 settled requests ($0.0362235 USD, $1.00 ceiling). R08 («Да, workflow-промпты проекта»): Adapter markdown templates updated to reference 'nullform workflow'; personal keys and machine settings untouched. R09 («Да, выпуск без недоказанных claims»): Release criteria grounded in portable technical correctness and honest reporting. Lean lens: shrink redundant 'workflow' branch in bin/nullform.mjs line 140 (net: -1 lines possible; core runtime and certification modules are lean already).\",\n  \"overall_confidence_score\": 0.98\n}"
+            }
+          ]
+        }
+      }
+    ],
+    "nativeEventsHash": "db460905bdadd6e2969247cea586d2bba2e95606555afb3d61186421691bf07c",
+    "eventProjectionHash": "2bf8d991f6f7f872eff6e788b8e533b336547af2471ddc94fe889c434005fd7b"
+  },
+  "stageB": {
+    "reviewerSessionId": "01a12d56-ee26-7134-9760-742b0a572e89",
+    "before": {
+      "sourceDigest": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+      "testFilesHash": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+      "testCmd": "node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/quality-evidence.test.mjs tools/tests/package-certification.test.mjs",
+      "startedAt": "2026-10-11T23:47:21.970Z",
+      "completedAt": "2026-10-11T23:48:31.290Z",
+      "exitCode": 0,
+      "output": "✔ derived higher local test upgrade version is never hardcoded 1.2.0 (0.749ms)\n✔ git commit extraction returns 40-character hex commit (376.067ms)\n✔ inspectArchiveContents succeeds on valid candidate archive matching repository source (542.572ms)\n✔ inspectArchiveContents rejects candidate with same version but altered payload (466.2196ms)\nworkflow: T0 task opened — fix-bug\n  budget: 10 tool calls for T0\n  no further artifacts required at this tier.\nworkflow: T0 \"fix-bug\" — COMPLETE\n  done lane        lane declared (start --tier)\ntask    fix-bug\ntier    T0\nstatus  open\nstarted 2026-10-11T23:47:51.118Z\nbudget  10 tool calls for T0\nartifacts 1/1\n  + lane\nbudget  consumption 309318898/200000 tokens, 931/45 calls\nBUDGET warning: session approaching soft budget ceiling (309318898/200000 tokens, 931/45 calls)\nworkflow: T0 task closed, all artifacts present.\nworkflow review-run: harness 'cursor' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.\nworkflow review-run: harness 'opencode' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.\n✔ 1. fault: deterministic write failure interrupts install; prior verified identity remains intact and human bytes preserved (15.2335ms)\n✔ 2. kill: interrupted process leaves journal that can be recovered without permanent lockout or data loss (8.744ms)\n✔ 3. stalelock: verified dead owner PID allows scoped recovery and lock reacquisition (3.1522ms)\n✔ 4. liveowner: active process holding lock cannot be displaced; concurrent application is refused; uncertain/corrupt PID is not displaced (4.278ms)\n✔ 5. tamperedjournal: crafted journal with outside targetRoot, escaped destPath or backupFile traversal is rejected BEFORE mutation (4.3238ms)\n✔ 6. crashwindow: write-ahead recovery handles pending applied writes (crash before recordWritten) (6.683ms)\n✔ 7. stateatomic: writeInstallationState safely replaces state without unlinking old state on Windows rename failure (9.1594ms)\n✔ 8. pendingretry: version divergence is reported by doctor as pending/recoverable; retry finishes without treating partly deployed owned bytes as human edits (14354.1537ms)\n✔ 9. humanassets: Markdown outside managed block and human edits in core scripts are preserved (14041.7925ms)\n✔ 10. noBunnonOMPpublicworkflow: public nullform workflow works Node-native without OMP or Bun in PATH (247.9451ms)\n✔ 11. unsupportedreview: automated review execution for unsupported harness refuses BEFORE dispatch (0.7189ms)\n✔ 12. capabilities: returns honest distinction between 8 config adapters, Node-native core gates, and OMP+Bun review only (20.1695ms)\n✔ 13. human edit after failure: recovery detects unknown hash, fails closed with ECONFLICT, preserves human bytes and keeps journal (180.5224ms)\n✔ 14. crafted dead lock: dead lock with targetRoot=outside does not grant outside scope; caller targetRoot is authoritative (2.9308ms)\n✔ 15. backupDir junction: backupDir pointing outside via junction/symlink is rejected by canonical guard (3.2483ms)\n✔ 16. real CLI init: fresh completed identity reflects clean post-commit readiness (setup/warn/ready, not recoverable/pending) (20576.0864ms)\n✔ 17. non-OMP installed review refusal: review-run without --harness resolves installation state and refuses before dispatch when non-OMP installed (3.9602ms)\n✔ 18. standalone installHarness cleans up own journal and backups on success (13575.274ms)\n✔ 19. public CLI workflow start with -h task value forwards properly via real child process (217.1938ms)\n✔ 20. checkVersionAlignment warns with older_binary when package is older than verified target (3.6589ms)\n✔ 21. sanitizeError redacts quoted and unquoted api_key, apikey, token, credential, and key prefixes while preserving normal error messages (1.7511ms)\n✔ readQualityEvidence on live repository root validates exact historical observations (4.3814ms)\n✔ EOL portability: CRLF and LF in raw observations produce identical hash and valid evidence (2.9886ms)\n✔ readQualityEvidence on clean packaged summary in isolated root succeeds and labels historical snapshot (1.5941ms)\n✔ mutation: deleted summary.review.baselineTariffUsd fails closed (2.6185ms)\n✔ mutation: NaN summary.review.baselineTariffUsd fails closed (2.3901ms)\n✔ mutation: string cost summary.review.baselineTariffUsd fails closed (1.9175ms)\n✔ mutation: forged sourceHash fails closed (1.9317ms)\n✔ mutation: arbitrary 64-hex sourceHash mismatch fails closed (1.938ms)\n✔ mutation: spendLedger unsettledRequests = 99 fails closed (1.8975ms)\n✔ mutation: spendLedger non-ok status fails closed (2.0337ms)\n✔ mutation: empty pairs array fails closed (1.6039ms)\n✔ mutation: duplicate sessionId across runs fails closed (2.2464ms)\n✔ mutation: model mismatch in baseline pair fails closed (1.5061ms)\n✔ mutation: fixtureHash mismatch in pair fails closed (1.6702ms)\n✔ mutation: candidate skillHash missing in candidate fails closed (1.4262ms)\n✔ mutation: workflow candidate laundered to passed fails closed (1.2288ms)\n✔ fallback per explicit root: missing root data fails closed and does not inspect unrelated paths (0.6174ms)\nℹ tests 42\nℹ suites 0\nℹ pass 42\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 63840.9559\n"
+    },
+    "after": {
+      "sourceDigest": "2c03c0ea9304ea0720cb133c2a58cce7c048074bc9c2c49b8f46221a88a5eba4",
+      "testFilesHash": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+      "testCmd": "node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/quality-evidence.test.mjs tools/tests/package-certification.test.mjs",
+      "startedAt": "2026-10-11T23:51:00.681Z",
+      "completedAt": "2026-10-11T23:52:00.417Z",
+      "exitCode": 0,
+      "output": "✔ derived higher local test upgrade version is never hardcoded 1.2.0 (0.7775ms)\n✔ git commit extraction returns 40-character hex commit (329.5604ms)\n✔ inspectArchiveContents succeeds on valid candidate archive matching repository source (754.1873ms)\n✔ inspectArchiveContents rejects candidate with same version but altered payload (704.6673ms)\nworkflow: T0 task opened — fix-bug\n  budget: 10 tool calls for T0\n  no further artifacts required at this tier.\nworkflow: T0 \"fix-bug\" — COMPLETE\n  done lane        lane declared (start --tier)\ntask    fix-bug\ntier    T0\nstatus  open\nstarted 2026-10-11T23:51:25.150Z\nbudget  10 tool calls for T0\nartifacts 1/1\n  + lane\nbudget  consumption 1767956860/200000 tokens, 5885/45 calls\nBUDGET warning: session approaching soft budget ceiling (1767956860/200000 tokens, 5885/45 calls)\nworkflow: T0 task closed, all artifacts present.\nworkflow review-run: harness 'cursor' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.\nworkflow review-run: harness 'opencode' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.\n✔ 1. fault: deterministic write failure interrupts install; prior verified identity remains intact and human bytes preserved (10.1089ms)\n✔ 2. kill: interrupted process leaves journal that can be recovered without permanent lockout or data loss (6.9194ms)\n✔ 3. stalelock: verified dead owner PID allows scoped recovery and lock reacquisition (2.0976ms)\n✔ 4. liveowner: active process holding lock cannot be displaced; concurrent application is refused; uncertain/corrupt PID is not displaced (2.8781ms)\n✔ 5. tamperedjournal: crafted journal with outside targetRoot, escaped destPath or backupFile traversal is rejected BEFORE mutation (3.5885ms)\n✔ 6. crashwindow: write-ahead recovery handles pending applied writes (crash before recordWritten) (4.9724ms)\n✔ 7. stateatomic: writeInstallationState safely replaces state without unlinking old state on Windows rename failure (8.8287ms)\n✔ 8. pendingretry: version divergence is reported by doctor as pending/recoverable; retry finishes without treating partly deployed owned bytes as human edits (12331.4248ms)\n✔ 9. humanassets: Markdown outside managed block and human edits in core scripts are preserved (11863.1791ms)\n✔ 10. noBunnonOMPpublicworkflow: public nullform workflow works Node-native without OMP or Bun in PATH (424.5818ms)\n✔ 11. unsupportedreview: automated review execution for unsupported harness refuses BEFORE dispatch (0.7458ms)\n✔ 12. capabilities: returns honest distinction between 8 config adapters, Node-native core gates, and OMP+Bun review only (22.1442ms)\n✔ 13. human edit after failure: recovery detects unknown hash, fails closed with ECONFLICT, preserves human bytes and keeps journal (6.4604ms)\n✔ 14. crafted dead lock: dead lock with targetRoot=outside does not grant outside scope; caller targetRoot is authoritative (2.25ms)\n✔ 15. backupDir junction: backupDir pointing outside via junction/symlink is rejected by canonical guard (3.6816ms)\n✔ 16. real CLI init: fresh completed identity reflects clean post-commit readiness (setup/warn/ready, not recoverable/pending) (20902.4703ms)\n✔ 17. non-OMP installed review refusal: review-run without --harness resolves installation state and refuses before dispatch when non-OMP installed (3.5557ms)\n✔ 18. standalone installHarness cleans up own journal and backups on success (12741.9708ms)\n✔ 19. public CLI workflow start with -h task value forwards properly via real child process (252.9476ms)\n✔ 20. checkVersionAlignment warns with older_binary when package is older than verified target (1.9009ms)\n✔ 21. sanitizeError redacts quoted and unquoted api_key, apikey, token, credential, and key prefixes while preserving normal error messages (0.6772ms)\n✔ readQualityEvidence on live repository root validates exact historical observations (4.5446ms)\n✔ EOL portability: CRLF and LF in raw observations produce identical hash and valid evidence (3.3471ms)\n✔ readQualityEvidence on clean packaged summary in isolated root succeeds and labels historical snapshot (2.1971ms)\n✔ mutation: deleted summary.review.baselineTariffUsd fails closed (1.8702ms)\n✔ mutation: NaN summary.review.baselineTariffUsd fails closed (1.6174ms)\n✔ mutation: string cost summary.review.baselineTariffUsd fails closed (2.0948ms)\n✔ mutation: forged sourceHash fails closed (1.7014ms)\n✔ mutation: arbitrary 64-hex sourceHash mismatch fails closed (1.5359ms)\n✔ mutation: spendLedger unsettledRequests = 99 fails closed (1.3987ms)\n✔ mutation: spendLedger non-ok status fails closed (1.9079ms)\n✔ mutation: empty pairs array fails closed (1.2843ms)\n✔ mutation: duplicate sessionId across runs fails closed (1.9073ms)\n✔ mutation: model mismatch in baseline pair fails closed (1.5093ms)\n✔ mutation: fixtureHash mismatch in pair fails closed (1.5682ms)\n✔ mutation: candidate skillHash missing in candidate fails closed (1.3936ms)\n✔ mutation: workflow candidate laundered to passed fails closed (1.6192ms)\n✔ fallback per explicit root: missing root data fails closed and does not inspect unrelated paths (0.4163ms)\nℹ tests 42\nℹ suites 0\nℹ pass 42\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 58737.8408\n"
+    },
+    "disposition": "simplified",
+    "testCmd": "node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/quality-evidence.test.mjs tools/tests/package-certification.test.mjs",
+    "exitCode": 0,
+    "testFilesHashBefore": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+    "testFilesHashAfter": "2fae127eea2ebaf8710a352d2d273f222d751fd3cae4de25a0b1e28a411f3bc1",
+    "sourceDigestBefore": "0631e1adbeca3ba7811f4d413b2d63aa141d54841dfaa5f08de95ab0f6297c85",
+    "sourceDigestAfter": "2c03c0ea9304ea0720cb133c2a58cce7c048074bc9c2c49b8f46221a88a5eba4",
+    "executedAt": "2026-10-11T23:52:00.417Z",
+    "summary": "Remove redundant workflow positional branch and time-brittle unpublished README wording; retain all frozen tests and honest release limits."
+  },
+  "oracles": [],
+  "history": []
+}
