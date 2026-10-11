@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import { isStructuralExcludedPath, isAcceptancePath, hashFile } from "./worktree-snapshot.mjs";
 
 export const TEXT_PATH = /(?:\.(?:md|mdc|mjs|cjs|js|jsx|ts|tsx|py|json|jsonc|json5|jsonl|ya?ml|toml|txt|ps1|psm1|sh|bash|css|html|xml|svg|csv|srt|example)|(?:^|\/)(?:VERSION|LICENSE|Dockerfile|Makefile|\.gitattributes|\.gitignore))$/i;
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(__dirname, "..");
 export const ALL_8_HARNESSES = ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman"];

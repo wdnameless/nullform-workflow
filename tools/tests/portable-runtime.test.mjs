@@ -6,37 +6,18 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-
-import {
-  acquireDeploymentLock,
-  releaseDeploymentLock,
-  recoverAbandonedJournal,
-  DeploymentJournal,
-  getDeploymentLockPath,
-  getDeploymentJournalPath,
-} from "../deployment-journal.mjs";
-import {
-  readInstallationState,
-  writeInstallationState,
-  getStateFilePath,
-} from "../installation-state.mjs";
+import { acquireDeploymentLock, releaseDeploymentLock, recoverAbandonedJournal, DeploymentJournal, getDeploymentLockPath, getDeploymentJournalPath } from "../deployment-journal.mjs";
+import { readInstallationState, writeInstallationState, getStateFilePath, sanitizeError } from "../installation-state.mjs";
 import { installHarness } from "../install-harness.mjs";
 import { runWorkflowCli } from "../workflow.mjs";
 import { getCapabilitiesInfo, main } from "../../bin/nullform.mjs";
 import { runDoctor } from "../doctor.mjs";
-
+import { checkVersionAlignment } from "../harness-capabilities.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -654,4 +635,63 @@ test("17. non-OMP installed review refusal: review-run without --harness resolve
     rmSync(userHome, { recursive: true, force: true });
     rmSync(targetRoot, { recursive: true, force: true });
   }
+});
+test("18. standalone installHarness cleans up own journal and backups on success", () => {
+  const userHome = createTempDir("standalone-install-home-");
+  const targetRoot = createTempDir("standalone-install-root-");
+  try {
+    const plan = installHarness({ harness: "opencode", root: targetRoot, userHome, dryRun: false });
+    assert.ok(plan.filesToCopy.length > 0);
+    assert.equal(existsSync(getDeploymentJournalPath(userHome)), false, "Standalone install must finalize own journal on success");
+  } finally {
+    rmSync(userHome, { recursive: true, force: true });
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
+test("19. public CLI workflow start with -h task value forwards properly via real child process", () => {
+  const projectRoot = createTempDir("task-h-proj-");
+  try {
+    const res = spawnSync(
+      process.execPath,
+      [CLI_PATH, "workflow", "start", "--tier", "T0", "--task", "-h", "--no-dashboard"],
+      { cwd: projectRoot, encoding: "utf8" }
+    );
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    const state = JSON.parse(readFileSync(join(projectRoot, ".workflow", "state.json"), "utf8"));
+    assert.equal(state.tier, "T0");
+    assert.equal(state.task, "-h");
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("20. checkVersionAlignment warns with older_binary when package is older than verified target", () => {
+  const tempPackageRoot = createTempDir("older-pkg-");
+  const tempTargetRoot = createTempDir("target-root-");
+  const tempHome = createTempDir("home-root-");
+  try {
+    writeFileSync(join(tempPackageRoot, "VERSION"), "1.1.0\n", "utf8");
+    writeFileSync(join(tempTargetRoot, "VERSION"), "1.2.0\n", "utf8");
+    const res = checkVersionAlignment({ harness: tempTargetRoot, userHome: tempHome, packageRoot: tempPackageRoot });
+    assert.equal(res.status, "warn");
+    assert.equal(res.divergence, "older_binary");
+    assert.equal(res.status !== "pass", true, "Must not falsely report pass when package is older than target");
+  } finally {
+    rmSync(tempPackageRoot, { recursive: true, force: true });
+    rmSync(tempTargetRoot, { recursive: true, force: true });
+    rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test("21. sanitizeError redacts quoted and unquoted api_key, apikey, token, credential, and key prefixes while preserving normal error messages", () => {
+  const secret1 = "sk-proj-1234567890abcdef";
+  const secret2 = "my_super_secret_api_key_999";
+  const secret3 = "quoted_token_secret_888";
+  const raw = `Config error: {"api_key": "${secret2}", "token": "${secret3}", "apiKey": "${secret1}"} and Authorization: Bearer ${secret3}`;
+  const out = sanitizeError(raw);
+  assert.equal(out.includes(secret1), false);
+  assert.equal(out.includes(secret2), false);
+  assert.equal(out.includes(secret3), false);
+  assert.equal(sanitizeError("Corrupted installation state JSON: Unexpected token"), "Corrupted installation state JSON: Unexpected token");
 });

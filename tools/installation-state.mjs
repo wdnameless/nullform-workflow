@@ -277,11 +277,18 @@ export function resolveInstalledBinPath(effectivePrefix) {
 export function sanitizeError(msg) {
   if (!msg || typeof msg !== 'string') return '';
   return msg
+    .replace(/-----BEGIN[ A-Z_-]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z_-]*PRIVATE KEY-----/gi, '[REDACTED_PRIVATE_KEY]')
     .replace(/((?:https?|git\+https?|ssh):\/\/)([^:@\r\n]*):([^@\r\n]+)@/g, (_, scheme, user) => `${scheme}${user}:***@`)
     .replace(/((?:https?|git\+https?|ssh):\/\/)([^:@\s]+)@/g, (_, scheme) => `${scheme}***@`)
+    .replace(/(?:postgres|mysql|mongodb(?:\+srv)?|redis|amqp):\/\/[^\s"']+/gi, '[REDACTED_CONNECTION_URI]')
     .replace(/(?:\/\/)([^:@\r\n]*):([^@\r\n]+)@/g, (_, user) => `//${user}:***@`)
     .replace(/(?:\/\/)([^:@\s]+)@/g, '//***@')
-    .replace(/(_authToken|_auth|token|secret|password|bearer|auth)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"',;]+)/gi, (_, label) => `${label}=***`)
+    .replace(/ey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._~+/-]*/g, '[REDACTED_JWT]')
+    .replace(/(?:AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}/g, '[REDACTED_AWS_KEY]')
+    .replace(/(?:sk-[A-Za-z0-9_-]{8,})/gi, 'sk-[REDACTED]')
+    .replace(/(?:ghp_[A-Za-z0-9]{20,})/gi, 'ghp_[REDACTED]')
+    .replace(/(?:npm_[A-Za-z0-9]{20,})/gi, 'npm_[REDACTED]')
+    .replace(/(_authToken|_auth|api_key|apikey|api-key|access_key|secret_key|private_key|client_secret|credential|credentials|token|secret|password|passwd|bearer|auth|key)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"',;}\]]+)/gi, (_, label) => `${label}=***`)
     .replace(/Bearer\s+["']?(?:[^\s"',;]+)["']?/gi, 'Bearer ***');
 }
 export const CORE_FILES = Object.freeze(["VERSION", ".code-size.baseline.json", "CONTEXT.md", "README.md", "secrets.example.env", "verify.ps1", "verify.sh", "package.json"]);

@@ -89,8 +89,7 @@ export function parseCliArgs(argv = []) {
     return {
       command: "workflow",
       workflowArgs: argv.slice(1),
-      json: argv.includes("--json"),
-      help: argv.includes("--help") || argv.includes("-h"),
+      help: false,
     };
   }
 
@@ -823,6 +822,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       return 1;
     }
   }
+  if (options.command === "workflow") return runWorkflowCommand(options.workflowArgs, deps);
 
   if (options.help || !options.command) {
     printCliHelp(output);
@@ -832,10 +832,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (options.command === "init") return runInit(options, deps);
   if (options.command === "doctor") return runDoctorCommand(options, deps);
   if (options.command === "update") return runUpdateCommand(options, deps);
-  if (options.command === "workflow") return runWorkflowCommand(options.workflowArgs, deps);
   if (options.command === "capabilities") return runCapabilitiesCommand(options, deps);
   if (options.command === "evidence") return runEvidenceCommand(options, deps);
-
   errOut.write(`Error: Unknown command "${options.command}"\n`);
   return 2;
 }

@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { sourceDigest } from "./worktree-snapshot.mjs";
 import { validateReviewEvidence, loadReviewEvidence, isPositiveOracleVerdict, isNegativeOracleVerdict } from "./review-evidence.mjs";
+import { sanitizeError } from "./installation-state.mjs";
 import {
   REPO_ROOT,
   ALL_8_HARNESSES,
@@ -381,8 +382,19 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
         certificates: certsOption,
         userConfig: userConfigOption,
       });
-      if (asJson) console.log(JSON.stringify(pubRes, null, 2));
-      else console.log(`PUBLISH RESULT: exit ${pubRes.status}`);
+      if (asJson) {
+        console.log(JSON.stringify(pubRes, null, 2));
+      } else {
+        console.log(`PUBLISH RESULT: exit ${pubRes.status} (published: ${pubRes.published})`);
+        if (pubRes.stdout) {
+          const outSnippet = sanitizeError(pubRes.stdout).trim();
+          if (outSnippet) console.log(`  [stdout] ${outSnippet.slice(-4000)}`);
+        }
+        if (pubRes.stderr) {
+          const errSnippet = sanitizeError(pubRes.stderr).trim();
+          if (errSnippet) console.error(`  [stderr] ${errSnippet.slice(-4000)}`);
+        }
+      }
       if (!pubRes.published) process.exitCode = 1;
     } else {
       const res = verifyReleasePreflight({

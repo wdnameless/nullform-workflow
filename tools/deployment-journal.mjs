@@ -3,38 +3,12 @@
  * atomic identity, and scoped backup/rollback.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  unlinkSync,
-  renameSync,
-  rmSync,
-  copyFileSync,
-  lstatSync,
-  readlinkSync,
-  symlinkSync,
-  openSync,
-  writeSync,
-  fsyncSync,
-  closeSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync, copyFileSync, lstatSync, readlinkSync, symlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { resolve, join, dirname, relative, isAbsolute, basename } from "node:path";
+import { homedir } from "node:os";
 import { hashContent } from "./harness-config.mjs";
-import {
-  getStateFilePath,
-  validateInstallationState,
-  writeInstallationState,
-  readInstallationState,
-  sanitizeError,
-} from "./installation-state.mjs";
-import {
-  normalizePath,
-  validateRootPath,
-  validatePathWithinScope,
-  isInsideOrEqual,
-} from "./worktree-snapshot.mjs";
+import { getStateFilePath, validateInstallationState, writeInstallationState, readInstallationState, sanitizeError } from "./installation-state.mjs";
+import { normalizePath, validateRootPath, validatePathWithinScope, isInsideOrEqual } from "./worktree-snapshot.mjs";
 
 export function getDeploymentLockPath(userHome) {
   return join(normalizePath(resolve(userHome)), ".nullform", "deployment.lock");
@@ -302,7 +276,7 @@ function restoreSingleEntry(entry, userHome, backupDir, allowedScopes) {
 }
 
 export class DeploymentJournal {
-  constructor({ userHome, targetRoot, projectRoot = null, harness, targetVersion, dryRun = false }) {
+  constructor({ userHome, targetRoot, projectRoot = null, harness, targetVersion, dryRun = false, extraScopes = [] }) {
     this.userHome = normalizePath(resolve(userHome));
     this.targetRoot = normalizePath(resolve(targetRoot));
     this.projectRoot = projectRoot ? normalizePath(resolve(projectRoot)) : null;
@@ -314,6 +288,10 @@ export class DeploymentJournal {
     this.backupDir = getDeploymentBackupDir(this.userHome, this.journalId);
     this.allowedScopes = [this.targetRoot, this.userHome];
     if (this.projectRoot) this.allowedScopes.push(this.projectRoot);
+    if (resolve(this.userHome) === resolve(homedir()) && process.env.HERMES_HOME) {
+      this.allowedScopes.push(normalizePath(resolve(process.env.HERMES_HOME)));
+    }
+    for (const s of extraScopes) if (s) this.allowedScopes.push(normalizePath(resolve(s)));
     this.entries = [];
     this.status = "in-progress";
     this.committed = false;
@@ -526,17 +504,18 @@ export class DeploymentJournal {
     } catch {}
   }
 
+  finalize() {
+    if (this.dryRun) return;
+    this.status = "committed";
+    this.committed = true;
+    try { rmSync(this.backupDir, { recursive: true, force: true }); } catch {}
+    try { unlinkSync(this.journalPath); } catch {}
+  }
+
   commit(verifiedState) {
     if (this.dryRun) return;
     writeInstallationState(this.userHome, verifiedState);
-    this.status = "committed";
-    this.committed = true;
-    try {
-      rmSync(this.backupDir, { recursive: true, force: true });
-    } catch {}
-    try {
-      unlinkSync(this.journalPath);
-    } catch {}
+    this.finalize();
   }
 }
 

@@ -5,7 +5,7 @@ import { resolve, join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { verifyReleasePreflight, REQUIRED_MATRIX_CELLS } from "../publish-release.mjs";
+import { verifyReleasePreflight, executePublish, REQUIRED_MATRIX_CELLS } from "../publish-release.mjs";
 import { getGitCommit } from "../certify-package.mjs";
 import { sourceDigest } from "../worktree-snapshot.mjs";
 import { computeFileDigests, ALL_8_HARNESSES } from "../package-archive.mjs";
@@ -301,6 +301,18 @@ test("preflight checkOnly returns report, while normal mode throws on blockers",
         repoRoot: REPO_ROOT,
         tarballPath: join(tmpdir(), "missing.tgz"),
         checkOnly: false,
+      });
+    },
+    /Release preflight checks refused publication/
+  );
+});
+
+test("executePublish throws and refuses publication when preflight conditions are not met", () => {
+  assert.throws(
+    () => {
+      executePublish({
+        repoRoot: REPO_ROOT,
+        tarballPath: join(tmpdir(), "missing.tgz"),
       });
     },
     /Release preflight checks refused publication/

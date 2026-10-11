@@ -137,7 +137,7 @@ export function checkVersionAlignment({ harness, userHome, packageRoot = REPO_RO
     };
   }
 
-  if (pkgVersion && targetVer && pkgVersion !== targetVer) {
+  if (pkgVersion && targetVer) {
     const cmp = compareSemVer(pkgVersion, targetVer);
     if (cmp > 0) {
       return {
@@ -146,6 +146,14 @@ export function checkVersionAlignment({ harness, userHome, packageRoot = REPO_RO
         divergence: "pending",
         pending: true,
         detail: `Бинарник пакета (v${pkgVersion}) новее проверенной установки (v${targetVer}). Повторное применение таргета ожидает завершения (pending/recoverable); запустите 'nullform update' или 'nullform init'.`,
+      };
+    }
+    if (cmp < 0) {
+      return {
+        id: "version-alignment",
+        status: "warn",
+        divergence: "older_binary",
+        detail: `Бинарник пакета (v${pkgVersion}) старше проверенной установки (v${targetVer}). Обновите бинарник пакета или запустите 'nullform init'.`,
       };
     }
     return {

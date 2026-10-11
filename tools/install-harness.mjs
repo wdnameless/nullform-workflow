@@ -378,6 +378,7 @@ function installHarness(options = {}) {
   let lock = null;
   let journal = null;
   const shouldManageLock = !options.dryRun && !options.lock;
+  const isOwnJournal = !options.dryRun && !options.journal;
 
   if (!options.dryRun) {
     lock = options.lock || acquireDeploymentLock({ userHome, targetRoot, harness: selectedHarness, dryRun: options.dryRun });
@@ -503,9 +504,12 @@ function installHarness(options = {}) {
         plan.baselineRecorded = false;
       }
     }
+    if (isOwnJournal && journal) {
+      journal.finalize();
+    }
     return plan;
   } catch (err) {
-    if (journal && !options.dryRun) {
+    if (isOwnJournal && journal) {
       journal.rollback(err.message);
     }
     if (shouldManageLock && lock) {

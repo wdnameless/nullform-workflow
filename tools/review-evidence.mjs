@@ -5,6 +5,7 @@ import { join, dirname, basename, resolve, relative, delimiter } from 'node:path
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot } from './worktree-snapshot.mjs';
+import { sanitizeError } from './installation-state.mjs';
 
 export const EVIDENCE_FILE = 'review-evidence.json';
 export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
@@ -170,9 +171,15 @@ function buildPrompt(root, changeId, role, baseRef, productCommand) {
     const changed = baseRef ? git(root, ['diff', '--name-only', '-z', baseRef, '--', '.']).split('\0').filter(p => p && !isStructuralExcludedPath(p) && !isSecretOrCredentialPath(p) && !isAcceptancePath(p)) : [];
     const untracked = Object.keys(snapshot.untracked || {}).filter(p => !isStructuralExcludedPath(p) && !isSecretOrCredentialPath(p) && !isAcceptancePath(p));
     const relevant = baseRef ? [...new Set([...changed, ...untracked])] : paths;
-    context = `\n## Baseline revision\n${baseRef || 'Non-git or working tree root'}\n## Changed source paths (${relevant.length} files)\n${relevant.sort().join('\n')}\n## Available product paths (${paths.length} files)\n${paths.sort().join('\n')}\nUse inspect_product with batch requests: [{path, kind:'diff'|'source', offset:0}]. When nextOffset is not null, follow continuations to inspect the complete content before reaching your verdict.`;
+    context = `\n## Baseline revision\n${baseRef || 'Non-git or working tree root'}\n## Changed source paths (${relevant.length} files)\n${relevant.sort().join('\n')}\n## Available product paths (${paths.length} files)\nQuery full path catalogue on demand via inspect_product with [{path:'', kind:'source', offset:0}].\nUse inspect_product with batch requests: [{path, kind:'diff'|'source', offset:0}]. When nextOffset is not null, follow continuations to inspect the complete content before reaching your verdict.`;
   }
-  return `${roleBody}\n\n# ${role === 'oracle' ? 'Blind product acceptance' : 'Implementation review'}\nChange: ${changeId}\n## Original manifest\n${manifest}${context}\nUse inspect_product to read relevant implementation and consumer files in bounded batches; follow all page continuations until complete. Oracle planning documents are inaccessible. Use exercise_product to run the operator-authorized consumer command: ${JSON.stringify(productCommand)}. Report all requirement results, preserve negative findings, and finish with ${role === 'reviewer' ? 'complete JSON containing findings, overall_correctness (correct or incorrect), overall_explanation, and overall_confidence_score (0..1)' : 'an explicit Verdict: ACCEPT or Verdict: REJECT'}.`;
+  const exerciseInstruction = productCommand
+    ? `Use exercise_product to run the operator-authorized consumer command: ${JSON.stringify(productCommand)}.`
+    : 'No operator consumer command was provided; do not invoke exercise_product.';
+  const terminalContract = role === 'reviewer'
+    ? 'Your ENTIRE final assistant response MUST be a single valid JSON object (no Markdown headings, prose, or text before or after the JSON) containing findings, overall_correctness ("correct" or "incorrect"), overall_explanation (non-empty string including all R## requirement results and lean/simplification observations), and overall_confidence_score (0..1).'
+    : 'Report all requirement results, preserve negative findings, and finish with an explicit Verdict: ACCEPT or Verdict: REJECT.';
+  return `${roleBody}\n\n# ${role === 'oracle' ? 'Blind product acceptance' : 'Implementation review'}\nChange: ${changeId}\n## Original manifest\n${manifest}${context}\nUse inspect_product to read relevant implementation and consumer files in bounded batches; follow all page continuations until complete. Oracle planning documents are inaccessible. ${exerciseInstruction} ${terminalContract}`;
 }
 function isRunnableCli(file) {
   if (!file || typeof file !== 'string' || !existsSync(file)) return false;
@@ -194,20 +201,6 @@ function cliPath() {
   if (!found) throw new Error('Installed OMP CLI not found; set OMP_CLI_PATH to dist/cli.js');
   return realpathSync(found);
 }
-function redactSensitive(text, maxLen = 4000) {
-  if (!text || typeof text !== 'string') return '';
-  const redacted = text
-    .replace(/(?:Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
-    .replace(/ey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._~+/-]*/g, '[REDACTED_JWT]')
-    .replace(/(?:AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}/g, '[REDACTED_AWS_KEY]')
-    .replace(/-----BEGIN[ A-Z_-]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z_-]*PRIVATE KEY-----/gi, '[REDACTED_PRIVATE_KEY]')
-    .replace(/(?:sk-[A-Za-z0-9_-]{8,})/gi, 'sk-[REDACTED]')
-    .replace(/(?:ghp_[A-Za-z0-9]{20,})/gi, 'ghp_[REDACTED]')
-    .replace(/(?:postgres|mysql|mongodb(?:\+srv)?|redis|amqp):\/\/[^\s"']+/gi, '[REDACTED_CONNECTION_URI]')
-    .replace(/((?:key|token|auth|password|secret|credential|api_key|apikey)[=:]\s*["']?)[A-Za-z0-9._~+/-]{8,}(["']?)/gi, '$1[REDACTED]$2');
-  const trimmed = redacted.trim();
-  return trimmed.length > maxLen ? trimmed.slice(-maxLen) : trimmed;
-}
 function invokeNative(root, prompt, model, sessionDir, options, runner) {
   if (runner) {
     const result = runner({ root, prompt, model, sessionDir, provenance: options.provenance, changeId: options.changeId, productCommand: options.productCommand });
@@ -220,7 +213,8 @@ function invokeNative(root, prompt, model, sessionDir, options, runner) {
   const result = spawnSync('bun', args, { cwd: root, input: prompt, encoding: 'utf8', shell: false, windowsHide: true, timeout: 910000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, WORKFLOW_REVIEW_OPTIONS: JSON.stringify(options) } });
   if (result.error || result.status !== 0) {
     const code = result.error?.code || result.error?.message || (result.status !== null ? `exit ${result.status}` : 'unknown');
-    const stderrSnippet = redactSensitive(result.stderr);
+    const cleanStderr = sanitizeError(result.stderr || '').trim();
+    const stderrSnippet = cleanStderr.length > 4000 ? cleanStderr.slice(-4000) : cleanStderr;
     const detail = stderrSnippet || (result.status !== 0 ? `child process exited with status ${result.status}` : 'no diagnostic error output');
     throw new Error(`Native OMP failed (${code}, status ${result.status}): ${detail} [retained session: ${sessionDir}]`);
   }

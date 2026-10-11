@@ -24,6 +24,8 @@ The user selected public npm release, no additional paid A/B experiments, permis
 - [x] RuntimeOwner implements recoverable installation, atomic identity, public core CLI and honest selected-client capability gates; focused and real CLI checks observed.
 - [x] CertificationOwner implements source-bound supplied-archive certification, maintained hosted matrix and secure release workflow. Actual local payload binding passed; remote platform execution is still pending.
 - [x] EvidenceOwner implements source-bound historical assessment, replay/model provenance repairs and honest public documentation; source mutation cases and actual evidence CLI observed.
+- [x] Native review attempt aborted at900s, retained raw session; no accepted receipt. Parent reproduced three partial findings, fixed standalone journal ownership, workflow `-h` task forwarding and reverse version divergence; non-JSON publication now uses canonical secret-safe diagnostics.
+- [x] Current remediation focused80/80 and full757/757,0fail0skip (artifact://5681). Actual child CLI/standalone-install/version/redaction scenarios pass. Reviewer prompt now requires JSON-only terminal content and uses existing bounded path discovery; deadlines unchanged.
 - [ ] Parent integrate, exercise real surfaces, run complete deterministic tests, freeze StageA tests and complete implementation review/StageB.
 - [ ] Obtain blind current acceptance and actual hosted platform results.
 - [ ] Complete user-controlled npm authorization, publish the exact certified archive, and verify registry installation/integrity.
