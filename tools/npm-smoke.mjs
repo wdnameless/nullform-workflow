@@ -199,8 +199,7 @@ async function prepareDependencyTarballs(ctx, registry, pkgJson) {
         assert.equal(packDep.status, 0, `Failed to fetch/pack dependency ${depName}@${depVersion}: ${packDep.stderr}`);
         const unpackDepDir = join(ctx.tempPackDir, `unpack_${depName.replace(/[^a-zA-Z0-9_-]/g, "_")}`);
         mkdirSync(unpackDepDir, { recursive: true });
-        const untar = await ctx.spawnAsync("tar", ["-xzf", depTarballPath, "-C", unpackDepDir], { cwd: unpackDepDir, env: ctx.isolatedEnv });
-        assert.equal(untar.status, 0, `Failed to inspect dependency tarball ${depTarballPath}: ${untar.stderr}`);
+        safeExtractArchive(depTarballPath, unpackDepDir);
         const rawPkg = JSON.parse(readFileSync(join(unpackDepDir, "package", "package.json"), "utf8"));
         delete rawPkg.scripts;
         delete rawPkg.devDependencies;
@@ -441,7 +440,7 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   const brokenVersion = deriveHigherVersion(pkgJson.version, 2);
   const unpackDir = join(ctx.spaceBase, "upgrade_unpack");
   mkdirSync(unpackDir, { recursive: true });
-  assert.equal((await ctx.spawnAsync("tar", ["-xzf", candidateTarballPath, "-C", unpackDir], { cwd: unpackDir, env: ctx.isolatedEnv })).status, 0);
+  safeExtractArchive(candidateTarballPath, unpackDir);
 
   const vUpSource = join(unpackDir, "package");
   const vUpPkg = { ...pkgJson, version: upgradeVersion };

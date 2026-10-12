@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { resolve, join, dirname, basename, delimiter } from "node:path";
+import { resolve, join, dirname, basename, delimiter, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -117,10 +117,31 @@ export function resolveNpmInvocation(env = process.env) {
   }
   return { command: "npm", prefixArgs: [], shell: false };
 }
+export function resolveTarCommand() {
+  if (process.platform === "win32") {
+    const sysRoot = process.env.SystemRoot || "C:\\Windows";
+    const system32Tar = join(sysRoot, "System32", "tar.exe");
+    if (existsSync(system32Tar)) {
+      return system32Tar;
+    }
+  }
+  return "tar";
+}
 
 export function safeExtractArchive(tarballPath, targetDir, options = {}) {
-  mkdirSync(targetDir, { recursive: true });
-  const listRes = spawnSync("tar", ["-tf", tarballPath], { encoding: "utf8", windowsHide: true });
+  const absTarball = resolve(tarballPath);
+  const tarDir = dirname(absTarball);
+  const tarFile = basename(absTarball);
+  const absTarget = resolve(targetDir);
+  mkdirSync(absTarget, { recursive: true });
+
+  const tarCmd = resolveTarCommand();
+
+  const listRes = spawnSync(tarCmd, ["-tf", tarFile], {
+    cwd: tarDir,
+    encoding: "utf8",
+    windowsHide: true,
+  });
   assert.equal(listRes.status, 0, `tar -tf failed: ${listRes.stderr || listRes.stdout}`);
   const entries = listRes.stdout.split(/\r?\n/).filter(Boolean);
   for (const entry of entries) {
@@ -131,9 +152,35 @@ export function safeExtractArchive(tarballPath, targetDir, options = {}) {
       assert.ok(norm === "package" || norm.startsWith("package/"), `Entry not under package/: ${norm}`);
     }
   }
-  const extractRes = spawnSync("tar", ["-xzf", tarballPath, "-C", targetDir], { encoding: "utf8", windowsHide: true });
+  const extractRes = spawnSync(tarCmd, ["-xzf", tarFile, "-C", absTarget], {
+    cwd: tarDir,
+    encoding: "utf8",
+    windowsHide: true,
+  });
   assert.equal(extractRes.status, 0, `tar -xzf failed: ${extractRes.stderr || extractRes.stdout}`);
   return entries;
+}
+
+export function createArchive(tarballPath, sourceDir, itemToPack = "package") {
+  const absTarball = resolve(tarballPath);
+  const tarDir = dirname(absTarball);
+  const tarFile = basename(absTarball);
+  const absSource = resolve(sourceDir);
+  const tarCmd = resolveTarCommand();
+  mkdirSync(tarDir, { recursive: true });
+
+  const relTar = relative(absSource, absTarball).replace(/\\/g, "/");
+  const useDir = relTar.includes(":") ? tarDir : absSource;
+  const archiveArg = relTar.includes(":") ? tarFile : relTar;
+  const packArg = relTar.includes(":") ? relative(tarDir, join(absSource, itemToPack)).replace(/\\/g, "/") : itemToPack;
+
+  const res = spawnSync(tarCmd, ["-czf", archiveArg, packArg], {
+    cwd: useDir,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(res.status, 0, `tar -czf failed: ${res.stderr || res.stdout}`);
+  return absTarball;
 }
 
 export function inspectArchiveContents(tarballPath, tempBase = null, options = {}) {

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { verifyReleasePreflight, executePublish, REQUIRED_MATRIX_CELLS } from "../publish-release.mjs";
 import { getGitCommit } from "../certify-package.mjs";
 import { sourceDigest } from "../worktree-snapshot.mjs";
-import { computeFileDigests, ALL_8_HARNESSES } from "../package-archive.mjs";
+import { computeFileDigests, ALL_8_HARNESSES, createArchive } from "../package-archive.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -35,12 +35,7 @@ function createValidCandidateTarball(baseDir, name = "nullform-workflow", versio
   writeFileSync(join(binDir, "nullform.mjs"), "#!/usr/bin/env node\nconsole.log('nullform');\n", "utf8");
 
   const tarballPath = join(baseDir, `${name}-${version}.tgz`);
-  const res = spawnSync("tar", ["-czf", tarballPath, "package"], {
-    cwd: stagingDir,
-    encoding: "utf8",
-    windowsHide: true,
-  });
-  assert.equal(res.status, 0, `Failed to build test fixture archive: ${res.stderr || res.stdout}`);
+  createArchive(tarballPath, stagingDir, "package");
   return tarballPath;
 }
 

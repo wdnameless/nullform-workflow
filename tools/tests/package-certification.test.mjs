@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { deriveHigherVersion } from "../npm-smoke.mjs";
 import { inspectArchiveContents, getGitCommit } from "../certify-package.mjs";
+import { createArchive } from "../package-archive.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -37,11 +38,7 @@ function buildTarballFixture(tempDir, overrides = {}) {
 
   const version = readFileSync(join(REPO_ROOT, "VERSION"), "utf8").trim();
   const tarballPath = join(tempDir, `nullform-workflow-${version}.tgz`);
-  const packRes = spawnSync("tar", ["-czf", tarballPath, "package"], {
-    cwd: stagingDir,
-    windowsHide: true,
-  });
-  assert.equal(packRes.status, 0, `Failed to build test tarball fixture: ${packRes.stderr || packRes.stdout}`);
+  createArchive(tarballPath, stagingDir, "package");
   return tarballPath;
 }
 
