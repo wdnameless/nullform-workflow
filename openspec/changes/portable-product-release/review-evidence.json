@@ -5,158 +5,153 @@
     "role": "reviewer",
     "context": {
       "role": "reviewer",
-      "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+      "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
       "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
       "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
-      "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
-      "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+      "testFilesHash": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+      "baseRef": "45f9e8b04e6bde7cbb96879a7fd30417ea665244",
       "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
-      "promptHash": "35984ce46ff4d8fd9a0e86e63328e1fa7740b4f7c30e363a5b518e5ddf34a492",
-      "productCommandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c"
+      "promptHash": "8812fcc52b46f1e8f19250793ebbc84cb00274f2bd29619254e956ad53d700c2",
+      "productCommandHash": "99de799f499d97e262b3ec0f9ebc8c2e944b1849561a1f99360f215ac9138ed1"
     },
     "productExecutions": [
       {
-        "commandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c",
-        "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+        "commandHash": "99de799f499d97e262b3ec0f9ebc8c2e944b1849561a1f99360f215ac9138ed1",
+        "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
         "exitCode": 0,
-        "startedAt": "2026-10-12T11:34:41.871Z",
-        "completedAt": "2026-10-12T11:36:41.745Z",
-        "outputHash": "ba99f878d97bdab11e6138135b6f8378a81ee5746a7c12ed326605fca768d3a3"
+        "startedAt": "2026-10-12T12:05:50.990Z",
+        "completedAt": "2026-10-12T12:06:21.633Z",
+        "outputHash": "dce40b59870587ffc749b91d369fc59e293185bf7b8c4126c48d58397d7cfb2a"
       }
     ],
-    "sessionId": "01a12fe2-0870-77f8-95be-53aa55bcaa42",
+    "sessionId": "01a13000-dee5-757c-ba5c-70ea1f039e94",
     "provider": "nullform-gateway",
     "model": "gemini-3.8-flash-high",
     "isFallback": false,
     "usage": {
-      "input": 206113,
-      "output": 1718,
-      "cacheRead": 2067364,
+      "input": 192675,
+      "output": 1238,
+      "cacheRead": 1404502,
       "cacheWrite": 0,
-      "totalTokens": 2275195,
-      "costUsd": 0.31607955,
+      "totalTokens": 1598415,
+      "costUsd": 0.2544864,
       "costSource": "native-fixed-tariff"
     },
-    "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of portable-product-release patch diff across bin/nullform.mjs, tools/install-harness.mjs, tools/self-update.mjs, and tools/tests/portable-runtime.test.mjs confirms the fix is correct, robust, and introduces no defects or regressions.\\n\\n1. Analysis of Changes & Cross-Boundary Contracts:\\n- bin/nullform.mjs (printInitSuccess): Completed init JSON is compacted into compactPlan, summarizing file lists to scalar counts (filesCount, managedFilesCount) and adapters array while keeping readiness, savedState, and doctor report intact. This resolves the Node spawnSync default 1MB maxBuffer overflow (ENOBUFS) during reinit under large harnesses like OpenHuman without stripping required data.\\n- tools/install-harness.mjs: The unneeded lock and journal object references were removed from plan construction, avoiding internal serialization leaks while maintaining correct transactional management inside runInit and installHarness.\\n- tools/self-update.mjs (runInstalledBinReinit, executeUpdate): Error handling now correctly prioritizes error.message (such as ENOBUFS, ENOENT, or ETIMEDOUT) over truncated text, caps stdout fallback to 500 characters, and applies canonical sanitizeError redacting.\\n- tools/tests/portable-runtime.test.mjs: Test 16 exercises the real CLI init child process with OpenHuman across deeply nested paths, verifying exit code 0, compact payload (<100KB), valid counts, and proper absence of internal journal data.\\n- Consumer dispatch: runInstalledBinReinit consumes ok, stage, error, detail, doctor, and version from reinitJson; none depend on verbose file arrays. Full test suite executed via exercise_product passed 21/21 tests.\\n\\n2. Requirements Manifest Verification:\\n- R01 (Stability): Prevents false install_failed reports during update reinit caused by buffer truncation; atomic identity, rollback, and journal cleanup remain intact.\\n- R02 (CLI Quality): Public CLI outputs clean, actionable JSON diagnostics and compact plan summaries without megabyte-scale telemetry.\\n- R03 (Portability): Resolves real child-process buffer limits across macOS, Linux, and Windows for all 8 supported adapters.\\n- R04 (No Hacks): Follows Node-native child process bounds naturally without arbitrary buffer overrides or unsafe workarounds.\\n- R05 (Quality Evidence): Preserves historical comparisons and no-paid-experiment constraints; evidence reports remain untouched.\\n- R06 (npm Publication): Preserves package integrity, version bindings, and upgrade validation mechanisms.\\n- R07 (No Paid Runs): Zero benchmark or paid model dispatch added.\\n- R08 (Managed Prompts): Managed surfaces and user instructions remain preserved.\\n- R09 (Honest Acceptance): Technical criteria satisfied with no unverified quality claims.\\n\\n3. Lean / Simplification Lens:\\n- No dead code, unnecessary abstractions, or redundant indirection introduced. Plan serialization cleanup removed obsolete internal references. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}",
+    "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"R01: PASS — Installation state atomicity, deployment journal recovery, and data preservation invariants are maintained; test failure retention in .tmp preserves failure diagnostics without corrupting repository state. R02: PASS — CLI help and diagnostic messaging are updated cleanly to document [--test-timeout <sec>], with executeTests reporting structured error codes, signals, elapsed milliseconds, and retained failure logs. R03: PASS — Portable Node-native runtime behavior and adapter configuration support remain fully compatible across Windows, Linux, and macOS environments without third-party host assumptions. R04: PASS — Zero external runtime dependencies added; core workflow gates operate strictly Node-native without hidden OMP or Bun prerequisites. R05: PASS — Deterministic test and review evidence gates enforce honest validation without manufacturing unsubstantiated quality claims. R06: PASS — Release publication preconditions, artifact digests, and verification pipelines remain properly bound and unbypassed. R07: PASS — No paid benchmark calls, external model dispatches, or modifications to historical spend records. R08: PASS — Workflow specifications in interfaces.md and execplan/portable-product-release.md accurately reflect the bounded operator timeout contract. R09: PASS — Release acceptance focuses strictly on portable runtime stability, deterministic test suites, and verified deployment rather than unproven quality claims. Lean lens: Lean already. The patch implements the bounded test timeout parameter and failure retention using native Node.js APIs without bespoke wrappers, dead code, or unnecessary abstractions.\",\n  \"overall_confidence_score\": 0.98\n}",
     "stopReason": "stop",
-    "startedAt": "2026-10-12T11:31:44.880Z",
-    "completedAt": "2026-10-12T11:40:06.701Z",
+    "startedAt": "2026-10-12T12:05:25.861Z",
+    "completedAt": "2026-10-12T12:11:14.791Z",
     "verdict": "ACCEPT",
     "nativeVerdict": "correct",
     "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
-    "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+    "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
     "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
     "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
-    "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
-    "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+    "testFilesHash": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+    "baseRef": "45f9e8b04e6bde7cbb96879a7fd30417ea665244",
     "exitCode": 0,
     "nativeProjection": {
       "role": "reviewer",
       "context": {
         "role": "reviewer",
-        "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+        "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
         "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
         "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
-        "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
-        "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+        "testFilesHash": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+        "baseRef": "45f9e8b04e6bde7cbb96879a7fd30417ea665244",
         "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
-        "promptHash": "35984ce46ff4d8fd9a0e86e63328e1fa7740b4f7c30e363a5b518e5ddf34a492",
-        "productCommandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c"
+        "promptHash": "8812fcc52b46f1e8f19250793ebbc84cb00274f2bd29619254e956ad53d700c2",
+        "productCommandHash": "99de799f499d97e262b3ec0f9ebc8c2e944b1849561a1f99360f215ac9138ed1"
       },
       "productExecutions": [
         {
-          "commandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c",
-          "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+          "commandHash": "99de799f499d97e262b3ec0f9ebc8c2e944b1849561a1f99360f215ac9138ed1",
+          "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
           "exitCode": 0,
-          "startedAt": "2026-10-12T11:34:41.871Z",
-          "completedAt": "2026-10-12T11:36:41.745Z",
-          "outputHash": "ba99f878d97bdab11e6138135b6f8378a81ee5746a7c12ed326605fca768d3a3"
+          "startedAt": "2026-10-12T12:05:50.990Z",
+          "completedAt": "2026-10-12T12:06:21.633Z",
+          "outputHash": "dce40b59870587ffc749b91d369fc59e293185bf7b8c4126c48d58397d7cfb2a"
         }
       ],
-      "sessionId": "01a12fe2-0870-77f8-95be-53aa55bcaa42",
+      "sessionId": "01a13000-dee5-757c-ba5c-70ea1f039e94",
       "provider": "nullform-gateway",
       "model": "gemini-3.8-flash-high",
       "isFallback": false,
       "usage": {
-        "input": 206113,
-        "output": 1718,
-        "cacheRead": 2067364,
+        "input": 192675,
+        "output": 1238,
+        "cacheRead": 1404502,
         "cacheWrite": 0,
-        "totalTokens": 2275195,
-        "costUsd": 0.31607955,
+        "totalTokens": 1598415,
+        "costUsd": 0.2544864,
         "costSource": "native-fixed-tariff"
       },
-      "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of portable-product-release patch diff across bin/nullform.mjs, tools/install-harness.mjs, tools/self-update.mjs, and tools/tests/portable-runtime.test.mjs confirms the fix is correct, robust, and introduces no defects or regressions.\\n\\n1. Analysis of Changes & Cross-Boundary Contracts:\\n- bin/nullform.mjs (printInitSuccess): Completed init JSON is compacted into compactPlan, summarizing file lists to scalar counts (filesCount, managedFilesCount) and adapters array while keeping readiness, savedState, and doctor report intact. This resolves the Node spawnSync default 1MB maxBuffer overflow (ENOBUFS) during reinit under large harnesses like OpenHuman without stripping required data.\\n- tools/install-harness.mjs: The unneeded lock and journal object references were removed from plan construction, avoiding internal serialization leaks while maintaining correct transactional management inside runInit and installHarness.\\n- tools/self-update.mjs (runInstalledBinReinit, executeUpdate): Error handling now correctly prioritizes error.message (such as ENOBUFS, ENOENT, or ETIMEDOUT) over truncated text, caps stdout fallback to 500 characters, and applies canonical sanitizeError redacting.\\n- tools/tests/portable-runtime.test.mjs: Test 16 exercises the real CLI init child process with OpenHuman across deeply nested paths, verifying exit code 0, compact payload (<100KB), valid counts, and proper absence of internal journal data.\\n- Consumer dispatch: runInstalledBinReinit consumes ok, stage, error, detail, doctor, and version from reinitJson; none depend on verbose file arrays. Full test suite executed via exercise_product passed 21/21 tests.\\n\\n2. Requirements Manifest Verification:\\n- R01 (Stability): Prevents false install_failed reports during update reinit caused by buffer truncation; atomic identity, rollback, and journal cleanup remain intact.\\n- R02 (CLI Quality): Public CLI outputs clean, actionable JSON diagnostics and compact plan summaries without megabyte-scale telemetry.\\n- R03 (Portability): Resolves real child-process buffer limits across macOS, Linux, and Windows for all 8 supported adapters.\\n- R04 (No Hacks): Follows Node-native child process bounds naturally without arbitrary buffer overrides or unsafe workarounds.\\n- R05 (Quality Evidence): Preserves historical comparisons and no-paid-experiment constraints; evidence reports remain untouched.\\n- R06 (npm Publication): Preserves package integrity, version bindings, and upgrade validation mechanisms.\\n- R07 (No Paid Runs): Zero benchmark or paid model dispatch added.\\n- R08 (Managed Prompts): Managed surfaces and user instructions remain preserved.\\n- R09 (Honest Acceptance): Technical criteria satisfied with no unverified quality claims.\\n\\n3. Lean / Simplification Lens:\\n- No dead code, unnecessary abstractions, or redundant indirection introduced. Plan serialization cleanup removed obsolete internal references. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}",
+      "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"R01: PASS — Installation state atomicity, deployment journal recovery, and data preservation invariants are maintained; test failure retention in .tmp preserves failure diagnostics without corrupting repository state. R02: PASS — CLI help and diagnostic messaging are updated cleanly to document [--test-timeout <sec>], with executeTests reporting structured error codes, signals, elapsed milliseconds, and retained failure logs. R03: PASS — Portable Node-native runtime behavior and adapter configuration support remain fully compatible across Windows, Linux, and macOS environments without third-party host assumptions. R04: PASS — Zero external runtime dependencies added; core workflow gates operate strictly Node-native without hidden OMP or Bun prerequisites. R05: PASS — Deterministic test and review evidence gates enforce honest validation without manufacturing unsubstantiated quality claims. R06: PASS — Release publication preconditions, artifact digests, and verification pipelines remain properly bound and unbypassed. R07: PASS — No paid benchmark calls, external model dispatches, or modifications to historical spend records. R08: PASS — Workflow specifications in interfaces.md and execplan/portable-product-release.md accurately reflect the bounded operator timeout contract. R09: PASS — Release acceptance focuses strictly on portable runtime stability, deterministic test suites, and verified deployment rather than unproven quality claims. Lean lens: Lean already. The patch implements the bounded test timeout parameter and failure retention using native Node.js APIs without bespoke wrappers, dead code, or unnecessary abstractions.\",\n  \"overall_confidence_score\": 0.98\n}",
       "stopReason": "stop",
-      "startedAt": "2026-10-12T11:31:44.880Z",
-      "completedAt": "2026-10-12T11:40:06.701Z",
+      "startedAt": "2026-10-12T12:05:25.861Z",
+      "completedAt": "2026-10-12T12:11:14.791Z",
       "verdict": "ACCEPT",
       "nativeVerdict": "correct",
       "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
-      "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+      "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
       "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
       "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
-      "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
-      "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+      "testFilesHash": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+      "baseRef": "45f9e8b04e6bde7cbb96879a7fd30417ea665244",
       "exitCode": 0
     },
     "nativeEvents": [
       {
         "type": "session",
-        "id": "01a12fe2-0870-77f8-95be-53aa55bcaa42",
-        "timestamp": "2026-10-12T11:31:44.880Z"
+        "id": "01a13000-dee5-757c-ba5c-70ea1f039e94",
+        "timestamp": "2026-10-12T12:05:25.861Z"
       },
       {
         "type": "model_change",
         "model": "gemini-3.8-flash-high",
         "provider": "nullform-gateway",
         "isFallback": false,
-        "timestamp": "2026-10-12T11:31:45.755Z"
+        "timestamp": "2026-10-12T12:05:28.649Z"
       },
       {
         "type": "custom",
         "customType": "workflow-review-context",
-        "timestamp": "2026-10-12T11:31:45.822Z",
+        "timestamp": "2026-10-12T12:05:28.817Z",
         "data": {
           "role": "reviewer",
-          "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+          "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
           "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
           "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
-          "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
-          "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+          "testFilesHash": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+          "baseRef": "45f9e8b04e6bde7cbb96879a7fd30417ea665244",
           "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
-          "promptHash": "35984ce46ff4d8fd9a0e86e63328e1fa7740b4f7c30e363a5b518e5ddf34a492",
-          "productCommandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c"
+          "promptHash": "8812fcc52b46f1e8f19250793ebbc84cb00274f2bd29619254e956ad53d700c2",
+          "productCommandHash": "99de799f499d97e262b3ec0f9ebc8c2e944b1849561a1f99360f215ac9138ed1"
         }
       },
       {
         "type": "message",
-        "timestamp": "2026-10-12T11:31:56.330Z",
+        "timestamp": "2026-10-12T12:05:42.129Z",
         "message": {
           "role": "assistant",
           "provider": "nullform-gateway",
           "model": "gemini-3.8-flash-high",
-          "timestamp": 1791804710425,
+          "timestamp": 1791806732359,
           "stopReason": "toolUse",
           "usage": {
-            "input": 44896,
-            "output": 119,
+            "input": 44895,
+            "output": 173,
             "cacheRead": 0,
             "cacheWrite": 0,
-            "totalTokens": 45015,
+            "totalTokens": 45068,
             "cost": {
-              "total": 0.03411825
+              "total": 0.03432
             }
           },
           "content": [
             {
               "type": "toolCall",
-              "id": "call_236467",
-              "name": "exercise_product"
-            },
-            {
-              "type": "toolCall",
-              "id": "call_236473",
+              "id": "call_324848",
               "name": "inspect_product"
             }
           ]
@@ -164,83 +159,27 @@
       },
       {
         "type": "message",
-        "timestamp": "2026-10-12T11:34:19.909Z",
+        "timestamp": "2026-10-12T12:05:50.990Z",
         "message": {
           "role": "assistant",
           "provider": "nullform-gateway",
           "model": "gemini-3.8-flash-high",
-          "timestamp": 1791804855895,
+          "timestamp": 1791806746688,
           "stopReason": "toolUse",
           "usage": {
-            "input": 3296,
-            "output": 67,
-            "cacheRead": 44912,
-            "cacheWrite": 0,
-            "totalTokens": 48275,
-            "cost": {
-              "total": 0.0060916500000000005
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_399147",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:34:33.893Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791804869156,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 3383,
-            "output": 40,
-            "cacheRead": 46192,
-            "cacheWrite": 0,
-            "totalTokens": 49615,
-            "cost": {
-              "total": 0.00615165
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_203772",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:34:41.871Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791804878319,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 10432,
+            "input": 6067,
             "output": 10,
-            "cacheRead": 47632,
+            "cacheRead": 44950,
             "cacheWrite": 0,
-            "totalTokens": 58074,
+            "totalTokens": 51027,
             "cost": {
-              "total": 0.011433899999999999
+              "total": 0.007959
             }
           },
           "content": [
             {
               "type": "toolCall",
-              "id": "call_344780",
+              "id": "call_309039",
               "name": "exercise_product"
             }
           ]
@@ -249,319 +188,263 @@
       {
         "type": "custom",
         "customType": "workflow-product-execution",
-        "timestamp": "2026-10-12T11:36:41.745Z",
+        "timestamp": "2026-10-12T12:06:21.633Z",
         "data": {
-          "commandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c",
-          "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+          "commandHash": "99de799f499d97e262b3ec0f9ebc8c2e944b1849561a1f99360f215ac9138ed1",
+          "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
           "exitCode": 0,
-          "startedAt": "2026-10-12T11:34:41.871Z",
-          "completedAt": "2026-10-12T11:36:41.745Z",
-          "outputHash": "ba99f878d97bdab11e6138135b6f8378a81ee5746a7c12ed326605fca768d3a3"
+          "startedAt": "2026-10-12T12:05:50.990Z",
+          "completedAt": "2026-10-12T12:06:21.633Z",
+          "outputHash": "dce40b59870587ffc749b91d369fc59e293185bf7b8c4126c48d58397d7cfb2a"
         }
       },
       {
         "type": "message",
-        "timestamp": "2026-10-12T11:36:50.867Z",
+        "timestamp": "2026-10-12T12:06:31.299Z",
         "message": {
           "role": "assistant",
           "provider": "nullform-gateway",
           "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805001788,
+          "timestamp": 1791806781663,
           "stopReason": "toolUse",
           "usage": {
-            "input": 3204,
+            "input": 2512,
+            "output": 101,
+            "cacheRead": 48988,
+            "cacheWrite": 0,
+            "totalTokens": 51601,
+            "cost": {
+              "total": 0.0059368500000000005
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_255642",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-12T12:06:37.765Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791806793668,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 11651,
+            "output": 53,
+            "cacheRead": 49563,
+            "cacheWrite": 0,
+            "totalTokens": 61267,
+            "cost": {
+              "total": 0.012654224999999998
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_221842",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-12T12:07:03.591Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791806799236,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9857,
+            "output": 74,
+            "cacheRead": 59247,
+            "cacheWrite": 0,
+            "totalTokens": 69178,
+            "cost": {
+              "total": 0.012113775
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_305096",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-12T12:07:10.216Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791806825851,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 14736,
+            "output": 52,
+            "cacheRead": 67164,
+            "cacheWrite": 0,
+            "totalTokens": 81952,
+            "cost": {
+              "total": 0.0162843
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_339377",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-12T12:07:14.639Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791806831197,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 8260,
+            "output": 51,
+            "cacheRead": 79903,
+            "cacheWrite": 0,
+            "totalTokens": 88214,
+            "cost": {
+              "total": 0.012378975
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_407003",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-12T12:07:22.852Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791806837854,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 11742,
+            "output": 56,
+            "cacheRead": 86185,
+            "cacheWrite": 0,
+            "totalTokens": 97983,
+            "cost": {
+              "total": 0.015480375000000001
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_417292",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-12T12:07:29.508Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791806844008,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10396,
+            "output": 54,
+            "cacheRead": 95935,
+            "cacheWrite": 0,
+            "totalTokens": 106385,
+            "cost": {
+              "total": 0.015194625
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_370562",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-12T12:08:12.360Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791806850748,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 6775,
+            "output": 50,
+            "cacheRead": 104314,
+            "cacheWrite": 0,
+            "totalTokens": 111139,
+            "cost": {
+              "total": 0.013092300000000001
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_385556",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-12T12:09:01.766Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791806894979,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10431,
             "output": 37,
-            "cacheRead": 56039,
+            "cacheRead": 109091,
             "cacheWrite": 0,
-            "totalTokens": 59280,
+            "totalTokens": 119559,
             "cost": {
-              "total": 0.006744675
+              "total": 0.016143825
             }
           },
           "content": [
             {
               "type": "toolCall",
-              "id": "call_407898",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:36:55.986Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805012360,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 11523,
-            "output": 39,
-            "cacheRead": 57296,
-            "cacheWrite": 0,
-            "totalTokens": 68858,
-            "cost": {
-              "total": 0.013085700000000002
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_357564",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:37:00.520Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805016819,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 4006,
-            "output": 39,
-            "cacheRead": 66797,
-            "cacheWrite": 0,
-            "totalTokens": 70842,
-            "cost": {
-              "total": 0.008160525
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_320382",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:37:06.014Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805022170,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 9311,
-            "output": 38,
-            "cacheRead": 68825,
-            "cacheWrite": 0,
-            "totalTokens": 78174,
-            "cost": {
-              "total": 0.012287625
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_232324",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:37:26.066Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805030010,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 10775,
-            "output": 93,
-            "cacheRead": 76163,
-            "cacheWrite": 0,
-            "totalTokens": 87031,
-            "cost": {
-              "total": 0.014142225
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_371108",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:37:32.489Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805047820,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 4818,
-            "output": 28,
-            "cacheRead": 84916,
-            "cacheWrite": 0,
-            "totalTokens": 89762,
-            "cost": {
-              "total": 0.0100872
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_420733",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:37:37.613Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805054451,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 12231,
-            "output": 32,
-            "cacheRead": 87762,
-            "cacheWrite": 0,
-            "totalTokens": 100025,
-            "cost": {
-              "total": 0.0158754
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_320685",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:37:47.531Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805060352,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 8732,
-            "output": 96,
-            "cacheRead": 97993,
-            "cacheWrite": 0,
-            "totalTokens": 106821,
-            "cost": {
-              "total": 0.014258475
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_350691",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:37:56.755Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805070340,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 12427,
-            "output": 44,
-            "cacheRead": 104744,
-            "cacheWrite": 0,
-            "totalTokens": 117215,
-            "cost": {
-              "total": 0.01734105
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_275594",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:38:05.810Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805079665,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 6783,
-            "output": 28,
-            "cacheRead": 115153,
-            "cacheWrite": 0,
-            "totalTokens": 121964,
-            "cost": {
-              "total": 0.013828725
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_370272",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:38:23.668Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805090928,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 2823,
-            "output": 27,
-            "cacheRead": 119893,
-            "cacheWrite": 0,
-            "totalTokens": 122743,
-            "cost": {
-              "total": 0.011210475
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_238121",
+              "id": "call_351635",
               "name": "mcp__codebase_index_codebase_search"
             }
           ]
@@ -569,27 +452,27 @@
       },
       {
         "type": "message",
-        "timestamp": "2026-10-12T11:38:34.371Z",
+        "timestamp": "2026-10-12T12:09:06.673Z",
         "message": {
           "role": "assistant",
           "provider": "nullform-gateway",
           "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805103681,
+          "timestamp": 1791806941777,
           "stopReason": "toolUse",
           "usage": {
-            "input": 3793,
-            "output": 44,
-            "cacheRead": 120679,
+            "input": 6531,
+            "output": 36,
+            "cacheRead": 117500,
             "cacheWrite": 0,
-            "totalTokens": 124516,
+            "totalTokens": 124067,
             "cost": {
-              "total": 0.012060675
+              "total": 0.013845749999999999
             }
           },
           "content": [
             {
               "type": "toolCall",
-              "id": "call_281693",
+              "id": "call_270507",
               "name": "inspect_product"
             }
           ]
@@ -597,27 +480,27 @@
       },
       {
         "type": "message",
-        "timestamp": "2026-10-12T11:38:47.722Z",
+        "timestamp": "2026-10-12T12:09:13.321Z",
         "message": {
           "role": "assistant",
           "provider": "nullform-gateway",
           "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805115597,
+          "timestamp": 1791806948497,
           "stopReason": "toolUse",
           "usage": {
-            "input": 11720,
-            "output": 38,
-            "cacheRead": 122480,
+            "input": 12354,
+            "output": 40,
+            "cacheRead": 122038,
             "cacheWrite": 0,
-            "totalTokens": 134238,
+            "totalTokens": 134432,
             "cost": {
-              "total": 0.018118500000000003
+              "total": 0.018568349999999997
             }
           },
           "content": [
             {
               "type": "toolCall",
-              "id": "call_388993",
+              "id": "call_256587",
               "name": "inspect_product"
             }
           ]
@@ -625,27 +508,27 @@
       },
       {
         "type": "message",
-        "timestamp": "2026-10-12T11:39:07.597Z",
+        "timestamp": "2026-10-12T12:09:56.764Z",
         "message": {
           "role": "assistant",
           "provider": "nullform-gateway",
           "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805129985,
+          "timestamp": 1791806958554,
           "stopReason": "toolUse",
           "usage": {
-            "input": 10914,
-            "output": 83,
-            "cacheRead": 132200,
+            "input": 8756,
+            "output": 48,
+            "cacheRead": 132378,
             "cacheWrite": 0,
-            "totalTokens": 143197,
+            "totalTokens": 141182,
             "cost": {
-              "total": 0.01841175
+              "total": 0.01667535
             }
           },
           "content": [
             {
               "type": "toolCall",
-              "id": "call_372602",
+              "id": "call_312128",
               "name": "inspect_product"
             }
           ]
@@ -653,27 +536,27 @@
       },
       {
         "type": "message",
-        "timestamp": "2026-10-12T11:39:14.259Z",
+        "timestamp": "2026-10-12T12:10:37.205Z",
         "message": {
           "role": "assistant",
           "provider": "nullform-gateway",
           "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805150560,
+          "timestamp": 1791806997229,
           "stopReason": "toolUse",
           "usage": {
-            "input": 13148,
-            "output": 39,
-            "cacheRead": 141122,
+            "input": 10971,
+            "output": 54,
+            "cacheRead": 139129,
             "cacheWrite": 0,
-            "totalTokens": 154309,
+            "totalTokens": 150154,
             "cost": {
-              "total": 0.0205914
+              "total": 0.018865424999999998
             }
           },
           "content": [
             {
               "type": "toolCall",
-              "id": "call_267892",
+              "id": "call_417961",
               "name": "inspect_product"
             }
           ]
@@ -681,92 +564,69 @@
       },
       {
         "type": "message",
-        "timestamp": "2026-10-12T11:39:24.738Z",
+        "timestamp": "2026-10-12T12:11:14.791Z",
         "message": {
           "role": "assistant",
           "provider": "nullform-gateway",
           "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805156188,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 11358,
-            "output": 38,
-            "cacheRead": 152266,
-            "cacheWrite": 0,
-            "totalTokens": 163662,
-            "cost": {
-              "total": 0.02008095
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_376663",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:39:31.742Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805165300,
-          "stopReason": "toolUse",
-          "usage": {
-            "input": 3186,
-            "output": 42,
-            "cacheRead": 161579,
-            "cacheWrite": 0,
-            "totalTokens": 164807,
-            "cost": {
-              "total": 0.014665425
-            }
-          },
-          "content": [
-            {
-              "type": "toolCall",
-              "id": "call_283277",
-              "name": "inspect_product"
-            }
-          ]
-        }
-      },
-      {
-        "type": "message",
-        "timestamp": "2026-10-12T11:40:06.701Z",
-        "message": {
-          "role": "assistant",
-          "provider": "nullform-gateway",
-          "model": "gemini-3.8-flash-high",
-          "timestamp": 1791805176661,
+          "timestamp": 1791807041780,
           "stopReason": "stop",
           "usage": {
-            "input": 3354,
-            "output": 697,
-            "cacheRead": 162721,
+            "input": 16741,
+            "output": 349,
+            "cacheRead": 148117,
             "cacheWrite": 0,
-            "totalTokens": 166772,
+            "totalTokens": 165207,
             "cost": {
-              "total": 0.017333325
+              "total": 0.024973275000000003
             }
           },
           "content": [
             {
               "type": "text",
-              "text": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of portable-product-release patch diff across bin/nullform.mjs, tools/install-harness.mjs, tools/self-update.mjs, and tools/tests/portable-runtime.test.mjs confirms the fix is correct, robust, and introduces no defects or regressions.\\n\\n1. Analysis of Changes & Cross-Boundary Contracts:\\n- bin/nullform.mjs (printInitSuccess): Completed init JSON is compacted into compactPlan, summarizing file lists to scalar counts (filesCount, managedFilesCount) and adapters array while keeping readiness, savedState, and doctor report intact. This resolves the Node spawnSync default 1MB maxBuffer overflow (ENOBUFS) during reinit under large harnesses like OpenHuman without stripping required data.\\n- tools/install-harness.mjs: The unneeded lock and journal object references were removed from plan construction, avoiding internal serialization leaks while maintaining correct transactional management inside runInit and installHarness.\\n- tools/self-update.mjs (runInstalledBinReinit, executeUpdate): Error handling now correctly prioritizes error.message (such as ENOBUFS, ENOENT, or ETIMEDOUT) over truncated text, caps stdout fallback to 500 characters, and applies canonical sanitizeError redacting.\\n- tools/tests/portable-runtime.test.mjs: Test 16 exercises the real CLI init child process with OpenHuman across deeply nested paths, verifying exit code 0, compact payload (<100KB), valid counts, and proper absence of internal journal data.\\n- Consumer dispatch: runInstalledBinReinit consumes ok, stage, error, detail, doctor, and version from reinitJson; none depend on verbose file arrays. Full test suite executed via exercise_product passed 21/21 tests.\\n\\n2. Requirements Manifest Verification:\\n- R01 (Stability): Prevents false install_failed reports during update reinit caused by buffer truncation; atomic identity, rollback, and journal cleanup remain intact.\\n- R02 (CLI Quality): Public CLI outputs clean, actionable JSON diagnostics and compact plan summaries without megabyte-scale telemetry.\\n- R03 (Portability): Resolves real child-process buffer limits across macOS, Linux, and Windows for all 8 supported adapters.\\n- R04 (No Hacks): Follows Node-native child process bounds naturally without arbitrary buffer overrides or unsafe workarounds.\\n- R05 (Quality Evidence): Preserves historical comparisons and no-paid-experiment constraints; evidence reports remain untouched.\\n- R06 (npm Publication): Preserves package integrity, version bindings, and upgrade validation mechanisms.\\n- R07 (No Paid Runs): Zero benchmark or paid model dispatch added.\\n- R08 (Managed Prompts): Managed surfaces and user instructions remain preserved.\\n- R09 (Honest Acceptance): Technical criteria satisfied with no unverified quality claims.\\n\\n3. Lean / Simplification Lens:\\n- No dead code, unnecessary abstractions, or redundant indirection introduced. Plan serialization cleanup removed obsolete internal references. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}"
+              "text": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"R01: PASS — Installation state atomicity, deployment journal recovery, and data preservation invariants are maintained; test failure retention in .tmp preserves failure diagnostics without corrupting repository state. R02: PASS — CLI help and diagnostic messaging are updated cleanly to document [--test-timeout <sec>], with executeTests reporting structured error codes, signals, elapsed milliseconds, and retained failure logs. R03: PASS — Portable Node-native runtime behavior and adapter configuration support remain fully compatible across Windows, Linux, and macOS environments without third-party host assumptions. R04: PASS — Zero external runtime dependencies added; core workflow gates operate strictly Node-native without hidden OMP or Bun prerequisites. R05: PASS — Deterministic test and review evidence gates enforce honest validation without manufacturing unsubstantiated quality claims. R06: PASS — Release publication preconditions, artifact digests, and verification pipelines remain properly bound and unbypassed. R07: PASS — No paid benchmark calls, external model dispatches, or modifications to historical spend records. R08: PASS — Workflow specifications in interfaces.md and execplan/portable-product-release.md accurately reflect the bounded operator timeout contract. R09: PASS — Release acceptance focuses strictly on portable runtime stability, deterministic test suites, and verified deployment rather than unproven quality claims. Lean lens: Lean already. The patch implements the bounded test timeout parameter and failure retention using native Node.js APIs without bespoke wrappers, dead code, or unnecessary abstractions.\",\n  \"overall_confidence_score\": 0.98\n}"
             }
           ]
         }
       }
     ],
-    "nativeEventsHash": "147de4f4c9f250894bff1d1d22daf4ce1334599d6aac4976722c9e0a801f8044",
-    "eventProjectionHash": "66af9a017f424d65a3ffe8604cc1e52afca04cbdd87997091fc036a2ce95362b"
+    "nativeEventsHash": "d771d8daa1ff55356ec939d5e7e7b0dc2e128dd667ca9c7d2cb968d858dbab91",
+    "eventProjectionHash": "17119e32e125e0322aebc2e06b935de830963ad5c66f6c29bf93ca0fb23666b6"
   },
-  "stageB": null,
+  "stageB": {
+    "reviewerSessionId": "01a13000-dee5-757c-ba5c-70ea1f039e94",
+    "before": {
+      "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
+      "testFilesHash": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+      "testCmd": "node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/quality-evidence.test.mjs tools/tests/package-certification.test.mjs",
+      "startedAt": "2026-10-12T12:12:04.531Z",
+      "completedAt": "2026-10-12T12:13:14.541Z",
+      "exitCode": 0,
+      "output": "✔ derived higher local test upgrade version is never hardcoded 1.2.0 (1.105ms)\n✔ git commit extraction returns 40-character hex commit (62.7536ms)\n✔ inspectArchiveContents succeeds on valid candidate archive matching repository source (438.0351ms)\n✔ inspectArchiveContents rejects candidate with same version but altered payload (120.3894ms)\n✔ createArchive preserves member layout without prepending parent source directory paths (469.2086ms)\nworkflow: T0 task opened — fix-bug\n  budget: 10 tool calls for T0\n  no further artifacts required at this tier.\nworkflow: T0 \"fix-bug\" — COMPLETE\n  done lane        lane declared (start --tier)\ntask    fix-bug\ntier    T0\nstatus  open\nstarted 2026-10-12T12:12:31.224Z\nbudget  10 tool calls for T0\nartifacts 1/1\n  + lane\nbudget  consumption 407465479/200000 tokens, 1182/45 calls\nBUDGET warning: session approaching soft budget ceiling (407465479/200000 tokens, 1182/45 calls)\nworkflow: T0 task closed, all artifacts present.\nworkflow review-run: harness 'cursor' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.\nworkflow review-run: harness 'opencode' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.\nworkflow stage-b error: Stage-B testTimeoutMs (--test-timeout 1..3600s) must be a safe integer between 1 and 3600000ms\nworkflow stage-b error: Stage-B testTimeoutMs (--test-timeout 1..3600s) must be a safe integer between 1 and 3600000ms\n✔ 1. fault: deterministic write failure interrupts install; prior verified identity remains intact and human bytes preserved (12.7189ms)\n✔ 2. kill: interrupted process leaves journal that can be recovered without permanent lockout or data loss (7.8787ms)\n✔ 3. stalelock: verified dead owner PID allows scoped recovery and lock reacquisition (3.1106ms)\n✔ 4. liveowner: active process holding lock cannot be displaced; concurrent application is refused; uncertain/corrupt PID is not displaced (3.9228ms)\n✔ 5. tamperedjournal: crafted journal with outside targetRoot, escaped destPath or backupFile traversal is rejected BEFORE mutation (5.1412ms)\n✔ 6. crashwindow: write-ahead recovery handles pending applied writes (crash before recordWritten) (7.1323ms)\n✔ 7. stateatomic: writeInstallationState safely replaces state without unlinking old state on Windows rename failure (16.2988ms)\n✔ 8. pendingretry: version divergence is reported by doctor as pending/recoverable; retry finishes without treating partly deployed owned bytes as human edits (13014.6453ms)\n✔ 9. humanassets: Markdown outside managed block and human edits in core scripts are preserved (11534.8182ms)\n✔ 10. noBunnonOMPpublicworkflow: public nullform workflow works Node-native without OMP or Bun in PATH (214.3798ms)\n✔ 11. unsupportedreview: automated review execution for unsupported harness refuses BEFORE dispatch (0.769ms)\n✔ 12. capabilities: returns honest distinction between 8 config adapters, Node-native core gates, and OMP+Bun review only (41.2713ms)\n✔ 13. human edit after failure: recovery detects unknown hash, fails closed with ECONFLICT, preserves human bytes and keeps journal (6.2383ms)\n✔ 14. crafted dead lock: dead lock with targetRoot=outside does not grant outside scope; caller targetRoot is authoritative (2.7547ms)\n✔ 15. backupDir junction: backupDir pointing outside via junction/symlink is rejected by canonical guard (3.831ms)\n✔ 16. real CLI init: openhuman with long root path succeeds within default spawnSync buffer and reflects clean post-commit readiness (27563.4152ms)\n✔ 17. non-OMP installed review refusal: review-run without --harness resolves installation state and refuses before dispatch when non-OMP installed (5.1352ms)\n✔ 18. standalone installHarness cleans up own journal and backups on success (13200.8063ms)\n✔ 19. public CLI workflow start with -h task value forwards properly via real child process (736.8846ms)\n✔ 20. checkVersionAlignment warns with older_binary when package is older than verified target (1.9901ms)\n✔ 21. sanitizeError redacts quoted and unquoted api_key, apikey, token, credential, and key prefixes while preserving normal error messages; recordStageB validates testTimeoutMs bounds (1.612ms)\n✔ readQualityEvidence on live repository root validates exact historical observations (4.5646ms)\n✔ EOL portability: CRLF and LF in raw observations produce identical hash and valid evidence (2.931ms)\n✔ readQualityEvidence on clean packaged summary in isolated root succeeds and labels historical snapshot (2.6626ms)\n✔ mutation: deleted summary.review.baselineTariffUsd fails closed (1.8344ms)\n✔ mutation: NaN summary.review.baselineTariffUsd fails closed (1.878ms)\n✔ mutation: string cost summary.review.baselineTariffUsd fails closed (1.5199ms)\n✔ mutation: forged sourceHash fails closed (1.6052ms)\n✔ mutation: arbitrary 64-hex sourceHash mismatch fails closed (1.702ms)\n✔ mutation: spendLedger unsettledRequests = 99 fails closed (1.5865ms)\n✔ mutation: spendLedger non-ok status fails closed (1.5106ms)\n✔ mutation: empty pairs array fails closed (1.3545ms)\n✔ mutation: duplicate sessionId across runs fails closed (1.5154ms)\n✔ mutation: model mismatch in baseline pair fails closed (1.2766ms)\n✔ mutation: fixtureHash mismatch in pair fails closed (1.8587ms)\n✔ mutation: candidate skillHash missing in candidate fails closed (1.3012ms)\n✔ mutation: workflow candidate laundered to passed fails closed (1.2834ms)\n✔ fallback per explicit root: missing root data fails closed and does not inspect unrelated paths (0.6011ms)\nℹ tests 43\nℹ suites 0\nℹ pass 43\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 67132.387\n",
+      "elapsedMs": 68520,
+      "timeoutMs": 300000
+    },
+    "after": {
+      "sourceDigest": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
+      "testFilesHash": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+      "testCmd": "node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/quality-evidence.test.mjs tools/tests/package-certification.test.mjs",
+      "startedAt": "2026-10-12T12:13:15.912Z",
+      "completedAt": "2026-10-12T12:14:58.210Z",
+      "exitCode": 0,
+      "output": "✔ derived higher local test upgrade version is never hardcoded 1.2.0 (1.1625ms)\n✔ git commit extraction returns 40-character hex commit (1040.9039ms)\n✔ inspectArchiveContents succeeds on valid candidate archive matching repository source (184.6791ms)\n✔ inspectArchiveContents rejects candidate with same version but altered payload (511.8446ms)\n✔ createArchive preserves member layout without prepending parent source directory paths (837.4748ms)\nworkflow: T0 task opened — fix-bug\n  budget: 10 tool calls for T0\n  no further artifacts required at this tier.\nworkflow: T0 \"fix-bug\" — COMPLETE\n  done lane        lane declared (start --tier)\ntask    fix-bug\ntier    T0\nstatus  open\nstarted 2026-10-12T12:13:44.717Z\nbudget  10 tool calls for T0\nartifacts 1/1\n  + lane\nbudget  consumption 408012952/200000 tokens, 1185/45 calls\nBUDGET warning: session approaching soft budget ceiling (408012952/200000 tokens, 1185/45 calls)\nworkflow: T0 task closed, all artifacts present.\nworkflow review-run: harness 'cursor' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.\nworkflow review-run: harness 'opencode' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.\nworkflow stage-b error: Stage-B testTimeoutMs (--test-timeout 1..3600s) must be a safe integer between 1 and 3600000ms\nworkflow stage-b error: Stage-B testTimeoutMs (--test-timeout 1..3600s) must be a safe integer between 1 and 3600000ms\n✔ 1. fault: deterministic write failure interrupts install; prior verified identity remains intact and human bytes preserved (14.4598ms)\n✔ 2. kill: interrupted process leaves journal that can be recovered without permanent lockout or data loss (9.3652ms)\n✔ 3. stalelock: verified dead owner PID allows scoped recovery and lock reacquisition (2.1884ms)\n✔ 4. liveowner: active process holding lock cannot be displaced; concurrent application is refused; uncertain/corrupt PID is not displaced (3.6252ms)\n✔ 5. tamperedjournal: crafted journal with outside targetRoot, escaped destPath or backupFile traversal is rejected BEFORE mutation (6.1054ms)\n✔ 6. crashwindow: write-ahead recovery handles pending applied writes (crash before recordWritten) (8.0121ms)\n✔ 7. stateatomic: writeInstallationState safely replaces state without unlinking old state on Windows rename failure (10.8987ms)\n✔ 8. pendingretry: version divergence is reported by doctor as pending/recoverable; retry finishes without treating partly deployed owned bytes as human edits (14170.4ms)\n✔ 9. humanassets: Markdown outside managed block and human edits in core scripts are preserved (13962.5523ms)\n✔ 10. noBunnonOMPpublicworkflow: public nullform workflow works Node-native without OMP or Bun in PATH (173.5824ms)\n✔ 11. unsupportedreview: automated review execution for unsupported harness refuses BEFORE dispatch (0.764ms)\n✔ 12. capabilities: returns honest distinction between 8 config adapters, Node-native core gates, and OMP+Bun review only (27.6488ms)\n✔ 13. human edit after failure: recovery detects unknown hash, fails closed with ECONFLICT, preserves human bytes and keeps journal (5.6949ms)\n✔ 14. crafted dead lock: dead lock with targetRoot=outside does not grant outside scope; caller targetRoot is authoritative (2.8704ms)\n✔ 15. backupDir junction: backupDir pointing outside via junction/symlink is rejected by canonical guard (3.6344ms)\n✔ 16. real CLI init: openhuman with long root path succeeds within default spawnSync buffer and reflects clean post-commit readiness (40816.1782ms)\n✔ 17. non-OMP installed review refusal: review-run without --harness resolves installation state and refuses before dispatch when non-OMP installed (6.3339ms)\n✔ 18. standalone installHarness cleans up own journal and backups on success (20759.0881ms)\n✔ 19. public CLI workflow start with -h task value forwards properly via real child process (308.9065ms)\n✔ 20. checkVersionAlignment warns with older_binary when package is older than verified target (4.4688ms)\n✔ 21. sanitizeError redacts quoted and unquoted api_key, apikey, token, credential, and key prefixes while preserving normal error messages; recordStageB validates testTimeoutMs bounds (19.6657ms)\n✔ readQualityEvidence on live repository root validates exact historical observations (4.3389ms)\n✔ EOL portability: CRLF and LF in raw observations produce identical hash and valid evidence (3.0001ms)\n✔ readQualityEvidence on clean packaged summary in isolated root succeeds and labels historical snapshot (1.9526ms)\n✔ mutation: deleted summary.review.baselineTariffUsd fails closed (1.4348ms)\n✔ mutation: NaN summary.review.baselineTariffUsd fails closed (1.3314ms)\n✔ mutation: string cost summary.review.baselineTariffUsd fails closed (1.5444ms)\n✔ mutation: forged sourceHash fails closed (1.3788ms)\n✔ mutation: arbitrary 64-hex sourceHash mismatch fails closed (1.6741ms)\n✔ mutation: spendLedger unsettledRequests = 99 fails closed (1.3941ms)\n✔ mutation: spendLedger non-ok status fails closed (1.4973ms)\n✔ mutation: empty pairs array fails closed (1.6832ms)\n✔ mutation: duplicate sessionId across runs fails closed (1.5885ms)\n✔ mutation: model mismatch in baseline pair fails closed (1.5979ms)\n✔ mutation: fixtureHash mismatch in pair fails closed (1.32ms)\n✔ mutation: candidate skillHash missing in candidate fails closed (1.8582ms)\n✔ mutation: workflow candidate laundered to passed fails closed (1.3575ms)\n✔ fallback per explicit root: missing root data fails closed and does not inspect unrelated paths (0.436ms)\nℹ tests 43\nℹ suites 0\nℹ pass 43\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 90878.2159\n",
+      "elapsedMs": 91096,
+      "timeoutMs": 300000
+    },
+    "disposition": "lean-already",
+    "testCmd": "node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/quality-evidence.test.mjs tools/tests/package-certification.test.mjs",
+    "exitCode": 0,
+    "testFilesHashBefore": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+    "testFilesHashAfter": "f71e46ad8fed37fd437de53043c846ed4307fb9aeea029043afccc2a8703f6b7",
+    "sourceDigestBefore": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
+    "sourceDigestAfter": "3314ef9bb899859e9c5034ce36551d1307cb2e0057ceb597c77ec0068f8ef76e",
+    "executedAt": "2026-10-12T12:14:58.210Z",
+    "summary": "Execute unchanged complete frozen runtime/evidence/archive checks twice with explicit bounded grading deadline; no source simplification needed."
+  },
   "oracles": [],
   "history": [
     {
@@ -4874,6 +4734,775 @@
         "executedAt": "2026-10-12T11:13:26.940Z",
         "summary": "Current corrected implementation is lean already; no source or frozen test changes after accepted complete-update review."
       },
+      "oracles": []
+    },
+    {
+      "reviewer": {
+        "role": "reviewer",
+        "context": {
+          "role": "reviewer",
+          "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+          "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+          "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+          "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
+          "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+          "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+          "promptHash": "35984ce46ff4d8fd9a0e86e63328e1fa7740b4f7c30e363a5b518e5ddf34a492",
+          "productCommandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c"
+        },
+        "productExecutions": [
+          {
+            "commandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c",
+            "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+            "exitCode": 0,
+            "startedAt": "2026-10-12T11:34:41.871Z",
+            "completedAt": "2026-10-12T11:36:41.745Z",
+            "outputHash": "ba99f878d97bdab11e6138135b6f8378a81ee5746a7c12ed326605fca768d3a3"
+          }
+        ],
+        "sessionId": "01a12fe2-0870-77f8-95be-53aa55bcaa42",
+        "provider": "nullform-gateway",
+        "model": "gemini-3.8-flash-high",
+        "isFallback": false,
+        "usage": {
+          "input": 206113,
+          "output": 1718,
+          "cacheRead": 2067364,
+          "cacheWrite": 0,
+          "totalTokens": 2275195,
+          "costUsd": 0.31607955,
+          "costSource": "native-fixed-tariff"
+        },
+        "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of portable-product-release patch diff across bin/nullform.mjs, tools/install-harness.mjs, tools/self-update.mjs, and tools/tests/portable-runtime.test.mjs confirms the fix is correct, robust, and introduces no defects or regressions.\\n\\n1. Analysis of Changes & Cross-Boundary Contracts:\\n- bin/nullform.mjs (printInitSuccess): Completed init JSON is compacted into compactPlan, summarizing file lists to scalar counts (filesCount, managedFilesCount) and adapters array while keeping readiness, savedState, and doctor report intact. This resolves the Node spawnSync default 1MB maxBuffer overflow (ENOBUFS) during reinit under large harnesses like OpenHuman without stripping required data.\\n- tools/install-harness.mjs: The unneeded lock and journal object references were removed from plan construction, avoiding internal serialization leaks while maintaining correct transactional management inside runInit and installHarness.\\n- tools/self-update.mjs (runInstalledBinReinit, executeUpdate): Error handling now correctly prioritizes error.message (such as ENOBUFS, ENOENT, or ETIMEDOUT) over truncated text, caps stdout fallback to 500 characters, and applies canonical sanitizeError redacting.\\n- tools/tests/portable-runtime.test.mjs: Test 16 exercises the real CLI init child process with OpenHuman across deeply nested paths, verifying exit code 0, compact payload (<100KB), valid counts, and proper absence of internal journal data.\\n- Consumer dispatch: runInstalledBinReinit consumes ok, stage, error, detail, doctor, and version from reinitJson; none depend on verbose file arrays. Full test suite executed via exercise_product passed 21/21 tests.\\n\\n2. Requirements Manifest Verification:\\n- R01 (Stability): Prevents false install_failed reports during update reinit caused by buffer truncation; atomic identity, rollback, and journal cleanup remain intact.\\n- R02 (CLI Quality): Public CLI outputs clean, actionable JSON diagnostics and compact plan summaries without megabyte-scale telemetry.\\n- R03 (Portability): Resolves real child-process buffer limits across macOS, Linux, and Windows for all 8 supported adapters.\\n- R04 (No Hacks): Follows Node-native child process bounds naturally without arbitrary buffer overrides or unsafe workarounds.\\n- R05 (Quality Evidence): Preserves historical comparisons and no-paid-experiment constraints; evidence reports remain untouched.\\n- R06 (npm Publication): Preserves package integrity, version bindings, and upgrade validation mechanisms.\\n- R07 (No Paid Runs): Zero benchmark or paid model dispatch added.\\n- R08 (Managed Prompts): Managed surfaces and user instructions remain preserved.\\n- R09 (Honest Acceptance): Technical criteria satisfied with no unverified quality claims.\\n\\n3. Lean / Simplification Lens:\\n- No dead code, unnecessary abstractions, or redundant indirection introduced. Plan serialization cleanup removed obsolete internal references. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}",
+        "stopReason": "stop",
+        "startedAt": "2026-10-12T11:31:44.880Z",
+        "completedAt": "2026-10-12T11:40:06.701Z",
+        "verdict": "ACCEPT",
+        "nativeVerdict": "correct",
+        "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+        "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+        "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+        "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+        "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
+        "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+        "exitCode": 0,
+        "nativeProjection": {
+          "role": "reviewer",
+          "context": {
+            "role": "reviewer",
+            "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+            "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+            "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+            "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
+            "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+            "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+            "promptHash": "35984ce46ff4d8fd9a0e86e63328e1fa7740b4f7c30e363a5b518e5ddf34a492",
+            "productCommandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c"
+          },
+          "productExecutions": [
+            {
+              "commandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c",
+              "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+              "exitCode": 0,
+              "startedAt": "2026-10-12T11:34:41.871Z",
+              "completedAt": "2026-10-12T11:36:41.745Z",
+              "outputHash": "ba99f878d97bdab11e6138135b6f8378a81ee5746a7c12ed326605fca768d3a3"
+            }
+          ],
+          "sessionId": "01a12fe2-0870-77f8-95be-53aa55bcaa42",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "isFallback": false,
+          "usage": {
+            "input": 206113,
+            "output": 1718,
+            "cacheRead": 2067364,
+            "cacheWrite": 0,
+            "totalTokens": 2275195,
+            "costUsd": 0.31607955,
+            "costSource": "native-fixed-tariff"
+          },
+          "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of portable-product-release patch diff across bin/nullform.mjs, tools/install-harness.mjs, tools/self-update.mjs, and tools/tests/portable-runtime.test.mjs confirms the fix is correct, robust, and introduces no defects or regressions.\\n\\n1. Analysis of Changes & Cross-Boundary Contracts:\\n- bin/nullform.mjs (printInitSuccess): Completed init JSON is compacted into compactPlan, summarizing file lists to scalar counts (filesCount, managedFilesCount) and adapters array while keeping readiness, savedState, and doctor report intact. This resolves the Node spawnSync default 1MB maxBuffer overflow (ENOBUFS) during reinit under large harnesses like OpenHuman without stripping required data.\\n- tools/install-harness.mjs: The unneeded lock and journal object references were removed from plan construction, avoiding internal serialization leaks while maintaining correct transactional management inside runInit and installHarness.\\n- tools/self-update.mjs (runInstalledBinReinit, executeUpdate): Error handling now correctly prioritizes error.message (such as ENOBUFS, ENOENT, or ETIMEDOUT) over truncated text, caps stdout fallback to 500 characters, and applies canonical sanitizeError redacting.\\n- tools/tests/portable-runtime.test.mjs: Test 16 exercises the real CLI init child process with OpenHuman across deeply nested paths, verifying exit code 0, compact payload (<100KB), valid counts, and proper absence of internal journal data.\\n- Consumer dispatch: runInstalledBinReinit consumes ok, stage, error, detail, doctor, and version from reinitJson; none depend on verbose file arrays. Full test suite executed via exercise_product passed 21/21 tests.\\n\\n2. Requirements Manifest Verification:\\n- R01 (Stability): Prevents false install_failed reports during update reinit caused by buffer truncation; atomic identity, rollback, and journal cleanup remain intact.\\n- R02 (CLI Quality): Public CLI outputs clean, actionable JSON diagnostics and compact plan summaries without megabyte-scale telemetry.\\n- R03 (Portability): Resolves real child-process buffer limits across macOS, Linux, and Windows for all 8 supported adapters.\\n- R04 (No Hacks): Follows Node-native child process bounds naturally without arbitrary buffer overrides or unsafe workarounds.\\n- R05 (Quality Evidence): Preserves historical comparisons and no-paid-experiment constraints; evidence reports remain untouched.\\n- R06 (npm Publication): Preserves package integrity, version bindings, and upgrade validation mechanisms.\\n- R07 (No Paid Runs): Zero benchmark or paid model dispatch added.\\n- R08 (Managed Prompts): Managed surfaces and user instructions remain preserved.\\n- R09 (Honest Acceptance): Technical criteria satisfied with no unverified quality claims.\\n\\n3. Lean / Simplification Lens:\\n- No dead code, unnecessary abstractions, or redundant indirection introduced. Plan serialization cleanup removed obsolete internal references. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}",
+          "stopReason": "stop",
+          "startedAt": "2026-10-12T11:31:44.880Z",
+          "completedAt": "2026-10-12T11:40:06.701Z",
+          "verdict": "ACCEPT",
+          "nativeVerdict": "correct",
+          "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+          "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+          "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+          "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+          "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
+          "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+          "exitCode": 0
+        },
+        "nativeEvents": [
+          {
+            "type": "session",
+            "id": "01a12fe2-0870-77f8-95be-53aa55bcaa42",
+            "timestamp": "2026-10-12T11:31:44.880Z"
+          },
+          {
+            "type": "model_change",
+            "model": "gemini-3.8-flash-high",
+            "provider": "nullform-gateway",
+            "isFallback": false,
+            "timestamp": "2026-10-12T11:31:45.755Z"
+          },
+          {
+            "type": "custom",
+            "customType": "workflow-review-context",
+            "timestamp": "2026-10-12T11:31:45.822Z",
+            "data": {
+              "role": "reviewer",
+              "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+              "manifestHash": "8b88873e885e8df208f4b2ab85fa18e1527a65d34c94bb5583c50c06bf6a6d93",
+              "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+              "testFilesHash": "0c3b52a13fe98778fe46dea551aa7cfc22b345875e992d96b3a5b52de9fe6345",
+              "baseRef": "60d0b958a25d378bab334adb4e90519f498411e7",
+              "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+              "promptHash": "35984ce46ff4d8fd9a0e86e63328e1fa7740b4f7c30e363a5b518e5ddf34a492",
+              "productCommandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c"
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:31:56.330Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791804710425,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 44896,
+                "output": 119,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 45015,
+                "cost": {
+                  "total": 0.03411825
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_236467",
+                  "name": "exercise_product"
+                },
+                {
+                  "type": "toolCall",
+                  "id": "call_236473",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:34:19.909Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791804855895,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 3296,
+                "output": 67,
+                "cacheRead": 44912,
+                "cacheWrite": 0,
+                "totalTokens": 48275,
+                "cost": {
+                  "total": 0.0060916500000000005
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_399147",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:34:33.893Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791804869156,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 3383,
+                "output": 40,
+                "cacheRead": 46192,
+                "cacheWrite": 0,
+                "totalTokens": 49615,
+                "cost": {
+                  "total": 0.00615165
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_203772",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:34:41.871Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791804878319,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 10432,
+                "output": 10,
+                "cacheRead": 47632,
+                "cacheWrite": 0,
+                "totalTokens": 58074,
+                "cost": {
+                  "total": 0.011433899999999999
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_344780",
+                  "name": "exercise_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "custom",
+            "customType": "workflow-product-execution",
+            "timestamp": "2026-10-12T11:36:41.745Z",
+            "data": {
+              "commandHash": "f6cb0364916130a0711477f2dfebac3519fba5316226aeede06cf1a07f0ec18c",
+              "sourceDigest": "44917933685d376b36dd29d6a0d690bb9e8eae09e915ed93538a7c01f67311ec",
+              "exitCode": 0,
+              "startedAt": "2026-10-12T11:34:41.871Z",
+              "completedAt": "2026-10-12T11:36:41.745Z",
+              "outputHash": "ba99f878d97bdab11e6138135b6f8378a81ee5746a7c12ed326605fca768d3a3"
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:36:50.867Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805001788,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 3204,
+                "output": 37,
+                "cacheRead": 56039,
+                "cacheWrite": 0,
+                "totalTokens": 59280,
+                "cost": {
+                  "total": 0.006744675
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_407898",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:36:55.986Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805012360,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 11523,
+                "output": 39,
+                "cacheRead": 57296,
+                "cacheWrite": 0,
+                "totalTokens": 68858,
+                "cost": {
+                  "total": 0.013085700000000002
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_357564",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:37:00.520Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805016819,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 4006,
+                "output": 39,
+                "cacheRead": 66797,
+                "cacheWrite": 0,
+                "totalTokens": 70842,
+                "cost": {
+                  "total": 0.008160525
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_320382",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:37:06.014Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805022170,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 9311,
+                "output": 38,
+                "cacheRead": 68825,
+                "cacheWrite": 0,
+                "totalTokens": 78174,
+                "cost": {
+                  "total": 0.012287625
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_232324",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:37:26.066Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805030010,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 10775,
+                "output": 93,
+                "cacheRead": 76163,
+                "cacheWrite": 0,
+                "totalTokens": 87031,
+                "cost": {
+                  "total": 0.014142225
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_371108",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:37:32.489Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805047820,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 4818,
+                "output": 28,
+                "cacheRead": 84916,
+                "cacheWrite": 0,
+                "totalTokens": 89762,
+                "cost": {
+                  "total": 0.0100872
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_420733",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:37:37.613Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805054451,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 12231,
+                "output": 32,
+                "cacheRead": 87762,
+                "cacheWrite": 0,
+                "totalTokens": 100025,
+                "cost": {
+                  "total": 0.0158754
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_320685",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:37:47.531Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805060352,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 8732,
+                "output": 96,
+                "cacheRead": 97993,
+                "cacheWrite": 0,
+                "totalTokens": 106821,
+                "cost": {
+                  "total": 0.014258475
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_350691",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:37:56.755Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805070340,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 12427,
+                "output": 44,
+                "cacheRead": 104744,
+                "cacheWrite": 0,
+                "totalTokens": 117215,
+                "cost": {
+                  "total": 0.01734105
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_275594",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:38:05.810Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805079665,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 6783,
+                "output": 28,
+                "cacheRead": 115153,
+                "cacheWrite": 0,
+                "totalTokens": 121964,
+                "cost": {
+                  "total": 0.013828725
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_370272",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:38:23.668Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805090928,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 2823,
+                "output": 27,
+                "cacheRead": 119893,
+                "cacheWrite": 0,
+                "totalTokens": 122743,
+                "cost": {
+                  "total": 0.011210475
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_238121",
+                  "name": "mcp__codebase_index_codebase_search"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:38:34.371Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805103681,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 3793,
+                "output": 44,
+                "cacheRead": 120679,
+                "cacheWrite": 0,
+                "totalTokens": 124516,
+                "cost": {
+                  "total": 0.012060675
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_281693",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:38:47.722Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805115597,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 11720,
+                "output": 38,
+                "cacheRead": 122480,
+                "cacheWrite": 0,
+                "totalTokens": 134238,
+                "cost": {
+                  "total": 0.018118500000000003
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_388993",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:39:07.597Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805129985,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 10914,
+                "output": 83,
+                "cacheRead": 132200,
+                "cacheWrite": 0,
+                "totalTokens": 143197,
+                "cost": {
+                  "total": 0.01841175
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_372602",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:39:14.259Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805150560,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 13148,
+                "output": 39,
+                "cacheRead": 141122,
+                "cacheWrite": 0,
+                "totalTokens": 154309,
+                "cost": {
+                  "total": 0.0205914
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_267892",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:39:24.738Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805156188,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 11358,
+                "output": 38,
+                "cacheRead": 152266,
+                "cacheWrite": 0,
+                "totalTokens": 163662,
+                "cost": {
+                  "total": 0.02008095
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_376663",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:39:31.742Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805165300,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 3186,
+                "output": 42,
+                "cacheRead": 161579,
+                "cacheWrite": 0,
+                "totalTokens": 164807,
+                "cost": {
+                  "total": 0.014665425
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_283277",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-12T11:40:06.701Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791805176661,
+              "stopReason": "stop",
+              "usage": {
+                "input": 3354,
+                "output": 697,
+                "cacheRead": 162721,
+                "cacheWrite": 0,
+                "totalTokens": 166772,
+                "cost": {
+                  "total": 0.017333325
+                }
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of portable-product-release patch diff across bin/nullform.mjs, tools/install-harness.mjs, tools/self-update.mjs, and tools/tests/portable-runtime.test.mjs confirms the fix is correct, robust, and introduces no defects or regressions.\\n\\n1. Analysis of Changes & Cross-Boundary Contracts:\\n- bin/nullform.mjs (printInitSuccess): Completed init JSON is compacted into compactPlan, summarizing file lists to scalar counts (filesCount, managedFilesCount) and adapters array while keeping readiness, savedState, and doctor report intact. This resolves the Node spawnSync default 1MB maxBuffer overflow (ENOBUFS) during reinit under large harnesses like OpenHuman without stripping required data.\\n- tools/install-harness.mjs: The unneeded lock and journal object references were removed from plan construction, avoiding internal serialization leaks while maintaining correct transactional management inside runInit and installHarness.\\n- tools/self-update.mjs (runInstalledBinReinit, executeUpdate): Error handling now correctly prioritizes error.message (such as ENOBUFS, ENOENT, or ETIMEDOUT) over truncated text, caps stdout fallback to 500 characters, and applies canonical sanitizeError redacting.\\n- tools/tests/portable-runtime.test.mjs: Test 16 exercises the real CLI init child process with OpenHuman across deeply nested paths, verifying exit code 0, compact payload (<100KB), valid counts, and proper absence of internal journal data.\\n- Consumer dispatch: runInstalledBinReinit consumes ok, stage, error, detail, doctor, and version from reinitJson; none depend on verbose file arrays. Full test suite executed via exercise_product passed 21/21 tests.\\n\\n2. Requirements Manifest Verification:\\n- R01 (Stability): Prevents false install_failed reports during update reinit caused by buffer truncation; atomic identity, rollback, and journal cleanup remain intact.\\n- R02 (CLI Quality): Public CLI outputs clean, actionable JSON diagnostics and compact plan summaries without megabyte-scale telemetry.\\n- R03 (Portability): Resolves real child-process buffer limits across macOS, Linux, and Windows for all 8 supported adapters.\\n- R04 (No Hacks): Follows Node-native child process bounds naturally without arbitrary buffer overrides or unsafe workarounds.\\n- R05 (Quality Evidence): Preserves historical comparisons and no-paid-experiment constraints; evidence reports remain untouched.\\n- R06 (npm Publication): Preserves package integrity, version bindings, and upgrade validation mechanisms.\\n- R07 (No Paid Runs): Zero benchmark or paid model dispatch added.\\n- R08 (Managed Prompts): Managed surfaces and user instructions remain preserved.\\n- R09 (Honest Acceptance): Technical criteria satisfied with no unverified quality claims.\\n\\n3. Lean / Simplification Lens:\\n- No dead code, unnecessary abstractions, or redundant indirection introduced. Plan serialization cleanup removed obsolete internal references. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}"
+                }
+              ]
+            }
+          }
+        ],
+        "nativeEventsHash": "147de4f4c9f250894bff1d1d22daf4ce1334599d6aac4976722c9e0a801f8044",
+        "eventProjectionHash": "66af9a017f424d65a3ffe8604cc1e52afca04cbdd87997091fc036a2ce95362b"
+      },
+      "stageB": null,
       "oracles": []
     }
   ],
