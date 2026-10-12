@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { resolve, join, dirname, basename, delimiter, relative } from "node:path";
+import { resolve, join, dirname, basename, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -168,14 +168,8 @@ export function createArchive(tarballPath, sourceDir, itemToPack = "package") {
   const absSource = resolve(sourceDir);
   const tarCmd = resolveTarCommand();
   mkdirSync(tarDir, { recursive: true });
-
-  const relTar = relative(absSource, absTarball).replace(/\\/g, "/");
-  const useDir = relTar.includes(":") ? tarDir : absSource;
-  const archiveArg = relTar.includes(":") ? tarFile : relTar;
-  const packArg = relTar.includes(":") ? relative(tarDir, join(absSource, itemToPack)).replace(/\\/g, "/") : itemToPack;
-
-  const res = spawnSync(tarCmd, ["-czf", archiveArg, packArg], {
-    cwd: useDir,
+  const res = spawnSync(tarCmd, ["-czf", tarFile, "-C", absSource, itemToPack], {
+    cwd: tarDir,
     encoding: "utf8",
     windowsHide: true,
   });

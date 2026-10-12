@@ -47,6 +47,7 @@ function terminateChildTree(child) {
 
 function spawnAsync(command, args = [], options = {}) {
   const { cwd = REPO_ROOT, env = process.env, input = "", timeoutMs = 120_000, tracker = null } = options;
+  const startedAt = Date.now();
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command, args, { cwd, env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     if (tracker) tracker.add(child);
@@ -76,12 +77,17 @@ function spawnAsync(command, args = [], options = {}) {
     });
     child.on("close", (code, signal) => {
       cleanupChild();
+      const elapsedMs = Date.now() - startedAt;
+      const stdout = Buffer.concat(outChunks).toString("utf8");
+      const rawStderr = Buffer.concat(errChunks).toString("utf8");
+      const stderr = rawStderr || (timedOut ? `Command timed out after ${timeoutMs}ms (elapsed: ${elapsedMs}ms): ${command} ${args.join(" ")}` : "");
       resolveRun({
         status: timedOut ? 124 : (code ?? 1),
         signal,
         timedOut,
-        stdout: Buffer.concat(outChunks).toString("utf8"),
-        stderr: Buffer.concat(errChunks).toString("utf8"),
+        elapsedMs,
+        stdout,
+        stderr,
       });
     });
   });
@@ -142,7 +148,15 @@ function createSmokeEnv(baseTemp) {
       const env = { ...isolatedEnv, ...(options.extraEnv || {}) };
       const command = process.platform === "win32" ? env.ComSpec || "cmd.exe" : binPath;
       const fullArgs = process.platform === "win32" ? ["/d", "/c", "nullform.cmd", ...args] : args;
-      return spawnAsync(command, fullArgs, { cwd: options.cwd || spaceBase, env, input: options.input ?? "", timeoutMs: options.timeoutMs ?? 60_000, tracker: activeChildren });
+      const isTwoPhaseUpdate = args[0] === "update";
+      const defaultTimeout = isTwoPhaseUpdate ? 180_000 : 60_000;
+      return spawnAsync(command, fullArgs, {
+        cwd: options.cwd || spaceBase,
+        env,
+        input: options.input ?? "",
+        timeoutMs: options.timeoutMs ?? defaultTimeout,
+        tracker: activeChildren,
+      });
     },
     async dispose() {
       for (const child of activeChildren) terminateChildTree(child);
@@ -464,8 +478,8 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   const opencodeHome = join(ctx.spaceBase, "home_opencode");
   const opencodeRoot = join(ctx.spaceBase, "root_opencode");
   const envReg = { npm_config_registry: registry.url, NPM_CONFIG_REGISTRY: registry.url, NULLFORM_REGISTRY: registry.url };
-  const updateRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], { extraEnv: envReg });
-  assert.equal(updateRes.status, 0, `R06: update failed: ${updateRes.stderr || updateRes.stdout}`);
+  const updateRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: 180_000 });
+  assert.equal(updateRes.status, 0, `R06: update failed (status: ${updateRes.status}, elapsed: ${updateRes.elapsedMs}ms): ${updateRes.stderr || updateRes.stdout}`);
   assert.equal((await ctx.runInstalledBin(["--version"])).stdout.trim(), upgradeVersion);
 
   const updatedState = JSON.parse(readFileSync(join(opencodeHome, ".nullform", "installation.json"), "utf8"));
@@ -476,8 +490,8 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
 
   const cursorHome = join(ctx.spaceBase, "home_cursor");
   const cursorRoot = join(ctx.spaceBase, "root_cursor");
-  const cUpRes = await ctx.runInstalledBin(["update", "--force", "--yes", "--user-home", cursorHome, "--registry", registry.url], { extraEnv: envReg });
-  assert.equal(cUpRes.status, 0);
+  const cUpRes = await ctx.runInstalledBin(["update", "--force", "--yes", "--user-home", cursorHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: 180_000 });
+  assert.equal(cUpRes.status, 0, `R06: cursor update failed (status: ${cUpRes.status}, elapsed: ${cUpRes.elapsedMs}ms): ${cUpRes.stderr || cUpRes.stdout}`);
   assert.equal(JSON.parse(readFileSync(join(cursorHome, ".nullform", "installation.json"), "utf8")).version, upgradeVersion);
   assert.equal(readFileSync(join(cursorRoot, "VERSION"), "utf8").trim(), upgradeVersion);
 
@@ -613,12 +627,16 @@ export async function runSmoke(options = {}) {
     if (registry) {
       try { await registry.close(); } catch (err) { cleanupError ||= err; }
     }
-    if (!keepTemp && existsSync(baseTemp)) {
+    if (!keepTemp && !primaryError && existsSync(baseTemp)) {
       try {
         rmSync(baseTemp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       } catch (err) {
         cleanupError ||= err;
       }
+    }
+    if (primaryError && existsSync(baseTemp)) {
+      try { primaryError.diagnosticsPath = baseTemp; } catch {}
+      console.error(`[npm-smoke] Failure diagnostics preserved at ${baseTemp}`);
     }
     if (cleanupError) {
       if (primaryError) {

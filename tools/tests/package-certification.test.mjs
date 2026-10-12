@@ -3,11 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { deriveHigherVersion } from "../npm-smoke.mjs";
 import { inspectArchiveContents, getGitCommit } from "../certify-package.mjs";
-import { createArchive } from "../package-archive.mjs";
+import { createArchive, safeExtractArchive } from "../package-archive.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -91,6 +90,27 @@ test("inspectArchiveContents rejects candidate with same version but altered pay
       },
       /byte\/hash mismatch with current repository source/
     );
+  } finally {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test("createArchive preserves member layout without prepending parent source directory paths", () => {
+  const tempDir = join(tmpdir(), `test-layout-${Date.now()}`);
+  const nestedSource = join(tempDir, "deep", "nested", "source");
+  const pkgDir = join(nestedSource, "package");
+  const outDir = join(tempDir, "out");
+  mkdirSync(pkgDir, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
+  try {
+    writeFileSync(join(pkgDir, "sample.txt"), "hello world\n", "utf8");
+    const tarballPath = join(outDir, "test-fixture.tgz");
+    createArchive(tarballPath, nestedSource, "package");
+
+    const unpackDir = join(tempDir, "unpack");
+    const entries = safeExtractArchive(tarballPath, unpackDir, { requirePackagePrefix: false });
+    const fileEntries = entries.filter((e) => !e.endsWith("/") && e !== "package");
+    assert.deepEqual(fileEntries, ["package/sample.txt"]);
   } finally {
     try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
   }
