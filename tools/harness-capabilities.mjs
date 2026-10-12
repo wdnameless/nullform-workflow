@@ -205,5 +205,5 @@ export function printWorkflowHelp() {
   console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
   console.log("  node workflow.mjs check-ci --push --base-ref <previous-commit>");
   console.log("  node workflow.mjs review-run --role <reviewer|oracle> --change <name> --model <provider/model> --base-ref <base> [--product-command <JSON argv>] [--redo]");
-  console.log("  node workflow.mjs stage-b --change <name> --phase <before|after> --test-cmd \"<cmd>\" [--disposition <lean-already|simplified>]");
+  console.log("  node workflow.mjs stage-b --change <name> --phase <before|after> --test-cmd \"<cmd>\" [--disposition <lean-already|simplified>] [--test-timeout <sec>]");
 }

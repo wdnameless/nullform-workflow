@@ -1887,7 +1887,7 @@ function cmdReviewRun(root, flags) {
 
 function cmdStageB(root, flags) {
   try {
-    const res = recordStageB({ root, changeId: flags.change, phase: flags.phase || "after", disposition: flags.disposition || "lean-already", testCmd: flags["test-cmd"] || flags.testCmd, summary: flags.summary });
+    const res = recordStageB({ root, changeId: flags.change, phase: flags.phase || "after", disposition: flags.disposition || "lean-already", testCmd: flags["test-cmd"] || flags.testCmd, summary: flags.summary, ...(flags["test-timeout"] !== undefined ? { testTimeoutMs: /^[1-9]\d*$/.test(String(flags["test-timeout"])) && typeof flags["test-timeout"] !== "boolean" ? Number(flags["test-timeout"]) * 1000 : NaN } : {}) });
     if (res.ok) { console.log(`workflow stage-b: recorded ${flags.phase || "after"} execution (${res.stageB.disposition || "frozen baseline"}) for '${flags.change}'.`); return 0; }
     return 1;
   } catch (err) { console.error(`workflow stage-b error: ${err.message}`); return 1; }

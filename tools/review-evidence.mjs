@@ -272,14 +272,43 @@ export function runReviewRecord(options) {
   saveReviewEvidence(dir, data);
   return { ok: true, record };
 }
-function executeTests(root, testCmd, testRunner) {
-  const result = testRunner ? testRunner(testCmd) : spawnSync(testCmd, { cwd: root, encoding: 'utf8', shell: true, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
-  if (result.error || result.status !== 0) throw new Error(`Stage-B frozen test suite failed with exit code ${result.status}`);
-  return { exitCode: result.status, output: `${result.stdout || ''}${result.stderr || ''}` };
+function resolveTestTimeoutMs(options = {}) {
+  const rawMs = options.testTimeoutMs;
+  if (rawMs === undefined || rawMs === null) return 120000;
+  if (typeof rawMs !== 'number' || !Number.isSafeInteger(rawMs) || rawMs < 1 || rawMs > 3600000) {
+    throw new Error('Stage-B testTimeoutMs (--test-timeout 1..3600s) must be a safe integer between 1 and 3600000ms');
+  }
+  return rawMs;
+}
+function executeTests(root, testCmd, testRunner, timeoutMs = 120000) {
+  const startedMs = Date.now();
+  const result = testRunner ? testRunner(testCmd, { timeoutMs }) : spawnSync(testCmd, { cwd: root, encoding: 'utf8', shell: true, windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
+  const elapsedMs = Date.now() - startedMs;
+  if (result.error || result.status !== 0) {
+    const combinedOut = sanitizeError(`${result.stdout || ''}${result.stderr || ''}`);
+    let logPath = null;
+    try {
+      const logDir = join(resolve(root), '.tmp');
+      mkdirSync(logDir, { recursive: true });
+      logPath = join(logDir, `stage-b-failed-${Date.now()}-${process.pid}.log`);
+      writeFileSync(logPath, combinedOut, 'utf8');
+    } catch {}
+    const errCode = result.error?.code || (result.signal ? `signal ${result.signal}` : `exit ${result.status}`);
+    const err = new Error(`Stage-B frozen test suite failed with exit code ${result.status} (${errCode}, elapsed ${elapsedMs}ms, deadline ${timeoutMs}ms)${logPath ? ` [retained output: ${logPath}]` : ''}`);
+    err.exitCode = result.status;
+    err.errorCode = result.error?.code || null;
+    err.signal = result.signal || null;
+    err.elapsedMs = elapsedMs;
+    err.timeoutMs = timeoutMs;
+    err.logPath = logPath;
+    throw err;
+  }
+  return { exitCode: result.status, output: `${result.stdout || ''}${result.stderr || ''}`, elapsedMs, timeoutMs };
 }
 export function recordStageB(options) {
   const { root = '.', changeId, phase = 'after', disposition = 'lean-already', testCmd, summary = '', testRunner = null } = options;
   if (!testCmd || !['before', 'after'].includes(phase) || !['lean-already', 'simplified'].includes(disposition)) throw new Error('Stage-B requires before|after, test-cmd, and lean-already|simplified disposition');
+  const timeoutMs = resolveTestTimeoutMs(options);
   const dir = changeDirectory(root, changeId), data = loadReviewEvidence(dir);
   if (data?.reviewer?.verdict !== 'ACCEPT') throw new Error('implementation reviewer ACCEPT record required before Stage-B');
   if (data.oracles?.some(o => o.verdict === 'REJECT')) throw new Error('Negative oracle evidence requires intentional reviewer --redo before Stage-B');
@@ -288,11 +317,11 @@ export function recordStageB(options) {
   if (phase === 'before' && source !== reviewer.sourceDigest) throw new Error('Stage-B before must run on reviewer source A');
   if (phase === 'after' && !data.stageB?.before && (disposition !== 'lean-already' || source !== reviewer.sourceDigest)) throw new Error('Stage-B before execution on A is required before simplification');
   if (phase === 'after' && !data.stageB?.before) {
-    recordStageB({ ...options, phase: 'before' });
-    return recordStageB(options);
+    recordStageB({ ...options, phase: 'before', testTimeoutMs: timeoutMs });
+    return recordStageB({ ...options, testTimeoutMs: timeoutMs });
   }
   const startedAt = new Date().toISOString();
-  const result = executeTests(root, testCmd, testRunner);
+  const result = executeTests(root, testCmd, testRunner, timeoutMs);
   if (testFilesHash(root) !== tests) throw new Error('frozen test files were modified during Stage-B run');
   if (sourceDigest(root) !== source) throw new Error('Test execution mutated product source');
   const execution = { sourceDigest: source, testFilesHash: tests, testCmd, startedAt, completedAt: new Date().toISOString(), ...result };

@@ -18,6 +18,7 @@ import { runWorkflowCli } from "../workflow.mjs";
 import { getCapabilitiesInfo, main } from "../../bin/nullform.mjs";
 import { runDoctor } from "../doctor.mjs";
 import { checkVersionAlignment } from "../harness-capabilities.mjs";
+import { recordStageB } from "../review-evidence.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -666,16 +667,13 @@ test("19. public CLI workflow start with -h task value forwards properly via rea
 });
 
 test("20. checkVersionAlignment warns with older_binary when package is older than verified target", () => {
-  const tempPackageRoot = createTempDir("older-pkg-");
-  const tempTargetRoot = createTempDir("target-root-");
-  const tempHome = createTempDir("home-root-");
+  const tempPackageRoot = createTempDir("older-pkg-"), tempTargetRoot = createTempDir("target-root-"), tempHome = createTempDir("home-root-");
   try {
     writeFileSync(join(tempPackageRoot, "VERSION"), "1.1.0\n", "utf8");
     writeFileSync(join(tempTargetRoot, "VERSION"), "1.2.0\n", "utf8");
     const res = checkVersionAlignment({ harness: tempTargetRoot, userHome: tempHome, packageRoot: tempPackageRoot });
     assert.equal(res.status, "warn");
     assert.equal(res.divergence, "older_binary");
-    assert.equal(res.status !== "pass", true, "Must not falsely report pass when package is older than target");
   } finally {
     rmSync(tempPackageRoot, { recursive: true, force: true });
     rmSync(tempTargetRoot, { recursive: true, force: true });
@@ -683,14 +681,15 @@ test("20. checkVersionAlignment warns with older_binary when package is older th
   }
 });
 
-test("21. sanitizeError redacts quoted and unquoted api_key, apikey, token, credential, and key prefixes while preserving normal error messages", () => {
-  const secret1 = "sk-proj-1234567890abcdef";
-  const secret2 = "my_super_secret_api_key_999";
-  const secret3 = "quoted_token_secret_888";
+test("21. sanitizeError redacts quoted and unquoted api_key, apikey, token, credential, and key prefixes while preserving normal error messages; recordStageB validates testTimeoutMs bounds", () => {
+  const secret1 = "sk-proj-1234567890abcdef", secret2 = "my_super_secret_api_key_999", secret3 = "quoted_token_secret_888";
   const raw = `Config error: {"api_key": "${secret2}", "token": "${secret3}", "apiKey": "${secret1}"} and Authorization: Bearer ${secret3}`;
   const out = sanitizeError(raw);
-  assert.equal(out.includes(secret1), false);
-  assert.equal(out.includes(secret2), false);
-  assert.equal(out.includes(secret3), false);
+  assert.equal(out.includes(secret1) || out.includes(secret2) || out.includes(secret3), false);
   assert.equal(sanitizeError("Corrupted installation state JSON: Unexpected token"), "Corrupted installation state JSON: Unexpected token");
+  for (const bad of [0, -5, 3600001, 1.5, "300000", true, NaN, Infinity]) {
+    assert.throws(() => recordStageB({ changeId: "x", testCmd: "node -v", testTimeoutMs: bad }), /testTimeoutMs .* must be a safe integer/);
+  }
+  assert.equal(runWorkflowCli(["stage-b", "--change", "x", "--test-cmd", "node -v", "--test-timeout", "120abc"]), 1);
+  assert.equal(runWorkflowCli(["stage-b", "--change", "x", "--test-cmd", "node -v", "--test-timeout", "3601"]), 1);
 });
