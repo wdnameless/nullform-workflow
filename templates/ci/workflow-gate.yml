@@ -7,6 +7,10 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled]
     branches: [main, master]
 
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
   pull-requests: write
@@ -20,6 +24,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           # Fetch full history if needed for diffs / previous commit comparison
           fetch-depth: 0
 
