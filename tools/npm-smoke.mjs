@@ -36,6 +36,8 @@ import {
 export { computeFileDigests, deriveHigherVersion, resolveNpmInvocation, safeExtractArchive, inspectArchiveContents };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Deployment includes asset copies, durable writes, native adapters, and doctor.
+const DEPLOYMENT_TIMEOUT_MS = 180_000;
 
 function terminateChildTree(child) {
   if (!child?.pid || child.exitCode !== null) return;
@@ -148,13 +150,11 @@ function createSmokeEnv(baseTemp) {
       const env = { ...isolatedEnv, ...(options.extraEnv || {}) };
       const command = process.platform === "win32" ? env.ComSpec || "cmd.exe" : binPath;
       const fullArgs = process.platform === "win32" ? ["/d", "/c", "nullform.cmd", ...args] : args;
-      const isTwoPhaseUpdate = args[0] === "update";
-      const defaultTimeout = isTwoPhaseUpdate ? 180_000 : 60_000;
       return spawnAsync(command, fullArgs, {
         cwd: options.cwd || spaceBase,
         env,
         input: options.input ?? "",
-        timeoutMs: options.timeoutMs ?? defaultTimeout,
+        timeoutMs: options.timeoutMs ?? 60_000,
         tracker: activeChildren,
       });
     },
@@ -292,7 +292,7 @@ async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome,
 
   let firstPassMdSnapshots = {};
   for (let pass = 1; pass <= 2; pass++) {
-    const res = await ctx.runInstalledBin(initArgs);
+    const res = await ctx.runInstalledBin(initArgs, { timeoutMs: DEPLOYMENT_TIMEOUT_MS });
     assert.equal(res.status, 0, `R02/R04: init pass ${pass} for ${harness} failed: ${res.stderr || res.stdout}`);
 
     for (const mdPath of fixture.mdFiles) {
@@ -478,7 +478,7 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   const opencodeHome = join(ctx.spaceBase, "home_opencode");
   const opencodeRoot = join(ctx.spaceBase, "root_opencode");
   const envReg = { npm_config_registry: registry.url, NPM_CONFIG_REGISTRY: registry.url, NULLFORM_REGISTRY: registry.url };
-  const updateRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: 180_000 });
+  const updateRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: DEPLOYMENT_TIMEOUT_MS });
   assert.equal(updateRes.status, 0, `R06: update failed (status: ${updateRes.status}, elapsed: ${updateRes.elapsedMs}ms): ${updateRes.stderr || updateRes.stdout}`);
   assert.equal((await ctx.runInstalledBin(["--version"])).stdout.trim(), upgradeVersion);
 
@@ -495,7 +495,7 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
     const hSecret = `sk-secret-${h}-98765`;
     const fixture = buildHarnessFixture(h, hRoot, hHome, hProj || hRoot, hSecret);
 
-    const hUp = await ctx.runInstalledBin(["update", "--yes", "--user-home", hHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: 180_000 });
+    const hUp = await ctx.runInstalledBin(["update", "--yes", "--user-home", hHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: DEPLOYMENT_TIMEOUT_MS });
     assert.equal(hUp.status, 0, `R06: ${h} update failed: ${hUp.stderr || hUp.stdout}`);
     const hState = JSON.parse(readFileSync(join(hHome, ".nullform", "installation.json"), "utf8"));
     assert.equal(hState.version, upgradeVersion);
