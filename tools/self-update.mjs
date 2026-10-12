@@ -307,7 +307,7 @@ function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, 
 
   if (reinitStatus !== 0 || (reinitJson && reinitJson.ok === false)) {
     const stageErr = reinitJson?.stage === "doctor" || reinitJson?.error === "doctor_failed" ? "doctor_failed" : "install_failed";
-    const rawDetail = reinitJson?.detail || reinitJson?.error || (reinitRes.stderr || reinitRes.stdout || reinitRes.error?.message || `exit ${reinitStatus}`).trim();
+    const rawDetail = (reinitJson?.detail || reinitJson?.error || reinitRes.error?.message || (reinitRes.stderr || "").trim() || (reinitRes.stdout || "").trim().slice(0, 500) || `exit ${reinitStatus}`).trim();
     return {
       ok: false,
       updated: false,
@@ -505,7 +505,7 @@ export async function executeUpdate(options = {}) {
   const npmRes = spawnSafe(spawnFn, runner.command, [...runner.prefixArgs, ...npmArgs], savedState.root, childEnv);
   const npmStatus = npmRes.status ?? (npmRes.error ? 1 : 0);
   if (npmStatus !== 0) {
-    const errMsg = (npmRes.stderr || npmRes.stdout || npmRes.error?.message || `exit ${npmStatus}`).trim();
+    const errMsg = (npmRes.error?.message || (npmRes.stderr || "").trim() || (npmRes.stdout || "").trim().slice(0, 500) || `exit ${npmStatus}`).trim();
     return { ok: false, updated: false, error: "npm_install_failed", current: check.current, latest: targetVersion, detail: `npm install --global failed: ${sanitizeError(errMsg)}` };
   }
 

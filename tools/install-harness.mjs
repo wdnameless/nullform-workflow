@@ -404,8 +404,6 @@ function installHarness(options = {}) {
       filesToCopy: [],
       adapters: [],
       managedFiles: {},
-      lock,
-      journal,
     };
 
     const isCursorActive = targetHarnesses.includes("cursor");

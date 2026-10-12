@@ -583,32 +583,31 @@ test("15. backupDir junction: backupDir pointing outside via junction/symlink is
     rmSync(outsidePoison, { recursive: true, force: true });
   }
 });
-test("16. real CLI init: fresh completed identity reflects clean post-commit readiness (setup/warn/ready, not recoverable/pending)", async () => {
+test("16. real CLI init: openhuman with long root path succeeds within default spawnSync buffer and reflects clean post-commit readiness", () => {
   const userHome = createTempDir("cli-init-home-");
-  const targetRoot = createTempDir("cli-init-root-");
-
+  const baseRoot = createTempDir("cli-init-root-");
+  const longTargetRoot = join(baseRoot, "deep-segment-alpha", "deep-segment-beta", "openhuman-workspace-target");
   try {
-    let stdoutText = "";
-    let stderrText = "";
-    const stdout = { write(chunk) { stdoutText += String(chunk); } };
-    const stderr = { write(chunk) { stderrText += String(chunk); } };
-
-    const code = await main(
-      ["init", "--harness", "opencode", "--root", targetRoot, "--user-home", userHome, "--yes", "--json", "--skip-release-check"],
-      { stdout, stderr }
+    const res = spawnSync(
+      process.execPath,
+      [CLI_PATH, "init", "--harness", "openhuman", "--root", longTargetRoot, "--user-home", userHome, "--yes", "--json", "--skip-release-check"],
+      { encoding: "utf8" }
     );
-
-    assert.equal(code, 0, `Expected exit 0, got ${code}: ${stderrText}`);
-    const json = JSON.parse(stdoutText.trim());
+    assert.equal(res.error, undefined, `Must not fail with ENOBUFS: ${res.error?.message}`);
+    assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
+    assert.ok(res.stdout.length < 100000, `Init JSON must remain compact (<100KB), got ${res.stdout.length}`);
+    const json = JSON.parse(res.stdout.trim());
     assert.equal(json.ok, true);
     assert.equal(json.stage, "complete");
     assert.notEqual(json.status, "recoverable", "Fresh completed identity must NOT be marked recoverable");
     assert.notEqual(json.status, "pending", "Fresh completed identity must NOT be marked pending");
-    assert.ok(json.readiness === "ready" || json.readiness === "setup" || json.readiness === "warn");
+    assert.ok(json.plan.filesCount > 0);
+    assert.equal(json.plan.journal, undefined, "Internal journal must not be serialized in public init JSON");
+    assert.equal(readInstallationState(userHome).root, resolve(longTargetRoot));
     assert.equal(existsSync(getDeploymentJournalPath(userHome)), false, "Journal must be deleted after clean commit");
   } finally {
     rmSync(userHome, { recursive: true, force: true });
-    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(baseRoot, { recursive: true, force: true });
   }
 });
 test("17. non-OMP installed review refusal: review-run without --harness resolves installation state and refuses before dispatch when non-OMP installed", async () => {

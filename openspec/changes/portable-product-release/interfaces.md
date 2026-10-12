@@ -18,6 +18,8 @@ Keep installHarness(options) and existing init/doctor/update public behavior; ad
 
 Standalone installation owns and finalizes its deployment journal on success; `DeploymentJournal.finalize()` must not finalize a caller-owned transaction. Public init retains ownership until `commit(verifiedState)` makes the last verified identity durable. `sanitizeError(msg)` is the canonical diagnostic redactor shared by installation, native review and publication; no parallel weaker redactors.
 
+Completed public init JSON uses bounded plan summaries (`filesCount`, `managedFilesCount`, adapters) and retains identity/readiness/doctor results; internal journals, locks and per-file ownership maps are not serialized. Detailed dry-run/internal plans remain available to their existing consumers. Child capture errors remain errors with actionable diagnostics, not false success or megabytes of truncated output.
+
 Expose core project gates through `nullform workflow <existing-command> ...` using the existing workflow parser/dispatch/implementations, not shell interpolation or copied business logic. Its project root defaults to cwd; basic operations never require OMP/Bun. Review capability is explicitly separate from configuration-adapter readiness. Certification measures eight configuration adapters, not undocumented native model execution.
 
 Review capability resolves the selected installation harness from existing verified state when no explicit harness is supplied. `validateReviewCapability(targetHarness,{dryRun,userHome})` returns `{ok,error,harness}`; a selected non-OMP installation refuses native review before model dispatch. Core gates remain independent of the selected native client.

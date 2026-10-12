@@ -311,6 +311,19 @@ function emitJsonOrText(output, errOut, isJson, payload, textMsg, toStderr = tru
 
 function printInitSuccess(output, options, { ok, readiness, selectedHarness, savedState, statePath, plan, doctorResult }) {
   if (options.json) {
+    const compactPlan = plan
+      ? {
+          harness: plan.harness,
+          root: plan.root,
+          ...(plan.projectRoot ? { projectRoot: plan.projectRoot } : {}),
+          userHome: plan.userHome,
+          dryRun: Boolean(plan.dryRun),
+          filesCount: Array.isArray(plan.filesToCopy) ? plan.filesToCopy.length : 0,
+          managedFilesCount: plan.managedFiles ? Object.keys(plan.managedFiles).length : 0,
+          adapters: plan.adapters || [],
+          ...(plan.baselineRecorded !== undefined ? { baselineRecorded: plan.baselineRecorded } : {}),
+        }
+      : null;
     const payload = {
       ok,
       stage: ok ? "complete" : "doctor",
@@ -322,7 +335,7 @@ function printInitSuccess(output, options, { ok, readiness, selectedHarness, sav
       userHome: savedState.userHome,
       version: savedState.version,
       statePath,
-      plan,
+      plan: compactPlan,
       doctor: doctorResult,
     };
     output.write(JSON.stringify(payload, null, 2) + "\n");
