@@ -488,12 +488,33 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   assert.equal(readFileSync(ownedSkillFile, "utf8"), `# Upgraded core.py v${upgradeVersion}\n`, "R03/R06: Owned asset updated");
   assert.equal(readFileSync(userSkillFile, "utf8"), "# User edit to validate_data.py preserved\n", "R03/R06: User edit preserved");
 
-  const cursorHome = join(ctx.spaceBase, "home_cursor");
-  const cursorRoot = join(ctx.spaceBase, "root_cursor");
-  const cUpRes = await ctx.runInstalledBin(["update", "--force", "--yes", "--user-home", cursorHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: 180_000 });
-  assert.equal(cUpRes.status, 0, `R06: cursor update failed (status: ${cUpRes.status}, elapsed: ${cUpRes.elapsedMs}ms): ${cUpRes.stderr || cUpRes.stdout}`);
-  assert.equal(JSON.parse(readFileSync(join(cursorHome, ".nullform", "installation.json"), "utf8")).version, upgradeVersion);
-  assert.equal(readFileSync(join(cursorRoot, "VERSION"), "utf8").trim(), upgradeVersion);
+  for (const h of HARNESS_CHOICES.filter((c) => c !== "opencode")) {
+    const hHome = join(ctx.spaceBase, `home_${h}`);
+    const hRoot = join(ctx.spaceBase, `root_${h}`);
+    const hProj = h === "cursor" ? join(ctx.spaceBase, `project_${h}`) : null;
+    const hSecret = `sk-secret-${h}-98765`;
+    const fixture = buildHarnessFixture(h, hRoot, hHome, hProj || hRoot, hSecret);
+
+    const hUp = await ctx.runInstalledBin(["update", "--yes", "--user-home", hHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: 180_000 });
+    assert.equal(hUp.status, 0, `R06: ${h} update failed: ${hUp.stderr || hUp.stdout}`);
+    const hState = JSON.parse(readFileSync(join(hHome, ".nullform", "installation.json"), "utf8"));
+    assert.equal(hState.version, upgradeVersion);
+    assert.equal(hState.harness, h);
+    assert.equal(resolve(hState.root), resolve(hRoot));
+    if (hProj) assert.equal(resolve(hState.projectRoot), resolve(hProj));
+    assert.equal(readFileSync(join(hRoot, "VERSION"), "utf8").trim(), upgradeVersion);
+
+    for (const mdPath of fixture.mdFiles) {
+      const md = readFileSync(mdPath, "utf8");
+      assert.ok(md.includes(fixture.humanBefore) && md.includes(fixture.humanAfter), `Human notes lost in ${mdPath}`);
+      assert.ok(md.includes("NULLFORM WORKFLOW"), `Adapter missing in ${mdPath}`);
+    }
+    for (const cfgPath of fixture.cfgFiles) {
+      assert.ok(readFileSync(cfgPath, "utf8").includes(hSecret), `Secret lost in ${cfgPath}`);
+    }
+    assert.equal(readFileSync(join(hRoot, "unrelated-notes.txt"), "utf8"), "Unrelated user file content.\n");
+    assert.equal(readFileSync(join(hRoot, ".env"), "utf8"), `USER_ENV_SECRET=${hSecret}\n`);
+  }
 
   registry.addPackage({ name: "nullform-workflow", version: brokenVersion, tarballPath: vUpTarballPath, manifest: { ...pkgJson, version: brokenVersion }, tarballStatus: 404 });
   const tarballFailRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], {
@@ -607,6 +628,7 @@ export async function runSmoke(options = {}) {
       outcomes: {
         globalInstall: "passed",
         harnesses: HARNESS_CHOICES,
+        updatedHarnesses: HARNESS_CHOICES,
         doctor: "passed",
         boundaries: "passed",
         registryUpgrade: "passed",

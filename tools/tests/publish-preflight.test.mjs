@@ -92,6 +92,7 @@ test("preflight refuses publication when certificate digest does not match archi
         boundaries: "passed",
         registryUpgrade: "passed",
         harnesses: ALL_8_HARNESSES,
+        updatedHarnesses: ALL_8_HARNESSES,
       },
       status: "PASS",
     };
@@ -136,6 +137,7 @@ test("preflight refuses publication when certificate is bound to a stale git com
         boundaries: "passed",
         registryUpgrade: "passed",
         harnesses: ALL_8_HARNESSES,
+        updatedHarnesses: ALL_8_HARNESSES,
       },
       status: "PASS",
     };
@@ -167,6 +169,7 @@ test("preflight refuses publication when certificate is bound to a stale git com
         boundaries: "passed",
         registryUpgrade: "passed",
         harnesses: ALL_8_HARNESSES,
+        updatedHarnesses: ALL_8_HARNESSES,
       },
       status: "PASS",
     };
@@ -208,6 +211,7 @@ test("preflight refuses publication when required 6 OS x Node matrix cells are i
         boundaries: "passed",
         registryUpgrade: "passed",
         harnesses: ALL_8_HARNESSES,
+        updatedHarnesses: ALL_8_HARNESSES,
       },
       status: "PASS",
     };
@@ -249,11 +253,11 @@ test("preflight refuses publication when certificates omit any of the 8 required
         doctor: "passed",
         boundaries: "passed",
         registryUpgrade: "passed",
-        harnesses: ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes"],
+        harnesses: ALL_8_HARNESSES,
+        updatedHarnesses: ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes"],
       },
       status: "PASS",
     };
-
     const res = verifyReleasePreflight({
       repoRoot: REPO_ROOT,
       tarballPath: tarball,
@@ -263,7 +267,7 @@ test("preflight refuses publication when certificates omit any of the 8 required
     });
 
     assert.equal(res.ok, false);
-    assert.ok(res.blockers.some((b) => b.includes("missing verified harness outcome for 'openhuman'")));
+    assert.ok(res.blockers.some((b) => b.includes("missing verified update coverage for 'openhuman'")));
   } finally {
     try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
   }

@@ -184,9 +184,13 @@ export function verifyReleasePreflight(options = {}) {
         blockers.push(`Certificate ${label} missing verified smoke outcomes (install/doctor/boundaries/upgrade).`);
       }
       const harnesses = Array.isArray(outcomes.harnesses) ? outcomes.harnesses : [];
+      const updatedHarnesses = Array.isArray(outcomes.updatedHarnesses) ? outcomes.updatedHarnesses : [];
       for (const h of ALL_8_HARNESSES) {
         if (!harnesses.includes(h)) {
           blockers.push(`Certificate ${label} missing verified harness outcome for '${h}'.`);
+        }
+        if (!updatedHarnesses.includes(h)) {
+          blockers.push(`Certificate ${label} missing verified update coverage for '${h}'.`);
         }
       }
     }
