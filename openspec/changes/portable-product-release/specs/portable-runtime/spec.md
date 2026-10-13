@@ -9,6 +9,13 @@ The runtime SHALL preserve user-owned instructions, configuration and edited ass
 - **THEN** the prior verified identity remains intact and recovery/retry restores a coherent installation without losing human bytes
 - **AND** the CLI does not report complete success
 
+#### Scenario: Human files in recursively deployed trees and native extensions
+- **GIVEN** an existing user-edited or unowned-different core tree file or OMP home extension, including the delete-guard
+- **WHEN** public init/update deploys package assets
+- **THEN** those human bytes are preserved, not replaced by a generic directory copy or extension copy loop
+- **AND** preserved custom assets are reported explicitly without falsely adopting their current bytes as package-owned
+- **AND** unchanged known-owned assets update across package versions with valid ownership and journal records
+
 #### Scenario: Concurrent application
 - **GIVEN** one active installation application for the same identity
 - **WHEN** another process attempts an overlapping application

@@ -3,8 +3,8 @@
  * for the 8 supported target harnesses.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve, join, dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
@@ -22,7 +22,6 @@ import {
   preflightYamlConfig,
   resolveOpencodeConfigPaths,
 } from "./harness-config.mjs";
-import { safeAtomicWrite } from "./deployment-journal.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
@@ -32,12 +31,11 @@ export function installOmpHomeAssets({
   targetRoot,
   slashRoot,
   userHome,
-  options,
-  priorManaged,
   plan,
   writeAdapter,
   readExisting,
-  journal,
+  assetContext,
+  copyAsset,
   copyDirRecursive,
   installSkills,
   installRoleRoster,
@@ -69,27 +67,18 @@ export function installOmpHomeAssets({
   }
 
   plan.filesToCopy.push(
-    ...installRoleRoster(join(targetRoot, "agent", "agents"), join(homeAgentDir, "agents"), slashRoot, options.dryRun, journal)
+    ...installRoleRoster(join(targetRoot, "agent", "agents"), join(homeAgentDir, "agents"), slashRoot, assetContext)
   );
   for (const dst of [join(homeAgentDir, "rules"), join(agentsHome, "rules")]) {
-    plan.filesToCopy.push(...copyDirRecursive(join(targetRoot, "rules"), dst, slashRoot, options.dryRun, journal));
+    plan.filesToCopy.push(...copyDirRecursive(join(REPO_ROOT, "rules"), dst, slashRoot, assetContext));
   }
   plan.filesToCopy.push(
-    ...installSkills(join(targetRoot, "skills"), join(agentsHome, "skills"), slashRoot, agentsHome, options.dryRun, priorManaged, plan.managedFiles, {}, journal)
+    ...installSkills(join(REPO_ROOT, "skills"), join(agentsHome, "skills"), slashRoot, agentsHome, assetContext)
   );
   for (const extFile of ["nullform-jev.ts", "nullform-delete-guard.ts"]) {
     const extSource = join(REPO_ROOT, "agent", "extensions", extFile);
     const extDest = join(homeAgentDir, "extensions", extFile);
-    if (existsSync(extSource)) {
-      if (!options.dryRun) {
-        const extContent = readFileSync(extSource);
-        if (journal) journal.recordBeforeWrite(extDest, extContent);
-        mkdirSync(dirname(extDest), { recursive: true });
-        safeAtomicWrite(extDest, extContent);
-        if (journal) journal.recordWritten(extDest);
-      }
-      plan.filesToCopy.push(extDest);
-    }
+    if (existsSync(extSource) && copyAsset(extSource, extDest)) plan.filesToCopy.push(extDest);
   }
 }
 
@@ -138,9 +127,6 @@ export function applyHarnessAdapter(h, ctx) {
     writeAdapter,
     readExisting,
     copyHomeSkills,
-    priorManaged,
-    plan,
-    journal,
     copyDirRecursive,
     installSkills,
     installRoleRoster,
@@ -177,12 +163,6 @@ export function applyHarnessAdapter(h, ctx) {
       break;
     }
     case "omp": {
-      const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
-      const lawPath = join(targetRoot, "agent", "AGENTS.md");
-      const rawLaw = existsSync(lawSource)
-        ? readFileSync(lawSource, "utf8").split("<HARNESS>").join(slashRoot)
-        : getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law");
-      if (resolve(lawPath) !== resolve(lawSource)) writeAdapter(lawPath, rawLaw);
       if (shouldWriteHome) {
         installOmpHomeAssets({
           ...ctx,

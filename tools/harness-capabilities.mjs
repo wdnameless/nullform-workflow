@@ -201,6 +201,8 @@ export function printWorkflowHelp() {
   console.log("  node workflow.mjs escalate --tier T2");
   console.log("  node workflow.mjs close [--force --reason \"...\"] [--auto] [--diff-lines N]");
   console.log("  node workflow.mjs metrics [--root .]");
+  console.log("  nullform workflow workspace --feature SLUG [--root PROJECT]  # new detached writer");
+  console.log("  nullform workflow integrate --feature SLUG [--root PROJECT]  # serialized native merge");
   console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
   console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
   console.log("  node workflow.mjs check-ci --push --base-ref <previous-commit>");

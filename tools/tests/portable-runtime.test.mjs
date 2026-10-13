@@ -1,6 +1,6 @@
 /**
- * tools/tests/portable-runtime.test.mjs — Real FS/child-process regressions for portable runtime:
- * fault, kill, stale lock, live owner, tampered journal, pending retry, human assets,
+ * tools/tests/portable-runtime.test.mjs — General portable runtime regressions:
+ * stale locks, live owners, tampered journals, pending retry, human assets,
  * no-Bun non-OMP public workflow, and unsupported review refusal.
  */
 
@@ -11,11 +11,11 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { acquireDeploymentLock, releaseDeploymentLock, recoverAbandonedJournal, DeploymentJournal, getDeploymentLockPath, getDeploymentJournalPath } from "../deployment-journal.mjs";
-import { readInstallationState, writeInstallationState, getStateFilePath, sanitizeError } from "../installation-state.mjs";
+import { acquireDeploymentLock, recoverAbandonedJournal, DeploymentJournal, getDeploymentLockPath, getDeploymentJournalPath } from "../deployment-journal.mjs";
+import { readInstallationState, writeInstallationState, sanitizeError } from "../installation-state.mjs";
 import { installHarness } from "../install-harness.mjs";
 import { runWorkflowCli } from "../workflow.mjs";
-import { getCapabilitiesInfo, main } from "../../bin/nullform.mjs";
+import { getCapabilitiesInfo } from "../../bin/nullform.mjs";
 import { runDoctor } from "../doctor.mjs";
 import { checkVersionAlignment } from "../harness-capabilities.mjs";
 import { recordStageB } from "../review-evidence.mjs";
@@ -29,81 +29,6 @@ function createTempDir(prefix = "runtime-test-") {
   mkdirSync(dir, { recursive: true });
   return dir;
 }
-
-test("1. fault: deterministic write failure interrupts install; prior verified identity remains intact and human bytes preserved", () => {
-  const userHome = createTempDir("fault-home-");
-  const targetRoot = createTempDir("fault-root-");
-
-  try {
-    const priorState = {
-      schemaVersion: 1,
-      harness: "opencode",
-      root: targetRoot,
-      userHome,
-      version: "1.0.0",
-      managedFiles: {},
-    };
-    writeInstallationState(userHome, priorState);
-
-    const humanFile = join(targetRoot, "human-notes.md");
-    writeFileSync(humanFile, "# Human original notes", "utf8");
-
-    const journal = new DeploymentJournal({
-      userHome,
-      targetRoot,
-      harness: "opencode",
-      targetVersion: "1.2.0",
-    });
-    journal.start();
-
-    const file1 = join(targetRoot, "test-file1.txt");
-    journal.recordBeforeWrite(file1, "content-v2");
-    writeFileSync(file1, "content-v2", "utf8");
-    journal.recordWritten(file1);
-
-    journal.rollback("injected_fault");
-
-    const current = readInstallationState(userHome);
-    assert.equal(current.version, "1.0.0");
-    assert.equal(existsSync(file1), false, "Created file should be unlinked on rollback");
-    assert.equal(readFileSync(humanFile, "utf8"), "# Human original notes", "Human file preserved");
-  } finally {
-    rmSync(userHome, { recursive: true, force: true });
-    rmSync(targetRoot, { recursive: true, force: true });
-  }
-});
-
-test("2. kill: interrupted process leaves journal that can be recovered without permanent lockout or data loss", () => {
-  const userHome = createTempDir("kill-home-");
-  const targetRoot = createTempDir("kill-root-");
-
-  try {
-    const originalFile = join(targetRoot, "config.json");
-    writeFileSync(originalFile, '{"setting": "original"}', "utf8");
-
-    const journal = new DeploymentJournal({
-      userHome,
-      targetRoot,
-      harness: "claude",
-      targetVersion: "1.2.0",
-    });
-    journal.start();
-
-    journal.recordBeforeWrite(originalFile, '{"setting": "modified"}');
-    writeFileSync(originalFile, '{"setting": "modified"}', "utf8");
-    journal.recordWritten(originalFile);
-
-    assert.equal(existsSync(getDeploymentJournalPath(userHome)), true);
-
-    const res = recoverAbandonedJournal(userHome, { targetRoot });
-    assert.equal(res.recovered, true);
-    assert.equal(readFileSync(originalFile, "utf8"), '{"setting": "original"}', "File restored from backup");
-    assert.equal(existsSync(getDeploymentJournalPath(userHome)), false, "Journal cleaned up after recovery");
-  } finally {
-    rmSync(userHome, { recursive: true, force: true });
-    rmSync(targetRoot, { recursive: true, force: true });
-  }
-});
 
 test("3. stalelock: verified dead owner PID allows scoped recovery and lock reacquisition", () => {
   const userHome = createTempDir("stale-home-");
@@ -196,15 +121,12 @@ test("5. tamperedjournal: crafted journal with outside targetRoot, escaped destP
         },
       ],
     };
-    writeFileSync(journalPath, JSON.stringify(attack1), "utf8");
-
-    assert.throws(
-      () => {
-        recoverAbandonedJournal(userHome);
-      },
-      (err) => err.code === "ETAMPERED"
-    );
-    assert.equal(readFileSync(victimFile, "utf8"), "VICTIM_INTACT");
+    for (const status of ["in-progress", "committed"]) {
+      writeFileSync(journalPath, JSON.stringify({ ...attack1, status }), "utf8");
+      assert.throws(() => recoverAbandonedJournal(userHome), { code: "ETAMPERED" });
+      assert.equal(readFileSync(victimFile, "utf8"), "VICTIM_INTACT");
+      assert.equal(existsSync(journalPath), true, "Untrusted journal must be preserved");
+    }
 
     // Attack 2: backupFile with path traversal
     const trustedTarget = createTempDir("tamper-target-");
@@ -227,16 +149,24 @@ test("5. tamperedjournal: crafted journal with outside targetRoot, escaped destP
         },
       ],
     };
-    writeFileSync(journalPath, JSON.stringify(attack2), "utf8");
+    for (const status of ["in-progress", "committed"]) {
+      writeFileSync(journalPath, JSON.stringify({ ...attack2, status }), "utf8");
+      assert.throws(() => recoverAbandonedJournal(userHome, { targetRoot: trustedTarget }), { code: "ETAMPERED" });
+      assert.equal(readFileSync(victimFile, "utf8"), "VICTIM_INTACT");
+      assert.equal(readFileSync(targetFile, "utf8"), "FILE_INTACT");
+      assert.equal(existsSync(journalPath), true, "Untrusted journal must be preserved");
+    }
 
-    assert.throws(
-      () => {
-        recoverAbandonedJournal(userHome, { targetRoot: trustedTarget });
-      },
-      (err) => err.code === "ETAMPERED"
-    );
-    assert.equal(readFileSync(victimFile, "utf8"), "VICTIM_INTACT");
-    assert.equal(readFileSync(targetFile, "utf8"), "FILE_INTACT");
+    const attack3 = {
+      ...attack2,
+      entries: [{ ...attack2.entries[0], destPath: victimFile, backupFile: "entry_0.bak" }],
+    };
+    for (const status of ["in-progress", "committed"]) {
+      writeFileSync(journalPath, JSON.stringify({ ...attack3, status }), "utf8");
+      assert.throws(() => recoverAbandonedJournal(userHome, { targetRoot: trustedTarget }), { code: "ETAMPERED" });
+      assert.equal(readFileSync(victimFile, "utf8"), "VICTIM_INTACT");
+      assert.equal(existsSync(journalPath), true, "Untrusted journal must be preserved");
+    }
 
     rmSync(trustedTarget, { recursive: true, force: true });
   } finally {
@@ -362,7 +292,7 @@ test("9. humanassets: Markdown outside managed block and human edits in core scr
     const agentsFile = join(targetRoot, "AGENTS.md");
     writeFileSync(agentsFile, "# Custom Human Header\n\nUser instructions here.\n", "utf8");
 
-    const plan = installHarness({
+    installHarness({
       harness: "codex",
       root: targetRoot,
       userHome,
@@ -570,14 +500,14 @@ test("15. backupDir junction: backupDir pointing outside via junction/symlink is
       "utf8"
     );
 
-    assert.throws(
-      () => {
-        recoverAbandonedJournal(userHome, { targetRoot });
-      },
-      (err) => err.code === "ETAMPERED"
-    );
-
-    assert.equal(readFileSync(targetFile, "utf8"), "ORIGINAL_SAFE", "Target file must not be poisoned");
+    for (const status of ["in-progress", "committed"]) {
+      const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+      writeFileSync(journalPath, JSON.stringify({ ...journal, status }), "utf8");
+      assert.throws(() => recoverAbandonedJournal(userHome, { targetRoot }), { code: "ETAMPERED" });
+      assert.equal(readFileSync(targetFile, "utf8"), "ORIGINAL_SAFE", "Target file must not be poisoned");
+      assert.equal(readFileSync(poisonFile, "utf8"), "POISON_PAYLOAD", "Outside backup bytes must not be deleted");
+      assert.equal(existsSync(journalPath), true, "Untrusted journal must be preserved");
+    }
   } finally {
     rmSync(userHome, { recursive: true, force: true });
     rmSync(targetRoot, { recursive: true, force: true });

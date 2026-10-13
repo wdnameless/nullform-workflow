@@ -54,7 +54,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export const CORE_TOOLS = [
-  "workflow.mjs", "review-evidence.mjs", "review-native-tools.mjs", "worktree-snapshot.mjs",
+  "workflow.mjs", "workflow-workspaces.mjs", "review-evidence.mjs", "review-native-tools.mjs", "worktree-snapshot.mjs",
   "prompt-lint.mjs", "skill-audit.mjs", "skills-doctor.mjs", "glossary.mjs",
   "replay.mjs", "codemap.mjs", "return-contract.mjs", "cache-policy.mjs",
   "cache-doctor.mjs", "context-inbox.mjs", "domain-context.mjs", "oracle-model.mjs",

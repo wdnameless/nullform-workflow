@@ -26,6 +26,9 @@ nullform update          # update via npm, no git needed
 
 Private registries use npm's `.npmrc` authentication. `nullform update --dry-run` previews the upgrade.
 
+Process-interruption recovery journals installation identity and durably writes the committed marker before backup cleanup: precommit recovery rolls back files and identity, postcommit recovery retains them, and rollback conflicts preserve human edits and fail closed with `ECONFLICT`; power-loss recovery is not guaranteed.
+Target-tree and OMP home-extension assets that are unknown or human-modified are preserved while unchanged owned files update, and `init` emits an explicit `preserved-assets` warning; preserved custom behavior or security policy may need manual review.
+
 Headless (Cursor rules are project-scoped):
 
 ```bash
@@ -50,6 +53,24 @@ nullform workflow close
 | **T1** | 3+ files, unfamiliar area | Recon before edits, verify before `close` |
 | **T2** | Architecture, new module | Manifest (`R##`) → OpenSpec → blind oracle ACCEPT |
 | **T3** | Multi-feature program | T2 per slice |
+
+## Concurrent features, one final branch
+
+Requires Git on PATH. Allocate from the integration checkout before dispatching each writer:
+
+```bash
+nullform workflow workspace --feature feature-a
+# Dispatch one worker with the returned absolute cwd and fresh feature context.
+# Worker finishes clean feature commits; only the parent integrates:
+nullform workflow integrate --feature feature-a
+```
+
+Each feature gets a private detached worktree and index; one parent integrates into the recorded final branch. Duplicate allocation refuses, never grants a second writer reuse. The base is committed HEAD: unsaved prerequisites are not included; commit required shared prerequisites first. A dirty integration target refuses without stash. Textual conflicts stay visible for integrator-only manual resolution and integrated checks; semantic compatibility is not guaranteed.
+
+On interruption or uncertain Git failure, keep the workspace/integration lock; before manual release, the operator must verify that its owner and Git/hook children have stopped, no integrator is active, and the lock identity is unchanged—there is no automatic repository repair.
+
+`git checkout stash@{0} -- src/App.tsx` replaces a whole file; it does not merge or preserve concurrent edits. OMP's native delete-guard requires explicit interactive authorization for identified checkout/restore/stash working-tree/index replacement and blocks it headlessly, without changing other headless permissions. Other host adapters provide the Git-backed portable CLI and guidance, not native interception. Neither regex matching nor worktree dispatch sandboxes arbitrary shell commands or direct filesystem writes.
+
 
 ## Why it works
 

@@ -24,7 +24,7 @@
  *   --help, -h            Show help
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, copyFileSync, lstatSync, readlinkSync, symlinkSync, unlinkSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, lstatSync, readlinkSync, symlinkSync, realpathSync } from "node:fs";
 import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -33,7 +33,7 @@ import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageD
 import { applyHarnessAdapter } from "./harness-adapters.mjs";
 import { validateRootPath } from './worktree-snapshot.mjs';
 import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement } from './installation-state.mjs';
-import { acquireDeploymentLock, releaseDeploymentLock, DeploymentJournal, safeAtomicWrite } from './deployment-journal.mjs';
+import { acquireDeploymentLock, DeploymentJournal, safeAtomicWrite } from './deployment-journal.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -74,17 +74,51 @@ function renderSubstitutedText(srcPath, slashRoot) {
   return content;
 }
 
-function copyAndSubstitute(srcPath, destPath, slashRoot, journal = null) {
-  if (resolve(srcPath) === resolve(destPath) || (existsSync(destPath) && realpathSync(srcPath) === realpathSync(destPath))) return;
-
-  const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(srcPath);
-  const content = isText ? renderSubstitutedText(srcPath, slashRoot) : readFileSync(srcPath);
-  if (journal) journal.recordBeforeWrite(destPath, content);
-  safeAtomicWrite(destPath, content, isText ? "utf8" : undefined);
-  if (journal) journal.recordWritten(destPath, hashContent(content));
+function preserveAsset(destPath, priorHash, plan) {
+  if (priorHash) plan.managedFiles[destPath] = priorHash;
+  const preserved = plan.preservedAssets;
+  const reason = priorHash ? "modifiedOwned" : "unowned";
+  preserved.count++;
+  preserved[reason]++;
+  if (preserved.examples.length < 3) preserved.examples.push({ path: destPath, reason });
 }
 
-function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false, journal = null) {
+function copyAndSubstitute(srcPath, destPath, slashRoot, { dryRun, priorManaged, plan, journal }) {
+  const destExists = existsSync(destPath);
+  const sameFile = resolve(srcPath) === resolve(destPath) ||
+    (destExists && realpathSync(srcPath) === realpathSync(destPath));
+  const priorHash = plan.managedFiles[destPath] || priorManaged[destPath];
+  // In-place install (destination IS the source): never rewrite the live tree and never
+  // adopt its bytes as newly owned; keep any ownership already recorded, never invent one.
+  if (sameFile) {
+    if (priorHash) plan.managedFiles[destPath] = priorHash;
+    return true;
+  }
+  const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(srcPath);
+  const content = isText ? renderSubstitutedText(srcPath, slashRoot) : readFileSync(srcPath);
+  const incomingHash = hashContent(content);
+  if (destExists) {
+    const currentHash = hashContent(readFileSync(destPath));
+    if (priorHash ? currentHash !== priorHash : currentHash !== incomingHash) {
+      preserveAsset(destPath, priorHash, plan);
+      return false;
+    }
+    if (currentHash === incomingHash) {
+      plan.managedFiles[destPath] = incomingHash;
+      return true;
+    }
+  }
+  plan.managedFiles[destPath] = incomingHash;
+  if (!dryRun) {
+    if (journal) journal.recordBeforeWrite(destPath, content);
+    mkdirSync(dirname(destPath), { recursive: true });
+    safeAtomicWrite(destPath, content, isText ? "utf8" : undefined);
+    if (journal) journal.recordWritten(destPath, incomingHash);
+  }
+  return true;
+}
+
+function copyDirRecursive(srcDir, destDir, slashRoot, assetContext) {
   const copied = [];
   if (!existsSync(srcDir)) return copied;
 
@@ -99,16 +133,12 @@ function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false, journal 
       const destPath = join(currentDest, entry.name);
 
       if (entry.isDirectory()) {
-        if (!planOnly) {
+        if (!assetContext.dryRun) {
           mkdirSync(destPath, { recursive: true });
         }
         walk(srcPath, destPath);
       } else if (entry.isFile()) {
-        copied.push(destPath);
-        if (!planOnly) {
-          mkdirSync(dirname(destPath), { recursive: true });
-          copyAndSubstitute(srcPath, destPath, slashRoot, journal);
-        }
+        if (copyAndSubstitute(srcPath, destPath, slashRoot, assetContext)) copied.push(destPath);
       }
     }
   }
@@ -121,24 +151,25 @@ function copyDirRecursive(srcDir, destDir, slashRoot, planOnly = false, journal 
  * Copies runtime parser dependencies (yaml, json5, jsonc-parser) selectively
  * into targetRoot/tools/node_modules without copying the developer node_modules tree.
  */
-function copyRuntimeDeps(repoRoot, targetRoot, slashRoot, planOnly = false, journal = null) {
+function copyRuntimeDeps(repoRoot, targetRoot, slashRoot, assetContext) {
   const copied = [];
   const destToolsNm = join(targetRoot, "tools", "node_modules");
   for (const pkg of RUNTIME_PARSER_DEPS) {
     const srcPkg = resolveRuntimePackageDir(pkg, repoRoot);
     if (srcPkg && existsSync(srcPkg)) {
       const destPkg = join(destToolsNm, pkg);
-      copied.push(...copyDirRecursive(srcPkg, destPkg, slashRoot, planOnly, journal));
+      copied.push(...copyDirRecursive(srcPkg, destPkg, slashRoot, assetContext));
     }
   }
   return copied;
 }
 /**
- * Link role roster into destination. If destination is a real physical directory,
- * missing mandatory role files are copied into place while leaving user definitions intact.
+ * Links the roster or updates unchanged managed role files; preserves human definitions and custom links.
  */
-function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false, journal = null) {
-  if (planOnly) return [destDir];
+function installRoleRoster(linkTarget, destDir, slashRoot, assetContext) {
+  const { dryRun, journal, plan } = assetContext;
+  // Dry run mutates nothing: return before any unlink/symlink/mkdir.
+  if (dryRun) return [destDir];
   try {
     let stat = null;
     try {
@@ -148,31 +179,29 @@ function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false, jou
     }
     if (stat) {
       if (!stat.isSymbolicLink()) {
+        // Physical roster: copy only missing mandatory roles; never adopt user roster files.
         const copied = [];
-        if (existsSync(linkTarget)) {
-          for (const entry of readdirSync(linkTarget, { withFileTypes: true })) {
-            if (entry.isFile()) {
-              const srcFile = join(linkTarget, entry.name);
-              const dstFile = join(destDir, entry.name);
-              if (!existsSync(dstFile)) {
-                if (!planOnly) {
-                  mkdirSync(dirname(dstFile), { recursive: true });
-                  copyAndSubstitute(srcFile, dstFile, slashRoot, journal);
-                }
-                copied.push(dstFile);
-              }
-            }
+        for (const entry of readdirSync(linkTarget, { withFileTypes: true })) {
+          if (!entry.isFile()) continue;
+          const dstFile = join(destDir, entry.name);
+          if (!existsSync(dstFile)) {
+            if (copyAndSubstitute(join(linkTarget, entry.name), dstFile, slashRoot, assetContext)) copied.push(dstFile);
           }
         }
         return copied;
       }
-      if (existsSync(destDir) &&
-          resolve(dirname(destDir), readlinkSync(destDir)) === resolve(linkTarget)) {
-        return [];
+      let currentTarget = null;
+      try {
+        currentTarget = resolve(dirname(destDir), readlinkSync(destDir));
+      } catch {
+        currentTarget = null;
       }
-      if (journal) journal.recordBeforeUnlink(destDir);
-      unlinkSync(destDir);
-      if (journal) journal.recordUnlinked(destDir);
+      // Known-expected link: already ours, nothing to do.
+      if (currentTarget === resolve(linkTarget)) return [];
+      // Unknown/dangling human or custom role link: preserve it and report; never silently
+      // unlink a human's link target, and never claim its bytes as owned.
+      preserveAsset(destDir, null, plan);
+      return [];
     }
     mkdirSync(dirname(destDir), { recursive: true });
     if (journal) journal.recordBeforeSymlink(destDir, linkTarget);
@@ -180,14 +209,14 @@ function installRoleRoster(linkTarget, destDir, slashRoot, planOnly = false, jou
     if (journal) journal.recordSymlinked(destDir);
     return [destDir];
   } catch {
-    return copyDirRecursive(linkTarget, destDir, slashRoot, false, journal);
+    return copyDirRecursive(linkTarget, destDir, slashRoot, assetContext);
   }
 }
 
 /**
  * Skills registry installer. Preserves human files by verifying against prior managed hashes.
  */
-function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false, priorManaged = {}, outManaged = {}, extra = {}, journal = null) {
+function installSkills(srcDir, destDir, slashRoot, agentsHome, assetContext, extra = {}) {
   if (!existsSync(srcDir)) return [];
   
   const skip = new Set();
@@ -234,39 +263,10 @@ function installSkills(srcDir, destDir, slashRoot, agentsHome, planOnly = false,
       const dPath = join(currentDest, entry.name);
 
       if (entry.isDirectory()) {
-        if (!planOnly) mkdirSync(dPath, { recursive: true });
+        if (!assetContext.dryRun) mkdirSync(dPath, { recursive: true });
         walkSkill(sPath, dPath);
       } else if (entry.isFile()) {
-        const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(sPath);
-        const deployedContent = isText ? renderSubstitutedText(sPath, slashRoot) : readFileSync(sPath);
-        const deployedHash = hashContent(deployedContent);
-
-        if (existsSync(dPath)) {
-          const currentContent = isText ? readFileSync(dPath, "utf8") : readFileSync(dPath);
-          const currentHash = hashContent(currentContent);
-          const priorHash = priorManaged[dPath];
-          if (priorHash) {
-            if (currentHash !== priorHash) {
-              outManaged[dPath] = priorHash;
-              continue;
-            }
-          } else {
-            if (currentHash !== deployedHash) {
-              continue;
-            }
-          }
-          if (currentHash === deployedHash) {
-            out.push(dPath);
-            outManaged[dPath] = deployedHash;
-            continue;
-          }
-        }
-        out.push(dPath);
-        outManaged[dPath] = deployedHash;
-        if (!planOnly) {
-          mkdirSync(dirname(dPath), { recursive: true });
-          copyAndSubstitute(sPath, dPath, slashRoot, journal);
-        }
+        if (copyAndSubstitute(sPath, dPath, slashRoot, assetContext)) out.push(dPath);
       }
     }
   }
@@ -404,7 +404,13 @@ function installHarness(options = {}) {
       filesToCopy: [],
       adapters: [],
       managedFiles: {},
+      preservedAssets: {
+        count: 0, modifiedOwned: 0, unowned: 0, examples: [],
+        detail: "Preserved assets may differ from packaged behavior and security policy; review local changes.",
+      },
     };
+    const assetContext = { dryRun: Boolean(options.dryRun), priorManaged, plan, journal };
+    const copyAsset = (src, dest) => copyAndSubstitute(src, dest, slashRoot, assetContext);
 
     const isCursorActive = targetHarnesses.includes("cursor");
     const coreDirs = getCoreDirs(isCursorActive);
@@ -412,58 +418,28 @@ function installHarness(options = {}) {
     for (const dir of coreDirs) {
       const srcDir = join(REPO_ROOT, dir);
       if (existsSync(srcDir)) {
-        plan.filesToCopy.push(...copyDirRecursive(srcDir, join(targetRoot, dir), slashRoot, options.dryRun, journal));
+        plan.filesToCopy.push(...copyDirRecursive(srcDir, join(targetRoot, dir), slashRoot, assetContext));
       }
     }
 
     for (const file of CORE_FILES) {
       const srcFile = join(REPO_ROOT, file);
       const destFile = join(targetRoot, file);
-      if (existsSync(srcFile)) {
-        const isText = /\.(md|mjs|js|cjs|json|ya?ml|ps1|sh|txt|env|example)$/i.test(srcFile);
-        const deployedContent = isText ? renderSubstitutedText(srcFile, slashRoot) : readFileSync(srcFile);
-        const deployedHash = hashContent(deployedContent);
-        if (existsSync(destFile)) {
-          const currentContent = isText ? readFileSync(destFile, "utf8") : readFileSync(destFile);
-          const currentHash = hashContent(currentContent);
-          const priorHash = priorManaged[destFile];
-          if (priorHash) {
-            if (currentHash !== priorHash) {
-              plan.managedFiles[destFile] = priorHash;
-              continue;
-            }
-          } else {
-            if (currentHash !== deployedHash) {
-              continue;
-            }
-          }
-          if (currentHash === deployedHash) {
-            plan.filesToCopy.push(destFile);
-            plan.managedFiles[destFile] = deployedHash;
-            continue;
-          }
-        }
-        plan.filesToCopy.push(destFile);
-        plan.managedFiles[destFile] = deployedHash;
-        if (!options.dryRun) {
-          mkdirSync(dirname(destFile), { recursive: true });
-          copyAndSubstitute(srcFile, destFile, slashRoot, journal);
-        }
-      }
+      if (existsSync(srcFile) && copyAsset(srcFile, destFile)) plan.filesToCopy.push(destFile);
     }
 
     if (isCursorActive) {
       const srcSkills = join(REPO_ROOT, "skills");
       const destSkills = join(targetRoot, "skills");
       plan.filesToCopy.push(
-        ...installSkills(srcSkills, destSkills, slashRoot, agentsHome, options.dryRun, priorManaged, plan.managedFiles, {
+        ...installSkills(srcSkills, destSkills, slashRoot, agentsHome, assetContext, {
           targetRoot,
           projectRoot,
-        }, journal)
+        })
       );
     }
 
-    plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, options.dryRun, journal));
+    plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, assetContext));
 
     const writeAdapter = (filePath, content) => {
       plan.adapters.push(filePath);
@@ -478,17 +454,17 @@ function installHarness(options = {}) {
     };
     const readExisting = (p) => (existsSync(p) ? readFileSync(p, "utf8") : "");
     const copyHomeSkills = (destDir) => {
-      const src = existsSync(join(targetRoot, "skills")) ? join(targetRoot, "skills") : join(REPO_ROOT, "skills");
-      plan.filesToCopy.push(...installSkills(src, destDir, slashRoot, userHome, options.dryRun, priorManaged, plan.managedFiles, {
+      const src = join(REPO_ROOT, "skills");
+      plan.filesToCopy.push(...installSkills(src, destDir, slashRoot, userHome, assetContext, {
         targetRoot,
         projectRoot,
-      }, journal));
+      }));
     };
 
     for (const h of targetHarnesses) {
       applyHarnessAdapter(h, {
         targetRoot, projectRoot, slashRoot, userHome, options, shouldWriteHome,
-        writeAdapter, readExisting, copyHomeSkills, priorManaged, plan, journal,
+        writeAdapter, readExisting, copyHomeSkills, plan, assetContext, copyAsset,
         copyDirRecursive, installSkills, installRoleRoster, translateStdioEntry,
       });
     }

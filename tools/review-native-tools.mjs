@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolveNpmRunner } from './installation-state.mjs';
@@ -131,13 +131,15 @@ export function executeProduct({ root, productCommand }) {
     command = runner.command;
     args = [cli, ...args];
   }
-  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', shell: false, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
+  const result = spawnSync(command, args, { cwd: root, shell: false, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
   if (sourceDigest(root) !== before) throw new Error('Product command mutated source; read-only execution violated');
   if (result.error || result.status === null) throw new Error(`Product execution failed or timed out${result.error?.code ? ` (${result.error.code})` : ''}`);
-  return JSON.stringify({ exitCode: result.status, stdout: result.stdout, stderr: result.stderr });
+  return JSON.stringify({ cwd: resolve(root), exitCode: result.status, stdout: UTF8_DECODER.decode(result.stdout), stderr: UTF8_DECODER.decode(result.stderr) });
 }
 export default function (pi) {
   const options = JSON.parse(process.env.WORKFLOW_REVIEW_OPTIONS || '{}');
+  let productOutput = null;
+  let executionError = null;
   pi.registerTool({
     name: 'inspect_product',
     label: 'Inspect product',
@@ -159,16 +161,40 @@ export default function (pi) {
   pi.registerTool({
     name: 'exercise_product',
     label: 'Exercise product',
-    description: 'Execute the fixed operator-authorized consumer/test command; no arbitrary commands or arguments.',
+    description: 'Run the fixed operator-authorized command once per session and read its complete UTF-8 JSON output in bounded pages. Start with offset=0; follow nextOffset until null. Continuations (including offset=0 rereads) never rerun the command. Pages include cwd, exitCode, provenance and the full contentHash. No arbitrary commands, arguments, files, URLs or artifact URIs.',
     approval: 'read',
     loadMode: 'essential',
-    parameters: pi.zod.object({}),
-    async execute() {
-      const startedAt = new Date().toISOString();
-      const text = executeProduct(options);
-      const result = JSON.parse(text);
-      pi.appendEntry('workflow-product-execution', { commandHash: options.provenance.productCommandHash, sourceDigest: sourceDigest(options.root), exitCode: result.exitCode, startedAt, completedAt: new Date().toISOString(), outputHash: createHash('sha256').update(text).digest('hex') });
-      return { content: [{ type: 'text', text }] };
+    parameters: pi.zod.object({
+      offset: pi.zod.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+    }).strict(),
+    async execute(_id, params = {}) {
+      if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => key !== 'offset')) throw new Error('exercise_product accepts only an offset; command overrides are forbidden');
+      const offset = Object.hasOwn(params, 'offset') ? params.offset : 0;
+      if (!Number.isSafeInteger(offset) || offset < 0) throw new Error(`Invalid output offset: ${offset}`);
+      if (executionError) throw executionError;
+      if (sourceDigest(options.root) !== options.provenance.sourceDigest) throw new Error('Product source changed from native review context');
+      if (!productOutput) {
+        if (offset !== 0) throw new Error('Output continuation requires an initial execution at offset=0');
+        try {
+          const startedAt = new Date().toISOString();
+          const text = executeProduct(options);
+          const completedAt = new Date().toISOString();
+          const result = JSON.parse(text);
+          const buffer = Buffer.from(text, 'utf8');
+          const contentHash = createHash('sha256').update(buffer).digest('hex');
+          const meta = { cwd: result.cwd, commandHash: options.provenance.productCommandHash, sourceDigest: options.provenance.sourceDigest, exitCode: result.exitCode, startedAt, completedAt, contentHash };
+          pi.appendEntry('workflow-product-execution', { commandHash: meta.commandHash, sourceDigest: meta.sourceDigest, exitCode: meta.exitCode, startedAt, completedAt, outputHash: contentHash });
+          productOutput = { buffer, meta };
+        } catch (error) {
+          executionError = error;
+          throw error;
+        }
+      }
+      const { buffer, meta } = productOutput;
+      if (offset > buffer.length) throw new Error(`Output offset ${offset} exceeds total bytes ${buffer.length}`);
+      const { text, nextOffset } = sliceUtf8Page(buffer, offset, MAX_AGGREGATE_JSON_BYTES, meta);
+      const page = { ...meta, offset, nextOffset, totalBytes: buffer.length, text };
+      return { content: [{ type: 'text', text: JSON.stringify(page, null, 2) }], isError: meta.exitCode !== 0 };
     },
   });
   pi.on('tool_call', event => {

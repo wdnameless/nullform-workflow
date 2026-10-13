@@ -2,9 +2,10 @@
  * agent/extensions/nullform-delete-guard.ts
  *
  * Native OMP extension for delete guard.
- * Intercepts destructive shell commands in interactive sessions (bash, eval)
- * and requires explicit user confirmation via ctx.ui.confirm() before execution.
- * In non-interactive mode (print/RPC/headless), commands proceed under normal rules.
+ * Intercepts destructive shell commands (bash, eval) and requires explicit
+ * user confirmation via ctx.ui.confirm() before execution.
+ * Identified Git restoration is refused headlessly; other headless behavior is unchanged.
+ * Command matching is a best-effort guard, not an arbitrary-shell sandbox.
  */
 
 import type {
@@ -18,6 +19,7 @@ import type {
 export interface DestructiveRule {
   re: RegExp;
   what: string;
+  blockHeadless?: boolean;
 }
 
 export interface DeleteGuardResult {
@@ -26,7 +28,16 @@ export interface DeleteGuardResult {
   deny: string;
 }
 
+// Git global options may precede the subcommand; shell wrappers may precede git.
+const GIT_WORD = String.raw`(?:"[^"]*"|'[^']*'|[^\s;&|]+)`;
+const GIT_RESTORATION: DestructiveRule = {
+  re: new RegExp(String.raw`\bgit(?:\.exe)?["']?\s+(?:(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--config-env)\s+${GIT_WORD}|(?:-C|-c)${GIT_WORD}|--(?:git-dir|work-tree|namespace|config-env)=${GIT_WORD}|-[pP]|--(?:no-pager|paginate|bare|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-replace-objects|no-optional-locks))\s+)*(?:(?:checkout|restore)\b|stash(?:\s+(?:apply|pop|push|save|branch)\b|\s+-|(?=\s*(?:$|[;&|"']))))`),
+  what: "заменить рабочие файлы или индекс (git checkout/restore/stash)",
+  blockHeadless: true,
+};
+
 // 6 RULES ported 1:1 from nickvels delete-guard:
+// Existing destructive operations retain their interactive-only permission behavior.
 // rm is caught with recursion flag anywhere in command: rm -rf, rm -f -r, rm -v -R, rm --recursive.
 export const RULES: DestructiveRule[] = [
   { re: /\brm\s+(?:[^;&|]*\s)?(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?=\s|$)/, what: "удалить папку целиком" },
@@ -49,6 +60,8 @@ export function getInteractive(): boolean {
 
 export function matchDestructiveCommand(cmd: string): { what: string; rule?: DestructiveRule } | null {
   if (typeof cmd !== "string") return null;
+  // Restoration must win even when another matched command precedes it.
+  if (GIT_RESTORATION.re.test(cmd)) return { what: GIT_RESTORATION.what, rule: GIT_RESTORATION };
   for (const rule of RULES) {
     if (rule.re.test(cmd)) {
       return { what: rule.what, rule };
@@ -189,10 +202,12 @@ export async function handleToolCall(
   const rule = matchDestructiveCommand(cmd);
   if (!rule) return undefined;
 
-  // Non-interactive mode (claude -p, scripts, autopilot, print/rpc mode)
-  // proceeds under normal permission rules
-  if (!isInteractive) return undefined;
-  if (ctx && typeof ctx === "object" && "hasUI" in ctx && ctx.hasUI === false) return undefined;
+  // Preserve existing headless permissions except identified destructive Git restoration.
+  if (!isInteractive || (ctx && typeof ctx === "object" && "hasUI" in ctx && ctx.hasUI === false)) {
+    if (!rule.rule?.blockHeadless) return undefined;
+    const reason = `Страж удаления: «${rule.what}» требует явного интерактивного подтверждения. Команда заблокирована без UI; не повторяй её, используй изолированный workspace и integrate.`;
+    return { block: true, reason, deny: reason };
+  }
 
   let home: string | undefined;
   if (ctx && typeof ctx === "object" && "env" in ctx && ctx.env && typeof ctx.env === "object" && "get" in ctx.env && typeof ctx.env.get === "function") {
@@ -210,13 +225,13 @@ export async function handleToolCall(
 
   let confirmed = false;
   const title = "Страж";
-  const message = `Claude хочет ${rule.what}${scope}:\n${cmd.slice(0, 200)}\nВыполнить?`;
+  const message = `Агент хочет ${rule.what}${scope}:\n${cmd.slice(0, 200)}\nВыполнить?`;
 
   if (ctx && typeof ctx === "object" && "ui" in ctx && ctx.ui && typeof ctx.ui === "object") {
     const ui = ctx.ui;
     try {
       if ("confirm" in ui && typeof ui.confirm === "function") {
-        confirmed = Boolean(await ui.confirm(title, message));
+        confirmed = (await ui.confirm(title, message)) === true;
       } else if ("ask" in ui && typeof ui.ask === "function") {
         const answer = await ui.ask(message, {
           header: title,

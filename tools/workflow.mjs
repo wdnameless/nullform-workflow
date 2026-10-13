@@ -52,7 +52,7 @@ import {
 } from "./review-evidence.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
 import { validateReviewCapability, printWorkflowHelp } from "./harness-capabilities.mjs";
-
+import { runWorkspaceCommand } from "./workflow-workspaces.mjs";
 const DIR = ".workflow";
 const FILE = "state.json";
 const BUDGETS_FILE = "budgets.json";
@@ -1897,9 +1897,9 @@ export function runWorkflowCli(argv = [], options = {}) {
   const args = parse(argv);
   const root = args.flags.root ? String(args.flags.root) : (options.cwd || process.cwd());
   const cmd = args._[0];
-
   let code;
   switch (cmd) {
+    case "workspace": case "integrate": code = runWorkspaceCommand(cmd, root, args.flags, args._.length); break;
     case "start":
       code = cmdStart(root, args.flags);
       if (code === 0 && !options.noDashboard) autoOpenDashboard(root, args.flags);

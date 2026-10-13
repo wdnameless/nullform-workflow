@@ -582,6 +582,7 @@ export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter
     "",
     "## 4. Возможности и лимиты адаптеров",
     "- 8 адаптеров для настройки; базовые гейты Node-native (без OMP/Bun); automated review только для OMP с Bun.",
+    "- Для workspace/integrate нужен исполняемый Git. Перед dispatch: `nullform workflow workspace --feature SLUG` из integration checkout; worker MUST работать только в возвращённом абсолютном cwd со свежим контекстом. Один writer на worktree; повторное выделение отказывает, не разрешает reuse.\n- База — committed HEAD, без несохранённых prerequisites; общие prerequisites сначала commit. Готовую фичу commit, затем единственный parent-integrator: `nullform workflow integrate --feature SLUG` на записанной integration branch.\n- Dirty integration target отказывает без stash; видимый Git conflict разрешает вручную только integrator. Один репозиторий/final branch ≠ общий физический checkout; не восстанавливай целые файлы из stash и не скрывай конфликт reset/ours/theirs.\n- Native interception только в OMP: delete-guard требует явное подтверждение для распознанных checkout/restore/stash замен и блокирует их headlessly. Остальные адаптеры — portable CLI + guidance, не shell/filesystem sandbox.",
     "",
     "## 5. Базовые законы",
     "- Честность: никаких заявлений о готовности без выполненных проверок.",

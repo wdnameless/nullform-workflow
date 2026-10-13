@@ -160,6 +160,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Gherkin spec** — `tools/gherkin-spec.mjs`. Parses, validates, and lints executable BDD specifications (Given/When/Then scenarios) in `.feature` files and Markdown code blocks, ensuring acceptance criteria are unambiguous and verifiable.
 - **Engineering dashboard** — `tools/dashboard.mjs`. Live HTTP view of task stages, counts, module topology, git file metadata and event status. Session message bodies, tool arguments and patch contents are not served; `/api/diff` returns line counts. Runtime file: `.workflow/dashboard.json` (port/pid); static fallback: `.workflow/dashboard.html`.
 - **CI evidence gate** — `workflow.mjs check-ci`: a PR declares one `workflow:T0..T3` label; T2/T3 PRs must commit a change under `openspec/changes/<id>/` with a manifest, proposal, tasks, specs, interfaces and positive acceptance evidence. It does not consume local `.workflow/state.json`.
+- **Feature workspace** — private detached Git worktree/index allocated by `nullform workflow workspace --feature SLUG` for exactly one writer, based on committed integration HEAD (not unsaved prerequisites). Duplicate allocation refuses rather than granting a second writer reuse.
+- **Integration branch** — the recorded final branch where one parent integrator combines clean committed feature work via `nullform workflow integrate --feature SLUG`. Distinct from a shared physical checkout; dirty target refuses without stash and native conflicts remain for manual resolution.
 - **Workspace script** — a service Paseo supervises (`paseo.json`), for long-lived
   processes the user must see. Distinct from **hub process**, which is an
   in-session PTY that dies with the session.
@@ -188,8 +190,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Spend ledger (`spend-ledger.json`)** — version-2 durable request reservations/settlements and cumulative one-USD ceiling in `bench/runs/`; outstanding reservations or `blocked_unknown_spend` prohibit further inference across restarts.
 - **SDK tariff (`computeTariffCost`)** — exact allowlisted installed-catalog pricing applied to strict nonnegative native token buckets; not independently confirmed provider billing.
 - **Terminal findings score (`scoreReview`)** — scores only the final normally stopped assistant's typed findings against known consumer defects and counts unmatched findings as false positives; injection adherence is not automatic skill discovery.
-- **Delete-guard** — `agent/extensions/nullform-delete-guard.ts`. Native OMP extension intercepting destructive shell commands (`rm -r`, `git push --force`, `git reset --hard`, `git clean -f`, `find -delete`, SQL drops/truncates) in interactive sessions to require explicit user confirmation before execution.
-- **Destructive rule (`DestructiveRule`)** — pattern match specification (`agent/extensions/nullform-delete-guard.ts`) associating a high-risk command regex with a human-readable action description for confirmation prompts.
+- **Delete-guard** — `agent/extensions/nullform-delete-guard.ts`. Native OMP extension requiring explicit interactive confirmation for identified destructive shell commands, including Git checkout/restore/stash working-tree/index replacement. Identified Git restoration blocks headlessly; other existing headless permissions are unchanged. A best-effort command guard, not an arbitrary-shell/filesystem sandbox; other adapters receive portable CLI/guidance only.
+- **Destructive rule (`DestructiveRule`)** — pattern match specification (`agent/extensions/nullform-delete-guard.ts`) associating a high-risk command regex with a human-readable action description and optional headless-block policy.
 - **Delete guard result (`DeleteGuardResult`)** — execution block decision (`agent/extensions/nullform-delete-guard.ts`) containing denial status, user-facing reason, and instruction preventing command retry.
 
 ## Operations

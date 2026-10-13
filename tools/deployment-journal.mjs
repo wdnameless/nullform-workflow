@@ -3,12 +3,12 @@
  * atomic identity, and scoped backup/rollback.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync, copyFileSync, lstatSync, readlinkSync, symlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
-import { resolve, join, dirname, relative, isAbsolute, basename } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync, lstatSync, readlinkSync, symlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
+import { resolve, join, dirname, isAbsolute, basename } from "node:path";
 import { homedir } from "node:os";
 import { hashContent } from "./harness-config.mjs";
-import { getStateFilePath, validateInstallationState, writeInstallationState, readInstallationState, sanitizeError } from "./installation-state.mjs";
-import { normalizePath, validateRootPath, validatePathWithinScope, isInsideOrEqual } from "./worktree-snapshot.mjs";
+import { writeInstallationState, readInstallationState } from "./installation-state.mjs";
+import { normalizePath, validatePathWithinScope } from "./worktree-snapshot.mjs";
 
 export function getDeploymentLockPath(userHome) {
   return join(normalizePath(resolve(userHome)), ".nullform", "deployment.lock");
@@ -55,29 +55,9 @@ export function safeAtomicWrite(destPath, content, encoding = "utf8") {
   try {
     renameSync(tmpPath, normDest);
   } catch (err) {
-    if (process.platform === "win32") {
-      const bakPath = join(dir, `.bak.${basename(normDest)}.${Date.now()}`);
-      let renamedExisting = false;
-      try {
-        if (existsSync(normDest)) {
-          renameSync(normDest, bakPath);
-          renamedExisting = true;
-        }
-        renameSync(tmpPath, normDest);
-        if (renamedExisting) {
-          try { unlinkSync(bakPath); } catch {}
-        }
-      } catch (replaceErr) {
-        if (renamedExisting && existsSync(bakPath)) {
-          try { renameSync(bakPath, normDest); } catch {}
-        }
-        try { unlinkSync(tmpPath); } catch {}
-        throw replaceErr;
-      }
-    } else {
-      try { unlinkSync(tmpPath); } catch {}
-      throw err;
-    }
+    // Keep the old destination discoverable if atomic replacement fails.
+    try { unlinkSync(tmpPath); } catch {}
+    throw err;
   }
 }
 
@@ -125,11 +105,7 @@ export function acquireDeploymentLock({
     }
 
     // Process is verified dead (ESRCH): recover abandoned journal with ONLY trusted scopes (caller + last verified)
-    try {
-      recoverAbandonedJournal(normHome, { targetRoot: normTarget });
-    } catch (recErr) {
-      if (recErr.code === "ETAMPERED" || recErr.code === "ECONFLICT") throw recErr;
-    }
+    recoverAbandonedJournal(normHome, { targetRoot: normTarget });
 
     try {
       unlinkSync(lockPath);
@@ -183,7 +159,7 @@ export function releaseDeploymentLock(userHome, expectedPid = null) {
   } catch {}
 }
 
-function restoreSingleEntry(entry, userHome, backupDir, allowedScopes) {
+function restoreSingleEntry(entry, _userHome, backupDir, allowedScopes) {
   const normDest = normalizePath(entry.destPath);
   const isDestSafe = allowedScopes.some((scope) => validatePathWithinScope(normDest, scope));
   if (!isDestSafe) {
@@ -224,7 +200,7 @@ function restoreSingleEntry(entry, userHome, backupDir, allowedScopes) {
         const absBackup = resolve(backupDir, entry.backupFile);
         if (existsSync(absBackup)) {
           mkdirSync(dirname(normDest), { recursive: true });
-          copyFileSync(absBackup, normDest);
+          safeAtomicWrite(normDest, readFileSync(absBackup));
         }
       }
     }
@@ -256,7 +232,7 @@ function restoreSingleEntry(entry, userHome, backupDir, allowedScopes) {
     }
 
     mkdirSync(dirname(normDest), { recursive: true });
-    copyFileSync(absBackup, normDest);
+    safeAtomicWrite(normDest, readFileSync(absBackup));
   } else if (!entry.existed) {
     if (existsSync(normDest)) {
       const currentBytes = readFileSync(normDest);
@@ -318,14 +294,7 @@ export class DeploymentJournal {
       targetVersion: this.targetVersion,
       entries: this.entries,
     };
-    const tmpPath = `${this.journalPath}.tmp.${process.pid}.${Date.now()}`;
-    writeFileSync(tmpPath, JSON.stringify(payload, null, 2) + "\n", "utf8");
-    try {
-      renameSync(tmpPath, this.journalPath);
-    } catch {
-      try { unlinkSync(this.journalPath); } catch {}
-      renameSync(tmpPath, this.journalPath);
-    }
+    safeAtomicWrite(this.journalPath, JSON.stringify(payload, null, 2) + "\n");
   }
 
   recordBeforeWrite(destPath, content) {
@@ -486,7 +455,7 @@ export class DeploymentJournal {
     }
   }
 
-  rollback(reason = "") {
+  rollback(_reason = "") {
     if (this.dryRun || this.committed) return;
     this.status = "rolling-back";
     const entriesToRevert = this.entries.slice().reverse();
@@ -496,6 +465,7 @@ export class DeploymentJournal {
     }
 
     this.status = "rolled-back";
+    this.flush();
     try {
       rmSync(this.backupDir, { recursive: true, force: true });
     } catch {}
@@ -506,7 +476,14 @@ export class DeploymentJournal {
 
   finalize() {
     if (this.dryRun) return;
+    const previousStatus = this.status;
     this.status = "committed";
+    try {
+      this.flush();
+    } catch (err) {
+      this.status = previousStatus;
+      throw err;
+    }
     this.committed = true;
     try { rmSync(this.backupDir, { recursive: true, force: true }); } catch {}
     try { unlinkSync(this.journalPath); } catch {}
@@ -514,8 +491,13 @@ export class DeploymentJournal {
 
   commit(verifiedState) {
     if (this.dryRun) return;
-    writeInstallationState(this.userHome, verifiedState);
-    this.finalize();
+    try {
+      writeInstallationState(this.userHome, verifiedState, { journal: this });
+      this.finalize();
+    } catch (err) {
+      this.rollback(err.message);
+      throw err;
+    }
   }
 }
 
@@ -531,11 +513,6 @@ export function recoverAbandonedJournal(userHome, options = {}) {
     const err = new Error(`Corrupted journal at ${journalPath}; keeping quarantined for operator inspection`);
     err.code = "ECORRUPT_JOURNAL";
     throw err;
-  }
-
-  if (journal.status === "committed") {
-    try { unlinkSync(journalPath); } catch {}
-    return { recovered: true, status: "committed" };
   }
 
   // 1. Verify userHome in journal matches caller's trusted normHome
@@ -608,6 +585,7 @@ export function recoverAbandonedJournal(userHome, options = {}) {
 
   // 5. VALIDATE EVERY ENTRY, BACKUP FILE AND INTEGRITY BEFORE MUTATION
   const entries = Array.isArray(journal.entries) ? journal.entries : [];
+  const terminal = journal.status === "committed" || journal.status === "rolled-back";
   for (const entry of entries) {
     if (
       !entry.destPath ||
@@ -644,12 +622,12 @@ export function recoverAbandonedJournal(userHome, options = {}) {
         err.code = "ETAMPERED";
         throw err;
       }
-      if (!existsSync(absBackup)) {
+      if (!terminal && !existsSync(absBackup)) {
         const err = new Error(`Tampered journal detected: backupFile "${entry.backupFile}" does not exist`);
         err.code = "ETAMPERED";
         throw err;
       }
-      if (entry.originalHash) {
+      if (!terminal && entry.originalHash) {
         const backupHash = hashContent(readFileSync(absBackup));
         if (backupHash !== entry.originalHash) {
           const err = new Error(`Tampered journal detected: backupFile hash mismatch for "${entry.backupFile}"`);
@@ -660,10 +638,14 @@ export function recoverAbandonedJournal(userHome, options = {}) {
     }
   }
 
-  // 6. ALL VALIDATIONS PASSED. Execute restoration in reverse order
-  const entriesToRevert = entries.slice().reverse();
-  for (const entry of entriesToRevert) {
-    restoreSingleEntry(entry, normHome, backupDir, trustedScopes);
+  // Terminal decisions are durable: cleanup never needs backups that may already be deleted.
+  if (!terminal) {
+    const entriesToRevert = entries.slice().reverse();
+    for (const entry of entriesToRevert) {
+      restoreSingleEntry(entry, normHome, backupDir, trustedScopes);
+    }
+    journal.status = "rolled-back";
+    safeAtomicWrite(journalPath, JSON.stringify(journal, null, 2) + "\n");
   }
 
   try {
@@ -673,5 +655,5 @@ export function recoverAbandonedJournal(userHome, options = {}) {
     unlinkSync(journalPath);
   } catch {}
 
-  return { recovered: true, status: "restored" };
+  return { recovered: true, status: journal.status === "committed" ? "committed" : "restored" };
 }

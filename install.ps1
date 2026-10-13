@@ -258,12 +258,14 @@ Copy-Item "$PSScriptRoot\agent\oracle-priority.example.json" "$HarnessRoot\agent
 if (Test-Path "$PSScriptRoot\agent\plugins.json") {
   Copy-Item "$PSScriptRoot\agent\plugins.json" "$HarnessRoot\agent\" -Force
 }
-# Native OMP extension: copy to harness root and user .omp/agent/extensions idempotently
-$jevExtSrc = Join-Path $PSScriptRoot "agent\extensions\nullform-jev.ts"
-if (Test-Path $jevExtSrc) {
-  Copy-Item $jevExtSrc (Join-Path $HarnessRoot "agent\extensions\nullform-jev.ts") -Force
-  Copy-Item $jevExtSrc (Join-Path $agentDir "extensions\nullform-jev.ts") -Force
-  Ok "extension -> $agentDir\extensions\nullform-jev.ts"
+# Native OMP extensions: copy to harness root and user .omp/agent/extensions idempotently
+foreach ($extension in @("nullform-jev.ts", "nullform-delete-guard.ts")) {
+  $extSrc = Join-Path $PSScriptRoot "agent\extensions\$extension"
+  if (Test-Path $extSrc) {
+    Copy-Item $extSrc (Join-Path $HarnessRoot "agent\extensions\$extension") -Force
+    Copy-Item $extSrc (Join-Path $agentDir "extensions\$extension") -Force
+    Ok "extension -> $agentDir\extensions\$extension"
+  }
 }
 # Copy rules directly into HarnessRoot/rules first. NEVER modify source files in PSScriptRoot!
 if (Test-Path "$PSScriptRoot\rules") {

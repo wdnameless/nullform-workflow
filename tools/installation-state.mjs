@@ -177,13 +177,14 @@ export function readInstallationState(userHome) {
   return validateInstallationState(parsed);
 }
 
-export function writeInstallationState(userHome, state) {
+export function writeInstallationState(userHome, state, { journal = null } = {}) {
   const statePath = getStateFilePath(userHome);
   const validated = validateInstallationState(state);
+  const content = JSON.stringify(validated, null, 2) + "\n";
+  if (journal) journal.recordBeforeWrite(statePath, content);
   const dir = dirname(statePath);
   mkdirSync(dir, { recursive: true });
   const tmpPath = join(dir, `.installation.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-  const content = JSON.stringify(validated, null, 2) + "\n";
   const fd = openSync(tmpPath, "w");
   try {
     writeSync(fd, content, 0, "utf8");
@@ -192,33 +193,14 @@ export function writeInstallationState(userHome, state) {
     closeSync(fd);
   }
 
-  if (process.platform === "win32") {
-    const bakPath = join(dir, `.installation.bak.${process.pid}.${Date.now()}`);
-    let backedUp = false;
-    try {
-      if (existsSync(statePath)) {
-        renameSync(statePath, bakPath);
-        backedUp = true;
-      }
-      renameSync(tmpPath, statePath);
-      if (backedUp) {
-        try { unlinkSync(bakPath); } catch {}
-      }
-    } catch (err) {
-      if (backedUp && existsSync(bakPath)) {
-        try { renameSync(bakPath, statePath); } catch {}
-      }
-      try { unlinkSync(tmpPath); } catch {}
-      throw err;
-    }
-  } else {
-    try {
-      renameSync(tmpPath, statePath);
-    } catch (err) {
-      try { unlinkSync(tmpPath); } catch {}
-      throw err;
-    }
+  try {
+    // Atomic replacement or failure; never leave installation identity temporarily absent.
+    renameSync(tmpPath, statePath);
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch {}
+    throw err;
   }
+  if (journal) journal.recordWritten(statePath);
   return { statePath, state: validated };
 }
 

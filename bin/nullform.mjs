@@ -309,21 +309,19 @@ function emitJsonOrText(output, errOut, isJson, payload, textMsg, toStderr = tru
   else output.write(safeMsg);
 }
 
+const compactInstallationPlan = (plan) => plan ? {
+  harness: plan.harness, root: plan.root, userHome: plan.userHome,
+  ...(plan.projectRoot ? { projectRoot: plan.projectRoot } : {}),
+  dryRun: Boolean(plan.dryRun),
+  filesCount: Array.isArray(plan.filesToCopy) ? plan.filesToCopy.length : 0,
+  managedFilesCount: plan.managedFiles ? Object.keys(plan.managedFiles).length : 0,
+  adapters: plan.adapters || [],
+  ...(plan.preservedAssets?.count ? { preservedAssets: plan.preservedAssets } : {}),
+  ...(plan.baselineRecorded !== undefined ? { baselineRecorded: plan.baselineRecorded } : {}),
+} : null;
+
 function printInitSuccess(output, options, { ok, readiness, selectedHarness, savedState, statePath, plan, doctorResult }) {
   if (options.json) {
-    const compactPlan = plan
-      ? {
-          harness: plan.harness,
-          root: plan.root,
-          ...(plan.projectRoot ? { projectRoot: plan.projectRoot } : {}),
-          userHome: plan.userHome,
-          dryRun: Boolean(plan.dryRun),
-          filesCount: Array.isArray(plan.filesToCopy) ? plan.filesToCopy.length : 0,
-          managedFilesCount: plan.managedFiles ? Object.keys(plan.managedFiles).length : 0,
-          adapters: plan.adapters || [],
-          ...(plan.baselineRecorded !== undefined ? { baselineRecorded: plan.baselineRecorded } : {}),
-        }
-      : null;
     const payload = {
       ok,
       stage: ok ? "complete" : "doctor",
@@ -335,7 +333,7 @@ function printInitSuccess(output, options, { ok, readiness, selectedHarness, sav
       userHome: savedState.userHome,
       version: savedState.version,
       statePath,
-      plan: compactPlan,
+      plan: compactInstallationPlan(plan),
       doctor: doctorResult,
     };
     output.write(JSON.stringify(payload, null, 2) + "\n");
@@ -442,8 +440,9 @@ export async function runInit(options = {}, deps = {}) {
         `  User home:    ${previewPlan.userHome}`,
         `  Files:        ${previewPlan.filesToCopy.length}`,
         ...previewPlan.adapters.map((a) => `  Adapter:      ${a}`),
+        ...(previewPlan.preservedAssets?.count ? [`  [WARN] preserved-assets: ${previewPlan.preservedAssets.count} preserved. ${previewPlan.preservedAssets.detail}`] : []),
       ].join("\n") + "\n";
-      emitJsonOrText(output, errOut, options.json, { ok: true, dryRun: true, ...previewPlan }, lines, false);
+      emitJsonOrText(output, errOut, options.json, { ok: true, ...compactInstallationPlan(previewPlan) }, lines, false);
       return 0;
     }
 
@@ -527,6 +526,10 @@ export async function runInit(options = {}, deps = {}) {
         statePath = existingState ? getStateFilePath(userHome) : null;
       }
 
+      if (plan.preservedAssets?.count) doctorResult.checks.push({
+        id: "preserved-assets", status: "warn",
+        detail: `${plan.preservedAssets.count} assets preserved. ${plan.preservedAssets.detail}`,
+      });
       const finalReadiness = summarizeDoctorReadiness(doctorResult);
       printInitSuccess(output, options, { ok, readiness: finalReadiness, selectedHarness, savedState, statePath, plan, doctorResult });
       return ok ? 0 : 1;
