@@ -11,6 +11,7 @@ All paths are inside D:/ohmypi/workflow-repo; initial base fbcead6e7ff5279e0b73b
 | OutputPages | .tmp/worktrees/acceptance-pages | fix/acceptance-pages | Native product-output paging, complete execution packet and corresponding integrity regressions; base2449bf8 |
 | WorkspaceOwner | .tmp/worktrees/workspace-control | detached a5bf423 | Git-backed feature workspace allocation/integration, existing dispatcher/help/doctor and behavioral regressions |
 | GuardOwner | .tmp/worktrees/checkout-guard | detached a5bf423 | Existing destructive guard, project dispatch guidance, documentation and sync/legacy PowerShell delivery parity |
+| ArchiveInventoryOwner (RuntimeCommit reuse) | .tmp/worktrees/archive-inventory | detached b3dc0d8 | Existing package-archive inspector and package-certification regressions; README sentence only after actual smoke. Complete Unicode source binding, no new module or archive-display parser |
 
 Parent integrates only reported owned paths into feat/portable-release-integration. User-owned openspec/changes/eval-metrics/manifest.md and context/product/video-agent-evals.srt are excluded. Source is frozen during verification; contained writers do not run builds/lint/tests/formatters mid-flight.
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,12 @@ function buildTarballFixture(tempDir, overrides = {}) {
       writeFileSync(dst, readFileSync(src));
     }
   }
+  for (const [rel, content] of Object.entries(overrides)) {
+    if (REQUIRED_FILES.includes(rel)) continue;
+    const dst = join(pkgDir, rel);
+    mkdirSync(dirname(dst), { recursive: true });
+    writeFileSync(dst, content, "utf8");
+  }
 
   const version = readFileSync(join(REPO_ROOT, "VERSION"), "utf8").trim();
   const tarballPath = join(tempDir, `nullform-workflow-${version}.tgz`);
@@ -64,10 +70,8 @@ test("inspectArchiveContents succeeds on valid candidate archive matching reposi
   try {
     const tarballPath = buildTarballFixture(tempDir);
     const result = inspectArchiveContents(tarballPath, null, { repoRoot: REPO_ROOT });
-    assert.ok(result);
     assert.equal(result.pkgJson.name, "nullform-workflow");
     assert.equal(result.version, readFileSync(join(REPO_ROOT, "VERSION"), "utf8").trim());
-    assert.ok(Array.isArray(result.packedFiles) && result.packedFiles.length >= REQUIRED_FILES.length);
     for (const req of REQUIRED_FILES) {
       assert.ok(result.packedFiles.includes(req), `Expected ${req} in packedFiles`);
     }
@@ -90,6 +94,87 @@ test("inspectArchiveContents rejects candidate with same version but altered pay
       },
       /byte\/hash mismatch with current repository source/
     );
+  } finally {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+const UNICODE_MEMBER = "skills/project-test-safety/prompts/00-диагностика.md";
+
+test("inspectArchiveContents counts an owned Unicode member and succeeds when it matches repository source", () => {
+  const tempDir = join(tmpdir(), `test-unicode-owned-${Date.now()}`);
+  mkdirSync(tempDir, { recursive: true });
+  try {
+    const tarballPath = buildTarballFixture(tempDir, { [UNICODE_MEMBER]: readFileSync(join(REPO_ROOT, UNICODE_MEMBER), "utf8") });
+    const result = inspectArchiveContents(tarballPath, null, { repoRoot: REPO_ROOT });
+    assert.ok(result.packedFiles.includes(UNICODE_MEMBER), `Owned Unicode member must appear in packedFiles: ${UNICODE_MEMBER}`);
+  } finally {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test("inspectArchiveContents rejects a same-version changed owned Unicode payload", () => {
+  const tempDir = join(tmpdir(), `test-unicode-changed-${Date.now()}`);
+  mkdirSync(tempDir, { recursive: true });
+  try {
+    const tarballPath = buildTarballFixture(tempDir, { [UNICODE_MEMBER]: "# tampered unicode payload\n" });
+    assert.throws(
+      () => inspectArchiveContents(tarballPath, null, { repoRoot: REPO_ROOT }),
+      /byte\/hash mismatch with current repository source/
+    );
+  } finally {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test("inspectArchiveContents rejects an extra unowned Unicode member", () => {
+  const tempDir = join(tmpdir(), `test-unicode-unowned-${Date.now()}`);
+  mkdirSync(tempDir, { recursive: true });
+  try {
+    const unowned = "skills/project-test-safety/prompts/неизвестный-файл.md";
+    const tarballPath = buildTarballFixture(tempDir, { [unowned]: "# unowned unicode payload\n" });
+    assert.throws(
+      () => inspectArchiveContents(tarballPath, null, { repoRoot: REPO_ROOT }),
+      /Unowned extra file in archive not present in repository/
+    );
+  } finally {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test("inspectArchiveContents reports the exact extracted member identity and its real content", () => {
+  const tempDir = join(tmpdir(), `test-identity-${Date.now()}`);
+  const referenceDir = join(tempDir, "reference");
+  const inspectBase = join(tempDir, "inspect-base");
+  mkdirSync(tempDir, { recursive: true });
+  try {
+    const originalName = "caf\u00e9.md".normalize("NFD");
+    const content = "# identity payload\n";
+    const tarballPath = buildTarballFixture(tempDir, { [`skills/normalization/${originalName}`]: content });
+
+    // Independently extract to an owned reference tree and read the member name the
+    // platform actually produced (NFD on preserving platforms, NFC on normalizing ones).
+    safeExtractArchive(tarballPath, referenceDir, { requirePackagePrefix: true });
+    const referencePkgDir = join(referenceDir, "package");
+    const referenceNames = readdirSync(join(referencePkgDir, "skills", "normalization"));
+    assert.equal(referenceNames.length, 1, "Reference tree must hold exactly the one normalization member");
+    const actualName = referenceNames[0];
+    const actualMember = `skills/normalization/${actualName}`;
+
+    mkdirSync(inspectBase, { recursive: true });
+    const result = inspectArchiveContents(tarballPath, inspectBase, { repoRoot: referencePkgDir });
+
+    assert.ok(result.packedFiles.includes(actualMember), `Inventory must report the exact extracted member: ${JSON.stringify(actualMember)}`);
+    assert.equal(readFileSync(join(result.pkgDir, actualMember), "utf8"), content, "Returned member must yield the real archived content");
+
+    if (actualName !== originalName) {
+      // The platform rewrote the name during packing/extraction: the original staging
+      // identity is a genuinely different path, so ownership must refuse, never equate.
+      assert.throws(
+        () => inspectArchiveContents(tarballPath, join(tempDir, "inspect-base-strict"), { repoRoot: join(tempDir, "staging", "package") }),
+        /Unowned extra file in archive not present in repository/
+      );
+    }
   } finally {
     try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
   }

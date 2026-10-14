@@ -90,7 +90,7 @@ On interruption or uncertain Git failure, keep the workspace/integration lock; b
 ## Reference
 
 - Spec: [`core/PORTABLE.md`](core/PORTABLE.md) · Glossary: [`CONTEXT.md`](CONTEXT.md) · Roles: [`agent/agents/`](agent/agents/)
-- Gates: `node tools/verify.mjs --profile verify` (or `--profile audit`) · Deterministic tests: `node --test tools/tests/*.test.mjs` (regression tests verify code stability and safety invariants, not causal AI quality improvement; see `nullform evidence`)
+- Gates: `node tools/verify.mjs --profile verify` (or `--profile audit`) · Deterministic tests: `node --test tools/tests/*.test.mjs` (regression tests verify code stability and safety invariants, not causal AI quality improvement; see `nullform evidence`) · Archive certification binds each candidate tarball to repository source by enumerating the actual extracted filenames (including Unicode names) and applying ownership and per-file hash checks to every extracted file.
 - Capabilities: `nullform capabilities` separates Node-native core gates and 8 host configuration adapters from OMP/Bun-specific native automated review.
 - Dashboard: `node tools/dashboard.mjs --url`
 

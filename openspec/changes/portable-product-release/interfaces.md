@@ -1,6 +1,6 @@
 # Integration contract
 
-Baseline c1b29e2; branch feat/portable-release-integration. Requirements are manifest.md R01-R09. Every builder reads current source before choosing internal helpers. Reuse existing Node modules, parser dependencies and filesystem guards; no new runtime dependency without source-verified need.
+Baseline c1b29e2; branch feat/portable-release-integration. Requirements are manifest.md R01-R11. Every builder reads current source before choosing internal helpers. Reuse existing Node modules, parser dependencies and filesystem guards; no new runtime dependency without source-verified need.
 
 ## Ownership
 
@@ -44,6 +44,8 @@ Certificate outcomes include both `harnesses` and `updatedHarnesses` with all ei
 
 Archive source binding compares shipped payload bytes to the current source snapshot before certificate emission; text checkout EOL differences use the existing canonical hashing convention and binary assets remain exact. Same-version altered payload, foreign extras, unverified Git identity and dirty source fail closed; a dirty diagnostic is never publishable.
 
+Archive inventory must enumerate actual extracted payload paths, including Unicode filenames, rather than use tar's human-readable escaped listing as filesystem paths. Every extracted member participates in the existing required/banned/source-ownership/hash checks; unreadable or unsupported entries cannot silently disappear. Existing `inspectArchiveContents(tarballPath,tempBase,options)` signature and caller contracts remain unchanged.
+
 Maintained certification targets: hosted Ubuntu/Windows/macOS x Node22/24. Preserve existing declared runtime compatibility unless an actual required API forces a reviewed engine change; documented certified support and engine range are distinct. Intended public release1.2.0; version bump uses one canonical VERSION/package/lock agreement and explicit rationale. No arbitrary baseline edits/defer exemptions.
 
 Public publishing is authorized only after integrity, hosted matrix and independently observed release-candidate acceptance bound to the current source/archive. Candidate acceptance is not proof that external publication occurred; final program completion still requires actual published-registry verification. For the unpublished name, initial bootstrap requires user-controlled npm web authentication to publish the real certified package, then owner configuration of hosted OIDC for subsequent releases. Never commit/copy/request tokens, publish a placeholder registration package, claim publication from dry-run, or change personal profiles. Bind the first release to verified build attestation/source/checksum; expose any npm-provenance limitation explicitly instead of forging it.
@@ -54,4 +56,4 @@ RuntimeOwner executes as RuntimeContained in D:/ohmypi/workflow-repo/.tmp/worktr
 
 The clean detached review worktree .tmp/worktrees/review will be checked out to the committed integrated source for frozen tests/native receipts. This excludes the user's unrelated dirty manifest/transcript without weakening source hashing or staging those files. Current ordinary oracle resolution: nullform-gateway/gemini-3.8-flash-high, not fallback, resolved by ensure --probe --dry-run; global configuration unchanged. Flash-class requires two independent passes beyond actually proven lite limits.
 
-The initially resolved gateway later became unavailable; ordinary native verification now uses the available OpenAI Codex provider without changing personal/global model configuration. Historical normal reviewer/oracle verdicts, including REJECT, remain retained. Current-source acceptance must be regenerated after code changes; earlier hosted/test proof is never relabeled.
+Historical gateway unavailability led to real Codex verification; later Codex quota exhaustion was observed. Current explicit independent selector `ollama-cloud/deepseek-v4-pro` is authenticated/available with fixed pricing in the actual native OMP SDK catalogue (`omp models find ... --json --no-extensions`), without changing personal/global configuration. The legacy YAML-only oracle resolver does not expose that SDK provider; its fallback result is not presented as Pro resolution. Historical native verdicts and parent qualification concerns remain retained. Every source-changing correction requires fresh acceptance; earlier hosted/test proof is never relabeled.

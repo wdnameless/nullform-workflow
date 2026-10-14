@@ -161,6 +161,26 @@ export function safeExtractArchive(tarballPath, targetDir, options = {}) {
   return entries;
 }
 
+/**
+ * Collects every extracted regular file under `dir` into `files` as exact-name
+ * forward-slash relative paths (no Unicode normalization). Fails closed on
+ * entries it cannot classify (symlinks, devices, fifos) instead of silently
+ * dropping them from the inventory.
+ */
+function collectExtractedFiles(dir, prefix, files) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      collectExtractedFiles(join(dir, entry.name), rel, files);
+    } else if (entry.isFile()) {
+      files.push(rel);
+    } else {
+      throw new Error(`Unsupported archive entry (not a regular file): ${rel}`);
+    }
+  }
+  return files;
+}
+
 export function createArchive(tarballPath, sourceDir, itemToPack = "package") {
   const absTarball = resolve(tarballPath);
   const tarDir = dirname(absTarball);
@@ -181,7 +201,7 @@ export function inspectArchiveContents(tarballPath, tempBase = null, options = {
   const base = tempBase || mkdtempSync(join(tmpdir(), "inspect-archive-"));
   const unpackDir = join(base, "unpack");
   try {
-    const entries = safeExtractArchive(tarballPath, unpackDir, { requirePackagePrefix: true });
+    safeExtractArchive(tarballPath, unpackDir, { requirePackagePrefix: true });
     const pkgDir = join(unpackDir, "package");
     assert.ok(existsSync(join(pkgDir, "package.json")), "package.json missing from archive");
     const pkgJson = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
@@ -202,19 +222,7 @@ export function inspectArchiveContents(tarballPath, tempBase = null, options = {
     for (const s of bannedScripts) {
       assert.ok(!pkgJson.scripts?.[s], `Lifecycle script ${s} must not exist`);
     }
-    const packedFiles = entries
-      .map((e) => e.replace(/\\/g, "/"))
-      .filter((e) => e !== "package" && e !== "package/" && e.startsWith("package/"))
-      .map((e) => e.slice("package/".length))
-      .filter((rel) => {
-        if (!rel || rel.endsWith("/")) return false;
-        const full = join(pkgDir, rel);
-        try {
-          return statSync(full).isFile();
-        } catch {
-          return false;
-        }
-      });
+    const packedFiles = collectExtractedFiles(pkgDir, "", []).sort();
     const bannedPrefixes = [
       ".tmp", ".workflow", "bench/runs", "history", "openspec", "tools/tests",
       "tools/npm-smoke.mjs", "tools/certify-package.mjs", "tools/publish-release.mjs", "tools/package-archive.mjs",
