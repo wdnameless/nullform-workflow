@@ -1,0 +1,2983 @@
+{
+  "version": 2,
+  "changeId": "concurrent-feature-workspaces",
+  "reviewer": {
+    "role": "reviewer",
+    "context": {
+      "role": "reviewer",
+      "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+      "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+      "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+      "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+      "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+      "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+      "promptHash": "e85a2dd5da445f30d67341f0437464862169a214e93329f14b9c3c23f2ce3778",
+      "productCommandHash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    },
+    "productExecutions": [],
+    "sessionId": "01a13798-cd81-70b0-bc54-e3a1f8fd29f1",
+    "provider": "nullform-gateway",
+    "model": "gemini-3.8-flash-high",
+    "isFallback": false,
+    "usage": {
+      "input": 247687,
+      "output": 2843,
+      "cacheRead": 2794929,
+      "cacheWrite": 0,
+      "totalTokens": 3045459,
+      "costUsd": 0.406046175,
+      "costSource": "native-fixed-tariff"
+    },
+    "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of concurrent-feature-workspaces is clean with zero blocking defects.\\n\\nRequirement results:\\n- R01: Verified. `nullform workflow workspace --feature SLUG` allocates private detached Git worktrees (.tmp/worktrees/feature<slug>) with isolated indexes based on committed HEAD. Allocation preserves human staged, unstaged, and untracked workflow state in the main working directory without copying or mutating it.\\n- R02: Verified. Multiple features converge onto the recorded integration branch through `nullform workflow integrate --feature SLUG` serialized by an exclusive filesystem lock (`nullform-integration.lock`). Both integration target and feature source must be clean and idle; textual merge conflicts halt cleanly with native conflict markers, unmerged index stages, and MERGE_HEAD left intact for manual resolution, with no automatic abort, stash restoration, or silent overwrites.\\n- R03: Verified. Provides a Node-native CLI control surface integrated into `bin/nullform.mjs` and `tools/workflow.mjs`, accompanied by project-owned dispatch instructions in `agent/AGENTS.md` and `agent/agents/orchestrator.md`. The destructive delete guard (`agent/extensions/nullform-delete-guard.ts`) identifies git checkout, restore, and stash replacements, requires explicit interactive confirmation, and refuses headlessly.\\n\\nLean lens: Implementation in `tools/workflow-workspaces.mjs` is minimal (168 lines) and directly leverages Node stdlib and native Git commands without extra layers, wrapper classes, or dead code. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}",
+    "stopReason": "stop",
+    "startedAt": "2026-10-13T23:28:43.393Z",
+    "completedAt": "2026-10-13T23:35:55.481Z",
+    "verdict": "ACCEPT",
+    "nativeVerdict": "correct",
+    "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+    "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+    "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+    "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+    "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+    "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+    "exitCode": 0,
+    "nativeProjection": {
+      "role": "reviewer",
+      "context": {
+        "role": "reviewer",
+        "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+        "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+        "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+        "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+        "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+        "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+        "promptHash": "e85a2dd5da445f30d67341f0437464862169a214e93329f14b9c3c23f2ce3778",
+        "productCommandHash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      },
+      "productExecutions": [],
+      "sessionId": "01a13798-cd81-70b0-bc54-e3a1f8fd29f1",
+      "provider": "nullform-gateway",
+      "model": "gemini-3.8-flash-high",
+      "isFallback": false,
+      "usage": {
+        "input": 247687,
+        "output": 2843,
+        "cacheRead": 2794929,
+        "cacheWrite": 0,
+        "totalTokens": 3045459,
+        "costUsd": 0.406046175,
+        "costSource": "native-fixed-tariff"
+      },
+      "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of concurrent-feature-workspaces is clean with zero blocking defects.\\n\\nRequirement results:\\n- R01: Verified. `nullform workflow workspace --feature SLUG` allocates private detached Git worktrees (.tmp/worktrees/feature<slug>) with isolated indexes based on committed HEAD. Allocation preserves human staged, unstaged, and untracked workflow state in the main working directory without copying or mutating it.\\n- R02: Verified. Multiple features converge onto the recorded integration branch through `nullform workflow integrate --feature SLUG` serialized by an exclusive filesystem lock (`nullform-integration.lock`). Both integration target and feature source must be clean and idle; textual merge conflicts halt cleanly with native conflict markers, unmerged index stages, and MERGE_HEAD left intact for manual resolution, with no automatic abort, stash restoration, or silent overwrites.\\n- R03: Verified. Provides a Node-native CLI control surface integrated into `bin/nullform.mjs` and `tools/workflow.mjs`, accompanied by project-owned dispatch instructions in `agent/AGENTS.md` and `agent/agents/orchestrator.md`. The destructive delete guard (`agent/extensions/nullform-delete-guard.ts`) identifies git checkout, restore, and stash replacements, requires explicit interactive confirmation, and refuses headlessly.\\n\\nLean lens: Implementation in `tools/workflow-workspaces.mjs` is minimal (168 lines) and directly leverages Node stdlib and native Git commands without extra layers, wrapper classes, or dead code. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}",
+      "stopReason": "stop",
+      "startedAt": "2026-10-13T23:28:43.393Z",
+      "completedAt": "2026-10-13T23:35:55.481Z",
+      "verdict": "ACCEPT",
+      "nativeVerdict": "correct",
+      "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+      "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+      "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+      "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+      "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+      "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+      "exitCode": 0
+    },
+    "nativeEvents": [
+      {
+        "type": "session",
+        "id": "01a13798-cd81-70b0-bc54-e3a1f8fd29f1",
+        "timestamp": "2026-10-13T23:28:43.393Z"
+      },
+      {
+        "type": "model_change",
+        "model": "gemini-3.8-flash-high",
+        "provider": "nullform-gateway",
+        "isFallback": false,
+        "timestamp": "2026-10-13T23:28:44.399Z"
+      },
+      {
+        "type": "custom",
+        "customType": "workflow-review-context",
+        "timestamp": "2026-10-13T23:28:44.454Z",
+        "data": {
+          "role": "reviewer",
+          "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+          "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+          "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+          "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+          "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+          "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+          "promptHash": "e85a2dd5da445f30d67341f0437464862169a214e93329f14b9c3c23f2ce3778",
+          "productCommandHash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:28:55.886Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934126413,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 44444,
+            "output": 230,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 44674,
+            "cost": {
+              "total": 0.034195500000000004
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_420180",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:29:04.523Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934136568,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9619,
+            "output": 223,
+            "cacheRead": 44536,
+            "cacheWrite": 0,
+            "totalTokens": 54378,
+            "cost": {
+              "total": 0.0113907
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_25890",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:29:11.276Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934145085,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9439,
+            "output": 231,
+            "cacheRead": 52192,
+            "cacheWrite": 0,
+            "totalTokens": 61862,
+            "cost": {
+              "total": 0.011859900000000001
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_643240",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:29:29.708Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934151856,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10998,
+            "output": 186,
+            "cacheRead": 59671,
+            "cacheWrite": 0,
+            "totalTokens": 70855,
+            "cost": {
+              "total": 0.013421325000000001
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_595278",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:29:37.590Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934170032,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 12801,
+            "output": 218,
+            "cacheRead": 68712,
+            "cacheWrite": 0,
+            "totalTokens": 81731,
+            "cost": {
+              "total": 0.01557165
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_226053",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:29:46.407Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934178244,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10465,
+            "output": 240,
+            "cacheRead": 79530,
+            "cacheWrite": 0,
+            "totalTokens": 90235,
+            "cost": {
+              "total": 0.0147135
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_425779",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:30:14.710Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934187072,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10943,
+            "output": 48,
+            "cacheRead": 88009,
+            "cacheWrite": 0,
+            "totalTokens": 99000,
+            "cost": {
+              "total": 0.014987925
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_437465",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:30:20.087Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934215050,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 16060,
+            "output": 51,
+            "cacheRead": 96989,
+            "cacheWrite": 0,
+            "totalTokens": 113100,
+            "cost": {
+              "total": 0.019510425
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_473941",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:30:34.925Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934220419,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 11816,
+            "output": 122,
+            "cacheRead": 111056,
+            "cacheWrite": 0,
+            "totalTokens": 122994,
+            "cost": {
+              "total": 0.0176487
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_456133",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:30:39.213Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934235252,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 4409,
+            "output": 85,
+            "cacheRead": 120836,
+            "cacheWrite": 0,
+            "totalTokens": 125330,
+            "cost": {
+              "total": 0.0126882
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_433037",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:30:48.454Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934239531,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 5543,
+            "output": 193,
+            "cacheRead": 123215,
+            "cacheWrite": 0,
+            "totalTokens": 128951,
+            "cost": {
+              "total": 0.014122125
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_624979",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:31:47.391Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934249039,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 9271,
+            "output": 55,
+            "cacheRead": 126747,
+            "cacheWrite": 0,
+            "totalTokens": 136073,
+            "cost": {
+              "total": 0.016665525
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_589253",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:32:01.480Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934307758,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 15841,
+            "output": 58,
+            "cacheRead": 134035,
+            "cacheWrite": 0,
+            "totalTokens": 149934,
+            "cost": {
+              "total": 0.022150875
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_415298",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:32:09.328Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934321879,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 10909,
+            "output": 63,
+            "cacheRead": 147867,
+            "cacheWrite": 0,
+            "totalTokens": 158839,
+            "cost": {
+              "total": 0.019508025
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_415315",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:32:14.494Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934329766,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 4052,
+            "output": 90,
+            "cacheRead": 156735,
+            "cacheWrite": 0,
+            "totalTokens": 160877,
+            "cost": {
+              "total": 0.015131625
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_445808",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:32:23.396Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934334985,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 7008,
+            "output": 46,
+            "cacheRead": 158759,
+            "cacheWrite": 0,
+            "totalTokens": 165813,
+            "cost": {
+              "total": 0.017335424999999998
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_423958",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:32:29.499Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934343767,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 3271,
+            "output": 57,
+            "cacheRead": 163722,
+            "cacheWrite": 0,
+            "totalTokens": 167050,
+            "cost": {
+              "total": 0.014946149999999998
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_648074",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:32:48.562Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934349940,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 3754,
+            "output": 51,
+            "cacheRead": 164950,
+            "cacheWrite": 0,
+            "totalTokens": 168755,
+            "cost": {
+              "total": 0.015378
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_505530",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:33:09.392Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934368935,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 8167,
+            "output": 68,
+            "cacheRead": 166681,
+            "cacheWrite": 0,
+            "totalTokens": 174916,
+            "cost": {
+              "total": 0.018881324999999997
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_648536",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:33:30.942Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934389926,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 8342,
+            "output": 53,
+            "cacheRead": 172825,
+            "cacheWrite": 0,
+            "totalTokens": 181220,
+            "cost": {
+              "total": 0.019417125
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_382551",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:34:27.915Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934411340,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 7001,
+            "output": 52,
+            "cacheRead": 179137,
+            "cacheWrite": 0,
+            "totalTokens": 186190,
+            "cost": {
+              "total": 0.018881025
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_565290",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:34:33.589Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934468283,
+          "stopReason": "toolUse",
+          "usage": {
+            "input": 12481,
+            "output": 48,
+            "cacheRead": 184130,
+            "cacheWrite": 0,
+            "totalTokens": 196659,
+            "cost": {
+              "total": 0.0233505
+            }
+          },
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call_409575",
+              "name": "inspect_product"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "timestamp": "2026-10-13T23:35:55.481Z",
+        "message": {
+          "role": "assistant",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "timestamp": 1791934474048,
+          "stopReason": "stop",
+          "usage": {
+            "input": 11053,
+            "output": 375,
+            "cacheRead": 194595,
+            "cacheWrite": 0,
+            "totalTokens": 206023,
+            "cost": {
+              "total": 0.024290625
+            }
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Implementation review of concurrent-feature-workspaces is clean with zero blocking defects.\\n\\nRequirement results:\\n- R01: Verified. `nullform workflow workspace --feature SLUG` allocates private detached Git worktrees (.tmp/worktrees/feature<slug>) with isolated indexes based on committed HEAD. Allocation preserves human staged, unstaged, and untracked workflow state in the main working directory without copying or mutating it.\\n- R02: Verified. Multiple features converge onto the recorded integration branch through `nullform workflow integrate --feature SLUG` serialized by an exclusive filesystem lock (`nullform-integration.lock`). Both integration target and feature source must be clean and idle; textual merge conflicts halt cleanly with native conflict markers, unmerged index stages, and MERGE_HEAD left intact for manual resolution, with no automatic abort, stash restoration, or silent overwrites.\\n- R03: Verified. Provides a Node-native CLI control surface integrated into `bin/nullform.mjs` and `tools/workflow.mjs`, accompanied by project-owned dispatch instructions in `agent/AGENTS.md` and `agent/agents/orchestrator.md`. The destructive delete guard (`agent/extensions/nullform-delete-guard.ts`) identifies git checkout, restore, and stash replacements, requires explicit interactive confirmation, and refuses headlessly.\\n\\nLean lens: Implementation in `tools/workflow-workspaces.mjs` is minimal (168 lines) and directly leverages Node stdlib and native Git commands without extra layers, wrapper classes, or dead code. Lean already.\",\n  \"overall_confidence_score\": 1.0\n}"
+            }
+          ]
+        }
+      }
+    ],
+    "nativeEventsHash": "48e50444675da2b72da986fe330117c659acef21a4849713f3d3e2dd54110b0b",
+    "eventProjectionHash": "6f88003cfdcff13ff10790b4b2ea37f2b7b022b14e01cbe1fda660887fef7e2d"
+  },
+  "stageB": {
+    "reviewerSessionId": "01a13798-cd81-70b0-bc54-e3a1f8fd29f1",
+    "before": {
+      "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+      "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+      "testCmd": "node --test --test-concurrency=2 tools/tests/workflow-workspaces.test.mjs tools/tests/delete-guard.test.mjs",
+      "startedAt": "2026-10-13T23:36:47.996Z",
+      "completedAt": "2026-10-13T23:40:38.212Z",
+      "exitCode": 0,
+      "output": "✔ existing destructive operations still classify their dangerous flags, not safe variants (2.6739ms)\n✔ Git restoration blocks headlessly even after another destructive match (0.7797ms)\n✔ safe Git inspection and isolated worktree creation remain usable (0.9354ms)\n✔ screenshot restoration requires explicit interactive authorization (0.9801ms)\n✔ session modes deny Git restoration but preserve other headless permission behavior (0.2522ms)\n✔ rmTargets parses arguments, flags, quotes, and expands ~ (0.7792ms)\n✔ computeRmScope counts files and size with ctx.exec or falls back gracefully (0.4292ms)\n✔ extractCommand extracts commands from bash and eval tool calls (0.1535ms)\n✔ handleToolCall prompts via ctx.ui.confirm when interactive and allows on true (0.2598ms)\n✔ handleToolCall blocks with deny message when ctx.ui.confirm returns false (0.3563ms)\n✔ handleToolCall blocks when ctx.ui.confirm throws error (dialog closed) (0.3694ms)\n✔ handleToolCall supports ctx.ui.ask fallback (0.2463ms)\n✔ handleToolCall skips guard in non-interactive sessions (0.1495ms)\n✔ concurrent allocation isolates indexes/state without copying staged, unstaged or untracked operator work (1740.8434ms)\n✔ uppercase and lowercase Git index injection cannot replace staged human or private feature indexes (2192.0598ms)\n✔ duplicate allocation refuses existing writable cwd and simultaneous duplicates have exactly one owner (1783.3238ms)\n✔ path-like slugs, existing foreign repositories and junction escape refuse without replacement (3584.9561ms)\n✔ junction in allocation parent refuses before making outside files (922.335ms)\n✔ two committed features integrate onto one branch while preserving both source commits (4475.6911ms)\n✔ generated registration is the only untracked source exemption; unmanaged tmp data still refuses (3225.3334ms)\n✔ dirty target and source, wrong branch and active operations refuse with autostash disabled (9691.895ms)\n✔ foreign root, foreign Git common directory and tampered registration refuse (4040.0815ms)\n✔ source history detached from the recorded base cannot be integrated (2415.145ms)\n✔ rewritten integration history must still descend from the recorded base (2685.0378ms)\n✔ same-line conflict remains native, recoverable and explicitly unsuccessful (4740.2365ms)\n✔ old live, malformed and uncertain-owner common locks are never reclaimed (182210.0111ms)\n✔ simultaneous integrations serialize the whole native merge, not just registration (5475.1409ms)\nℹ tests 27\nℹ suites 0\nℹ pass 27\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 229262.7932\n",
+      "elapsedMs": 229327,
+      "timeoutMs": 1200000
+    },
+    "after": {
+      "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+      "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+      "testCmd": "node --test --test-concurrency=2 tools/tests/workflow-workspaces.test.mjs tools/tests/delete-guard.test.mjs",
+      "startedAt": "2026-10-13T23:40:39.133Z",
+      "completedAt": "2026-10-13T23:44:29.419Z",
+      "exitCode": 0,
+      "output": "✔ existing destructive operations still classify their dangerous flags, not safe variants (1.9284ms)\n✔ Git restoration blocks headlessly even after another destructive match (1.0844ms)\n✔ safe Git inspection and isolated worktree creation remain usable (0.3026ms)\n✔ screenshot restoration requires explicit interactive authorization (0.6872ms)\n✔ session modes deny Git restoration but preserve other headless permission behavior (0.2716ms)\n✔ rmTargets parses arguments, flags, quotes, and expands ~ (0.759ms)\n✔ computeRmScope counts files and size with ctx.exec or falls back gracefully (0.4279ms)\n✔ extractCommand extracts commands from bash and eval tool calls (0.1158ms)\n✔ handleToolCall prompts via ctx.ui.confirm when interactive and allows on true (0.2509ms)\n✔ handleToolCall blocks with deny message when ctx.ui.confirm returns false (0.3421ms)\n✔ handleToolCall blocks when ctx.ui.confirm throws error (dialog closed) (0.2235ms)\n✔ handleToolCall supports ctx.ui.ask fallback (0.2239ms)\n✔ handleToolCall skips guard in non-interactive sessions (0.1529ms)\n✔ concurrent allocation isolates indexes/state without copying staged, unstaged or untracked operator work (1522.07ms)\n✔ uppercase and lowercase Git index injection cannot replace staged human or private feature indexes (2023.4848ms)\n✔ duplicate allocation refuses existing writable cwd and simultaneous duplicates have exactly one owner (1744.8074ms)\n✔ path-like slugs, existing foreign repositories and junction escape refuse without replacement (3474.0334ms)\n✔ junction in allocation parent refuses before making outside files (953.0338ms)\n✔ two committed features integrate onto one branch while preserving both source commits (4541.6348ms)\n✔ generated registration is the only untracked source exemption; unmanaged tmp data still refuses (3446.4763ms)\n✔ dirty target and source, wrong branch and active operations refuse with autostash disabled (10013.3345ms)\n✔ foreign root, foreign Git common directory and tampered registration refuse (3997.3422ms)\n✔ source history detached from the recorded base cannot be integrated (2666.2482ms)\n✔ rewritten integration history must still descend from the recorded base (2922.5212ms)\n✔ same-line conflict remains native, recoverable and explicitly unsuccessful (4926.8224ms)\n✔ old live, malformed and uncertain-owner common locks are never reclaimed (182103.3549ms)\n✔ simultaneous integrations serialize the whole native merge, not just registration (4930.0391ms)\nℹ tests 27\nℹ suites 0\nℹ pass 27\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 229339.5404\n",
+      "elapsedMs": 229417,
+      "timeoutMs": 1200000
+    },
+    "disposition": "lean-already",
+    "testCmd": "node --test --test-concurrency=2 tools/tests/workflow-workspaces.test.mjs tools/tests/delete-guard.test.mjs",
+    "exitCode": 0,
+    "testFilesHashBefore": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+    "testFilesHashAfter": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+    "sourceDigestBefore": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+    "sourceDigestAfter": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+    "executedAt": "2026-10-13T23:44:29.419Z",
+    "summary": "Corrected-base reviewer found no defect or delete-list; unchanged source and frozen tests; full784/784 independently executed on b3dc0d8"
+  },
+  "oracles": [
+    {
+      "role": "oracle",
+      "context": {
+        "role": "oracle",
+        "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+        "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+        "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+        "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+        "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+        "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+        "promptHash": "44598843d9892576fd0d5b0c271b33d4d9fec82cf8a3044529b23b013973e474",
+        "productCommandHash": "5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab"
+      },
+      "productExecutions": [
+        {
+          "commandHash": "5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab",
+          "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+          "exitCode": 0,
+          "startedAt": "2026-10-13T23:45:50.371Z",
+          "completedAt": "2026-10-13T23:46:03.145Z",
+          "outputHash": "f708fa978a00e05dec7afa3bc476a274cc2d5f32872676ae555c5829410ded81"
+        }
+      ],
+      "sessionId": "01a137a8-42f6-73bb-86b0-788091305fb0",
+      "provider": "nullform-gateway",
+      "model": "gemini-3.8-flash-high",
+      "isFallback": false,
+      "usage": {
+        "input": 260395,
+        "output": 5810,
+        "cacheRead": 2601987,
+        "cacheWrite": 0,
+        "totalTokens": 2868192,
+        "costUsd": 0.412232775,
+        "costSource": "native-fixed-tariff"
+      },
+      "report": "# Blind Product Acceptance Report: concurrent-feature-workspaces\n\n**Target Change:** `concurrent-feature-workspaces`  \n**Execution Timestamp:** Started `2026-10-13T23:45:50.371Z`, Completed `2026-10-13T23:46:03.145Z`  \n**Execution Context:**  \n- Working Directory: `D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`  \n- Execution Exit Code: `0`  \n- Source Digest: `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`  \n- Test Files Hash: `71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59`  \n- Command Hash: `5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab`  \n- Content Hash: `f708fa978a00e05dec7afa3bc476a274cc2d5f32872676ae555c5829410ded81`  \n- Total Output Bytes: `381991`\n\n---\n\n## 1. Requirements Manifest Evaluation\n\n### R01 — Isolated Working Directories & Working Tree Preservation\n- **Verbatim User Quote:** «я работаю разными агентами в одном и том же реп и пилю разные фишки, и они конфликтуют друг с другом, затирают изменения друг друга»\n- **Observable Requirement:** Feature writers receive separate Git working directories and indexes. Allocation preserves existing dirty files, staged entries and other workflow state.\n- **Source Verification:**\n  - `tools/workflow-workspaces.mjs:106` — `mkdirSync(cwd);`\n  - `tools/workflow-workspaces.mjs:107` — `git(root, ['worktree', 'add', '--detach', '--', cwd, base]);`\n  - `tools/workflow-workspaces.mjs:108` — `if (commonDirectory(cwd) !== commonDir) throw new Error('Allocated worktree belongs to a foreign repository');`\n- **Native Execution Evidence:**\n  The operator's product test executed the live allocation of concurrent features in an isolated fixture (`cwd: D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`):\n  ```json\n  {\"source\":\"D:/ohmypi/workflow-repo/.tmp/accept-installed-65a/node_modules/nullform-workflow\",\"root\":\"D:\\\\TMP\\\\nullform-concurrent-smoke-oxyL78\",\"allocationCommonRepo\":true,\"separateIndexPaths\":true,\"humanBytesAndStageAndWorkflowPreserved\":true,\"duplicateRefused\":true,\"dirtyIntegrationRefused\":true,\"independentCommitsIntegrated\":[\"9fc6a7d2a849345a986c2cf6958b77d98dd55ff7\",\"7e69e8c4420c5567f5c799266a2143d60a5cde4b\"],\"conflictRetained\":true,\"conflictSourceCommitsRetained\":[\"21179edeb9e62beadb3b915187fdda850b42eaf4\",\"af9a78496e26b83b64facc9dd8bff8a83c10d6d4\"],\"headlessScreenshotRestorationBlocked\":true,\"readOnlyGitAllowed\":true}\n  ```\n  The assertions confirmed that:\n  - `a.cwd !== b.cwd` while `a.commonDir === b.commonDir`\n  - Git index paths are strictly independent (`rev-parse --git-path index`)\n  - Integration checkout index (`git ls-files --stage`), staged/unstaged `human.txt`, untracked `notes.md`, and `.workflow/state.json` remained byte-identical before and after concurrent allocations.\n  - Duplicate allocation was rejected with exit code 1 (`duplicateRefused: true`).\n- **Test Suite Evidence:**\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ concurrent allocation isolates indexes/state without copying staged, unstaged or untracked operator work (1485.5371ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ uppercase and lowercase Git index injection cannot replace staged human or private feature indexes (2000.4596ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ duplicate allocation refuses existing writable cwd and simultaneous duplicates have exactly one owner (1638.0308ms)`\n- **Status:** **PROVEN**\n\n---\n\n### R02 — Serialized Integration on One Final Branch & Visible Conflict Halting\n- **Verbatim User Quote:** «чтобы можно было в одном репозитории, в одной ветке делать много фич разными агентами, и оно не конфликтовало»\n- **Observable Requirement:** Multiple features converge on one integration branch through one serialized integration operation. Conflicting edits stop visibly; no silent overwrite or promise that semantic conflicts disappear. No shared-physical-checkout write-safety claim.\n- **Source Verification:**\n  - `tools/workflow-workspaces.mjs:118` — `return withIntegrationLock(commonDirectory(root), () => {`\n  - `tools/workflow-workspaces.mjs:125` — `const result = spawnSync('git', ['-c', 'merge.autoStash=false', '-c', 'rebase.autoStash=false', '-c', `branch.${record.integrationBranch}.mergeOptions=`, 'merge', '--no-autostash', '--no-ff', '--no-edit', sourceHead], { cwd: root, env: gitEnv(), encoding: 'utf8', windowsHide: true, timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 });`\n  - `tools/workflow-workspaces.mjs:127` — `if (result.status !== 0) throw new Error(`Native Git merge failed; conflict/operation state retained.\\n${result.stdout || ''}${result.stderr || ''}`);`\n- **Native Execution Evidence:**\n  The live product run demonstrated convergence of two independent feature branches (`a` and `b`) onto branch `integration`:\n  - `independentCommitsIntegrated: [\"9fc6a7d2a849345a986c2cf6958b77d98dd55ff7\", \"7e69e8c4420c5567f5c799266a2143d60a5cde4b\"]`\n  - Both feature files (`feature-a.txt` containing `FEATURE A\\n` and `feature-b.txt` containing `FEATURE B\\n`) were merged cleanly into the integration checkout while preserving human fixture edits.\n  - Conflicting edits (`c` and `d` both modifying `App.txt`) halted visibly on `d`:\n    - Integration exit code: `1`\n    - Stderr: `Native Git merge failed; conflict/operation state retained.`\n    - Porcelain status: `UU App.txt`\n    - Source feature HEAD commits were preserved untouched: `conflictSourceCommitsRetained: [\"21179edeb9e62beadb3b915187fdda850b42eaf4\", \"af9a78496e26b83b64facc9dd8bff8a83c10d6d4\"]`\n- **Test Suite Evidence:**\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ two committed features integrate onto one branch while preserving both source commits (4117.6211ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ dirty target and source, wrong branch and active operations refuse with autostash disabled (8878.6895ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ same-line conflict remains native, recoverable and explicitly unsuccessful (4440.2745ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ simultaneous integrations serialize the whole native merge, not just registration (4542.9497ms)`\n- **Status:** **PROVEN**\n\n---\n\n### R03 — Node-Native CLI Control Surface, Fleet Dispatch & Destructive Git Restoration Guard\n- **Verbatim User Quote:** «Если так работает, давай что-то с этим придумаем»\n- **Observable Requirement:** Provide a Node-native installed CLI control surface and update project-owned dispatch instructions; the screenshot's stash-file restoration is classified as destructive rather than harmless preservation.\n- **Source Verification:**\n  - `bin/nullform.mjs:71` — `if (Array.isArray(argv) && argv.length > 0 && argv[0] === \"workflow\") { return { command: \"workflow\", workflowArgs: argv.slice(1), help: false }; }`\n  - `tools/workflow.mjs:38` — `import { runWorkspaceCommand } from \"./workflow-workspaces.mjs\";`\n  - `agent/AGENTS.md:75` — `For concurrent Git features, first run \\`nullform workflow workspace --feature SLUG\\` from the integration checkout (Git executable required). Dispatch exactly one writer with the returned absolute \\`cwd\\`, committed base and fresh feature context; the worker MUST run there, never in the integration or a sibling checkout. Duplicate allocation refuses; it does not authorize another writer to reuse a workspace. The committed base excludes unsaved prerequisites: commit required shared prerequisites before allocation.`\n  - `agent/AGENTS.md:76` — `Finish with clean feature commits, then the single parent integrator runs \\`nullform workflow integrate --feature SLUG\\` from the recorded integration branch. Dirty targets refuse without stash; visible Git conflicts require integrator-only manual resolution, never reset/restore/stash or automatic ours/theirs. One repository/final branch does not mean one shared physical checkout.`\n  - `agent/AGENTS.md:77` — `OMP's native delete-guard requires explicit confirmation for identified \\`git checkout\\`, \\`git restore\\` and stash working-tree/index replacement; headless restoration blocks. Other adapters get portable CLI/guidance only, not native interception. This best-effort command guard does not sandbox arbitrary shells or direct filesystem writes.`\n  - `agent/extensions/nullform-delete-guard.ts:32` — `const GIT_RESTORATION: DestructiveRule = { re: new RegExp(String.raw\\`\\\\bgit(?:\\\\.exe)?[\"']?\\\\s+(?:(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--config-env)\\\\s+${GIT_WORD}|(?:-C|-c)${GIT_WORD}|--(?:git-dir|work-tree|namespace|config-env)=${GIT_WORD}|-[pP]|--(?:no-pager|paginate|bare|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-replace-objects|no-optional-locks))\\\\s+)*(?:(?:checkout|restore)\\\\b|stash(?:\\\\s+(?:apply|pop|push|save|branch)\\\\b|\\\\s+-|(?=\\\\s*(?:$|[;&|\"'`]))))\\`), what: \"заменить рабочие файлы или индекс (git checkout/restore/stash)\", blockHeadless: true };`\n- **Native Execution Evidence:**\n  - Evaluated in delivered extension outside `node_modules`:\n    - `command: 'git checkout stash@{0} -- src/App.tsx'` under `{hasUI: false}` returned `denied.block: true`.\n    - `command: 'git show HEAD:App.txt'` returned `undefined` (read-only command allowed).\n    - Output flag: `headlessScreenshotRestorationBlocked: true`, `readOnlyGitAllowed: true`.\n  - Installed CLI invocations:\n    - `node bin/nullform.mjs --version` → `1.2.0` (exit code `0`)\n    - `node bin/nullform.mjs capabilities --json` → `ok: true`, `configurationAdapters: 8`, `coreWorkflowGates: Node.js` (exit code `0`)\n- **Test Suite Evidence:**\n  - `tools/tests/delete-guard.test.mjs` → `✔ screenshot restoration requires explicit interactive authorization (0.9141ms)`\n  - `tools/tests/delete-guard.test.mjs` → `✔ Git restoration blocks headlessly even after another destructive match (0.8951ms)`\n  - `tools/tests/delete-guard.test.mjs` → `✔ safe Git inspection and isolated worktree creation remain usable (0.3211ms)`\n- **Status:** **PROVEN**\n\n---\n\n## 2. Test Suite & Coverage Verification\n\nFrom `result.json` in `current-verification-b3dc0d8`:\n- **Executed Command:**\n  `C:\\Program Files\\nodejs\\node.exe --test --test-concurrency=2 --experimental-test-coverage --test-reporter=spec <64 test files>`\n- **Total Test Counts:**\n  - `ℹ tests 784`\n  - `ℹ suites 2`\n  - `ℹ pass 784`\n  - `ℹ fail 0`\n  - `ℹ cancelled 0`\n  - `ℹ skipped 0`\n  - `ℹ duration_ms 954819.3543`\n- **Overall Code Coverage:**\n  `ℹ all files | 82.27 | 73.26 | 86.77 |`\n- **Target File Coverage:**\n  - `tools/workflow-workspaces.mjs`: `line %: 100.00`, `branch %: 71.43`, `funcs %: 100.00`, `uncovered lines: none`\n  - `agent/extensions/nullform-delete-guard.ts`: `line %: 90.84`, `branch %: 71.55`, `funcs %: 87.50`\n  - `bin/nullform.mjs`: `line %: 83.12`, `branch %: 76.45`, `funcs %: 90.24`\n\n### Stage-B Frozen Regression Verification\nFrom `frozen-stage-b-b3dc0d8.json`:\n1. `concurrent-feature-workspaces` (`disposition: lean-already`):\n   - Command: `node --test --test-concurrency=2 tools/tests/workflow-workspaces.test.mjs tools/tests/delete-guard.test.mjs`\n   - Phase `before`: `ℹ tests 27`, `ℹ pass 27`, `ℹ fail 0` (exit code `0`)\n   - Phase `after`: `ℹ tests 27`, `ℹ pass 27`, `ℹ fail 0` (exit code `0`)\n   - Source digest: `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`\n   - Test files hash: `71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59`\n2. `portable-product-release` (`disposition: lean-already`):\n   - Command: `node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/deployment-journal.test.mjs tools/tests/review-integrity.test.mjs tools/tests/install-skills-assets.test.mjs tools/tests/install-harness.test.mjs`\n   - Phase `before`: `ℹ tests 78`, `ℹ pass 78`, `ℹ fail 0` (exit code `0`)\n   - Phase `after`: `ℹ tests 78`, `ℹ pass 78`, `ℹ fail 0` (exit code `0`)\n\n### Red-Capable Loop Evidence\nPrior failure state preserved in `recovery-failing-before-2449.txt` demonstrates that the runtime integrity and recovery tests were genuinely failing (red) before the fix:\n- `ℹ tests 32`\n- `ℹ pass 17`\n- `ℹ fail 15`\n- `Command exited with code 1`\n\n---\n\n## 3. Architecture & Discipline Gates\n\n1. **Deep Module Quality Gate:**\n   - `tools/workflow-workspaces.mjs` encapsulates detached worktree creation, slug validation, common directory detection, anchor metadata persistence, state verification, atomic integration locking (`withIntegrationLock`), porcelain status inspection, idle head checks, and 3-way non-autostash merging behind `runWorkspaceCommand`. Applying the Deletion Test: removing this module collapses multi-process lock coordination, worktree reservation, and conflict management into consuming callers. The module is cohesive and deep.\n   - `agent/extensions/nullform-delete-guard.ts` encapsulates recursive deletion regex matching, git restoration patterns, target path expansion, file/size counting via `computeRmScope`, and UI confirmation/headless refusal logic behind standard OMP extension event handlers.\n2. **Seam Check:**\n   - Both modules expose parameter-driven entry points (`--root`, `--feature`, `ctx`, `isInteractive`) allowing isolated integration and headless automated verification without global monkeypatching.\n3. **Vocabulary Drift Gate:**\n   - Checked against `CONTEXT.md`:\n     - `Feature workspace` — defined in `CONTEXT.md` (matches `tools/workflow-workspaces.mjs`)\n     - `Integration branch` — defined in `CONTEXT.md` (matches `tools/workflow-workspaces.mjs`)\n     - `Delete-guard` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n     - `Destructive rule (DestructiveRule)` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n     - `Delete guard result (DeleteGuardResult)` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n   - Zero glossary discrepancies detected.\n4. **ADR Alignment:**\n   - Complies with workspace containment (worktrees contained under `.tmp/worktrees/feature<slug>`).\n   - Complies with read-only oracle and blind acceptance protocols.\n5. **Network Path Evidence:**\n   - The workspace feature introduces zero network endpoints.\n   - Deterministic replay verification via `tools/replay.mjs`:\n     `replay: cassette D:/ohmypi/workflow-repo/.tmp/npm-registry-current.cassette.json`\n     `cassette is structurally valid and redacted.`\n     `HIT GET /nullform-workflow [-]` (status `404`)\n6. **Hypothesis Disclosure:**\n   - Root cause disclosed and verified: the screenshot defect (`git checkout stash@{0} -- src/App.tsx`) occurred because Git restore/checkout/stash commands were not classified as destructive operations by the delete guard and were not blocked in headless sessions. Fixed by regex classification and explicit headless blocking (`blockHeadless: true`).\n\n---\n\n## 4. Preserved Negative Findings & Boundaries\n\n1. **Unpublished npm Package & Publisher Authorization:**\n   - `argv: [\"C:\\\\Program Files\\\\nodejs\\\\node.exe\", \"npm-cli.js\", \"whoami\", \"--registry\", \"https://registry.npmjs.org\"]` exited with code `1`:\n     `npm error code ENEEDAUTH`\n     `npm error need auth This command requires you to be logged in.`\n   - Public npm publication has not been executed; the package remains unreleased to the public npm registry.\n2. **Hosted CI Execution Conclusion:**\n   - From `hosted-results-b3dc0d8.json` (GitHub Actions run `38483391695`): overall conclusion `failure` because independent current acceptance evidence was not committed on the candidate branch (`workflow check-ci: missing oracle evidence in '.../openspec/changes/concurrent-feature-workspaces'`). Code-size/prompt steps following the gate failure were skipped in that hosted run.\n3. **Automated Review Adapter Boundaries:**\n   - Automated review execution remains OMP+Bun only:\n     `workflow review-run --harness claude` → exit code `1`: `workflow review-run: harness 'claude' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.`\n4. **Prompt Lint Structural Advisories:**\n   - `tools/prompt-lint.mjs skills --check` returned `Recommendations and Advisory Warnings (113)` regarding file lengths and heading navigation in reference docs.\n5. **Quality Evidence Historical Baseline:**\n   - `core/quality-evidence.summary.json` retains `claimStatus: \"not-proven\"` for historical skill benefit evaluations (four constructed cases, single repetition, no universal benefit claim).\n\n---\n\nVerdict: ACCEPT",
+      "stopReason": "stop",
+      "startedAt": "2026-10-13T23:45:36.502Z",
+      "completedAt": "2026-10-13T23:49:08.651Z",
+      "verdict": "ACCEPT",
+      "nativeVerdict": "ACCEPT",
+      "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+      "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+      "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+      "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+      "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+      "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+      "exitCode": 0,
+      "nativeProjection": {
+        "role": "oracle",
+        "context": {
+          "role": "oracle",
+          "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+          "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+          "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+          "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+          "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+          "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+          "promptHash": "44598843d9892576fd0d5b0c271b33d4d9fec82cf8a3044529b23b013973e474",
+          "productCommandHash": "5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab"
+        },
+        "productExecutions": [
+          {
+            "commandHash": "5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab",
+            "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+            "exitCode": 0,
+            "startedAt": "2026-10-13T23:45:50.371Z",
+            "completedAt": "2026-10-13T23:46:03.145Z",
+            "outputHash": "f708fa978a00e05dec7afa3bc476a274cc2d5f32872676ae555c5829410ded81"
+          }
+        ],
+        "sessionId": "01a137a8-42f6-73bb-86b0-788091305fb0",
+        "provider": "nullform-gateway",
+        "model": "gemini-3.8-flash-high",
+        "isFallback": false,
+        "usage": {
+          "input": 260395,
+          "output": 5810,
+          "cacheRead": 2601987,
+          "cacheWrite": 0,
+          "totalTokens": 2868192,
+          "costUsd": 0.412232775,
+          "costSource": "native-fixed-tariff"
+        },
+        "report": "# Blind Product Acceptance Report: concurrent-feature-workspaces\n\n**Target Change:** `concurrent-feature-workspaces`  \n**Execution Timestamp:** Started `2026-10-13T23:45:50.371Z`, Completed `2026-10-13T23:46:03.145Z`  \n**Execution Context:**  \n- Working Directory: `D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`  \n- Execution Exit Code: `0`  \n- Source Digest: `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`  \n- Test Files Hash: `71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59`  \n- Command Hash: `5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab`  \n- Content Hash: `f708fa978a00e05dec7afa3bc476a274cc2d5f32872676ae555c5829410ded81`  \n- Total Output Bytes: `381991`\n\n---\n\n## 1. Requirements Manifest Evaluation\n\n### R01 — Isolated Working Directories & Working Tree Preservation\n- **Verbatim User Quote:** «я работаю разными агентами в одном и том же реп и пилю разные фишки, и они конфликтуют друг с другом, затирают изменения друг друга»\n- **Observable Requirement:** Feature writers receive separate Git working directories and indexes. Allocation preserves existing dirty files, staged entries and other workflow state.\n- **Source Verification:**\n  - `tools/workflow-workspaces.mjs:106` — `mkdirSync(cwd);`\n  - `tools/workflow-workspaces.mjs:107` — `git(root, ['worktree', 'add', '--detach', '--', cwd, base]);`\n  - `tools/workflow-workspaces.mjs:108` — `if (commonDirectory(cwd) !== commonDir) throw new Error('Allocated worktree belongs to a foreign repository');`\n- **Native Execution Evidence:**\n  The operator's product test executed the live allocation of concurrent features in an isolated fixture (`cwd: D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`):\n  ```json\n  {\"source\":\"D:/ohmypi/workflow-repo/.tmp/accept-installed-65a/node_modules/nullform-workflow\",\"root\":\"D:\\\\TMP\\\\nullform-concurrent-smoke-oxyL78\",\"allocationCommonRepo\":true,\"separateIndexPaths\":true,\"humanBytesAndStageAndWorkflowPreserved\":true,\"duplicateRefused\":true,\"dirtyIntegrationRefused\":true,\"independentCommitsIntegrated\":[\"9fc6a7d2a849345a986c2cf6958b77d98dd55ff7\",\"7e69e8c4420c5567f5c799266a2143d60a5cde4b\"],\"conflictRetained\":true,\"conflictSourceCommitsRetained\":[\"21179edeb9e62beadb3b915187fdda850b42eaf4\",\"af9a78496e26b83b64facc9dd8bff8a83c10d6d4\"],\"headlessScreenshotRestorationBlocked\":true,\"readOnlyGitAllowed\":true}\n  ```\n  The assertions confirmed that:\n  - `a.cwd !== b.cwd` while `a.commonDir === b.commonDir`\n  - Git index paths are strictly independent (`rev-parse --git-path index`)\n  - Integration checkout index (`git ls-files --stage`), staged/unstaged `human.txt`, untracked `notes.md`, and `.workflow/state.json` remained byte-identical before and after concurrent allocations.\n  - Duplicate allocation was rejected with exit code 1 (`duplicateRefused: true`).\n- **Test Suite Evidence:**\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ concurrent allocation isolates indexes/state without copying staged, unstaged or untracked operator work (1485.5371ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ uppercase and lowercase Git index injection cannot replace staged human or private feature indexes (2000.4596ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ duplicate allocation refuses existing writable cwd and simultaneous duplicates have exactly one owner (1638.0308ms)`\n- **Status:** **PROVEN**\n\n---\n\n### R02 — Serialized Integration on One Final Branch & Visible Conflict Halting\n- **Verbatim User Quote:** «чтобы можно было в одном репозитории, в одной ветке делать много фич разными агентами, и оно не конфликтовало»\n- **Observable Requirement:** Multiple features converge on one integration branch through one serialized integration operation. Conflicting edits stop visibly; no silent overwrite or promise that semantic conflicts disappear. No shared-physical-checkout write-safety claim.\n- **Source Verification:**\n  - `tools/workflow-workspaces.mjs:118` — `return withIntegrationLock(commonDirectory(root), () => {`\n  - `tools/workflow-workspaces.mjs:125` — `const result = spawnSync('git', ['-c', 'merge.autoStash=false', '-c', 'rebase.autoStash=false', '-c', `branch.${record.integrationBranch}.mergeOptions=`, 'merge', '--no-autostash', '--no-ff', '--no-edit', sourceHead], { cwd: root, env: gitEnv(), encoding: 'utf8', windowsHide: true, timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 });`\n  - `tools/workflow-workspaces.mjs:127` — `if (result.status !== 0) throw new Error(`Native Git merge failed; conflict/operation state retained.\\n${result.stdout || ''}${result.stderr || ''}`);`\n- **Native Execution Evidence:**\n  The live product run demonstrated convergence of two independent feature branches (`a` and `b`) onto branch `integration`:\n  - `independentCommitsIntegrated: [\"9fc6a7d2a849345a986c2cf6958b77d98dd55ff7\", \"7e69e8c4420c5567f5c799266a2143d60a5cde4b\"]`\n  - Both feature files (`feature-a.txt` containing `FEATURE A\\n` and `feature-b.txt` containing `FEATURE B\\n`) were merged cleanly into the integration checkout while preserving human fixture edits.\n  - Conflicting edits (`c` and `d` both modifying `App.txt`) halted visibly on `d`:\n    - Integration exit code: `1`\n    - Stderr: `Native Git merge failed; conflict/operation state retained.`\n    - Porcelain status: `UU App.txt`\n    - Source feature HEAD commits were preserved untouched: `conflictSourceCommitsRetained: [\"21179edeb9e62beadb3b915187fdda850b42eaf4\", \"af9a78496e26b83b64facc9dd8bff8a83c10d6d4\"]`\n- **Test Suite Evidence:**\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ two committed features integrate onto one branch while preserving both source commits (4117.6211ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ dirty target and source, wrong branch and active operations refuse with autostash disabled (8878.6895ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ same-line conflict remains native, recoverable and explicitly unsuccessful (4440.2745ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ simultaneous integrations serialize the whole native merge, not just registration (4542.9497ms)`\n- **Status:** **PROVEN**\n\n---\n\n### R03 — Node-Native CLI Control Surface, Fleet Dispatch & Destructive Git Restoration Guard\n- **Verbatim User Quote:** «Если так работает, давай что-то с этим придумаем»\n- **Observable Requirement:** Provide a Node-native installed CLI control surface and update project-owned dispatch instructions; the screenshot's stash-file restoration is classified as destructive rather than harmless preservation.\n- **Source Verification:**\n  - `bin/nullform.mjs:71` — `if (Array.isArray(argv) && argv.length > 0 && argv[0] === \"workflow\") { return { command: \"workflow\", workflowArgs: argv.slice(1), help: false }; }`\n  - `tools/workflow.mjs:38` — `import { runWorkspaceCommand } from \"./workflow-workspaces.mjs\";`\n  - `agent/AGENTS.md:75` — `For concurrent Git features, first run \\`nullform workflow workspace --feature SLUG\\` from the integration checkout (Git executable required). Dispatch exactly one writer with the returned absolute \\`cwd\\`, committed base and fresh feature context; the worker MUST run there, never in the integration or a sibling checkout. Duplicate allocation refuses; it does not authorize another writer to reuse a workspace. The committed base excludes unsaved prerequisites: commit required shared prerequisites before allocation.`\n  - `agent/AGENTS.md:76` — `Finish with clean feature commits, then the single parent integrator runs \\`nullform workflow integrate --feature SLUG\\` from the recorded integration branch. Dirty targets refuse without stash; visible Git conflicts require integrator-only manual resolution, never reset/restore/stash or automatic ours/theirs. One repository/final branch does not mean one shared physical checkout.`\n  - `agent/AGENTS.md:77` — `OMP's native delete-guard requires explicit confirmation for identified \\`git checkout\\`, \\`git restore\\` and stash working-tree/index replacement; headless restoration blocks. Other adapters get portable CLI/guidance only, not native interception. This best-effort command guard does not sandbox arbitrary shells or direct filesystem writes.`\n  - `agent/extensions/nullform-delete-guard.ts:32` — `const GIT_RESTORATION: DestructiveRule = { re: new RegExp(String.raw\\`\\\\bgit(?:\\\\.exe)?[\"']?\\\\s+(?:(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--config-env)\\\\s+${GIT_WORD}|(?:-C|-c)${GIT_WORD}|--(?:git-dir|work-tree|namespace|config-env)=${GIT_WORD}|-[pP]|--(?:no-pager|paginate|bare|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-replace-objects|no-optional-locks))\\\\s+)*(?:(?:checkout|restore)\\\\b|stash(?:\\\\s+(?:apply|pop|push|save|branch)\\\\b|\\\\s+-|(?=\\\\s*(?:$|[;&|\"'`]))))\\`), what: \"заменить рабочие файлы или индекс (git checkout/restore/stash)\", blockHeadless: true };`\n- **Native Execution Evidence:**\n  - Evaluated in delivered extension outside `node_modules`:\n    - `command: 'git checkout stash@{0} -- src/App.tsx'` under `{hasUI: false}` returned `denied.block: true`.\n    - `command: 'git show HEAD:App.txt'` returned `undefined` (read-only command allowed).\n    - Output flag: `headlessScreenshotRestorationBlocked: true`, `readOnlyGitAllowed: true`.\n  - Installed CLI invocations:\n    - `node bin/nullform.mjs --version` → `1.2.0` (exit code `0`)\n    - `node bin/nullform.mjs capabilities --json` → `ok: true`, `configurationAdapters: 8`, `coreWorkflowGates: Node.js` (exit code `0`)\n- **Test Suite Evidence:**\n  - `tools/tests/delete-guard.test.mjs` → `✔ screenshot restoration requires explicit interactive authorization (0.9141ms)`\n  - `tools/tests/delete-guard.test.mjs` → `✔ Git restoration blocks headlessly even after another destructive match (0.8951ms)`\n  - `tools/tests/delete-guard.test.mjs` → `✔ safe Git inspection and isolated worktree creation remain usable (0.3211ms)`\n- **Status:** **PROVEN**\n\n---\n\n## 2. Test Suite & Coverage Verification\n\nFrom `result.json` in `current-verification-b3dc0d8`:\n- **Executed Command:**\n  `C:\\Program Files\\nodejs\\node.exe --test --test-concurrency=2 --experimental-test-coverage --test-reporter=spec <64 test files>`\n- **Total Test Counts:**\n  - `ℹ tests 784`\n  - `ℹ suites 2`\n  - `ℹ pass 784`\n  - `ℹ fail 0`\n  - `ℹ cancelled 0`\n  - `ℹ skipped 0`\n  - `ℹ duration_ms 954819.3543`\n- **Overall Code Coverage:**\n  `ℹ all files | 82.27 | 73.26 | 86.77 |`\n- **Target File Coverage:**\n  - `tools/workflow-workspaces.mjs`: `line %: 100.00`, `branch %: 71.43`, `funcs %: 100.00`, `uncovered lines: none`\n  - `agent/extensions/nullform-delete-guard.ts`: `line %: 90.84`, `branch %: 71.55`, `funcs %: 87.50`\n  - `bin/nullform.mjs`: `line %: 83.12`, `branch %: 76.45`, `funcs %: 90.24`\n\n### Stage-B Frozen Regression Verification\nFrom `frozen-stage-b-b3dc0d8.json`:\n1. `concurrent-feature-workspaces` (`disposition: lean-already`):\n   - Command: `node --test --test-concurrency=2 tools/tests/workflow-workspaces.test.mjs tools/tests/delete-guard.test.mjs`\n   - Phase `before`: `ℹ tests 27`, `ℹ pass 27`, `ℹ fail 0` (exit code `0`)\n   - Phase `after`: `ℹ tests 27`, `ℹ pass 27`, `ℹ fail 0` (exit code `0`)\n   - Source digest: `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`\n   - Test files hash: `71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59`\n2. `portable-product-release` (`disposition: lean-already`):\n   - Command: `node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/deployment-journal.test.mjs tools/tests/review-integrity.test.mjs tools/tests/install-skills-assets.test.mjs tools/tests/install-harness.test.mjs`\n   - Phase `before`: `ℹ tests 78`, `ℹ pass 78`, `ℹ fail 0` (exit code `0`)\n   - Phase `after`: `ℹ tests 78`, `ℹ pass 78`, `ℹ fail 0` (exit code `0`)\n\n### Red-Capable Loop Evidence\nPrior failure state preserved in `recovery-failing-before-2449.txt` demonstrates that the runtime integrity and recovery tests were genuinely failing (red) before the fix:\n- `ℹ tests 32`\n- `ℹ pass 17`\n- `ℹ fail 15`\n- `Command exited with code 1`\n\n---\n\n## 3. Architecture & Discipline Gates\n\n1. **Deep Module Quality Gate:**\n   - `tools/workflow-workspaces.mjs` encapsulates detached worktree creation, slug validation, common directory detection, anchor metadata persistence, state verification, atomic integration locking (`withIntegrationLock`), porcelain status inspection, idle head checks, and 3-way non-autostash merging behind `runWorkspaceCommand`. Applying the Deletion Test: removing this module collapses multi-process lock coordination, worktree reservation, and conflict management into consuming callers. The module is cohesive and deep.\n   - `agent/extensions/nullform-delete-guard.ts` encapsulates recursive deletion regex matching, git restoration patterns, target path expansion, file/size counting via `computeRmScope`, and UI confirmation/headless refusal logic behind standard OMP extension event handlers.\n2. **Seam Check:**\n   - Both modules expose parameter-driven entry points (`--root`, `--feature`, `ctx`, `isInteractive`) allowing isolated integration and headless automated verification without global monkeypatching.\n3. **Vocabulary Drift Gate:**\n   - Checked against `CONTEXT.md`:\n     - `Feature workspace` — defined in `CONTEXT.md` (matches `tools/workflow-workspaces.mjs`)\n     - `Integration branch` — defined in `CONTEXT.md` (matches `tools/workflow-workspaces.mjs`)\n     - `Delete-guard` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n     - `Destructive rule (DestructiveRule)` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n     - `Delete guard result (DeleteGuardResult)` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n   - Zero glossary discrepancies detected.\n4. **ADR Alignment:**\n   - Complies with workspace containment (worktrees contained under `.tmp/worktrees/feature<slug>`).\n   - Complies with read-only oracle and blind acceptance protocols.\n5. **Network Path Evidence:**\n   - The workspace feature introduces zero network endpoints.\n   - Deterministic replay verification via `tools/replay.mjs`:\n     `replay: cassette D:/ohmypi/workflow-repo/.tmp/npm-registry-current.cassette.json`\n     `cassette is structurally valid and redacted.`\n     `HIT GET /nullform-workflow [-]` (status `404`)\n6. **Hypothesis Disclosure:**\n   - Root cause disclosed and verified: the screenshot defect (`git checkout stash@{0} -- src/App.tsx`) occurred because Git restore/checkout/stash commands were not classified as destructive operations by the delete guard and were not blocked in headless sessions. Fixed by regex classification and explicit headless blocking (`blockHeadless: true`).\n\n---\n\n## 4. Preserved Negative Findings & Boundaries\n\n1. **Unpublished npm Package & Publisher Authorization:**\n   - `argv: [\"C:\\\\Program Files\\\\nodejs\\\\node.exe\", \"npm-cli.js\", \"whoami\", \"--registry\", \"https://registry.npmjs.org\"]` exited with code `1`:\n     `npm error code ENEEDAUTH`\n     `npm error need auth This command requires you to be logged in.`\n   - Public npm publication has not been executed; the package remains unreleased to the public npm registry.\n2. **Hosted CI Execution Conclusion:**\n   - From `hosted-results-b3dc0d8.json` (GitHub Actions run `38483391695`): overall conclusion `failure` because independent current acceptance evidence was not committed on the candidate branch (`workflow check-ci: missing oracle evidence in '.../openspec/changes/concurrent-feature-workspaces'`). Code-size/prompt steps following the gate failure were skipped in that hosted run.\n3. **Automated Review Adapter Boundaries:**\n   - Automated review execution remains OMP+Bun only:\n     `workflow review-run --harness claude` → exit code `1`: `workflow review-run: harness 'claude' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.`\n4. **Prompt Lint Structural Advisories:**\n   - `tools/prompt-lint.mjs skills --check` returned `Recommendations and Advisory Warnings (113)` regarding file lengths and heading navigation in reference docs.\n5. **Quality Evidence Historical Baseline:**\n   - `core/quality-evidence.summary.json` retains `claimStatus: \"not-proven\"` for historical skill benefit evaluations (four constructed cases, single repetition, no universal benefit claim).\n\n---\n\nVerdict: ACCEPT",
+        "stopReason": "stop",
+        "startedAt": "2026-10-13T23:45:36.502Z",
+        "completedAt": "2026-10-13T23:49:08.651Z",
+        "verdict": "ACCEPT",
+        "nativeVerdict": "ACCEPT",
+        "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+        "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+        "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+        "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+        "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+        "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+        "exitCode": 0
+      },
+      "nativeEvents": [
+        {
+          "type": "session",
+          "id": "01a137a8-42f6-73bb-86b0-788091305fb0",
+          "timestamp": "2026-10-13T23:45:36.502Z"
+        },
+        {
+          "type": "model_change",
+          "model": "gemini-3.8-flash-high",
+          "provider": "nullform-gateway",
+          "isFallback": false,
+          "timestamp": "2026-10-13T23:45:37.382Z"
+        },
+        {
+          "type": "custom",
+          "customType": "workflow-review-context",
+          "timestamp": "2026-10-13T23:45:37.522Z",
+          "data": {
+            "role": "oracle",
+            "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+            "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+            "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+            "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+            "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+            "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+            "promptHash": "44598843d9892576fd0d5b0c271b33d4d9fec82cf8a3044529b23b013973e474",
+            "productCommandHash": "5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab"
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:45:49.961Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935139789,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 49332,
+              "output": 23,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "totalTokens": 49355,
+              "cost": {
+                "total": 0.03708525000000001
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_496310",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "custom",
+          "customType": "workflow-product-execution",
+          "timestamp": "2026-10-13T23:46:03.146Z",
+          "data": {
+            "commandHash": "5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab",
+            "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+            "exitCode": 0,
+            "startedAt": "2026-10-13T23:45:50.371Z",
+            "completedAt": "2026-10-13T23:46:03.145Z",
+            "outputHash": "f708fa978a00e05dec7afa3bc476a274cc2d5f32872676ae555c5829410ded81"
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:08.329Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935163185,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 10514,
+              "output": 28,
+              "cacheRead": 49422,
+              "cacheWrite": 0,
+              "totalTokens": 59964,
+              "cost": {
+                "total": 0.01169715
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_349947",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:14.333Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935168647,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11223,
+              "output": 28,
+              "cacheRead": 57979,
+              "cacheWrite": 0,
+              "totalTokens": 69230,
+              "cost": {
+                "total": 0.012870674999999998
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_493713",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:20.027Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935174654,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 10984,
+              "output": 28,
+              "cacheRead": 67232,
+              "cacheWrite": 0,
+              "totalTokens": 78244,
+              "cost": {
+                "total": 0.013385399999999999
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_430587",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:24.233Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935180400,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 10495,
+              "output": 29,
+              "cacheRead": 76235,
+              "cacheWrite": 0,
+              "totalTokens": 86759,
+              "cost": {
+                "total": 0.013697624999999998
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_633825",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:30.167Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935184587,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 13504,
+              "output": 29,
+              "cacheRead": 84761,
+              "cacheWrite": 0,
+              "totalTokens": 98294,
+              "cost": {
+                "total": 0.016593825
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_416087",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:34.994Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935190548,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 12863,
+              "output": 29,
+              "cacheRead": 96284,
+              "cacheWrite": 0,
+              "totalTokens": 109176,
+              "cost": {
+                "total": 0.0169773
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_416677",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:41.571Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935195400,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 13625,
+              "output": 29,
+              "cacheRead": 107164,
+              "cacheWrite": 0,
+              "totalTokens": 120818,
+              "cost": {
+                "total": 0.0183648
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_659835",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:47.074Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935201947,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 9992,
+              "output": 29,
+              "cacheRead": 118783,
+              "cacheWrite": 0,
+              "totalTokens": 128804,
+              "cost": {
+                "total": 0.016511474999999998
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_439890",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:52.109Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935207398,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 13868,
+              "output": 29,
+              "cacheRead": 126784,
+              "cacheWrite": 0,
+              "totalTokens": 140681,
+              "cost": {
+                "total": 0.02001855
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_589611",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:46:57.100Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935212438,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11567,
+              "output": 29,
+              "cacheRead": 138647,
+              "cacheWrite": 0,
+              "totalTokens": 150243,
+              "cost": {
+                "total": 0.019182525
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_418674",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:47:01.372Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935217496,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 13754,
+              "output": 29,
+              "cacheRead": 148215,
+              "cacheWrite": 0,
+              "totalTokens": 161998,
+              "cost": {
+                "total": 0.021540375
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_612164",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:47:06.111Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935221690,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 13985,
+              "output": 29,
+              "cacheRead": 159968,
+              "cacheWrite": 0,
+              "totalTokens": 173982,
+              "cost": {
+                "total": 0.0225951
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_471962",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:47:11.560Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935226481,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 12319,
+              "output": 29,
+              "cacheRead": 171942,
+              "cacheWrite": 0,
+              "totalTokens": 184290,
+              "cost": {
+                "total": 0.02224365
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_424809",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:47:19.751Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935231888,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11673,
+              "output": 103,
+              "cacheRead": 182246,
+              "cacheWrite": 0,
+              "totalTokens": 194022,
+              "cost": {
+                "total": 0.02280945
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_683343",
+                "name": "inspect_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:47:25.606Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935240093,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 2802,
+              "output": 93,
+              "cacheRead": 191870,
+              "cacheWrite": 0,
+              "totalTokens": 194765,
+              "cost": {
+                "total": 0.016840499999999998
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_488350",
+                "name": "inspect_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:47:33.204Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935245941,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11163,
+              "output": 87,
+              "cacheRead": 192654,
+              "cacheWrite": 0,
+              "totalTokens": 203904,
+              "cost": {
+                "total": 0.02314755
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_445826",
+                "name": "inspect_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:47:39.236Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935253524,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 10508,
+              "output": 49,
+              "cacheRead": 201795,
+              "cacheWrite": 0,
+              "totalTokens": 212352,
+              "cost": {
+                "total": 0.023199375
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_408946",
+                "name": "inspect_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:47:44.879Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935259582,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11481,
+              "output": 47,
+              "cacheRead": 210284,
+              "cacheWrite": 0,
+              "totalTokens": 221812,
+              "cost": {
+                "total": 0.024558299999999998
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "call_414208",
+                "name": "inspect_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-13T23:49:08.651Z",
+          "message": {
+            "role": "assistant",
+            "provider": "nullform-gateway",
+            "model": "gemini-3.8-flash-high",
+            "timestamp": 1791935265199,
+            "stopReason": "stop",
+            "usage": {
+              "input": 4743,
+              "output": 5034,
+              "cacheRead": 219722,
+              "cacheWrite": 0,
+              "totalTokens": 229499,
+              "cost": {
+                "total": 0.0389139
+              }
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "# Blind Product Acceptance Report: concurrent-feature-workspaces\n\n**Target Change:** `concurrent-feature-workspaces`  \n**Execution Timestamp:** Started `2026-10-13T23:45:50.371Z`, Completed `2026-10-13T23:46:03.145Z`  \n**Execution Context:**  \n- Working Directory: `D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`  \n- Execution Exit Code: `0`  \n- Source Digest: `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`  \n- Test Files Hash: `71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59`  \n- Command Hash: `5cc4b712d7918bcae441f532fb9d76abc1100b1462550c9226ce71142e4746ab`  \n- Content Hash: `f708fa978a00e05dec7afa3bc476a274cc2d5f32872676ae555c5829410ded81`  \n- Total Output Bytes: `381991`\n\n---\n\n## 1. Requirements Manifest Evaluation\n\n### R01 — Isolated Working Directories & Working Tree Preservation\n- **Verbatim User Quote:** «я работаю разными агентами в одном и том же реп и пилю разные фишки, и они конфликтуют друг с другом, затирают изменения друг друга»\n- **Observable Requirement:** Feature writers receive separate Git working directories and indexes. Allocation preserves existing dirty files, staged entries and other workflow state.\n- **Source Verification:**\n  - `tools/workflow-workspaces.mjs:106` — `mkdirSync(cwd);`\n  - `tools/workflow-workspaces.mjs:107` — `git(root, ['worktree', 'add', '--detach', '--', cwd, base]);`\n  - `tools/workflow-workspaces.mjs:108` — `if (commonDirectory(cwd) !== commonDir) throw new Error('Allocated worktree belongs to a foreign repository');`\n- **Native Execution Evidence:**\n  The operator's product test executed the live allocation of concurrent features in an isolated fixture (`cwd: D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`):\n  ```json\n  {\"source\":\"D:/ohmypi/workflow-repo/.tmp/accept-installed-65a/node_modules/nullform-workflow\",\"root\":\"D:\\\\TMP\\\\nullform-concurrent-smoke-oxyL78\",\"allocationCommonRepo\":true,\"separateIndexPaths\":true,\"humanBytesAndStageAndWorkflowPreserved\":true,\"duplicateRefused\":true,\"dirtyIntegrationRefused\":true,\"independentCommitsIntegrated\":[\"9fc6a7d2a849345a986c2cf6958b77d98dd55ff7\",\"7e69e8c4420c5567f5c799266a2143d60a5cde4b\"],\"conflictRetained\":true,\"conflictSourceCommitsRetained\":[\"21179edeb9e62beadb3b915187fdda850b42eaf4\",\"af9a78496e26b83b64facc9dd8bff8a83c10d6d4\"],\"headlessScreenshotRestorationBlocked\":true,\"readOnlyGitAllowed\":true}\n  ```\n  The assertions confirmed that:\n  - `a.cwd !== b.cwd` while `a.commonDir === b.commonDir`\n  - Git index paths are strictly independent (`rev-parse --git-path index`)\n  - Integration checkout index (`git ls-files --stage`), staged/unstaged `human.txt`, untracked `notes.md`, and `.workflow/state.json` remained byte-identical before and after concurrent allocations.\n  - Duplicate allocation was rejected with exit code 1 (`duplicateRefused: true`).\n- **Test Suite Evidence:**\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ concurrent allocation isolates indexes/state without copying staged, unstaged or untracked operator work (1485.5371ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ uppercase and lowercase Git index injection cannot replace staged human or private feature indexes (2000.4596ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ duplicate allocation refuses existing writable cwd and simultaneous duplicates have exactly one owner (1638.0308ms)`\n- **Status:** **PROVEN**\n\n---\n\n### R02 — Serialized Integration on One Final Branch & Visible Conflict Halting\n- **Verbatim User Quote:** «чтобы можно было в одном репозитории, в одной ветке делать много фич разными агентами, и оно не конфликтовало»\n- **Observable Requirement:** Multiple features converge on one integration branch through one serialized integration operation. Conflicting edits stop visibly; no silent overwrite or promise that semantic conflicts disappear. No shared-physical-checkout write-safety claim.\n- **Source Verification:**\n  - `tools/workflow-workspaces.mjs:118` — `return withIntegrationLock(commonDirectory(root), () => {`\n  - `tools/workflow-workspaces.mjs:125` — `const result = spawnSync('git', ['-c', 'merge.autoStash=false', '-c', 'rebase.autoStash=false', '-c', `branch.${record.integrationBranch}.mergeOptions=`, 'merge', '--no-autostash', '--no-ff', '--no-edit', sourceHead], { cwd: root, env: gitEnv(), encoding: 'utf8', windowsHide: true, timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 });`\n  - `tools/workflow-workspaces.mjs:127` — `if (result.status !== 0) throw new Error(`Native Git merge failed; conflict/operation state retained.\\n${result.stdout || ''}${result.stderr || ''}`);`\n- **Native Execution Evidence:**\n  The live product run demonstrated convergence of two independent feature branches (`a` and `b`) onto branch `integration`:\n  - `independentCommitsIntegrated: [\"9fc6a7d2a849345a986c2cf6958b77d98dd55ff7\", \"7e69e8c4420c5567f5c799266a2143d60a5cde4b\"]`\n  - Both feature files (`feature-a.txt` containing `FEATURE A\\n` and `feature-b.txt` containing `FEATURE B\\n`) were merged cleanly into the integration checkout while preserving human fixture edits.\n  - Conflicting edits (`c` and `d` both modifying `App.txt`) halted visibly on `d`:\n    - Integration exit code: `1`\n    - Stderr: `Native Git merge failed; conflict/operation state retained.`\n    - Porcelain status: `UU App.txt`\n    - Source feature HEAD commits were preserved untouched: `conflictSourceCommitsRetained: [\"21179edeb9e62beadb3b915187fdda850b42eaf4\", \"af9a78496e26b83b64facc9dd8bff8a83c10d6d4\"]`\n- **Test Suite Evidence:**\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ two committed features integrate onto one branch while preserving both source commits (4117.6211ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ dirty target and source, wrong branch and active operations refuse with autostash disabled (8878.6895ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ same-line conflict remains native, recoverable and explicitly unsuccessful (4440.2745ms)`\n  - `tools/tests/workflow-workspaces.test.mjs` → `✔ simultaneous integrations serialize the whole native merge, not just registration (4542.9497ms)`\n- **Status:** **PROVEN**\n\n---\n\n### R03 — Node-Native CLI Control Surface, Fleet Dispatch & Destructive Git Restoration Guard\n- **Verbatim User Quote:** «Если так работает, давай что-то с этим придумаем»\n- **Observable Requirement:** Provide a Node-native installed CLI control surface and update project-owned dispatch instructions; the screenshot's stash-file restoration is classified as destructive rather than harmless preservation.\n- **Source Verification:**\n  - `bin/nullform.mjs:71` — `if (Array.isArray(argv) && argv.length > 0 && argv[0] === \"workflow\") { return { command: \"workflow\", workflowArgs: argv.slice(1), help: false }; }`\n  - `tools/workflow.mjs:38` — `import { runWorkspaceCommand } from \"./workflow-workspaces.mjs\";`\n  - `agent/AGENTS.md:75` — `For concurrent Git features, first run \\`nullform workflow workspace --feature SLUG\\` from the integration checkout (Git executable required). Dispatch exactly one writer with the returned absolute \\`cwd\\`, committed base and fresh feature context; the worker MUST run there, never in the integration or a sibling checkout. Duplicate allocation refuses; it does not authorize another writer to reuse a workspace. The committed base excludes unsaved prerequisites: commit required shared prerequisites before allocation.`\n  - `agent/AGENTS.md:76` — `Finish with clean feature commits, then the single parent integrator runs \\`nullform workflow integrate --feature SLUG\\` from the recorded integration branch. Dirty targets refuse without stash; visible Git conflicts require integrator-only manual resolution, never reset/restore/stash or automatic ours/theirs. One repository/final branch does not mean one shared physical checkout.`\n  - `agent/AGENTS.md:77` — `OMP's native delete-guard requires explicit confirmation for identified \\`git checkout\\`, \\`git restore\\` and stash working-tree/index replacement; headless restoration blocks. Other adapters get portable CLI/guidance only, not native interception. This best-effort command guard does not sandbox arbitrary shells or direct filesystem writes.`\n  - `agent/extensions/nullform-delete-guard.ts:32` — `const GIT_RESTORATION: DestructiveRule = { re: new RegExp(String.raw\\`\\\\bgit(?:\\\\.exe)?[\"']?\\\\s+(?:(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--config-env)\\\\s+${GIT_WORD}|(?:-C|-c)${GIT_WORD}|--(?:git-dir|work-tree|namespace|config-env)=${GIT_WORD}|-[pP]|--(?:no-pager|paginate|bare|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-replace-objects|no-optional-locks))\\\\s+)*(?:(?:checkout|restore)\\\\b|stash(?:\\\\s+(?:apply|pop|push|save|branch)\\\\b|\\\\s+-|(?=\\\\s*(?:$|[;&|\"'`]))))\\`), what: \"заменить рабочие файлы или индекс (git checkout/restore/stash)\", blockHeadless: true };`\n- **Native Execution Evidence:**\n  - Evaluated in delivered extension outside `node_modules`:\n    - `command: 'git checkout stash@{0} -- src/App.tsx'` under `{hasUI: false}` returned `denied.block: true`.\n    - `command: 'git show HEAD:App.txt'` returned `undefined` (read-only command allowed).\n    - Output flag: `headlessScreenshotRestorationBlocked: true`, `readOnlyGitAllowed: true`.\n  - Installed CLI invocations:\n    - `node bin/nullform.mjs --version` → `1.2.0` (exit code `0`)\n    - `node bin/nullform.mjs capabilities --json` → `ok: true`, `configurationAdapters: 8`, `coreWorkflowGates: Node.js` (exit code `0`)\n- **Test Suite Evidence:**\n  - `tools/tests/delete-guard.test.mjs` → `✔ screenshot restoration requires explicit interactive authorization (0.9141ms)`\n  - `tools/tests/delete-guard.test.mjs` → `✔ Git restoration blocks headlessly even after another destructive match (0.8951ms)`\n  - `tools/tests/delete-guard.test.mjs` → `✔ safe Git inspection and isolated worktree creation remain usable (0.3211ms)`\n- **Status:** **PROVEN**\n\n---\n\n## 2. Test Suite & Coverage Verification\n\nFrom `result.json` in `current-verification-b3dc0d8`:\n- **Executed Command:**\n  `C:\\Program Files\\nodejs\\node.exe --test --test-concurrency=2 --experimental-test-coverage --test-reporter=spec <64 test files>`\n- **Total Test Counts:**\n  - `ℹ tests 784`\n  - `ℹ suites 2`\n  - `ℹ pass 784`\n  - `ℹ fail 0`\n  - `ℹ cancelled 0`\n  - `ℹ skipped 0`\n  - `ℹ duration_ms 954819.3543`\n- **Overall Code Coverage:**\n  `ℹ all files | 82.27 | 73.26 | 86.77 |`\n- **Target File Coverage:**\n  - `tools/workflow-workspaces.mjs`: `line %: 100.00`, `branch %: 71.43`, `funcs %: 100.00`, `uncovered lines: none`\n  - `agent/extensions/nullform-delete-guard.ts`: `line %: 90.84`, `branch %: 71.55`, `funcs %: 87.50`\n  - `bin/nullform.mjs`: `line %: 83.12`, `branch %: 76.45`, `funcs %: 90.24`\n\n### Stage-B Frozen Regression Verification\nFrom `frozen-stage-b-b3dc0d8.json`:\n1. `concurrent-feature-workspaces` (`disposition: lean-already`):\n   - Command: `node --test --test-concurrency=2 tools/tests/workflow-workspaces.test.mjs tools/tests/delete-guard.test.mjs`\n   - Phase `before`: `ℹ tests 27`, `ℹ pass 27`, `ℹ fail 0` (exit code `0`)\n   - Phase `after`: `ℹ tests 27`, `ℹ pass 27`, `ℹ fail 0` (exit code `0`)\n   - Source digest: `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`\n   - Test files hash: `71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59`\n2. `portable-product-release` (`disposition: lean-already`):\n   - Command: `node --test --test-concurrency=2 tools/tests/portable-runtime.test.mjs tools/tests/deployment-journal.test.mjs tools/tests/review-integrity.test.mjs tools/tests/install-skills-assets.test.mjs tools/tests/install-harness.test.mjs`\n   - Phase `before`: `ℹ tests 78`, `ℹ pass 78`, `ℹ fail 0` (exit code `0`)\n   - Phase `after`: `ℹ tests 78`, `ℹ pass 78`, `ℹ fail 0` (exit code `0`)\n\n### Red-Capable Loop Evidence\nPrior failure state preserved in `recovery-failing-before-2449.txt` demonstrates that the runtime integrity and recovery tests were genuinely failing (red) before the fix:\n- `ℹ tests 32`\n- `ℹ pass 17`\n- `ℹ fail 15`\n- `Command exited with code 1`\n\n---\n\n## 3. Architecture & Discipline Gates\n\n1. **Deep Module Quality Gate:**\n   - `tools/workflow-workspaces.mjs` encapsulates detached worktree creation, slug validation, common directory detection, anchor metadata persistence, state verification, atomic integration locking (`withIntegrationLock`), porcelain status inspection, idle head checks, and 3-way non-autostash merging behind `runWorkspaceCommand`. Applying the Deletion Test: removing this module collapses multi-process lock coordination, worktree reservation, and conflict management into consuming callers. The module is cohesive and deep.\n   - `agent/extensions/nullform-delete-guard.ts` encapsulates recursive deletion regex matching, git restoration patterns, target path expansion, file/size counting via `computeRmScope`, and UI confirmation/headless refusal logic behind standard OMP extension event handlers.\n2. **Seam Check:**\n   - Both modules expose parameter-driven entry points (`--root`, `--feature`, `ctx`, `isInteractive`) allowing isolated integration and headless automated verification without global monkeypatching.\n3. **Vocabulary Drift Gate:**\n   - Checked against `CONTEXT.md`:\n     - `Feature workspace` — defined in `CONTEXT.md` (matches `tools/workflow-workspaces.mjs`)\n     - `Integration branch` — defined in `CONTEXT.md` (matches `tools/workflow-workspaces.mjs`)\n     - `Delete-guard` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n     - `Destructive rule (DestructiveRule)` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n     - `Delete guard result (DeleteGuardResult)` — defined in `CONTEXT.md` (matches `agent/extensions/nullform-delete-guard.ts`)\n   - Zero glossary discrepancies detected.\n4. **ADR Alignment:**\n   - Complies with workspace containment (worktrees contained under `.tmp/worktrees/feature<slug>`).\n   - Complies with read-only oracle and blind acceptance protocols.\n5. **Network Path Evidence:**\n   - The workspace feature introduces zero network endpoints.\n   - Deterministic replay verification via `tools/replay.mjs`:\n     `replay: cassette D:/ohmypi/workflow-repo/.tmp/npm-registry-current.cassette.json`\n     `cassette is structurally valid and redacted.`\n     `HIT GET /nullform-workflow [-]` (status `404`)\n6. **Hypothesis Disclosure:**\n   - Root cause disclosed and verified: the screenshot defect (`git checkout stash@{0} -- src/App.tsx`) occurred because Git restore/checkout/stash commands were not classified as destructive operations by the delete guard and were not blocked in headless sessions. Fixed by regex classification and explicit headless blocking (`blockHeadless: true`).\n\n---\n\n## 4. Preserved Negative Findings & Boundaries\n\n1. **Unpublished npm Package & Publisher Authorization:**\n   - `argv: [\"C:\\\\Program Files\\\\nodejs\\\\node.exe\", \"npm-cli.js\", \"whoami\", \"--registry\", \"https://registry.npmjs.org\"]` exited with code `1`:\n     `npm error code ENEEDAUTH`\n     `npm error need auth This command requires you to be logged in.`\n   - Public npm publication has not been executed; the package remains unreleased to the public npm registry.\n2. **Hosted CI Execution Conclusion:**\n   - From `hosted-results-b3dc0d8.json` (GitHub Actions run `38483391695`): overall conclusion `failure` because independent current acceptance evidence was not committed on the candidate branch (`workflow check-ci: missing oracle evidence in '.../openspec/changes/concurrent-feature-workspaces'`). Code-size/prompt steps following the gate failure were skipped in that hosted run.\n3. **Automated Review Adapter Boundaries:**\n   - Automated review execution remains OMP+Bun only:\n     `workflow review-run --harness claude` → exit code `1`: `workflow review-run: harness 'claude' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.`\n4. **Prompt Lint Structural Advisories:**\n   - `tools/prompt-lint.mjs skills --check` returned `Recommendations and Advisory Warnings (113)` regarding file lengths and heading navigation in reference docs.\n5. **Quality Evidence Historical Baseline:**\n   - `core/quality-evidence.summary.json` retains `claimStatus: \"not-proven\"` for historical skill benefit evaluations (four constructed cases, single repetition, no universal benefit claim).\n\n---\n\nVerdict: ACCEPT"
+              }
+            ]
+          }
+        }
+      ],
+      "nativeEventsHash": "4cfd4645d990bef63ce8887cf0e3d8e6c8c26f316ff331bf8b1152dd89876c82",
+      "eventProjectionHash": "42dfc6cfa9a601641af0b9db250e42120b30380227ef61e579e63c015539130e"
+    },
+    {
+      "role": "oracle",
+      "context": {
+        "role": "oracle",
+        "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+        "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+        "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+        "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+        "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+        "requestedModel": "ollama-cloud/deepseek-v4-pro",
+        "promptHash": "713a2517fc65aa8b359543aff61a147d58582163b6c1ed0de1b253789cd06d52",
+        "productCommandHash": "472a9f483124caa8861988b2620b4f84d3d342320ec789cfb29c20b535669d67"
+      },
+      "productExecutions": [
+        {
+          "commandHash": "472a9f483124caa8861988b2620b4f84d3d342320ec789cfb29c20b535669d67",
+          "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+          "exitCode": 0,
+          "startedAt": "2026-10-14T00:00:57.196Z",
+          "completedAt": "2026-10-14T00:01:09.972Z",
+          "outputHash": "31273b4ea0f298373792581eea963738b67e3b68167ff789af076874007d7d34"
+        }
+      ],
+      "sessionId": "01a137b6-2782-75c2-8f49-b9bf2cbff4e1",
+      "provider": "ollama-cloud",
+      "model": "deepseek-v4-pro",
+      "isFallback": false,
+      "usage": {
+        "input": 209256,
+        "output": 11561,
+        "cacheRead": 2977350,
+        "cacheWrite": 0,
+        "totalTokens": 3198167,
+        "costUsd": 0.22650144,
+        "costSource": "native-fixed-tariff"
+      },
+      "report": "# Oracle Report — `concurrent-feature-workspaces` (Wave 4 blind acceptance)\n\n**Provenance:** cwd `D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`; sourceDigest `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`; native exercise `exitCode 0` (started `2026-10-14T00:00:57.196Z`, completed `2026-10-14T00:01:09.972Z`); contentHash `31273b4ea0f298373792581eea963738b67e3b68167ff789af076874007d7d34`. Command = the operator-fixed argv (executed once; all 20 output pages concatenated in byte order).\n\n---\n\n## Full suite (operator-authorized `--test` run)\n\nRaw `executedFullSuite.rawSummary` (also in `stdout.txt` evidence):\n```\nℹ tests 784\nℹ suites 2\nℹ pass 784\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ duration_ms 954819.3543\nℹ start of coverage report\nℹ all files                          |  82.27 |    73.26 |   86.77 | \nℹ end of coverage report\n```\n`testFileCount: 59`, `exitCode: 0`. New-module coverage lines (verbatim): `workflow-workspaces.mjs | 100.00 | 71.43 | 100.00` and `nullform-delete-guard.ts | 90.84 | 71.55 | 87.50`.\n\n---\n\n## R01 — separate Git working directories/indexes; allocation preserves dirty files, staged entries, workflow state → **PROVEN**\n\nLive installed-CLI concurrent smoke (child `exitCode 0`, verbatim stdout):\n```\n{\"source\":\"D:/ohmypi/workflow-repo/.tmp/accept-installed-65a/node_modules/nullform-workflow\",\"root\":\"D:\\\\TMP\\\\nullform-concurrent-smoke-58n6jS\",\"allocationCommonRepo\":true,\"separateIndexPaths\":true,\"humanBytesAndStageAndWorkflowPreserved\":true,\"duplicateRefused\":true,\"dirtyIntegrationRefused\":true,\"independentCommitsIntegrated\":[\"0b53b4bf84b8a4c19cd7bbeda4a619c7c423d4b9\",\"37bea17929c852056c47c0405f5ea3d6458f2c53\"],\"conflictRetained\":true,\"conflictSourceCommitsRetained\":[\"8b28065713207c646193a4608e1efb6cd62a5a4d\",\"e393a94bf49e2b2eddf67371b3a321b685d09551\"],\"headlessScreenshotRestorationBlocked\":true,\"readOnlyGitAllowed\":true}\n```\nThe smoke asserts `a.cwd !== b.cwd`, equal `commonDir`, and unequal `git rev-parse --git-path index` — surfacing as `separateIndexPaths:true`. Staged `human.txt`, unstaged `human.txt`, untracked `notes.md`, and `.workflow/state.json` bytes all equal before/after allocation → `humanBytesAndStageAndWorkflowPreserved:true`. Re-allocation of an existing feature returns status 1 → `duplicateRefused:true`.\n\nImplementation anchor `tools/workflow-workspaces.mjs:129` — `git(root, ['worktree', 'add', '--detach', '--', cwd, base]);` with `:128` — `mkdirSync(cwd);` (atomic reservation; comment `:127`). Frozen Stage-B `concurrent-feature-workspaces` (before & after, both `exitCode 0`):\n```\nℹ tests 27\nℹ suites 0\nℹ pass 27\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 229262.7932\n```\nincluding `✔ concurrent allocation isolates indexes/state without copying staged, unstaged or untracked operator work`.\n\n## R02 — one branch, serialized integration, visible conflicts, no silent overwrite → **PROVEN**\n\nSmoke: `independentCommitsIntegrated:[aHead,bHead]`; dirty integrate refused (`dirtyIntegrationRefused:true`, stderr matched `/Dirty checkout/`); conflict `integrate d` → status 1, stderr `/Native Git merge failed/`, `git status --porcelain` → `UU App.txt`, both source commits retained (`conflictSourceCommitsRetained:[cHead,dHead]`).\n\nImplementation `tools/workflow-workspaces.mjs:143` — `return withIntegrationLock(commonDirectory(root), () => {` serializing the merge; `:151` — `git ... 'merge', '--no-autostash', '--no-ff', '--no-edit', sourceHead`; `:153` — `throw new Error('Native Git merge failed; conflict/operation state retained...')`. Lock never auto-evicted (`:103` `// Never evict: age, a malformed payload or an uncertain PID is not ownership proof.`). Frozen tests: `✔ two committed features integrate onto one branch while preserving both source commits`, `✔ same-line conflict remains native, recoverable and explicitly unsuccessful`, `✔ simultaneous integrations serialize the whole native merge, not just registration`.\n\n## R03 — Node-native installed CLI + dispatch + destructive classification of stash restoration → **PROVEN**\n\nDispatch wiring `tools/workflow.mjs:1902` — `case \"workspace\": case \"integrate\": code = runWorkspaceCommand(cmd, root, args.flags, args._.length); break;`. Installed `capabilities --json` (live, exit 0): `\"coreWorkflowGates\": { \"supported\": true, \"runtime\": \"node\", \"requiresOmp\": false, \"requiresBun\": false, ...}`. Archive (`packedFileCount 617`, `sourceBytesMatch true`): `\"workspaceIncluded\":true`.\n\nDelete-guard classification: `agent/extensions/nullform-delete-guard.ts:33-37` — `GIT_RESTORATION` rule with `blockHeadless: true` matching `checkout|restore|stash`; smoke `headlessScreenshotRestorationBlocked:true` (headless `git checkout stash@{0} -- src/App.tsx` → `{block:true}`, while read-only `git show HEAD:App.txt` → `undefined`). Vocabulary gate satisfied — CONTEXT.md names the same symbols: `:163` **Feature workspace**, `:164` **Integration branch**, `:193` **Delete-guard**, `:194` **Destructive rule (`DestructiveRule`)**, `:195` **Delete guard result (`DeleteGuardResult`)**. No synonym drift, no undocumented public domain entity.\n\n---\n\n## Negative findings (preserved, non-blocking)\n\n1. Hosted CI run (`hosted-results-b3dc0d8.json`) `overallConclusion: failure` — reason verbatim: `Independent current acceptance artifacts not yet committed; tests and six adapter-certification jobs succeeded.` Raw regression `# pass 774`, `# fail 0`, `# skipped 10`; the only gate error is `workflow check-ci: missing oracle evidence in '.../concurrent-feature-workspaces' or resolves outside project root.` (this oracle report, not yet committed at hosted-run time).\n2. `publisherAuthorization` `npm whoami` → `exitCode 1`, stderr `npm error code ENEEDAUTH ... This command requires you to be logged in.`; `liveRegistryMetadata` → status `404`, body `{\"error\":\"Not found\"}`. Consistent with the declared limit: `Public npm publication is not claimed; final registry installation remains unexecuted pending user authorization.`\n3. Network-replay cassette (`npm-registry-current.cassette.json`) exercises only the npm metadata path, not a changed path in this diff — this change introduces no network path (no endpoint/request/retry/third-party call), so Rule 10 does not require a cassette.\n\nDeep-module / deletion test: `workflow-workspaces.mjs` hides allocation + tamper-resistant registration + crash-surviving exclusive lock + ancestor assertions + native serialized merge behind `runWorkspaceCommand(command, root, flags, positionalCount)` — non-shallow. `nullform-delete-guard.ts` is a cohesive extension. No ADR contradiction observed. No unstated hypothesis: the destructive-classification cause is stated in the manifest (screenshot `git checkout stash@{0} -- src/App.tsx` replaced the whole file).\n\n---\n\n**R01: proven · R02: proven · R03: proven**\n\nVerdict: ACCEPT",
+      "stopReason": "stop",
+      "startedAt": "2026-10-14T00:00:46.978Z",
+      "completedAt": "2026-10-14T00:03:27.113Z",
+      "verdict": "ACCEPT",
+      "nativeVerdict": "ACCEPT",
+      "requestedModel": "ollama-cloud/deepseek-v4-pro",
+      "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+      "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+      "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+      "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+      "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+      "exitCode": 0,
+      "nativeProjection": {
+        "role": "oracle",
+        "context": {
+          "role": "oracle",
+          "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+          "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+          "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+          "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+          "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+          "requestedModel": "ollama-cloud/deepseek-v4-pro",
+          "promptHash": "713a2517fc65aa8b359543aff61a147d58582163b6c1ed0de1b253789cd06d52",
+          "productCommandHash": "472a9f483124caa8861988b2620b4f84d3d342320ec789cfb29c20b535669d67"
+        },
+        "productExecutions": [
+          {
+            "commandHash": "472a9f483124caa8861988b2620b4f84d3d342320ec789cfb29c20b535669d67",
+            "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+            "exitCode": 0,
+            "startedAt": "2026-10-14T00:00:57.196Z",
+            "completedAt": "2026-10-14T00:01:09.972Z",
+            "outputHash": "31273b4ea0f298373792581eea963738b67e3b68167ff789af076874007d7d34"
+          }
+        ],
+        "sessionId": "01a137b6-2782-75c2-8f49-b9bf2cbff4e1",
+        "provider": "ollama-cloud",
+        "model": "deepseek-v4-pro",
+        "isFallback": false,
+        "usage": {
+          "input": 209256,
+          "output": 11561,
+          "cacheRead": 2977350,
+          "cacheWrite": 0,
+          "totalTokens": 3198167,
+          "costUsd": 0.22650144,
+          "costSource": "native-fixed-tariff"
+        },
+        "report": "# Oracle Report — `concurrent-feature-workspaces` (Wave 4 blind acceptance)\n\n**Provenance:** cwd `D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`; sourceDigest `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`; native exercise `exitCode 0` (started `2026-10-14T00:00:57.196Z`, completed `2026-10-14T00:01:09.972Z`); contentHash `31273b4ea0f298373792581eea963738b67e3b68167ff789af076874007d7d34`. Command = the operator-fixed argv (executed once; all 20 output pages concatenated in byte order).\n\n---\n\n## Full suite (operator-authorized `--test` run)\n\nRaw `executedFullSuite.rawSummary` (also in `stdout.txt` evidence):\n```\nℹ tests 784\nℹ suites 2\nℹ pass 784\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ duration_ms 954819.3543\nℹ start of coverage report\nℹ all files                          |  82.27 |    73.26 |   86.77 | \nℹ end of coverage report\n```\n`testFileCount: 59`, `exitCode: 0`. New-module coverage lines (verbatim): `workflow-workspaces.mjs | 100.00 | 71.43 | 100.00` and `nullform-delete-guard.ts | 90.84 | 71.55 | 87.50`.\n\n---\n\n## R01 — separate Git working directories/indexes; allocation preserves dirty files, staged entries, workflow state → **PROVEN**\n\nLive installed-CLI concurrent smoke (child `exitCode 0`, verbatim stdout):\n```\n{\"source\":\"D:/ohmypi/workflow-repo/.tmp/accept-installed-65a/node_modules/nullform-workflow\",\"root\":\"D:\\\\TMP\\\\nullform-concurrent-smoke-58n6jS\",\"allocationCommonRepo\":true,\"separateIndexPaths\":true,\"humanBytesAndStageAndWorkflowPreserved\":true,\"duplicateRefused\":true,\"dirtyIntegrationRefused\":true,\"independentCommitsIntegrated\":[\"0b53b4bf84b8a4c19cd7bbeda4a619c7c423d4b9\",\"37bea17929c852056c47c0405f5ea3d6458f2c53\"],\"conflictRetained\":true,\"conflictSourceCommitsRetained\":[\"8b28065713207c646193a4608e1efb6cd62a5a4d\",\"e393a94bf49e2b2eddf67371b3a321b685d09551\"],\"headlessScreenshotRestorationBlocked\":true,\"readOnlyGitAllowed\":true}\n```\nThe smoke asserts `a.cwd !== b.cwd`, equal `commonDir`, and unequal `git rev-parse --git-path index` — surfacing as `separateIndexPaths:true`. Staged `human.txt`, unstaged `human.txt`, untracked `notes.md`, and `.workflow/state.json` bytes all equal before/after allocation → `humanBytesAndStageAndWorkflowPreserved:true`. Re-allocation of an existing feature returns status 1 → `duplicateRefused:true`.\n\nImplementation anchor `tools/workflow-workspaces.mjs:129` — `git(root, ['worktree', 'add', '--detach', '--', cwd, base]);` with `:128` — `mkdirSync(cwd);` (atomic reservation; comment `:127`). Frozen Stage-B `concurrent-feature-workspaces` (before & after, both `exitCode 0`):\n```\nℹ tests 27\nℹ suites 0\nℹ pass 27\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 229262.7932\n```\nincluding `✔ concurrent allocation isolates indexes/state without copying staged, unstaged or untracked operator work`.\n\n## R02 — one branch, serialized integration, visible conflicts, no silent overwrite → **PROVEN**\n\nSmoke: `independentCommitsIntegrated:[aHead,bHead]`; dirty integrate refused (`dirtyIntegrationRefused:true`, stderr matched `/Dirty checkout/`); conflict `integrate d` → status 1, stderr `/Native Git merge failed/`, `git status --porcelain` → `UU App.txt`, both source commits retained (`conflictSourceCommitsRetained:[cHead,dHead]`).\n\nImplementation `tools/workflow-workspaces.mjs:143` — `return withIntegrationLock(commonDirectory(root), () => {` serializing the merge; `:151` — `git ... 'merge', '--no-autostash', '--no-ff', '--no-edit', sourceHead`; `:153` — `throw new Error('Native Git merge failed; conflict/operation state retained...')`. Lock never auto-evicted (`:103` `// Never evict: age, a malformed payload or an uncertain PID is not ownership proof.`). Frozen tests: `✔ two committed features integrate onto one branch while preserving both source commits`, `✔ same-line conflict remains native, recoverable and explicitly unsuccessful`, `✔ simultaneous integrations serialize the whole native merge, not just registration`.\n\n## R03 — Node-native installed CLI + dispatch + destructive classification of stash restoration → **PROVEN**\n\nDispatch wiring `tools/workflow.mjs:1902` — `case \"workspace\": case \"integrate\": code = runWorkspaceCommand(cmd, root, args.flags, args._.length); break;`. Installed `capabilities --json` (live, exit 0): `\"coreWorkflowGates\": { \"supported\": true, \"runtime\": \"node\", \"requiresOmp\": false, \"requiresBun\": false, ...}`. Archive (`packedFileCount 617`, `sourceBytesMatch true`): `\"workspaceIncluded\":true`.\n\nDelete-guard classification: `agent/extensions/nullform-delete-guard.ts:33-37` — `GIT_RESTORATION` rule with `blockHeadless: true` matching `checkout|restore|stash`; smoke `headlessScreenshotRestorationBlocked:true` (headless `git checkout stash@{0} -- src/App.tsx` → `{block:true}`, while read-only `git show HEAD:App.txt` → `undefined`). Vocabulary gate satisfied — CONTEXT.md names the same symbols: `:163` **Feature workspace**, `:164` **Integration branch**, `:193` **Delete-guard**, `:194` **Destructive rule (`DestructiveRule`)**, `:195` **Delete guard result (`DeleteGuardResult`)**. No synonym drift, no undocumented public domain entity.\n\n---\n\n## Negative findings (preserved, non-blocking)\n\n1. Hosted CI run (`hosted-results-b3dc0d8.json`) `overallConclusion: failure` — reason verbatim: `Independent current acceptance artifacts not yet committed; tests and six adapter-certification jobs succeeded.` Raw regression `# pass 774`, `# fail 0`, `# skipped 10`; the only gate error is `workflow check-ci: missing oracle evidence in '.../concurrent-feature-workspaces' or resolves outside project root.` (this oracle report, not yet committed at hosted-run time).\n2. `publisherAuthorization` `npm whoami` → `exitCode 1`, stderr `npm error code ENEEDAUTH ... This command requires you to be logged in.`; `liveRegistryMetadata` → status `404`, body `{\"error\":\"Not found\"}`. Consistent with the declared limit: `Public npm publication is not claimed; final registry installation remains unexecuted pending user authorization.`\n3. Network-replay cassette (`npm-registry-current.cassette.json`) exercises only the npm metadata path, not a changed path in this diff — this change introduces no network path (no endpoint/request/retry/third-party call), so Rule 10 does not require a cassette.\n\nDeep-module / deletion test: `workflow-workspaces.mjs` hides allocation + tamper-resistant registration + crash-surviving exclusive lock + ancestor assertions + native serialized merge behind `runWorkspaceCommand(command, root, flags, positionalCount)` — non-shallow. `nullform-delete-guard.ts` is a cohesive extension. No ADR contradiction observed. No unstated hypothesis: the destructive-classification cause is stated in the manifest (screenshot `git checkout stash@{0} -- src/App.tsx` replaced the whole file).\n\n---\n\n**R01: proven · R02: proven · R03: proven**\n\nVerdict: ACCEPT",
+        "stopReason": "stop",
+        "startedAt": "2026-10-14T00:00:46.978Z",
+        "completedAt": "2026-10-14T00:03:27.113Z",
+        "verdict": "ACCEPT",
+        "nativeVerdict": "ACCEPT",
+        "requestedModel": "ollama-cloud/deepseek-v4-pro",
+        "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+        "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+        "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+        "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+        "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+        "exitCode": 0
+      },
+      "nativeEvents": [
+        {
+          "type": "session",
+          "id": "01a137b6-2782-75c2-8f49-b9bf2cbff4e1",
+          "timestamp": "2026-10-14T00:00:46.978Z"
+        },
+        {
+          "type": "model_change",
+          "model": "deepseek-v4-pro",
+          "provider": "ollama-cloud",
+          "isFallback": false,
+          "timestamp": "2026-10-14T00:00:47.923Z"
+        },
+        {
+          "type": "custom",
+          "customType": "workflow-review-context",
+          "timestamp": "2026-10-14T00:00:48.035Z",
+          "data": {
+            "role": "oracle",
+            "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+            "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+            "rolePromptHash": "ad9bed90ae64288d3f48b9c84a6b265f78293079fe8c9a478f3dd99edd2a47a1",
+            "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+            "baseRef": "a5bf423ab9efcfb5287d9b980adbe6470dc3077e",
+            "requestedModel": "ollama-cloud/deepseek-v4-pro",
+            "promptHash": "713a2517fc65aa8b359543aff61a147d58582163b6c1ed0de1b253789cd06d52",
+            "productCommandHash": "472a9f483124caa8861988b2620b4f84d3d342320ec789cfb29c20b535669d67"
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:00:56.558Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936050548,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 7488,
+              "output": 477,
+              "cacheRead": 40448,
+              "cacheWrite": 0,
+              "totalTokens": 48413,
+              "cost": {
+                "total": 0.0067763960000000005
+              }
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "I'll examine the implementation files and run the operator-authorized product command in parallel."
+              },
+              {
+                "type": "toolCall",
+                "id": "ollama:2:inspect_product",
+                "name": "inspect_product"
+              },
+              {
+                "type": "toolCall",
+                "id": "ollama:3:exercise_product",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "custom",
+          "customType": "workflow-product-execution",
+          "timestamp": "2026-10-14T00:01:09.974Z",
+          "data": {
+            "commandHash": "472a9f483124caa8861988b2620b4f84d3d342320ec789cfb29c20b535669d67",
+            "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+            "exitCode": 0,
+            "startedAt": "2026-10-14T00:00:57.196Z",
+            "completedAt": "2026-10-14T00:01:09.972Z",
+            "outputHash": "31273b4ea0f298373792581eea963738b67e3b68167ff789af076874007d7d34"
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:01:14.528Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936070022,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 18230,
+              "output": 295,
+              "cacheRead": 47935,
+              "cacheWrite": 0,
+              "totalTokens": 66460,
+              "cost": {
+                "total": 0.01367047
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product",
+                "name": "exercise_product"
+              },
+              {
+                "type": "toolCall",
+                "id": "ollama:2:inspect_product_dup1",
+                "name": "inspect_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:01:17.755Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936075239,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11424,
+              "output": 105,
+              "cacheRead": 66164,
+              "cacheWrite": 0,
+              "totalTokens": 77693,
+              "cost": {
+                "total": 0.009203348000000002
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup1",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:01:20.201Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936078085,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 8365,
+              "output": 160,
+              "cacheRead": 77587,
+              "cacheWrite": 0,
+              "totalTokens": 86112,
+              "cost": {
+                "total": 0.007544614
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup2",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:01:23.490Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936080555,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 8307,
+              "output": 189,
+              "cacheRead": 85951,
+              "cacheWrite": 0,
+              "totalTokens": 94447,
+              "cost": {
+                "total": 0.007747762
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup3",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:01:29.839Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936083817,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 9369,
+              "output": 753,
+              "cacheRead": 94257,
+              "cacheWrite": 0,
+              "totalTokens": 104379,
+              "cost": {
+                "total": 0.009748134
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup4",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:01:32.989Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936090176,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 9040,
+              "output": 212,
+              "cacheRead": 103625,
+              "cacheWrite": 0,
+              "totalTokens": 112877,
+              "cost": {
+                "total": 0.008665909999999999
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup5",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:01:36.172Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936093330,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 10107,
+              "output": 133,
+              "cacheRead": 112664,
+              "cacheWrite": 0,
+              "totalTokens": 122904,
+              "cost": {
+                "total": 0.009412568
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup6",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:07.445Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936096532,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 7476,
+              "output": 227,
+              "cacheRead": 122770,
+              "cacheWrite": 0,
+              "totalTokens": 130473,
+              "cost": {
+                "total": 0.00808456
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup7",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:10.192Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936127774,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 10482,
+              "output": 108,
+              "cacheRead": 130245,
+              "cacheWrite": 0,
+              "totalTokens": 140835,
+              "cost": {
+                "total": 0.00999735
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup8",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:15.146Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936130526,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 9015,
+              "output": 363,
+              "cacheRead": 140726,
+              "cacheWrite": 0,
+              "totalTokens": 150104,
+              "cost": {
+                "total": 0.009764611999999999
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup9",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:19.166Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936135468,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 10750,
+              "output": 272,
+              "cacheRead": 149740,
+              "cacheWrite": 0,
+              "totalTokens": 160762,
+              "cost": {
+                "total": 0.010927840000000001
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup10",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:23.970Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936139512,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 10761,
+              "output": 360,
+              "cacheRead": 160489,
+              "cacheWrite": 0,
+              "totalTokens": 171610,
+              "cost": {
+                "total": 0.011345818
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup11",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:31.013Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936144309,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 9058,
+              "output": 727,
+              "cacheRead": 171249,
+              "cacheWrite": 0,
+              "totalTokens": 181034,
+              "cost": {
+                "total": 0.011185218
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup12",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:34.120Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936151418,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 9124,
+              "output": 106,
+              "cacheRead": 180306,
+              "cacheWrite": 0,
+              "totalTokens": 189536,
+              "cost": {
+                "total": 0.010198452
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup13",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:37.838Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936154453,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11038,
+              "output": 222,
+              "cacheRead": 189429,
+              "cacheWrite": 0,
+              "totalTokens": 200689,
+              "cost": {
+                "total": 0.011892078
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup14",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:41.540Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936158173,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 9962,
+              "output": 120,
+              "cacheRead": 200466,
+              "cacheWrite": 0,
+              "totalTokens": 210548,
+              "cost": {
+                "total": 0.011222772
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup15",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:44.793Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936161918,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 9310,
+              "output": 106,
+              "cacheRead": 210427,
+              "cacheWrite": 0,
+              "totalTokens": 219843,
+              "cost": {
+                "total": 0.010983874
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup16",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:47.652Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936165179,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11101,
+              "output": 149,
+              "cacheRead": 219736,
+              "cacheWrite": 0,
+              "totalTokens": 230986,
+              "cost": {
+                "total": 0.012455872
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup17",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:02:50.235Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936167975,
+            "stopReason": "toolUse",
+            "usage": {
+              "input": 11465,
+              "output": 96,
+              "cacheRead": 230836,
+              "cacheWrite": 0,
+              "totalTokens": 242397,
+              "cost": {
+                "total": 0.012835372
+              }
+            },
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "ollama:1:exercise_product_dup18",
+                "name": "exercise_product"
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "timestamp": "2026-10-14T00:03:27.113Z",
+          "message": {
+            "role": "assistant",
+            "provider": "ollama-cloud",
+            "model": "deepseek-v4-pro",
+            "timestamp": 1791936170555,
+            "stopReason": "stop",
+            "usage": {
+              "input": 7384,
+              "output": 6381,
+              "cacheRead": 242300,
+              "cacheWrite": 0,
+              "totalTokens": 256065,
+              "cost": {
+                "total": 0.022838419999999998
+              }
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "# Oracle Report — `concurrent-feature-workspaces` (Wave 4 blind acceptance)\n\n**Provenance:** cwd `D:\\ohmypi\\workflow-repo\\.tmp\\worktrees\\review`; sourceDigest `b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e`; native exercise `exitCode 0` (started `2026-10-14T00:00:57.196Z`, completed `2026-10-14T00:01:09.972Z`); contentHash `31273b4ea0f298373792581eea963738b67e3b68167ff789af076874007d7d34`. Command = the operator-fixed argv (executed once; all 20 output pages concatenated in byte order).\n\n---\n\n## Full suite (operator-authorized `--test` run)\n\nRaw `executedFullSuite.rawSummary` (also in `stdout.txt` evidence):\n```\nℹ tests 784\nℹ suites 2\nℹ pass 784\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ duration_ms 954819.3543\nℹ start of coverage report\nℹ all files                          |  82.27 |    73.26 |   86.77 | \nℹ end of coverage report\n```\n`testFileCount: 59`, `exitCode: 0`. New-module coverage lines (verbatim): `workflow-workspaces.mjs | 100.00 | 71.43 | 100.00` and `nullform-delete-guard.ts | 90.84 | 71.55 | 87.50`.\n\n---\n\n## R01 — separate Git working directories/indexes; allocation preserves dirty files, staged entries, workflow state → **PROVEN**\n\nLive installed-CLI concurrent smoke (child `exitCode 0`, verbatim stdout):\n```\n{\"source\":\"D:/ohmypi/workflow-repo/.tmp/accept-installed-65a/node_modules/nullform-workflow\",\"root\":\"D:\\\\TMP\\\\nullform-concurrent-smoke-58n6jS\",\"allocationCommonRepo\":true,\"separateIndexPaths\":true,\"humanBytesAndStageAndWorkflowPreserved\":true,\"duplicateRefused\":true,\"dirtyIntegrationRefused\":true,\"independentCommitsIntegrated\":[\"0b53b4bf84b8a4c19cd7bbeda4a619c7c423d4b9\",\"37bea17929c852056c47c0405f5ea3d6458f2c53\"],\"conflictRetained\":true,\"conflictSourceCommitsRetained\":[\"8b28065713207c646193a4608e1efb6cd62a5a4d\",\"e393a94bf49e2b2eddf67371b3a321b685d09551\"],\"headlessScreenshotRestorationBlocked\":true,\"readOnlyGitAllowed\":true}\n```\nThe smoke asserts `a.cwd !== b.cwd`, equal `commonDir`, and unequal `git rev-parse --git-path index` — surfacing as `separateIndexPaths:true`. Staged `human.txt`, unstaged `human.txt`, untracked `notes.md`, and `.workflow/state.json` bytes all equal before/after allocation → `humanBytesAndStageAndWorkflowPreserved:true`. Re-allocation of an existing feature returns status 1 → `duplicateRefused:true`.\n\nImplementation anchor `tools/workflow-workspaces.mjs:129` — `git(root, ['worktree', 'add', '--detach', '--', cwd, base]);` with `:128` — `mkdirSync(cwd);` (atomic reservation; comment `:127`). Frozen Stage-B `concurrent-feature-workspaces` (before & after, both `exitCode 0`):\n```\nℹ tests 27\nℹ suites 0\nℹ pass 27\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 229262.7932\n```\nincluding `✔ concurrent allocation isolates indexes/state without copying staged, unstaged or untracked operator work`.\n\n## R02 — one branch, serialized integration, visible conflicts, no silent overwrite → **PROVEN**\n\nSmoke: `independentCommitsIntegrated:[aHead,bHead]`; dirty integrate refused (`dirtyIntegrationRefused:true`, stderr matched `/Dirty checkout/`); conflict `integrate d` → status 1, stderr `/Native Git merge failed/`, `git status --porcelain` → `UU App.txt`, both source commits retained (`conflictSourceCommitsRetained:[cHead,dHead]`).\n\nImplementation `tools/workflow-workspaces.mjs:143` — `return withIntegrationLock(commonDirectory(root), () => {` serializing the merge; `:151` — `git ... 'merge', '--no-autostash', '--no-ff', '--no-edit', sourceHead`; `:153` — `throw new Error('Native Git merge failed; conflict/operation state retained...')`. Lock never auto-evicted (`:103` `// Never evict: age, a malformed payload or an uncertain PID is not ownership proof.`). Frozen tests: `✔ two committed features integrate onto one branch while preserving both source commits`, `✔ same-line conflict remains native, recoverable and explicitly unsuccessful`, `✔ simultaneous integrations serialize the whole native merge, not just registration`.\n\n## R03 — Node-native installed CLI + dispatch + destructive classification of stash restoration → **PROVEN**\n\nDispatch wiring `tools/workflow.mjs:1902` — `case \"workspace\": case \"integrate\": code = runWorkspaceCommand(cmd, root, args.flags, args._.length); break;`. Installed `capabilities --json` (live, exit 0): `\"coreWorkflowGates\": { \"supported\": true, \"runtime\": \"node\", \"requiresOmp\": false, \"requiresBun\": false, ...}`. Archive (`packedFileCount 617`, `sourceBytesMatch true`): `\"workspaceIncluded\":true`.\n\nDelete-guard classification: `agent/extensions/nullform-delete-guard.ts:33-37` — `GIT_RESTORATION` rule with `blockHeadless: true` matching `checkout|restore|stash`; smoke `headlessScreenshotRestorationBlocked:true` (headless `git checkout stash@{0} -- src/App.tsx` → `{block:true}`, while read-only `git show HEAD:App.txt` → `undefined`). Vocabulary gate satisfied — CONTEXT.md names the same symbols: `:163` **Feature workspace**, `:164` **Integration branch**, `:193` **Delete-guard**, `:194` **Destructive rule (`DestructiveRule`)**, `:195` **Delete guard result (`DeleteGuardResult`)**. No synonym drift, no undocumented public domain entity.\n\n---\n\n## Negative findings (preserved, non-blocking)\n\n1. Hosted CI run (`hosted-results-b3dc0d8.json`) `overallConclusion: failure` — reason verbatim: `Independent current acceptance artifacts not yet committed; tests and six adapter-certification jobs succeeded.` Raw regression `# pass 774`, `# fail 0`, `# skipped 10`; the only gate error is `workflow check-ci: missing oracle evidence in '.../concurrent-feature-workspaces' or resolves outside project root.` (this oracle report, not yet committed at hosted-run time).\n2. `publisherAuthorization` `npm whoami` → `exitCode 1`, stderr `npm error code ENEEDAUTH ... This command requires you to be logged in.`; `liveRegistryMetadata` → status `404`, body `{\"error\":\"Not found\"}`. Consistent with the declared limit: `Public npm publication is not claimed; final registry installation remains unexecuted pending user authorization.`\n3. Network-replay cassette (`npm-registry-current.cassette.json`) exercises only the npm metadata path, not a changed path in this diff — this change introduces no network path (no endpoint/request/retry/third-party call), so Rule 10 does not require a cassette.\n\nDeep-module / deletion test: `workflow-workspaces.mjs` hides allocation + tamper-resistant registration + crash-surviving exclusive lock + ancestor assertions + native serialized merge behind `runWorkspaceCommand(command, root, flags, positionalCount)` — non-shallow. `nullform-delete-guard.ts` is a cohesive extension. No ADR contradiction observed. No unstated hypothesis: the destructive-classification cause is stated in the manifest (screenshot `git checkout stash@{0} -- src/App.tsx` replaced the whole file).\n\n---\n\n**R01: proven · R02: proven · R03: proven**\n\nVerdict: ACCEPT"
+              }
+            ]
+          }
+        }
+      ],
+      "nativeEventsHash": "53276d9bac5762f14b9867dcf5c8aceeabc926a7f7c91a34ea7fd0a90a53414e",
+      "eventProjectionHash": "65f9033e9dcf3150fd78fe46b122f1c976bc0462bd16fa471fb00f9557f0e39b"
+    }
+  ],
+  "history": [
+    {
+      "reviewer": {
+        "role": "reviewer",
+        "context": {
+          "role": "reviewer",
+          "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+          "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+          "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+          "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+          "baseRef": "65a1af9f48a44f3d81219a2a3212aacbde93325b",
+          "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+          "promptHash": "d8c878727c9bce7ca602a938c52bbb0ddcc0c4ee54c55961c8d8179764f6ea96",
+          "productCommandHash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        "productExecutions": [],
+        "sessionId": "01a1378c-86c5-761f-b51c-72c9a9a086fc",
+        "provider": "nullform-gateway",
+        "model": "gemini-3.8-flash-high",
+        "isFallback": false,
+        "usage": {
+          "input": 234792,
+          "output": 1674,
+          "cacheRead": 2366393,
+          "cacheWrite": 0,
+          "totalTokens": 2602859,
+          "costUsd": 0.35985097499999996,
+          "costSource": "native-fixed-tariff"
+        },
+        "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Review of concurrent-feature-workspaces patch (worktrees.md and install-harness.test.mjs) confirms all changes are sound with zero defects introduced. Requirement R01 is satisfied: private detached worktree allocation in tools/workflow-workspaces.mjs provides separate working directories and indexes without mutating operator staged/unstaged changes. Requirement R02 is satisfied: serialized integration via withIntegrationLock safely merges feature branches onto the integration branch, explicitly retaining native conflict states on collision without destructive stash/reset operations. Requirement R03 is satisfied: public CLI surface (nullform workflow workspace/integrate) and project-owned adapter guidance are updated, and the OMP delete guard blocks screenshot-class destructive restorations in headless contexts. The test changes in install-harness.test.mjs isolate child process environments via isolatedChildEnv to prevent ~/.nullform lock/journal contention during parallel test runs and remove fragile template wording checks in accordance with verification policy. Lean lens evaluation: Lean already.\",\n  \"overall_confidence_score\": 1.0\n}",
+        "stopReason": "stop",
+        "startedAt": "2026-10-13T23:15:18.853Z",
+        "completedAt": "2026-10-13T23:28:25.589Z",
+        "verdict": "ACCEPT",
+        "nativeVerdict": "correct",
+        "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+        "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+        "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+        "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+        "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+        "baseRef": "65a1af9f48a44f3d81219a2a3212aacbde93325b",
+        "exitCode": 0,
+        "nativeProjection": {
+          "role": "reviewer",
+          "context": {
+            "role": "reviewer",
+            "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+            "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+            "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+            "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+            "baseRef": "65a1af9f48a44f3d81219a2a3212aacbde93325b",
+            "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+            "promptHash": "d8c878727c9bce7ca602a938c52bbb0ddcc0c4ee54c55961c8d8179764f6ea96",
+            "productCommandHash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+          },
+          "productExecutions": [],
+          "sessionId": "01a1378c-86c5-761f-b51c-72c9a9a086fc",
+          "provider": "nullform-gateway",
+          "model": "gemini-3.8-flash-high",
+          "isFallback": false,
+          "usage": {
+            "input": 234792,
+            "output": 1674,
+            "cacheRead": 2366393,
+            "cacheWrite": 0,
+            "totalTokens": 2602859,
+            "costUsd": 0.35985097499999996,
+            "costSource": "native-fixed-tariff"
+          },
+          "report": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Review of concurrent-feature-workspaces patch (worktrees.md and install-harness.test.mjs) confirms all changes are sound with zero defects introduced. Requirement R01 is satisfied: private detached worktree allocation in tools/workflow-workspaces.mjs provides separate working directories and indexes without mutating operator staged/unstaged changes. Requirement R02 is satisfied: serialized integration via withIntegrationLock safely merges feature branches onto the integration branch, explicitly retaining native conflict states on collision without destructive stash/reset operations. Requirement R03 is satisfied: public CLI surface (nullform workflow workspace/integrate) and project-owned adapter guidance are updated, and the OMP delete guard blocks screenshot-class destructive restorations in headless contexts. The test changes in install-harness.test.mjs isolate child process environments via isolatedChildEnv to prevent ~/.nullform lock/journal contention during parallel test runs and remove fragile template wording checks in accordance with verification policy. Lean lens evaluation: Lean already.\",\n  \"overall_confidence_score\": 1.0\n}",
+          "stopReason": "stop",
+          "startedAt": "2026-10-13T23:15:18.853Z",
+          "completedAt": "2026-10-13T23:28:25.589Z",
+          "verdict": "ACCEPT",
+          "nativeVerdict": "correct",
+          "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+          "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+          "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+          "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+          "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+          "baseRef": "65a1af9f48a44f3d81219a2a3212aacbde93325b",
+          "exitCode": 0
+        },
+        "nativeEvents": [
+          {
+            "type": "session",
+            "id": "01a1378c-86c5-761f-b51c-72c9a9a086fc",
+            "timestamp": "2026-10-13T23:15:18.853Z"
+          },
+          {
+            "type": "model_change",
+            "model": "gemini-3.8-flash-high",
+            "provider": "nullform-gateway",
+            "isFallback": false,
+            "timestamp": "2026-10-13T23:15:19.900Z"
+          },
+          {
+            "type": "custom",
+            "customType": "workflow-review-context",
+            "timestamp": "2026-10-13T23:15:20.038Z",
+            "data": {
+              "role": "reviewer",
+              "sourceDigest": "b205a9578c249504859ca283f8983d0269bf21c723f878794b95ce1c5bd8016e",
+              "manifestHash": "bf5c47f1fa59b059924fb03bf63ecf2a51b1c96e1c6254634b4fda5c67f7ac8f",
+              "rolePromptHash": "51c50cb819932fbfb242d4af65b5113473db9916f2ad1ebd043969a98ebb4d33",
+              "testFilesHash": "71304797781ed06dbcf0bcd9a2f789fc8aee3c4e9ae81e857e114062ec6dee59",
+              "baseRef": "65a1af9f48a44f3d81219a2a3212aacbde93325b",
+              "requestedModel": "nullform-gateway/gemini-3.8-flash-high",
+              "promptHash": "d8c878727c9bce7ca602a938c52bbb0ddcc0c4ee54c55961c8d8179764f6ea96",
+              "productCommandHash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:15:31.256Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933325639,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 44120,
+                "output": 84,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 44204,
+                "cost": {
+                  "total": 0.033405000000000004
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_595523",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:16:11.968Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933331949,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 4047,
+                "output": 37,
+                "cacheRead": 44153,
+                "cacheWrite": 0,
+                "totalTokens": 48237,
+                "cost": {
+                  "total": 0.006485475
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_457729",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:17:34.222Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933372347,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 12667,
+                "output": 41,
+                "cacheRead": 46276,
+                "cacheWrite": 0,
+                "totalTokens": 58984,
+                "cost": {
+                  "total": 0.0131247
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_436890",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:19:28.865Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933454589,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 2031,
+                "output": 128,
+                "cacheRead": 63842,
+                "cacheWrite": 0,
+                "totalTokens": 66001,
+                "cost": {
+                  "total": 0.0067913999999999995
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_589169",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:21:27.797Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933569276,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 2721,
+                "output": 211,
+                "cacheRead": 63839,
+                "cacheWrite": 0,
+                "totalTokens": 66771,
+                "cost": {
+                  "total": 0.0076199250000000005
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_377951",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:22:53.760Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933688177,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 5790,
+                "output": 56,
+                "cacheRead": 64554,
+                "cacheWrite": 0,
+                "totalTokens": 70400,
+                "cost": {
+                  "total": 0.009394050000000001
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_446006",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:24:03.045Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933774186,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 12389,
+                "output": 62,
+                "cacheRead": 68387,
+                "cacheWrite": 0,
+                "totalTokens": 80838,
+                "cost": {
+                  "total": 0.014653275
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_451083",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:24:13.713Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933843396,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 7187,
+                "output": 73,
+                "cacheRead": 78773,
+                "cacheWrite": 0,
+                "totalTokens": 86033,
+                "cost": {
+                  "total": 0.011571974999999998
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_462999",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:24:33.472Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933854079,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 10552,
+                "output": 53,
+                "cacheRead": 83977,
+                "cacheWrite": 0,
+                "totalTokens": 94582,
+                "cost": {
+                  "total": 0.014411025000000001
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_487047",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:24:47.684Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933873884,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 14604,
+                "output": 56,
+                "cacheRead": 92565,
+                "cacheWrite": 0,
+                "totalTokens": 107225,
+                "cost": {
+                  "total": 0.018105375
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_360056",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:25:10.915Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933888109,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 6829,
+                "output": 78,
+                "cacheRead": 105152,
+                "cacheWrite": 0,
+                "totalTokens": 112059,
+                "cost": {
+                  "total": 0.01330065
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_530344",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:25:16.410Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933911345,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 16060,
+                "output": 62,
+                "cacheRead": 110013,
+                "cacheWrite": 0,
+                "totalTokens": 126135,
+                "cost": {
+                  "total": 0.020528474999999997
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_396753",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:25:31.062Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933916810,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 3761,
+                "output": 52,
+                "cacheRead": 124034,
+                "cacheWrite": 0,
+                "totalTokens": 127847,
+                "cost": {
+                  "total": 0.012318299999999999
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_437469",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:25:50.134Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933931434,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 7714,
+                "output": 48,
+                "cacheRead": 125778,
+                "cacheWrite": 0,
+                "totalTokens": 133540,
+                "cost": {
+                  "total": 0.015398849999999999
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_651262",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:26:16.398Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933950567,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 11243,
+                "output": 51,
+                "cacheRead": 131491,
+                "cacheWrite": 0,
+                "totalTokens": 142785,
+                "cost": {
+                  "total": 0.018485325
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_589549",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:26:45.337Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791933976840,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 7651,
+                "output": 48,
+                "cacheRead": 140713,
+                "cacheWrite": 0,
+                "totalTokens": 148412,
+                "cost": {
+                  "total": 0.016471725
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_523482",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:27:09.435Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791934005710,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 14304,
+                "output": 54,
+                "cacheRead": 146373,
+                "cacheWrite": 0,
+                "totalTokens": 160731,
+                "cost": {
+                  "total": 0.021908474999999997
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_474351",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:27:30.527Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791934029826,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 11777,
+                "output": 86,
+                "cacheRead": 158671,
+                "cacheWrite": 0,
+                "totalTokens": 170534,
+                "cost": {
+                  "total": 0.021055575
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_474138",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:27:36.274Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791934050919,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 6712,
+                "output": 46,
+                "cacheRead": 168418,
+                "cacheWrite": 0,
+                "totalTokens": 175176,
+                "cost": {
+                  "total": 0.01783785
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_463844",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:27:41.300Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791934056652,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 12154,
+                "output": 51,
+                "cacheRead": 173122,
+                "cacheWrite": 0,
+                "totalTokens": 185327,
+                "cost": {
+                  "total": 0.022290900000000002
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_411785",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:27:47.124Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791934061683,
+              "stopReason": "toolUse",
+              "usage": {
+                "input": 11757,
+                "output": 52,
+                "cacheRead": 183265,
+                "cacheWrite": 0,
+                "totalTokens": 195074,
+                "cost": {
+                  "total": 0.022757625000000004
+                }
+              },
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_375647",
+                  "name": "inspect_product"
+                }
+              ]
+            }
+          },
+          {
+            "type": "message",
+            "timestamp": "2026-10-13T23:28:25.589Z",
+            "message": {
+              "role": "assistant",
+              "provider": "nullform-gateway",
+              "model": "gemini-3.8-flash-high",
+              "timestamp": 1791934067495,
+              "stopReason": "stop",
+              "usage": {
+                "input": 8722,
+                "output": 245,
+                "cacheRead": 192997,
+                "cacheWrite": 0,
+                "totalTokens": 201964,
+                "cost": {
+                  "total": 0.021935025
+                }
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\n  \"findings\": [],\n  \"overall_correctness\": \"correct\",\n  \"overall_explanation\": \"Review of concurrent-feature-workspaces patch (worktrees.md and install-harness.test.mjs) confirms all changes are sound with zero defects introduced. Requirement R01 is satisfied: private detached worktree allocation in tools/workflow-workspaces.mjs provides separate working directories and indexes without mutating operator staged/unstaged changes. Requirement R02 is satisfied: serialized integration via withIntegrationLock safely merges feature branches onto the integration branch, explicitly retaining native conflict states on collision without destructive stash/reset operations. Requirement R03 is satisfied: public CLI surface (nullform workflow workspace/integrate) and project-owned adapter guidance are updated, and the OMP delete guard blocks screenshot-class destructive restorations in headless contexts. The test changes in install-harness.test.mjs isolate child process environments via isolatedChildEnv to prevent ~/.nullform lock/journal contention during parallel test runs and remove fragile template wording checks in accordance with verification policy. Lean lens evaluation: Lean already.\",\n  \"overall_confidence_score\": 1.0\n}"
+                }
+              ]
+            }
+          }
+        ],
+        "nativeEventsHash": "1b06065432420eb1e351186767862108acaab898fdcb3bcf4a31e62b25e3c6e5",
+        "eventProjectionHash": "db845095a42d2eae0b569f650d2159cbcd2ddc3b30220412dca1b84f4fde0afd"
+      },
+      "stageB": null,
+      "oracles": []
+    }
+  ],
+  "supersededArtifacts": []
+}
