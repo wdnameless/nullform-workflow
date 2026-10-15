@@ -1,99 +1,135 @@
-# NULLFORM WORKFLOW
+# Nullform Workflow
 
+Проверяемый процесс разработки поверх вашего AI-харнесса.
+
+[![npm](https://img.shields.io/npm/v/nullform-workflow?color=171717)](https://www.npmjs.com/package/nullform-workflow)
 [![CI](https://github.com/wdnameless/nullform-workflow/actions/workflows/repo-gate.yml/badge.svg)](https://github.com/wdnameless/nullform-workflow/actions/workflows/repo-gate.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![MIT](https://img.shields.io/badge/license-MIT-171717)](LICENSE)
 
-**Hard gates over promises. Verified tests over "done". Observability over guesswork.**
-**Строгие гейты вместо обещаний. Проверенные тесты вместо «готово».**
+[Установка](#установка) · [Как работать](#как-работать) · [Параллельные фичи](#параллельные-фичи) · [Ограничения](#что-важно-знать)
 
-Portable engineering harness for AI coding agents — 8 roles · 70 skills · 8 host adapters · Windows / Linux / macOS.
+## Обычный харнесс и Nullform
 
-![Live Dashboard](docs/assets/dashboard-graph.jpg)
+**Харнесс даёт агенту инструменты. Nullform добавляет правила работы и проверку результата.**
 
-## Install
+Вы продолжаете пользоваться своим клиентом, моделями и инструментами. Nullform не заменяет Claude Code, Codex или другой харнесс: он устанавливает workflow, роли, skills и CLI под выбранный клиент.
 
-Requires Node.js `>=18.19.0`. Public npm distribution requires certified authenticated release:
+| | Только ваш харнесс | Харнесс + Nullform |
+|---|---|---|
+| Процесс | Встроенные режимы клиента и ваши инструкции | Общий процесс T0–T3: от мелкой правки до программы из нескольких фич |
+| Готовность | Проверки, настроенные в клиенте или проекте | CLI проверяет обязательные артефакты; неполную задачу нельзя закрыть без явного отклонения |
+| Ревью | Возможности выбранного клиента | Требования → независимая приёмка → записи исполнения, привязанные к исходникам; автоматический запуск только в OMP |
+| Несколько агентов | Изоляция зависит от клиента и вашей настройки | Отдельные Git worktree и индексы, один интегратор, видимые конфликты |
+| Переносимость | Настройка каждого клиента отдельно | Один npm-пакет и выбор из 8 конфигурационных адаптеров |
+| Наблюдаемость | Логи и интерфейс клиента | Дополнительно: состояние workflow, dashboard и отчёт о проверках |
+
+Это сравнение подходов, а не утверждение, что другим харнессам недоступны тесты, ревью или worktree.
+
+## Установка
+
+Нужен Node.js ≥18.19; для проверенного развёртывания рекомендуются **Node.js 22 или 24 LTS**. Сам харнесс устанавливается отдельно.
 
 ```bash
 npm install -g --ignore-scripts nullform-workflow
-nullform init            # choose your harness: claude · codex · opencode · cursor · omp · openclaw · hermes · openhuman
-nullform doctor          # verify installation health
-nullform capabilities   # explicit 8 configuration adapters vs OMP-only automated review
-nullform workflow <cmd> # execute core Node-native workflow gates directly
-nullform evidence        # transparent comparative quality evidence
-nullform update          # update via npm, no git needed
+nullform init       # выберите свой харнесс
+nullform doctor     # проверьте установку
 ```
 
-Private registries use npm's `.npmrc` authentication. `nullform update --dry-run` previews the upgrade.
+Адаптеры: **Claude Code · Codex · OpenCode · Cursor · OMP · OpenClaw · Hermes · OpenHuman**.
 
-Process-interruption recovery journals installation identity and durably writes the committed marker before backup cleanup: precommit recovery rolls back files and identity, postcommit recovery retains them, and rollback conflicts preserve human edits and fail closed with `ECONFLICT`; power-loss recovery is not guaranteed.
-Target-tree and OMP home-extension assets that are unknown or human-modified are preserved while unchanged owned files update, and `init` emits an explicit `preserved-assets` warning; preserved custom behavior or security policy may need manual review.
-
-Headless (Cursor rules are project-scoped):
+Без диалога:
 
 ```bash
 nullform init --harness opencode --yes
 nullform init --harness cursor --project-root . --yes
 ```
 
-Developers: `git clone https://github.com/wdnameless/nullform-workflow.git && cd nullform-workflow && npm ci`.
+Cursor получает правила в выбранном проекте. `nullform capabilities` показывает, какие функции доступны вашему клиенту.
 
-## Work in tiers
+## Как работать
+
+Дайте задачу агенту в выбранном харнессе. Установленные инструкции задают процесс; CLI проверяет его обязательные артефакты.
+
+```text
+Задача → уровень сложности → работа → проверка → закрытие
+```
+
+| Уровень | Когда | Что требуется |
+|---|---|---|
+| T0 | Очевидная правка в 1–2 известных файлах | Объявить уровень |
+| T1 | Несколько файлов или незнакомый участок | Разобраться в коде и записать план проверки |
+| T2 | Новый модуль или архитектурное изменение | Требования R##, OpenSpec, независимая приёмка |
+| T3 | Несколько фич | T2 по частям и изолированные рабочие деревья |
+
+Например, ручное управление небольшой задачей:
 
 ```bash
-nullform doctor
-nullform workflow start --tier T1 --task "smoke check"
-nullform workflow artifact --kind recon --detail "Files: chosen task files; acceptance: run the task smoke check before close."
+nullform workflow start --tier T1 --task "Исправить экспорт отчёта"
+nullform workflow artifact --kind recon --detail "Файлы: модуль экспорта; проверка: запустить экспорт и проверить результат."
+# Выполните изменение и реальную проверку.
+nullform workflow check
 nullform workflow close
 ```
 
-| Tier | When | Gate |
-|---|---|---|
-| **T0** | 1–2 files, trivial fix | Tier declared → `close` |
-| **T1** | 3+ files, unfamiliar area | Recon before edits, verify before `close` |
-| **T2** | Architecture, new module | Manifest (`R##`) → OpenSpec → blind oracle ACCEPT |
-| **T3** | Multi-feature program | T2 per slice |
+Dashboard: `node tools/dashboard.mjs --url` в checkout исходников. [Пример интерфейса](docs/assets/dashboard-graph.jpg).
 
-## Concurrent features, one final branch
+## Параллельные фичи
 
-Requires Git on PATH. Allocate from the integration checkout before dispatching each writer:
+Один репозиторий, отдельная рабочая папка на фичу, одна итоговая ветка. Нужен Git в PATH.
 
 ```bash
-nullform workflow workspace --feature feature-a
-# Dispatch one worker with the returned absolute cwd and fresh feature context.
-# Worker finishes clean feature commits; only the parent integrates:
-nullform workflow integrate --feature feature-a
+nullform workflow workspace --feature export-report
+# Передайте агенту возвращённый cwd. Один агент-писатель на папку.
+# Агент заканчивает работу чистыми коммитами; затем интегратор выполняет:
+nullform workflow integrate --feature export-report
 ```
 
-Each feature gets a private detached worktree and index; one parent integrates into the recorded final branch. Duplicate allocation refuses, never grants a second writer reuse. The base is committed HEAD: unsaved prerequisites are not included; commit required shared prerequisites first. A dirty integration target refuses without stash. Textual conflicts stay visible for integrator-only manual resolution and integrated checks; semantic compatibility is not guaranteed.
+Общие предпосылки сначала закоммитьте: worktree создаётся из HEAD, а не из несохранённых правок. Повторное выделение той же фичи и интеграция в грязное дерево отклоняются без stash. Конфликты остаются видимыми для интегратора; смысловую совместимость изменений всё равно нужно проверять.
 
-On interruption or uncertain Git failure, keep the workspace/integration lock; before manual release, the operator must verify that its owner and Git/hook children have stopped, no integrator is active, and the lock identity is unchanged—there is no automatic repository repair.
+## Обновление
 
-`git checkout stash@{0} -- src/App.tsx` replaces a whole file; it does not merge or preserve concurrent edits. OMP's native delete-guard requires explicit interactive authorization for identified checkout/restore/stash working-tree/index replacement and blocks it headlessly, without changing other headless permissions. Other host adapters provide the Git-backed portable CLI and guidance, not native interception. Neither regex matching nor worktree dispatch sandboxes arbitrary shell commands or direct filesystem writes.
+```bash
+nullform update --dry-run   # посмотреть доступное обновление
+nullform update --yes       # обновить npm-пакет и повторно применить настройку харнесса
+```
 
+Выбранный харнесс и путь сохраняются. Неизвестные и изменённые человеком файлы сохраняются с предупреждением `preserved-assets`; неизменённые файлы, которыми владеет Nullform, обновляются. Сохранённые пользовательские правила могут требовать ручной сверки.
 
-## Why it works
+**Фонового автообновления нет:** команда запускается явно. Приватные реестры используют стандартную аутентификацию npm через `.npmrc`.
 
-- **Lane gates** — PRs and pushes to `main`/`master` validate tier artifacts; T1 requires committed recon, T2/T3 require current review receipts.
-- **Blind oracle** — independent acceptance against your verbatim requirements and the running product, never against our spec.
-- **Session retro** — ranks real session logs by hidden waste (`node tools/session-retro.mjs scan`).
-- **JEV hints** — a tiny decision model suggests one installed skill before a turn (≥0.80 confidence, else silence). Skill recommendation cost on benchmark calibration vs classifier baseline; details in [`docs/jev.md`](docs/jev.md).
+## Что важно знать
 
-## Quality evidence & honest limits
+- Базовые CLI-гейты работают на Node.js во всех 8 адаптерах. Автоматическое native-ревью требует **OMP + Bun**; остальные адаптеры получают конфигурацию, инструкции и переносимый CLI. Поддержка адаптера не означает проверку всех функций стороннего клиента.
+- В OMP guard запрашивает подтверждение для распознанных опасных Git-восстановлений и блокирует их без интерактивного подтверждения. Это не sandbox: произвольные команды и прямые записи в файлы не становятся безопасными.
+- Восстановление установки проверено при прерывании процесса, но сохранность при потере питания не гарантируется. Неопределённый lock интеграции не удаляется автоматически: перед ручным снятием проверьте владельца, дочерние Git/hook-процессы, отсутствие активного интегратора и неизменность lock.
 
-`nullform evidence` (or `node bin/nullform.mjs evidence` in source tree) provides transparent comparative evidence:
-- **Claim status**: `not-proven`. This release makes no positive causal claim that workflow skills improve software development quality.
-- **Retained comparisons**: Across four constructed task pairs on one model with a single repetition, three review pairs showed equal accuracy (3/3 each) with ~2x candidate tariff spend; one workflow pair succeeded in 5 requests on baseline and halted at the 6-request cap on candidate without a final report.
-- **Accounting bounds**: Costs reflect fixed SDK catalog tariffs, not independently verified provider invoices.
-- **Zero additional paid A/B**: No benchmark inference runs were dispatched for this release.
+### Доказательства, а не обещания
 
-## Reference
+Общее улучшение качества, скорости или стоимости разработки пока **не доказано** (`not-proven`). В четырёх сохранённых сравнениях на одной модели три пары дали одинаковую точность при примерно двойном тарифном расходе кандидата; в одной baseline завершил задачу за 5 запросов, а кандидат остановился на лимите 6. SDK-тарифы не сверены со счетами провайдера. Новых платных A/B для релиза не запускали.
 
-- Spec: [`core/PORTABLE.md`](core/PORTABLE.md) · Glossary: [`CONTEXT.md`](CONTEXT.md) · Roles: [`agent/agents/`](agent/agents/)
-- Gates: `node tools/verify.mjs --profile verify` (or `--profile audit`) · Deterministic tests: `node --test tools/tests/*.test.mjs` (regression tests verify code stability and safety invariants, not causal AI quality improvement; see `nullform evidence`) · Archive certification binds each candidate tarball to repository source by enumerating the actual extracted filenames (including Unicode names) and applying ownership and per-file hash checks to every extracted file.
-- Capabilities: `nullform capabilities` separates Node-native core gates and 8 host configuration adapters from OMP/Bun-specific native automated review.
-- Dashboard: `node tools/dashboard.mjs --url`
+[Приёмка npm-релиза](openspec/changes/portable-product-release/oracle-final-publication.md) · [Приёмка параллельной работы](openspec/changes/concurrent-feature-workspaces/oracle-final-publication.md) · [Исходные сравнения](openspec/changes/skill-benefit-evaluation/evidence/observed-eight-sessions.json)
 
-## License
+В checkout Nullform отчёт доступен через `nullform evidence`. Из другой папки укажите `nullform evidence --root <путь-к-checkout-или-установленному-пакету>`: команда читает данные из текущей папки или явного `--root`, а не из любого проекта автоматически.
 
-Project code is licensed under MIT (see [LICENSE](LICENSE)). Third-party bundled assets retain their upstream licenses: Apache 2.0 for `skills/skill-creator/`, `skills/ui-styling/`, and `skills/frontend-design-anthropic/`, SIL Open Font License 1.1 for fonts under `skills/ui-styling/canvas-fonts/`.
+<details>
+<summary>Для разработки и аудита</summary>
+
+```bash
+git clone https://github.com/wdnameless/nullform-workflow.git
+cd nullform-workflow
+npm ci
+node tools/verify.mjs --profile verify   # или --profile audit
+node --test tools/tests/*.test.mjs
+```
+
+Тесты проверяют поведение кода и безопасность, а не причинный эффект AI-workflow. Сертификация сверяет владение и хеш каждого извлечённого файла npm-архива, включая Unicode-имена. PR/push-гейты проверяют артефакты уровня; T2/T3 требуют актуальных записей ревью. Их нужно подключить в CI проекта.
+
+[Переносимый контракт](core/PORTABLE.md) · [Термины](CONTEXT.md) · [Роли](agent/agents/) · [JEV: рекомендации skills и калибровка](docs/jev.md)
+
+Ретроспектива реальных логов: `node tools/session-retro.mjs scan`. JEV предлагает один установленный skill при уверенности ≥0.80, иначе не добавляет рекомендацию.
+
+</details>
+
+## Лицензия
+
+[MIT](LICENSE). Включённые сторонние assets сохраняют свои лицензии: Apache 2.0 для `skill-creator`, `ui-styling`, `frontend-design-anthropic`; SIL Open Font License 1.1 для шрифтов `ui-styling/canvas-fonts`.
