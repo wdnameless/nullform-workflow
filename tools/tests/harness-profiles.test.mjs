@@ -297,6 +297,16 @@ function probeFixture(box, output) {
   chmodSync(join(box.bin, "hermes"), 0o755);
 }
 
+// This is a POSIX-only probe-env test: Windows cannot execute the shebang fixture.
+function probeLocalAppDataFixture(box) {
+  const seenPath = join(box.root, "probe-localappdata.jsonl");
+  const script = `#!${process.execPath}\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(seenPath)}, JSON.stringify({localappdata: process.env.LOCALAPPDATA || null}) + '\\n');\nif (process.argv[2] === '--version') console.log('hermes 1.2.3');\nelse if (process.argv[2] === 'config') console.log(require('node:path').join(process.env.HERMES_HOME, 'config.yaml'));\nelse console.log('Built-in toolsets (cli):\\n  \\u2713 enabled  kanban  Kanban');\n`;
+  writeFileSync(join(box.bin, "hermes"), script);
+  chmodSync(join(box.bin, "hermes"), 0o755);
+  return seenPath;
+}
+
+
 test("explicit probe accepts only pinned built-in CLI rows and never equates todo, plugin or MCP entries with native task state", { skip: process.platform === "win32" }, (t) => {
   const box = sandbox(t);
   probeFixture(box, ["Built-in toolsets (cli):", "  \u001b[32m✓ enabled\u001b[0m  todo  Task Planning", "  ✗ disabled  kanban  Kanban", "  ✓ enabled  delegation  Task Delegation", "  ✓ enabled  terminal  Terminal & Processes", "  ✗ disabled  skills  Skills", "", "Plugin toolsets (cli):", "  ✓ enabled  kanban  Plugin cannot enable native board", "", "MCP servers:", "  ✓ enabled  kanban  secret-provider-details-do-not-retain"].join("\n"));
@@ -354,4 +364,18 @@ test("probe output overflow fails explicitly without retaining output or treatin
   assert.equal(report.probe.commands[2].status, "failed");
   assert.equal(report.capabilities.taskState.status, "unknown");
   assert.equal(JSON.stringify(report).includes("secret-output"), false);
+});
+
+test("probe LOCALAPPDATA keeps inside-home values and falls back for outside values", { skip: process.platform === "win32" }, (t) => {
+  const box = sandbox(t);
+  const seenPath = probeLocalAppDataFixture(box);
+  const inside = join(box.home, "AppData", "Local");
+  inspectHarness({ harness: "hermes", userHome: box.home, hostHome: box.hostHome, env: { ...box.env, LOCALAPPDATA: inside }, probe: true });
+  const first = JSON.parse(readFileSync(seenPath, "utf8").trim().split("\n").at(-1));
+  assert.equal(first.localappdata, inside);
+  rmSync(seenPath, { force: true });
+  const outside = join(box.root, "foreign-localappdata");
+  inspectHarness({ harness: "hermes", userHome: box.home, hostHome: box.hostHome, env: { ...box.env, LOCALAPPDATA: outside }, probe: true });
+  const second = JSON.parse(readFileSync(seenPath, "utf8").trim().split("\n").at(-1));
+  assert.equal(second.localappdata, join(box.home, "AppData", "Local"));
 });

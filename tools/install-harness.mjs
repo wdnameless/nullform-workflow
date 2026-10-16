@@ -406,7 +406,7 @@ function installHarness(options = {}) {
   // Recover before collision checks: an interrupted first apply has no published skill ownership yet.
   if ((!options.dryRun || options.recover) && !options.lock && existsSync(getDeploymentJournalPath(userHome))) {
     const recoveryLock = acquireDeploymentLock({
-      userHome, targetRoot, projectRoot, hostHome: hostHome || hostHomes.hermes, harness: selectedHarness,
+      userHome, targetRoot, projectRoot, hostHome: hostHome || hostHomes.hermes, hostHomes, harness: selectedHarness,
     });
     recoveryLock.release();
     const restored = readInstallationState(userHome);
@@ -428,7 +428,7 @@ function installHarness(options = {}) {
   const isOwnJournal = !options.dryRun && !options.journal;
 
   if (!options.dryRun) {
-    lock = options.lock || acquireDeploymentLock({ userHome, targetRoot, projectRoot, hostHome: hostHome || hostHomes.hermes, harness: selectedHarness, dryRun: options.dryRun });
+    lock = options.lock || acquireDeploymentLock({ userHome, targetRoot, projectRoot, hostHome: hostHome || hostHomes.hermes, hostHomes, harness: selectedHarness, dryRun: options.dryRun });
     journal = options.journal || new DeploymentJournal({
       userHome,
       targetRoot,
@@ -437,6 +437,7 @@ function installHarness(options = {}) {
       targetVersion: options.targetVersion,
       dryRun: options.dryRun,
       hostHome: hostHome || hostHomes.hermes,
+      hostHomes,
     });
     journal.start();
   }

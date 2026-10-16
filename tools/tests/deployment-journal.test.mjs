@@ -323,3 +323,56 @@ test("journal-declared and ambient host homes never authorize an external recove
     assert.equal(existsSync(journalPath), true);
   } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
 });
+
+test("cross-profile caller hostHome is rejected with ESCOPE while matching caller recovers", async () => {
+  const fixture = transactionFixture({ identity: false, nativeProfile: true });
+  try {
+    await killAtBoundary(fixture, { boundary: "before-identity" });
+    const journalPath = getDeploymentJournalPath(fixture.userHome);
+    const foreignHome = join(fixture.sandbox, "foreign-profile");
+    mkdirSync(foreignHome, { recursive: true });
+    assert.throws(() => recoverAbandonedJournal(fixture.userHome, {
+      targetRoot: fixture.targetRoot, hostHome: foreignHome, harness: "opencode",
+    }), { code: "ESCOPE" });
+    assert.equal(existsSync(journalPath), true);
+    const recovery = recoverAbandonedJournal(fixture.userHome, {
+      targetRoot: fixture.targetRoot, hostHome: fixture.hostHome, harness: "opencode",
+    });
+    assert.equal(recovery.recovered, true);
+    assert.equal(existsSync(journalPath), false);
+  } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+});
+
+test("absent-hostHome legacy journal recovers without a caller host scope", async () => {
+  const fixture = transactionFixture({ identity: false });
+  try {
+    await killAtBoundary(fixture, { boundary: "before-identity" });
+    const journalPath = getDeploymentJournalPath(fixture.userHome);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    assert.ok(journal.hostHome === undefined || journal.hostHome === null);
+    const recovery = recoverAbandonedJournal(fixture.userHome, { targetRoot: fixture.targetRoot });
+    assert.equal(recovery.recovered, true);
+    assert.equal(existsSync(journalPath), false);
+  } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+});
+
+test("all-mode journal authorizes every target home and recovery verifies the same set", async () => {
+  const fixture = transactionFixture({ identity: false, nativeProfile: true });
+  try {
+    await killAtBoundary(fixture, { boundary: "before-identity" });
+    const journalPath = getDeploymentJournalPath(fixture.userHome);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    journal.harness = "all";
+    journal.hostHomes = [fixture.hostHome];
+    assert.deepEqual([...journal.hostHomes].sort(), [fixture.hostHome].sort());
+    assert.throws(() => recoverAbandonedJournal(fixture.userHome, {
+      targetRoot: fixture.targetRoot, hostHomes: [join(fixture.sandbox, "other-profile")], harness: "all",
+    }), { code: "ESCOPE" });
+    assert.equal(existsSync(journalPath), true);
+    const recovery = recoverAbandonedJournal(fixture.userHome, {
+      targetRoot: fixture.targetRoot, hostHomes: [fixture.hostHome], harness: "all",
+    });
+    assert.equal(recovery.recovered, true);
+    assert.equal(existsSync(journalPath), false);
+  } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+});

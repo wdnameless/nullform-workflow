@@ -118,13 +118,6 @@ export function prepareHermesActivation({ hostHome, slashRoot, report, managedFi
       activation: { status: "manual", detail: "No native activation; skills tools/HERMES_IGNORE_RULES or declared support prevent loading." },
     };
   }
-  const disabledPath = join(hostHome, ".skills-disabled.json");
-  if (existsSync(disabledPath)) {
-    let disabled;
-    try { disabled = JSON.parse(readFileSync(disabledPath, "utf8")); } catch { throw new Error("Malformed Hermes disabled skill registry"); }
-    if (!Array.isArray(disabled.disabled)) throw new Error("Malformed Hermes disabled skill registry");
-    if (disabled.disabled.includes("nullform-workflow")) throw new Error("Hermes quality skill is user-disabled; refusing to re-enable it.");
-  }
   const policy = getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter", report);
   const content = `---\nname: nullform-workflow\ndescription: Native-first task quality and truthful result verification.\n---\n\n${policy}`;
   const writes = [[skillPath, content], [configPath, config]];
