@@ -49,8 +49,8 @@ function createIO(inputText = null, isTTY = false) {
   };
 }
 
-test("parseCliArgs and resolveMenuSelection cover all 8 harnesses and reject bad flags", () => {
-  assert.equal(HARNESS_CHOICES.length, 8);
+test("parseCliArgs and resolveMenuSelection cover 8 named harnesses plus declarative custom and reject bad flags", () => {
+  assert.equal(HARNESS_CHOICES.length, 9);
   assert.equal(HARNESS_MENU_ITEMS.length, 8);
 
   for (let i = 1; i <= 8; i++) {
@@ -58,15 +58,16 @@ test("parseCliArgs and resolveMenuSelection cover all 8 harnesses and reject bad
     assert.equal(resolveMenuSelection(String(i)), expected);
     assert.equal(resolveMenuSelection(expected.toUpperCase()), expected);
   }
+  assert.equal(resolveMenuSelection("custom"), "custom");
+  assert.equal(resolveMenuSelection("9"), null);
   const opencodeItem = HARNESS_MENU_ITEMS.find((item) => item.id === "opencode");
   const cursorItem = HARNESS_MENU_ITEMS.find((item) => item.id === "cursor");
-  assert.match(opencodeItem.description, /~\/\.config\/opencode\/opencode\.json/);
+  assert.match(opencodeItem.description, /Native configuration and adaptive AGENTS\.md/);
   assert.doesNotMatch(opencodeItem.description, /~\/\.opencode\//);
   assert.match(cursorItem.description, /<project>\/\.cursor\/rules\/00-workflow\.mdc/);
   assert.match(cursorItem.description, /project-scoped/);
   assert.doesNotMatch(cursorItem.description, /~\/\.cursor\/rules/);
   assert.equal(resolveMenuSelection("0"), null);
-  assert.equal(resolveMenuSelection("9"), null);
   assert.equal(resolveMenuSelection("auto"), null);
   assert.equal(resolveMenuSelection("all"), null);
   assert.equal(resolveMenuSelection("q"), null);
@@ -166,7 +167,7 @@ test("init interactive menu selects harness, previews plan, confirms and persist
     assert.equal(state.root, customRoot);
     assert.equal(state.userHome, tmpHome);
     assert.deepEqual(state.managedFiles, { [join(tmpHome, ".config", "opencode", "opencode.json")]: "hash123" });
-    assert.match(io.getStdout(), /~\/\.config\/opencode\/opencode\.json/);
+    assert.match(io.getStdout(), /Native configuration and adaptive AGENTS\.md/);
     assert.match(io.getStdout(), /<project>\/\.cursor\/rules\/00-workflow\.mdc/);
     assert.match(io.getStdout(), /SETUP \/ host configuration needed/);
   } finally {
