@@ -2,6 +2,8 @@
 
 Настоящее руководство определяет абстрактную спецификацию, протоколы взаимодействия и роли независимого ядра workflow, абстрагированного от конкретных сред исполнения (Oh My Pi, Paseo, CI-раннеры или произвольные AI-агенты).
 
+**Граница применения:** строгий coding-протокол ниже сохраняется для OMP и явного portable-режима сложной разработки. Адаптивные non-OMP профили — **UNRELEASED/source-only**, не часть опубликованного npm 1.2.0. Они переиспользуют доступные native-механизмы и проверяют фактический результат без обязательных интервью, OpenSpec, второго task board и dashboard для каждого общего запроса. Наличие установленного файла не доказывает, что клиент его загрузил.
+
 ---
 
 ## 1. Абстрактные возможности среды (Capability Requirements)
@@ -22,7 +24,7 @@
 
 ## 2. Протокол дорожек выполнения (Work Lanes Protocol)
 
-Все задачи классифицируются по масштабу и рискам:
+В строгом OMP/явном portable coding-режиме задачи классифицируются по масштабу и рискам:
 
 - **T0 (Fast Lane)**: 1–2 известных файла, тривиальное локальное изменение. Прямая правка одним исполнителем.
 - **T1 (Standard Lane)**: 3+ файлов или незнакомая область. Быстрое предварительное исследование, микроплан, 1–2 специализированных исполнителя с непересекающимися файлами.
@@ -60,7 +62,7 @@ CONCERNS/BLOCKERS: <риски или блокеры>
 
 ## 5. Адаптеры сред выполнения (Environment Adapters)
 
-Настоящая поставка включает и верифицирует только **адаптер для Oh My Pi (OMP)** в качестве основной рабочей среды и **опциональный интеграционный профиль для Paseo**. Генераторы адаптеров для других сред (`install-harness.mjs` для Claude Code, Codex, OpenCode, Cursor) формируют базовые инструкции вызова инструментов, но глубокая интеграция жизненного цикла этих сред является не верифицированной «из коробки» и требует адаптации под конкретный раннер. Генераторы адаптеров не должны требовать несуществующих артефактов (например, `--kind verification` отсутствует в `workflow.mjs`).
+Один пакет содержит восемь именованных конфигурационных адаптеров: Claude Code, Codex, OpenCode, Cursor, OMP, OpenClaw, Hermes, OpenHuman. Native автоматическое ревью остаётся **OMP + Bun only**; установка адаптера, декларация возможностей и успешный doctor не равны исполнению задачи в стороннем клиенте. Paseo — опциональный профиль, не девятый именованный харнесс.
 
 - **Oh My Pi (OMP) — Основной адаптер (Primary Binding, Shipped & Verified)**:
   - Реализует ролевые инструкции (`agent/AGENTS.md`, `agent/agents/*.md`).
@@ -71,3 +73,46 @@ CONCERNS/BLOCKERS: <риски или блокеры>
   - Предоставляет профили агентов (`paseo/profiles.json`) для графической оболочки Paseo.
   - Устанавливается опционально и идемпотентно через `paseo/setup-paseo.ps1` в `daemon.agentProfiles`.
   - Предоставляет шаблон конфигурации долгоживущих процессов воркспейса (`templates/paseo.json`).
+
+### Адаптивный контракт (исходники, ещё не опубликован)
+
+`node bin/nullform.mjs inspect --harness <id> --user-home <sandbox-user> --host-home <sandbox-host> --json` возвращает выбранный профиль, источники evidence, решения модулей и ограничения runtime readiness. По умолчанию inspection не пишет файлы и не запускает host-процессы. Только явно запрошенный Hermes `inspect --probe` допускает ограниченные version/path/tool-list команды; bootstrap клиента может иметь побочные эффекты, поэтому проверка проводится в независимом home/root. Ни auth-файлы, ни модельные запросы не являются способом обнаружения возможностей.
+
+| Evidence | Действие профиля |
+|---|---|
+| Native taskState/delegation available с configured/declared evidence | `reuse`: native tracker/dispatch с проверкой реальной доступности в сессии, без второго agent loop |
+| taskState явно unavailable | `enable`: существующие `nullform workflow start/artifact/check/close` для явной сложной разработки, не обязательное состояние общего запроса |
+| delegation явно unavailable | `manual`: один агент или передача оператору с требованиями и проверяемым результатом |
+| worktree явно unavailable | `enable`: portable `workspace/integrate` при наличии Git, committed base и clean target; иначе `manual` с недостающей предпосылкой |
+| taskState/delegation/worktree unknown | `manual`: получить evidence или явно выбрать portable tools, не трактовать unknown как отсутствие |
+| verification unavailable/unknown | `enable`: лёгкая проверка реального результата; не новый framework и не обязательная coding-spec |
+| terminal/browser/MCP | Сохранить native-инструмент либо сообщить ручную предпосылку; не устанавливать сервисы автоматически |
+
+Архитектурный компромисс: декларативный контракт расширяет совместимость без исполнения произвольных discovery-команд. Он не может доказать загрузку инструкций неизвестным клиентом. Пример — `templates/host-manifest.example.json`; для custom обязательны `--harness custom --host-manifest <file> --project-root <project>`. Схема:
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "team-client",
+  "instructionsFile": "instructions/workflow.md",
+  "capabilities": {
+    "taskState": "available",
+    "delegation": "unavailable",
+    "verification": "unknown"
+  }
+}
+```
+
+Допустимые capability keys: taskState, delegation, worktree, terminal, browser, skills, verification, mcp; значения available/unavailable/unknown. Неизвестные поля, команды, абсолютные/escaping/ADS/control-character пути запрещены до записи. `instructionsFile` ограничен проектом. Нормализованные host home и manifest сохраняются в installation identity для последующих doctor/update; смена переменных окружения не должна перенаправлять установленный профиль.
+
+### Hermes: реальный consumer, не домашний AGENTS.md
+
+Поставка adaptive-политики — ровно один сгенерированный `<hostHome>/skills/nullform-workflow/SKILL.md` с native frontmatter и регистрацией `nullform-workflow` в YAML `skills.auto_load`. Человеческие элементы списка, комментарии и прочие настройки сохраняются; чужой одноимённый skill, некорректные skills/auto_load и отключённый loader не перезаписываются и не включаются молча. Недоступная загрузка требует явного manual/project-instruction действия. Домашний AGENTS.md сам по себе не доставляет глобальную политику; SOUL — identity, новая установка его не изменяет и не добавляет MCP/полный каталог skills.
+
+Native загрузка зависит от skills tools и `HERMES_IGNORE_RULES`. Делегированные дети могут пропускать context/skills: родитель передаёт ограниченные требования, ограничения и критерии проверки через native delegation context. Признанные owned legacy-блоки удаляются только с доказательством владения; изменённые/неизвестные assets сохраняются с предупреждением, а не объявляются отключёнными.
+
+### Граница доказательств
+
+CLI-тесты выполняются с отдельными HOME/USERPROFILE/NULLFORM_USER_HOME/LOCALAPPDATA/HERMES_HOME. Именованный Hermes-профиль может разделять Kanban root, поэтому имя профиля не заменяет независимый home/root. Native Hermes executable/modules/process в текущей среде недоступны: YAML/frontmatter, исходники loader и sandbox apply не доказывают live session.
+
+Новых платных A/B нет; общая польза для качества остаётся `not-proven`, в том числе при меньшем overhead. В сравнении установки отдельно учитываются зарегистрированные MCP, байты managed-инструкций, entries skills и время; байты — proxy, единичные timings не benchmark, установка assets не active context load. Будущая оценка — отдельно разрешённые пары baseline/adaptive с одинаковыми задачами, моделью, инструментами, лимитами, повторениями, независимыми result checks и сохранением отрицательных исходов; стоимость и качество не выводятся из размера промпта.

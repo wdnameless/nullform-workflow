@@ -24,22 +24,23 @@
  *   --help, -h            Show help
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, lstatSync, readlinkSync, symlinkSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, lstatSync, readlinkSync, symlinkSync, realpathSync, statSync } from "node:fs";
 import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, preflightAllConfigs, hashContent, isCommandInPath } from "./harness-config.mjs";
-import { applyHarnessAdapter } from "./harness-adapters.mjs";
+import { applyHarnessAdapter, prepareHermesActivation } from "./harness-adapters.mjs";
 import { validateRootPath } from './worktree-snapshot.mjs';
-import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement } from './installation-state.mjs';
-import { acquireDeploymentLock, DeploymentJournal, safeAtomicWrite } from './deployment-journal.mjs';
+import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement, readInstallationState } from './installation-state.mjs';
+import { acquireDeploymentLock, DeploymentJournal, safeAtomicWrite, getDeploymentJournalPath } from './deployment-journal.mjs';
+import { resolveHostHome, validateHostManifest, inspectHarness } from "./harness-profiles.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..");
 
-const SUPPORTED_HARNESSES = [...CONCRETE_HARNESSES, 'all', 'auto'];
+const SUPPORTED_HARNESSES = [...CONCRETE_HARNESSES, 'custom', 'all', 'auto'];
 
 function isStrictlyInside(parent, child) {
   const rel = relative(resolve(parent), resolve(child));
@@ -48,15 +49,13 @@ function isStrictlyInside(parent, child) {
 
 function detectHarness({ userHome = homedir(), env = process.env } = {}) {
   const isDefaultHome = resolve(userHome) === resolve(homedir());
-  if (existsSync(join(userHome, ".claude"))) return "claude";
-  if (existsSync(join(userHome, ".codex"))) return "codex";
-  if (existsSync(join(userHome, ".config", "opencode")) || existsSync(join(userHome, ".opencode"))) return "opencode";
-  if (existsSync(join(userHome, ".cursor"))) return "cursor";
-  if (existsSync(join(userHome, ".openclaw", "openclaw.json")) || (isDefaultHome && isCommandInPath("openclaw"))) return "openclaw";
-  const hasHermesHome = env.HERMES_HOME && (isDefaultHome || isStrictlyInside(userHome, env.HERMES_HOME) || resolve(env.HERMES_HOME) === resolve(userHome));
-  if (existsSync(join(userHome, ".hermes", "config.yaml")) || hasHermesHome || (isDefaultHome && isCommandInPath("hermes"))) return "hermes";
-  if (existsSync(join(userHome, ".openhuman")) || (isDefaultHome && isCommandInPath("openhuman-core")) || (isDefaultHome && isCommandInPath("openhuman"))) return "openhuman";
-  if (isDefaultHome && isCommandInPath("omp")) return "omp";
+  const home = harness => resolveHostHome({ harness, userHome, env }).path;
+  for (const harness of ["claude", "codex", "opencode", "cursor"]) {
+    if (existsSync(home(harness))) return harness;
+  }
+  if (existsSync(join(home("openclaw"), "openclaw.json")) || (isDefaultHome && isCommandInPath("openclaw"))) return "openclaw";
+  if (existsSync(join(home("hermes"), "config.yaml")) || (isDefaultHome && isCommandInPath("hermes"))) return "hermes";
+  if (existsSync(home("openhuman")) || (isDefaultHome && (isCommandInPath("openhuman-core") || isCommandInPath("openhuman")))) return "openhuman";
   return "omp";
 }
 
@@ -314,6 +313,12 @@ function parseCliArgs(argv) {
     if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--dry-run") options.dryRun = true;
     else if (arg === "--json") options.json = true;
+    else if (arg === "inspect") options.command = "inspect";
+    else if (arg === "--probe") options.probe = true;
+    else if (arg === "--host-home") options.hostHome = takeVal(i++, "--host-home");
+    else if (arg.startsWith("--host-home=")) options.hostHome = arg.slice("--host-home=".length);
+    else if (arg === "--host-manifest") options.hostManifest = takeVal(i++, "--host-manifest");
+    else if (arg.startsWith("--host-manifest=")) options.hostManifest = arg.slice("--host-manifest=".length);
     else if (arg === "--harness") options.harness = takeVal(i++, "--harness");
     else if (arg.startsWith("--harness=")) options.harness = arg.slice("--harness=".length);
     else if (arg === "--root") options.root = takeVal(i++, "--root");
@@ -324,14 +329,28 @@ function parseCliArgs(argv) {
     else if (arg.startsWith("--user-home=")) options.userHome = arg.slice("--user-home=".length);
     else throw new Error(`Unknown option "${arg}"`);
   }
+  if (options.probe && options.command !== "inspect") throw new Error("--probe is inspect-only");
   return options;
 }
 
+export function loadHostManifest(value, harness) {
+  if (value === null || value === undefined || value === "") {
+    if (harness === "custom") throw new Error("Custom host requires --host-manifest and --project-root");
+    return undefined;
+  }
+  let parsed = value;
+  if (typeof value === "string") {
+    if (statSync(value).size > 32768) throw new Error("Host manifest exceeds 32 KiB");
+    try { parsed = JSON.parse(readFileSync(value, "utf8")); }
+    catch { throw new Error("Host manifest must be valid JSON"); }
+  }
+  return validateHostManifest(parsed, { custom: harness === "custom" });
+}
 
 function installHarness(options = {}) {
-  const userHome = options.userHome
-    ? resolve(options.userHome)
-    : process.env.USERPROFILE || process.env.HOME || homedir();
+  const env = options.env || process.env;
+  if (options.probe) throw new Error("--probe is inspect-only");
+  const userHome = resolve(options.userHome || env.NULLFORM_USER_HOME || env.USERPROFILE || env.HOME || homedir());
 
   const rawHarness = options.harness || "auto";
   if (!SUPPORTED_HARNESSES.includes(rawHarness)) {
@@ -340,10 +359,13 @@ function installHarness(options = {}) {
     );
   }
 
-  const selectedHarness = rawHarness === "auto" ? detectHarness({ userHome }) : rawHarness;
+  const selectedHarness = rawHarness === "auto" ? detectHarness({ userHome, env }) : rawHarness;
+  if (selectedHarness === "all" && (options.hostHome || options.hostManifest)) throw new Error("Select one harness when using profile overrides");
+  const hostManifest = loadHostManifest(options.hostManifest, selectedHarness);
+  if (selectedHarness === "custom" && !options.projectRoot) throw new Error("Custom host requires --project-root");
   const rawTargetRoot = options.root
     ? resolve(options.root)
-    : getDefaultRoot(selectedHarness, userHome);
+    : getDefaultRoot(selectedHarness, userHome, { hostHome: options.hostHome, env });
   const targetRoot = validateRootPath(rawTargetRoot);
   const slashRoot = targetRoot.replace(/\\/g, "/");
   const projectRoot = options.projectRoot ? validateRootPath(resolve(options.projectRoot)) : null;
@@ -361,7 +383,14 @@ function installHarness(options = {}) {
       ? ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman"]
       : [selectedHarness];
 
-  const shouldWriteHome = Boolean(options.userHome || !options.root);
+  const shouldWriteHome = Boolean(options.hostHome || options.userHome || !options.root);
+  const hostHomes = Object.fromEntries(targetHarnesses.map(h => [h, resolveHostHome({ harness: h, userHome, hostHome: options.hostHome, env }).path]));
+  const hostHome = hostHomes[selectedHarness];
+  for (const h of targetHarnesses) {
+    if (h !== "omp" && resolve(targetRoot) === resolve(hostHomes[h])) {
+      throw new Error("Use a separate workflow installation root, not the native host home; bulk package assets must not become a native home skill catalogue.");
+    }
+  }
 
   preflightFilesystemConfinement({
     harnesses: targetHarnesses,
@@ -370,10 +399,28 @@ function installHarness(options = {}) {
     userHome,
     agentsHome,
     shouldWriteHome,
-    options,
+    hostHomes, hostManifest,
   });
 
-  preflightAllConfigs({ harnesses: targetHarnesses, targetRoot, projectRoot, userHome });
+  // An explicitly requested apply may first recover a dead transaction. A public dry-run never does.
+  // Recover before collision checks: an interrupted first apply has no published skill ownership yet.
+  if ((!options.dryRun || options.recover) && !options.lock && existsSync(getDeploymentJournalPath(userHome))) {
+    const recoveryLock = acquireDeploymentLock({
+      userHome, targetRoot, projectRoot, hostHome: hostHome || hostHomes.hermes, harness: selectedHarness,
+    });
+    recoveryLock.release();
+    const restored = readInstallationState(userHome);
+    options = {
+      ...options,
+      managedFiles: restored?.harness === selectedHarness && resolve(restored.root) === resolve(targetRoot) ? restored.managedFiles : undefined,
+    };
+  }
+  const reports = Object.fromEntries(targetHarnesses.map(h => [h, inspectHarness({ harness: h, userHome, hostHome: hostHomes[h], hostManifest, projectRoot, env })]));
+  const report = reports[selectedHarness];
+  preflightAllConfigs({ harnesses: targetHarnesses, targetRoot, projectRoot, userHome, hostHomes, hostManifest });
+  const hermesActivation = targetHarnesses.includes("hermes") ? prepareHermesActivation({
+    hostHome: hostHomes.hermes, slashRoot, report: reports.hermes, managedFiles: options.managedFiles, env, translateStdioEntry,
+  }) : null;
 
   let lock = null;
   let journal = null;
@@ -381,7 +428,7 @@ function installHarness(options = {}) {
   const isOwnJournal = !options.dryRun && !options.journal;
 
   if (!options.dryRun) {
-    lock = options.lock || acquireDeploymentLock({ userHome, targetRoot, harness: selectedHarness, dryRun: options.dryRun });
+    lock = options.lock || acquireDeploymentLock({ userHome, targetRoot, projectRoot, hostHome: hostHome || hostHomes.hermes, harness: selectedHarness, dryRun: options.dryRun });
     journal = options.journal || new DeploymentJournal({
       userHome,
       targetRoot,
@@ -389,6 +436,7 @@ function installHarness(options = {}) {
       harness: selectedHarness,
       targetVersion: options.targetVersion,
       dryRun: options.dryRun,
+      hostHome: hostHome || hostHomes.hermes,
     });
     journal.start();
   }
@@ -400,6 +448,10 @@ function installHarness(options = {}) {
       root: targetRoot,
       ...(projectRoot ? { projectRoot } : {}),
       userHome,
+      ...(hostHome ? { hostHome } : {}),
+      ...(hostManifest ? { hostManifest } : {}),
+      ...(report ? { profile: report } : { profiles: reports }),
+      warnings: [],
       dryRun: Boolean(options.dryRun),
       filesToCopy: [],
       adapters: [],
@@ -453,24 +505,18 @@ function installHarness(options = {}) {
       }
     };
     const readExisting = (p) => (existsSync(p) ? readFileSync(p, "utf8") : "");
-    const copyHomeSkills = (destDir) => {
-      const src = join(REPO_ROOT, "skills");
-      plan.filesToCopy.push(...installSkills(src, destDir, slashRoot, userHome, assetContext, {
-        targetRoot,
-        projectRoot,
-      }));
-    };
 
     for (const h of targetHarnesses) {
       applyHarnessAdapter(h, {
         targetRoot, projectRoot, slashRoot, userHome, options, shouldWriteHome,
-        writeAdapter, readExisting, copyHomeSkills, plan, assetContext, copyAsset,
+        hostHome: hostHomes[h], report: reports[h], hostManifest, hermesActivation,
+        writeAdapter, readExisting, plan, assetContext, copyAsset,
         copyDirRecursive, installSkills, installRoleRoster, translateStdioEntry,
       });
     }
 
     const promptLint = join(targetRoot, "tools", "prompt-lint.mjs");
-    if (!options.dryRun && existsSync(promptLint)) {
+    if (selectedHarness === "omp" && !options.dryRun && existsSync(promptLint)) {
       try {
         runPromptLintBaseline(promptLint, targetRoot, userHome);
         plan.baselineRecorded = true;
@@ -511,19 +557,23 @@ NULLFORM WORKFLOW Harness Portable Installer
 
 Usage:
   node tools/install-harness.mjs [options]
+  node tools/install-harness.mjs inspect --harness <name> [--host-home <dir>] [--host-manifest <json>] [--probe]
 
 Options:
-  --harness <name>      Harness to configure: claude, codex, opencode, cursor, omp, openclaw, hermes, openhuman, all, auto (default: auto)
+  --harness <name>      Harness: claude, codex, opencode, cursor, omp, openclaw, hermes, openhuman, custom, all, auto
   --root <dir>          Installation root directory (default: harness default directory)
   --project-root <dir>  Project root directory for project-scoped rules (e.g. Cursor)
   --user-home <dir>     User home directory override
+  --host-home <dir>     Select a native host/profile home explicitly
+  --host-manifest <f>   Declarative JSON host contract (custom also requires project-root)
+  --probe               Inspect-only bounded native probe; never used during install
   --dry-run             Preview installation plan without writing any files
   --json                Output result as JSON
   --help, -h            Show this help message
 `.trim());
 }
 
-function main() {
+async function main() {
   let options;
   try {
     options = parseCliArgs(process.argv.slice(2));
@@ -540,6 +590,15 @@ function main() {
   }
 
   try {
+    if (options.command === "inspect") {
+      const env = process.env;
+      const userHome = resolve(options.userHome || env.NULLFORM_USER_HOME || env.USERPROFILE || env.HOME || homedir());
+      const harness = options.harness === "auto" ? detectHarness({ userHome, env }) : options.harness;
+      if (harness === "all") throw new Error("Inspect requires one selected harness");
+      const report = await inspectHarness({ harness, userHome, hostHome: options.hostHome, hostManifest: loadHostManifest(options.hostManifest, harness), projectRoot: options.projectRoot, env, probe: Boolean(options.probe) });
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
     const plan = installHarness(options);
 
     if (options.json) {

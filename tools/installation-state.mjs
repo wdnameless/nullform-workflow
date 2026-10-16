@@ -5,10 +5,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, lstatSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { resolve, join, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { validatePathWithinScope, isInsideOrEqual, resolveRealPath, getCanonicalPath } from './worktree-snapshot.mjs';
 import { RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, resolveOpencodeConfigPaths } from './harness-config.mjs';
+import { resolveHostHome, validateHostManifest } from './harness-profiles.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -17,7 +17,7 @@ const REPO_ROOT = resolve(__dirname, "..");
 export const PACKAGE_NAME = "nullform-workflow";
 
 export const CONCRETE_HARNESSES = Object.freeze(['claude', 'codex', 'opencode', 'cursor', 'omp', 'openclaw', 'hermes', 'openhuman']);
-export const HARNESS_CHOICES = CONCRETE_HARNESSES;
+export const HARNESS_CHOICES = Object.freeze([...CONCRETE_HARNESSES, "custom"]);
 
 const ALLOWED_STATE_KEYS = new Set([
   "schemaVersion",
@@ -27,6 +27,8 @@ const ALLOWED_STATE_KEYS = new Set([
   "userHome",
   "version",
   "managedFiles",
+  "hostHome",
+  "hostManifest",
 ]);
 
 export function parseSemVer(v) {
@@ -120,9 +122,9 @@ export function validateInstallationState(state) {
   if (state.schemaVersion !== 1) {
     throw new Error(`Unsupported installation state schemaVersion: ${JSON.stringify(state.schemaVersion)}`);
   }
-  if (typeof state.harness !== "string" || !CONCRETE_HARNESSES.includes(state.harness)) {
+  if (typeof state.harness !== "string" || !HARNESS_CHOICES.includes(state.harness)) {
     throw new Error(
-      `Invalid harness in installation state: ${JSON.stringify(sanitizeError(String(state.harness)))}. Expected one of: ${CONCRETE_HARNESSES.join(", ")}`
+      `Invalid harness in installation state: ${JSON.stringify(sanitizeError(String(state.harness)))}. Expected one of: ${HARNESS_CHOICES.join(", ")}`
     );
   }
   if (typeof state.root !== "string" || !state.root.trim() || !isAbsolute(state.root) || /[\x00\r\n]/.test(state.root)) {
@@ -154,6 +156,15 @@ export function validateInstallationState(state) {
     throw new Error(`Invalid version in installation state: ${JSON.stringify(sanitizeError(String(state.version)))}`);
   }
   const managedFiles = validateManagedFilesMap(state.managedFiles);
+  let hostHome;
+  if (state.hostHome !== undefined) {
+    if (typeof state.hostHome !== "string" || state.hostHome.length > 4096 || !isAbsolute(state.hostHome) || /[\x00-\x1f\x7f]/.test(state.hostHome)) {
+      throw new Error("Invalid hostHome in installation state: must be a bounded absolute path");
+    }
+    hostHome = resolveHostHome({ harness: state.harness, userHome: state.userHome, hostHome: state.hostHome }).path;
+  }
+  const hostManifest = state.hostManifest === undefined ? undefined : validateHostManifest(state.hostManifest, { custom: state.harness === "custom" });
+  if (state.harness === "custom" && (!hostManifest || !projectRoot)) throw new Error("Custom installation state requires hostManifest and projectRoot");
 
   return {
     schemaVersion: 1,
@@ -163,6 +174,8 @@ export function validateInstallationState(state) {
     userHome: resolve(state.userHome),
     version: sem.raw,
     ...(managedFiles ? { managedFiles } : {}),
+    ...(hostHome ? { hostHome } : {}),
+    ...(hostManifest ? { hostManifest } : {}),
   };
 }
 export function readInstallationState(userHome) {
@@ -284,7 +297,8 @@ export function preflightFilesystemConfinement({
   userHome,
   agentsHome,
   shouldWriteHome,
-  options,
+  hostHomes = {},
+  hostManifest,
 }) {
   const pathCache = new Map();
     const source = getCanonicalPath(REPO_ROOT, pathCache), target = getCanonicalPath(targetRoot, pathCache);
@@ -323,50 +337,46 @@ export function preflightFilesystemConfinement({
   const checkHomeSkills = (dest, scope) => checkTree(join(REPO_ROOT, "skills"), dest, scope);
 
   for (const h of harnesses) {
-    if (h === "claude") {
-      check(join(targetRoot, "CLAUDE.md"), targetRoot);
-      if (shouldWriteHome) {
-        check(join(userHome, ".claude", "CLAUDE.md"), userHome);
-        checkHomeSkills(join(userHome, ".claude", "skills"), userHome);
+    if (h !== "omp") {
+      if (h === "custom") {
+        if (!projectRoot || !hostManifest) throw new Error("Custom host requires a manifest and projectRoot");
+        check(join(projectRoot, hostManifest.instructionsFile), projectRoot);
+        continue;
       }
-    }
-    if (h === "codex") {
-      check(join(targetRoot, "AGENTS.md"), targetRoot);
-      if (shouldWriteHome) {
-        check(join(userHome, ".codex", "AGENTS.md"), userHome);
-        checkHomeSkills(join(userHome, ".codex", "skills"), userHome);
+      if (h === "cursor") {
+        const base = projectRoot || targetRoot;
+        check(join(base, ".cursor", "rules", "00-workflow.mdc"), base);
+        continue;
       }
-    }
-    if (h === "opencode") {
-      check(join(targetRoot, "AGENTS.md"), targetRoot);
-      for (const p of resolveOpencodeConfigPaths(targetRoot)) check(p, targetRoot);
-      if (shouldWriteHome) {
-        const cfgDir = join(userHome, ".config", "opencode");
-        check(join(cfgDir, "AGENTS.md"), userHome);
-        for (const p of resolveOpencodeConfigPaths(cfgDir)) check(p, userHome);
-        const legacyDir = join(userHome, ".opencode");
-        if (existsSync(legacyDir)) {
-          for (const p of resolveOpencodeConfigPaths(legacyDir)) check(p, userHome);
+      const home = hostHomes[h] || resolveHostHome({ harness: h, userHome }).path;
+      check(home, home);
+      check(join(targetRoot, h === "claude" ? "CLAUDE.md" : "AGENTS.md"), targetRoot);
+      if (h === "hermes") {
+        for (const path of ["config.yaml", "SOUL.md", "skills/nullform-workflow/SKILL.md"]) check(join(home, path), home);
+      } else if (shouldWriteHome) {
+        check(join(home, h === "claude" ? "CLAUDE.md" : "AGENTS.md"), home);
+      }
+      if (h === "opencode" || h === "openclaw") {
+        for (const base of new Set([targetRoot, ...(shouldWriteHome ? [home] : [])])) {
+          const paths = h === "opencode" ? resolveOpencodeConfigPaths(base) : [join(base, "openclaw.json")];
+          for (const path of paths) check(path, base);
         }
-        checkHomeSkills(join(cfgDir, "skills"), userHome);
       }
-    }
-    if (h === "cursor") {
-      const cursorTarget = projectRoot || targetRoot;
-      check(join(cursorTarget, ".cursor", "rules", "00-workflow.mdc"), cursorTarget);
+      continue;
     }
     if (h === "omp") {
       check(join(targetRoot, "agent", "AGENTS.md"), targetRoot);
       if (shouldWriteHome) {
-        const homeAgentDir = join(userHome, ".omp", "agent");
-        check(join(homeAgentDir, "AGENTS.md"), userHome);
-        check(join(homeAgentDir, ".harness-root"), userHome);
-        check(join(homeAgentDir, "mcp.json"), userHome);
-        checkTree(join(REPO_ROOT, "rules"), join(homeAgentDir, "rules"), userHome);
+        const homeAgentDir = hostHomes.omp || resolveHostHome({ harness: "omp", userHome }).path;
+        check(homeAgentDir, homeAgentDir);
+        check(join(homeAgentDir, "AGENTS.md"), homeAgentDir);
+        check(join(homeAgentDir, ".harness-root"), homeAgentDir);
+        check(join(homeAgentDir, "mcp.json"), homeAgentDir);
+        checkTree(join(REPO_ROOT, "rules"), join(homeAgentDir, "rules"), homeAgentDir);
         checkTree(join(REPO_ROOT, "rules"), join(agentsHome, "rules"), userHome);
         checkHomeSkills(join(agentsHome, "skills"), userHome);
-        check(join(homeAgentDir, "extensions", "nullform-jev.ts"), userHome);
-        check(join(homeAgentDir, "extensions", "nullform-delete-guard.ts"), userHome);
+        check(join(homeAgentDir, "extensions", "nullform-jev.ts"), homeAgentDir);
+        check(join(homeAgentDir, "extensions", "nullform-delete-guard.ts"), homeAgentDir);
 
         const destAgents = join(homeAgentDir, "agents");
         const legitimateTarget = join(targetRoot, "agent", "agents");
@@ -376,50 +386,18 @@ export function preflightFilesystemConfinement({
           if (st && st.isSymbolicLink()) {
             const rl = resolveRealPath(destAgents);
             if (rl !== resolveRealPath(legitimateTarget)) {
-              if (!rl || !isInsideOrEqual(userHome, rl)) {
+              if (!rl || (!isInsideOrEqual(userHome, rl) && !isInsideOrEqual(homeAgentDir, rl))) {
                 throw new Error(
                   `Preflight failed: destination path "${destAgents}" escapes declared root "${userHome}" or is an unresolved link`
                 );
               }
             }
           } else {
-            checkTree(join(REPO_ROOT, "agent", "agents"), destAgents, userHome);
+            checkTree(join(REPO_ROOT, "agent", "agents"), destAgents, homeAgentDir);
           }
         } else {
-          checkTree(join(REPO_ROOT, "agent", "agents"), destAgents, userHome);
+          checkTree(join(REPO_ROOT, "agent", "agents"), destAgents, homeAgentDir);
         }
-      }
-    }
-    if (h === "openclaw") {
-      check(join(targetRoot, "AGENTS.md"), targetRoot);
-      check(join(targetRoot, "SOUL.md"), targetRoot);
-      check(join(targetRoot, "USER.md"), targetRoot);
-      check(join(targetRoot, "openclaw.json"), targetRoot);
-      if (shouldWriteHome || options.dryRun) {
-        check(join(userHome, ".openclaw", "openclaw.json"), userHome);
-        checkHomeSkills(join(userHome, ".openclaw", "skills"), userHome);
-      }
-    }
-    if (h === "hermes") {
-      check(join(targetRoot, "AGENTS.md"), targetRoot);
-      check(join(targetRoot, "config.yaml"), targetRoot);
-      const isDefaultHome = resolve(userHome) === resolve(homedir());
-      const hermesHome = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
-      if (shouldWriteHome || options.dryRun) {
-        check(join(hermesHome, "config.yaml"), hermesHome);
-        check(join(hermesHome, "SOUL.md"), hermesHome);
-        check(join(hermesHome, "AGENTS.md"), hermesHome);
-        checkHomeSkills(join(hermesHome, "skills"), hermesHome);
-      }
-    }
-    if (h === "openhuman") {
-      check(join(targetRoot, "AGENTS.md"), targetRoot);
-      const agentDir = join(targetRoot, "agents", "workflow");
-      check(join(agentDir, "AGENTS.md"), targetRoot);
-      checkHomeSkills(join(agentDir, "skills"), targetRoot);
-      if (shouldWriteHome || options.dryRun) {
-        check(join(userHome, ".openhuman", "AGENTS.md"), userHome);
-        checkHomeSkills(join(userHome, ".openhuman", "skills"), userHome);
       }
     }
   }
@@ -490,20 +468,8 @@ return spawnFn(command, args, {
   shell: isBatch,
   windowsHide: isWin,
 }); }
-export function getDefaultRoot(harness, userHome) { switch (harness) {
-  case "claude": return join(userHome, ".claude", "workflow");
-  case "codex": return join(userHome, ".codex", "workflow");
-  case "opencode":
-    return existsSync(join(userHome, ".opencode"))
-      ? join(userHome, ".opencode", "workflow")
-      : join(userHome, ".config", "opencode", "workflow");
-  case "cursor": return join(userHome, ".cursor", "workflow");
-  case "openclaw": return join(userHome, ".openclaw", "workflow");
-  case "hermes": {
-    const isDefaultHome = resolve(userHome) === resolve(homedir());
-    const hermesBase = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
-    return join(hermesBase, "workflow");
-  }
-  case "openhuman": return join(userHome, ".openhuman", "workflow");
-  default: return join(userHome, "omp-workflow");
-} }
+export function getDefaultRoot(harness, userHome, options = {}) {
+  if (harness === "omp" || harness === "all" || harness === "auto") return join(userHome, "omp-workflow");
+  if (harness === "custom") return join(userHome, ".nullform", "workflow");
+  return join(resolveHostHome({ harness, userHome, ...options }).path, "workflow");
+}

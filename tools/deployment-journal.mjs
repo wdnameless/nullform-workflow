@@ -5,10 +5,22 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync, lstatSync, readlinkSync, symlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { resolve, join, dirname, isAbsolute, basename } from "node:path";
-import { homedir } from "node:os";
 import { hashContent } from "./harness-config.mjs";
 import { writeInstallationState, readInstallationState } from "./installation-state.mjs";
 import { normalizePath, validatePathWithinScope } from "./worktree-snapshot.mjs";
+import { resolveHostHome } from "./harness-profiles.mjs";
+
+function selectedHostScope(hostHome, userHome, harness = "custom") {
+  if (hostHome === undefined || hostHome === null) return null;
+  if (typeof hostHome !== "string" || hostHome.length > 4096 || !isAbsolute(hostHome) || /[\x00-\x1f\x7f]/.test(hostHome)) {
+    throw new Error("Invalid selected hostHome: expected a bounded absolute path");
+  }
+  const path = normalizePath(resolveHostHome({ harness: harness === "all" ? "hermes" : harness, userHome, hostHome }).path);
+  if (!validatePathWithinScope(path, path)) {
+    throw Object.assign(new Error("Selected hostHome is an unresolved link or escapes its canonical scope"), { code: "ESCOPE" });
+  }
+  return path;
+}
 
 export function getDeploymentLockPath(userHome) {
   return join(normalizePath(resolve(userHome)), ".nullform", "deployment.lock");
@@ -65,6 +77,8 @@ export function acquireDeploymentLock({
   userHome,
   targetRoot,
   harness,
+  projectRoot = null,
+  hostHome = null,
   dryRun = false,
 } = {}) {
   if (dryRun) {
@@ -79,6 +93,7 @@ export function acquireDeploymentLock({
 
   const normHome = normalizePath(resolve(userHome));
   const normTarget = normalizePath(resolve(targetRoot));
+  const hostScope = selectedHostScope(hostHome, normHome, harness);
   const lockPath = getDeploymentLockPath(normHome);
   mkdirSync(dirname(lockPath), { recursive: true });
 
@@ -105,11 +120,21 @@ export function acquireDeploymentLock({
     }
 
     // Process is verified dead (ESRCH): recover abandoned journal with ONLY trusted scopes (caller + last verified)
-    recoverAbandonedJournal(normHome, { targetRoot: normTarget });
+    recoverAbandonedJournal(normHome, { targetRoot: normTarget, projectRoot, hostHome: hostScope, harness });
 
     try {
       unlinkSync(lockPath);
     } catch {}
+  }
+  const journalPath = getDeploymentJournalPath(normHome);
+  if (existsSync(journalPath)) {
+    let pending;
+    try { pending = JSON.parse(readFileSync(journalPath, "utf8")); }
+    catch { throw Object.assign(new Error("Corrupted deployment journal; recovery requires operator inspection"), { code: "ECORRUPT_JOURNAL" }); }
+    if (!isProcessAlive(pending.pid).verifiedDead) {
+      throw Object.assign(new Error("Deployment journal owner is live or uncertain; refusing concurrent recovery"), { code: "ELOCKED" });
+    }
+    recoverAbandonedJournal(normHome, { targetRoot: normTarget, projectRoot, hostHome: hostScope, harness });
   }
 
   const lockData = {
@@ -252,10 +277,11 @@ function restoreSingleEntry(entry, _userHome, backupDir, allowedScopes) {
 }
 
 export class DeploymentJournal {
-  constructor({ userHome, targetRoot, projectRoot = null, harness, targetVersion, dryRun = false, extraScopes = [] }) {
+  constructor({ userHome, targetRoot, projectRoot = null, hostHome = null, harness, targetVersion, dryRun = false }) {
     this.userHome = normalizePath(resolve(userHome));
     this.targetRoot = normalizePath(resolve(targetRoot));
     this.projectRoot = projectRoot ? normalizePath(resolve(projectRoot)) : null;
+    this.hostHome = selectedHostScope(hostHome, this.userHome, harness);
     this.harness = harness;
     this.targetVersion = targetVersion;
     this.dryRun = Boolean(dryRun);
@@ -264,10 +290,7 @@ export class DeploymentJournal {
     this.backupDir = getDeploymentBackupDir(this.userHome, this.journalId);
     this.allowedScopes = [this.targetRoot, this.userHome];
     if (this.projectRoot) this.allowedScopes.push(this.projectRoot);
-    if (resolve(this.userHome) === resolve(homedir()) && process.env.HERMES_HOME) {
-      this.allowedScopes.push(normalizePath(resolve(process.env.HERMES_HOME)));
-    }
-    for (const s of extraScopes) if (s) this.allowedScopes.push(normalizePath(resolve(s)));
+    if (this.hostHome) this.allowedScopes.push(this.hostHome);
     this.entries = [];
     this.status = "in-progress";
     this.committed = false;
@@ -290,6 +313,7 @@ export class DeploymentJournal {
       userHome: this.userHome,
       targetRoot: this.targetRoot,
       projectRoot: this.projectRoot,
+      hostHome: this.hostHome,
       harness: this.harness,
       targetVersion: this.targetVersion,
       entries: this.entries,
@@ -537,6 +561,7 @@ export function recoverAbandonedJournal(userHome, options = {}) {
     const savedState = readInstallationState(normHome);
     if (savedState?.root) trustedScopes.push(normalizePath(savedState.root));
     if (savedState?.projectRoot) trustedScopes.push(normalizePath(savedState.projectRoot));
+    if (savedState?.hostHome) trustedScopes.push(selectedHostScope(savedState.hostHome, normHome, savedState.harness));
   } catch {}
 
   if (options.targetRoot && typeof options.targetRoot === "string") {
@@ -545,6 +570,8 @@ export function recoverAbandonedJournal(userHome, options = {}) {
   if (options.projectRoot && typeof options.projectRoot === "string") {
     trustedScopes.push(normalizePath(options.projectRoot));
   }
+  const hostScope = selectedHostScope(options.hostHome, normHome, options.harness);
+  if (hostScope) trustedScopes.push(hostScope);
 
   // Verify journal.targetRoot is within trusted scopes (CANONICAL GUARD ONLY, NO LEXICAL FALLBACK)
   if (!journal.targetRoot || typeof journal.targetRoot !== "string") {

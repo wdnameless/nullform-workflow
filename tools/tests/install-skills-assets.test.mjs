@@ -20,12 +20,12 @@ test("actual skill asset ownership transition across versions preserves user edi
   const tempHome = createTempDir("harness-asset-transition-home-");
   try {
     const res1 = spawnSync(process.execPath, [
-      SCRIPT_PATH, "--harness", "opencode", "--root", tempRoot, "--user-home", tempHome, "--json",
+      SCRIPT_PATH, "--harness", "omp", "--root", tempRoot, "--user-home", tempHome, "--json",
     ], { encoding: "utf8" });
     assert.equal(res1.status, 0, `Initial install failed: ${res1.stderr}`);
     const plan1 = JSON.parse(res1.stdout);
 
-    const skillsDir = join(tempHome, ".config", "opencode", "skills");
+    const skillsDir = join(tempHome, ".agents", "skills");
     const pyAsset = join(skillsDir, "ui-ux-pro-max", "scripts", "core.py");
     const userModifiedAsset = join(skillsDir, "ui-ux-pro-max", "scripts", "validate_data.py");
     const binaryAsset = join(skillsDir, "ui-styling", "canvas-fonts", "YoungSerif-Regular.ttf");
@@ -65,7 +65,7 @@ test("actual skill asset ownership transition across versions preserves user edi
       pathToFileURL(join(tempRoot, "tools", "install-harness.mjs")).href
     );
     const plan2 = installV2Harness({
-      harness: "opencode",
+      harness: "omp",
       root: tempRoot,
       userHome: tempHome,
       managedFiles: plan1.managedFiles,
@@ -91,7 +91,7 @@ test("actual skill asset ownership transition across versions preserves user edi
     if (existsSync(testLockedFile)) rmSync(testLockedFile, { force: true });
 
     installV2Harness({
-      harness: "opencode",
+      harness: "omp",
       root: tempRoot,
       userHome: tempHome,
       managedFiles: plan2.managedFiles,

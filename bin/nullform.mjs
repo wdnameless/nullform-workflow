@@ -10,12 +10,13 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
-import { installHarness, SUPPORTED_HARNESSES } from "../tools/install-harness.mjs";
+import { installHarness, SUPPORTED_HARNESSES, loadHostManifest } from "../tools/install-harness.mjs";
 import { getDefaultRoot } from '../tools/installation-state.mjs';
-import { runDoctor, probeProviders, printHumanReport } from "../tools/doctor.mjs";
+import { runDoctor, printHumanReport } from "../tools/doctor.mjs";
 import { runWorkflowCli } from "../tools/workflow.mjs";
 import { acquireDeploymentLock, releaseDeploymentLock, DeploymentJournal } from "../tools/deployment-journal.mjs";
 import { getCapabilitiesInfo, checkVersionAlignment } from "../tools/harness-capabilities.mjs";
+import { inspectHarness, resolveHostHome } from "../tools/harness-profiles.mjs";
 import {
   PACKAGE_NAME,
   HARNESS_CHOICES,
@@ -49,12 +50,12 @@ export {
 export const HARNESS_MENU_ITEMS = [
   { index: 1, id: "claude", label: "Claude Code", description: "~/.claude/CLAUDE.md" },
   { index: 2, id: "codex", label: "OpenAI Codex", description: "~/.codex/AGENTS.md" },
-  { index: 3, id: "opencode", label: "OpenCode", description: "~/.config/opencode/opencode.json, AGENTS.md & skills" },
+  { index: 3, id: "opencode", label: "OpenCode", description: "Native configuration and adaptive AGENTS.md" },
   { index: 4, id: "cursor", label: "Cursor", description: "<project>/.cursor/rules/00-workflow.mdc (project-scoped)" },
   { index: 5, id: "omp", label: "Oh My Pi (OMP)", description: "~/.omp/agent & ~/.agents/skills" },
-  { index: 6, id: "openclaw", label: "OpenClaw", description: "~/.openclaw/openclaw.json, SOUL.md & skills" },
-  { index: 7, id: "hermes", label: "Hermes Agent", description: "~/.hermes/config.yaml, AGENTS.md & skills" },
-  { index: 8, id: "openhuman", label: "OpenHuman", description: "~/.openhuman/AGENTS.md & skills" },
+  { index: 6, id: "openclaw", label: "OpenClaw", description: "Native workspace and adaptive AGENTS.md" },
+  { index: 7, id: "hermes", label: "Hermes Agent", description: "Selected profile: one native auto-load quality skill" },
+  { index: 8, id: "openhuman", label: "OpenHuman", description: "Adaptive AGENTS.md" },
 ];
 
 export function readPackageVersion(root = PACKAGE_ROOT) {
@@ -111,6 +112,8 @@ export function parseCliArgs(argv = []) {
     root: { type: "string" },
     "project-root": { type: "string" },
     "user-home": { type: "string" },
+    "host-home": { type: "string" },
+    "host-manifest": { type: "string" },
     "agents-home": { type: "string" },
     mode: { type: "string" },
     prefix: { type: "string" },
@@ -137,13 +140,14 @@ export function parseCliArgs(argv = []) {
 
   let command = null;
   for (const pos of parsed.positionals) {
-    if (pos === "init" || pos === "doctor" || pos === "update" || pos === "capabilities" || pos === "evidence") {
+    if (["init", "inspect", "doctor", "update", "capabilities", "evidence"].includes(pos)) {
       if (command && command !== pos) throw new Error(`Unexpected command "${pos}" after "${command}"`);
       command = pos;
     } else {
       throw new Error(`Unknown option or command "${pos}"`);
     }
   }
+  if (parsed.values.probe && command !== "inspect") throw new Error("--probe is inspect-only");
 
   let timeoutMs = null;
   if (parsed.values.timeout) {
@@ -159,6 +163,8 @@ export function parseCliArgs(argv = []) {
     root: parsed.values.root || null,
     projectRoot: parsed.values["project-root"] || null,
     userHome: parsed.values["user-home"] || null,
+    hostHome: parsed.values["host-home"] || null,
+    hostManifest: parsed.values["host-manifest"] || null,
     agentsHome: parsed.values["agents-home"] || null,
     mode: parsed.values.mode || null,
     prefix: parsed.values.prefix || null,
@@ -312,6 +318,11 @@ function emitJsonOrText(output, errOut, isJson, payload, textMsg, toStderr = tru
 const compactInstallationPlan = (plan) => plan ? {
   harness: plan.harness, root: plan.root, userHome: plan.userHome,
   ...(plan.projectRoot ? { projectRoot: plan.projectRoot } : {}),
+  ...(plan.hostHome ? { hostHome: plan.hostHome } : {}),
+  ...(plan.hostManifest ? { hostManifest: plan.hostManifest } : {}),
+  ...(plan.profile ? { profile: plan.profile } : {}),
+  ...(plan.activation ? { activation: plan.activation } : {}),
+  ...(plan.warnings?.length ? { warnings: plan.warnings } : {}),
   dryRun: Boolean(plan.dryRun),
   filesCount: Array.isArray(plan.filesToCopy) ? plan.filesToCopy.length : 0,
   managedFilesCount: plan.managedFiles ? Object.keys(plan.managedFiles).length : 0,
@@ -331,6 +342,11 @@ function printInitSuccess(output, options, { ok, readiness, selectedHarness, sav
       root: savedState.root,
       ...(savedState.projectRoot ? { projectRoot: savedState.projectRoot } : {}),
       userHome: savedState.userHome,
+      ...(plan.hostHome ? { hostHome: plan.hostHome } : {}),
+      ...(plan.hostManifest ? { hostManifest: plan.hostManifest } : {}),
+      ...(plan.profile ? { profile: plan.profile } : {}),
+      ...(plan.activation ? { activation: plan.activation } : {}),
+      ...(plan.warnings?.length ? { warnings: plan.warnings } : {}),
       version: savedState.version,
       statePath,
       plan: compactInstallationPlan(plan),
@@ -404,11 +420,16 @@ export async function runInit(options = {}, deps = {}) {
     const selectedHarness = harnessRes.harness;
 
     const isSameHarness = Boolean(existingState && existingState.harness === selectedHarness);
+    const profileOptions = {
+      hostHome: options.hostHome || (isSameHarness ? existingState.hostHome : undefined),
+      hostManifest: options.hostManifest || (isSameHarness ? existingState.hostManifest : undefined),
+      env,
+    };
     const targetRoot = options.root
       ? resolve(options.root)
       : isSameHarness && existingState.root
         ? resolve(existingState.root)
-        : getDefaultRoot(selectedHarness, userHome);
+        : getDefaultRoot(selectedHarness, userHome, profileOptions);
     const projectRoot = options.projectRoot
       ? resolve(options.projectRoot)
       : isSameHarness && existingState.projectRoot
@@ -416,16 +437,22 @@ export async function runInit(options = {}, deps = {}) {
         : selectedHarness === "cursor"
           ? resolve(process.cwd())
           : null;
-    const priorManaged = isSameHarness && existingState?.managedFiles ? existingState.managedFiles : undefined;
+    let priorManaged = isSameHarness && existingState?.managedFiles ? existingState.managedFiles : undefined;
 
     const runInstall = (dryRun) => installFn({
       harness: selectedHarness, root: targetRoot, ...(projectRoot ? { projectRoot } : {}),
       userHome, dryRun, ...(priorManaged ? { managedFiles: priorManaged } : {}),
+      recover: !options.dryRun,
+      ...profileOptions,
     });
 
     let previewPlan;
     try {
       previewPlan = runInstall(true);
+      if (!options.dryRun) {
+        const restored = readInstallationState(userHome);
+        priorManaged = restored?.harness === selectedHarness && resolve(restored.root) === resolve(targetRoot) ? restored.managedFiles : undefined;
+      }
     } catch (err) {
       const safeMsg = sanitizeError(err.message);
       emitJsonOrText(output, errOut, options.json, { ok: false, stage: "preflight", error: "install_failed", detail: safeMsg }, `Error: ${safeMsg}\n`);
@@ -458,19 +485,21 @@ export async function runInit(options = {}, deps = {}) {
     let lock = null;
     let journal = null;
     try {
-      lock = acquireDeploymentLock({ userHome, targetRoot, harness: selectedHarness });
+      lock = acquireDeploymentLock({ userHome, targetRoot, projectRoot, hostHome: previewPlan.hostHome, harness: selectedHarness });
       journal = new DeploymentJournal({
         userHome,
         targetRoot,
         projectRoot,
         harness: selectedHarness,
         targetVersion: readPackageVersion(PACKAGE_ROOT),
+        hostHome: previewPlan.hostHome,
       });
       journal.start();
 
       plan = installFn({
         harness: selectedHarness, root: targetRoot, ...(projectRoot ? { projectRoot } : {}),
         userHome, dryRun: false, ...(priorManaged ? { managedFiles: priorManaged } : {}),
+        ...profileOptions, hostHome: previewPlan.hostHome || profileOptions.hostHome,
         lock, journal, deferLock: true,
       });
     } catch (err) {
@@ -488,7 +517,8 @@ export async function runInit(options = {}, deps = {}) {
         targetHarness: selectedHarness,
         ...(finalProjectRoot ? { projectRoot: resolve(finalProjectRoot) } : {}),
         userHome,
-        agentDir: join(userHome, ".omp", "agent"),
+        hostHome: plan.hostHome, hostManifest: plan.hostManifest, env,
+        ...(selectedHarness === "omp" ? { agentDir: plan.hostHome || join(userHome, ".omp", "agent") } : {}),
         agentsHome: join(userHome, ".agents"),
         mode: "installed",
         releaseInfo: null,
@@ -502,6 +532,8 @@ export async function runInit(options = {}, deps = {}) {
         root: resolve(plan.root || targetRoot),
         ...(finalProjectRoot ? { projectRoot: resolve(finalProjectRoot) } : {}),
         userHome,
+        ...(plan.hostHome ? { hostHome: plan.hostHome } : {}),
+        ...(plan.hostManifest ? { hostManifest: plan.hostManifest } : {}),
         version: readPackageVersion(PACKAGE_ROOT),
         ...(plan.managedFiles || priorManaged ? { managedFiles: plan.managedFiles || priorManaged } : {}),
       };
@@ -581,9 +613,10 @@ export async function runDoctorCommand(options = {}, deps = {}) {
     return 1;
   }
 
-  const agentDir = options.agentDir ? resolve(options.agentDir) : join(userHome, ".omp", "agent");
+  const agentDir = options.agentDir ? resolve(options.agentDir) : targetHarness === "omp"
+    ? resolveHostHome({ harness: "omp", userHome, hostHome: options.hostHome || (savedState?.harness === "omp" ? savedState.hostHome : undefined), env }).path
+    : null;
   const agentsHome = options.agentsHome ? resolve(options.agentsHome) : join(userHome, ".agents");
-  const probeResults = options.probe ? await probeProviders(join(agentDir, "models.yml")) : null;
 
   let releaseInfo = null;
   const releaseApiUrl = options.releaseUrl || options.apiUrl || env.NULLFORM_RELEASE_URL || null;
@@ -610,13 +643,16 @@ export async function runDoctorCommand(options = {}, deps = {}) {
     targetHarness,
     ...(projectRoot ? { projectRoot } : {}),
     userHome,
+    hostHome: options.hostHome || (isSameSavedHarness ? savedState.hostHome : undefined),
+    hostManifest: loadHostManifest(options.hostManifest || (isSameSavedHarness ? savedState.hostManifest : undefined), targetHarness),
+    env,
     agentDir,
     agentsHome,
     mode: options.mode || "installed",
     requirePlugins: options.requirePlugins,
     skipPluginCheck: options.skipPluginCheck,
     pruneLogs: options.pruneLogs,
-    probeResults,
+    probeResults: null,
     releaseInfo,
   });
   const readiness = summarizeDoctorReadiness(result);
@@ -679,7 +715,11 @@ export async function runCapabilitiesCommand(options = {}, deps = {}) {
   const output = deps.stdout || process.stdout;
   const env = deps.env || process.env;
   const userHome = resolveUserHomePath(options, env);
-  const info = (deps.getCapabilitiesInfo || getCapabilitiesInfo)({ userHome, env });
+  const info = (deps.getCapabilitiesInfo || getCapabilitiesInfo)({
+    userHome, env, harness: options.harness, hostHome: options.hostHome,
+    hostManifest: loadHostManifest(options.hostManifest, options.harness),
+    projectRoot: options.projectRoot,
+  });
 
   if (options.json) {
     output.write(JSON.stringify(info, null, 2) + "\n");
@@ -744,6 +784,30 @@ export async function runEvidenceCommand(options = {}, deps = {}) {
   }
 }
 
+export async function runInspectCommand(options = {}, deps = {}) {
+  const output = deps.stdout || process.stdout;
+  const errOut = deps.stderr || process.stderr;
+  try {
+    const env = deps.env || process.env;
+    const { userHome, state } = loadUserState(options, env);
+    const harness = options.harness || state?.harness;
+    if (!HARNESS_CHOICES.includes(harness)) throw new Error("Inspect requires --harness or a saved installation");
+    const same = state?.harness === harness;
+    const report = await inspectHarness({
+      harness, userHome, env,
+      hostHome: options.hostHome || (same ? state.hostHome : undefined),
+      hostManifest: loadHostManifest(options.hostManifest || (same ? state.hostManifest : undefined), harness),
+      projectRoot: options.projectRoot || (same ? state.projectRoot : undefined),
+      probe: Boolean(options.probe),
+    });
+    output.write(JSON.stringify(report, null, 2) + "\n");
+    return 0;
+  } catch (err) {
+    emitJsonOrText(output, errOut, options.json, { ok: false, error: "inspection_failed", detail: sanitizeError(err.message) }, `inspect error: ${sanitizeError(err.message)}\n`);
+    return 1;
+  }
+}
+
 export function printCliHelp(output = process.stdout) {
   let ver = "unknown";
   try { ver = readPackageVersion(PACKAGE_ROOT); } catch {}
@@ -752,6 +816,7 @@ nullform — NULLFORM WORKFLOW CLI (v${ver})
 
 Usage:
   nullform init [options]
+  nullform inspect --harness <name> [--host-home <dir>] [--host-manifest <file>] [--probe]
   nullform doctor [options]
   nullform update [options]
   nullform workflow <command> [args...]
@@ -762,6 +827,7 @@ Usage:
 
 Commands:
   init          Select harness (interactive menu or --harness), preview plan, install adapter & save state
+  inspect       Read-only profile facts and evidence-aware decisions; optional bounded native probe
   doctor        Verify installed workflow assets and selected native harness integration
   update        Check npm registry, update global package and re-apply saved installation
   workflow      Execute core workflow gates (start, suggest, artifact, check, status, close, check-ci, stage-b, metrics)
@@ -773,6 +839,9 @@ Init Options:
   --root <dir>       Workflow installation root override
   --project-root <d> Project root override (e.g. Cursor project rules)
   --user-home <dir>  User home directory override
+  --host-home <dir>  Explicit native host/profile home (saved for doctor/update)
+  --host-manifest <f> Validated declarative JSON contract; custom also requires --project-root
+  --probe            Inspect only; bounded native probe, never a model turn or readiness guarantee
   --yes, -y          Confirm installation without interactive prompt
   --dry-run          Preview installation plan without modifying target or state
   --json             Output structured JSON result
@@ -846,6 +915,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   }
 
   if (options.command === "init") return runInit(options, deps);
+  if (options.command === "inspect") return runInspectCommand(options, deps);
   if (options.command === "doctor") return runDoctorCommand(options, deps);
   if (options.command === "update") return runUpdateCommand(options, deps);
   if (options.command === "capabilities") return runCapabilitiesCommand(options, deps);
