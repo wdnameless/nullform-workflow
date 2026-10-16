@@ -40,6 +40,27 @@ Non-OMP profiles SHALL avoid mandatory external task state, dashboard startup, c
 - **THEN** human settings are preserved, SOUL.md is not created/changed, no default MCP server is registered, and the full home-skill catalogue is not copied
 - **AND** instructions do not force a second task tracker or coding ceremony for unrelated requests
 
+#### Scenario: Evidenced native task state and delegation are reused
+- **GIVEN** a validated host contract or configured-tool probe reports native taskState and delegation available
+- **WHEN** the public inspect/init path selects the adaptive profile
+- **THEN** both module decisions are reuse with their actual evidence levels and installed native-dispatch guidance
+- **AND** no parallel Nullform task state, unconditional start/check/close or replacement delegation loop is introduced
+- **AND** declarations/configuration are not labeled as actual runtime execution
+
+#### Scenario: An explicit capability gap receives a usable action
+- **GIVEN** a validated host contract explicitly reports taskState unavailable and delegation unavailable
+- **WHEN** the public inspect/init path selects the adaptive profile
+- **THEN** the taskState decision enables concrete existing portable start/artifact/check/close actions for explicit complex coding work
+- **AND** the delegation decision explains single-agent execution or explicit operator handoff rather than an invented tool
+- **AND** an unavailable worktree capability enables the concrete portable workspace/integrate actions when Git is present, or reports the missing Git prerequisite
+- **AND** installed guidance makes these actions usable without forcing coding ceremony on routine/general requests
+
+#### Scenario: Unknown support is neither silently reused nor treated as a gap
+- **GIVEN** no configured or declared evidence for native taskState/delegation/worktree
+- **WHEN** the adaptive profile is inspected/applied
+- **THEN** those modules report an explicit manual/unknown outcome and a way to supply evidence or opt into portable tools
+- **AND** lightweight result-verification guidance remains available without activating a speculative tracker, agent loop or MCP service
+
 #### Scenario: Previously installed managed assets
 - **GIVEN** legacy Nullform blocks/registrations alongside human edits
 - **WHEN** adaptation replaces a recognized managed block

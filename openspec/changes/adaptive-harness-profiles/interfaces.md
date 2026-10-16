@@ -18,6 +18,23 @@ Default inspection spawns no host processes, starts no services and writes no fi
 
 Task-state capability means durable native task management, not merely headless exec. Delegation isolation is not filesystem/worktree isolation. A browser or skills registry is not proof of a specific tool or equivalent skill. Research recommendations to inspect auth files or equate declarations with active runtime are rejected.
 
+### Required module decisions
+
+P01 computes these decisions; P02 installs the matching guidance/available actions; V01 exercises both branches through the public CLI. Every row includes its evidence level and an actionable reason. Documented API existence alone does not count as configured availability.
+
+| Capability evidence | Required decision and installed action |
+|---|---|
+| taskState available with configured/declared evidence | reuse: use the host task tracker conditionally on its actual session availability; do not create a parallel Nullform task state or force start/check/close. Report declaration/configuration, never active execution. |
+| taskState explicitly unavailable | enable: expose existing portable start/artifact/check/close commands for explicit complex coding work; installed instructions explain how to use them. General/routine requests do not acquire mandatory state. |
+| delegation available with configured/declared evidence | reuse: direct dispatch to the host's existing delegation mechanism, preserving its availability/permission limits; no new agent loop. |
+| delegation explicitly unavailable | manual: single-agent work or explicit operator handoff with a verifiable result/return contract; no invented callable delegation or silent omission. |
+| worktree explicitly unavailable and Git present | enable: existing portable workspace/integrate commands with concrete committed-base/clean-target prerequisites. Without Git, manual action states that prerequisite; no automatic install. |
+| verification explicitly unavailable or unknown | enable: lightweight actual-result verification guidance already implementable by the host/portable tools, not a new test framework or a mandatory coding spec for general tasks. Native verified/declared equivalents are reused rather than duplicated. |
+| taskState/delegation/worktree unknown | manual: retain conditional native guidance and explain how to provide capability evidence or opt into portable tools; no speculative tracker/service activation. |
+| terminal/browser absent or any MCP capability | manual/skip as appropriate: explain the missing prerequisite or preserve the existing host tool; never install a browser/terminal/MCP server merely to make the report look complete. |
+
+`modules` therefore cannot be an all-skip placeholder: known available native state/delegation and explicit gap cases must produce different decisions and consumer-visible installed guidance/actions. A declaration's decisions remain visibly declaration-based, not a readiness guarantee.
+
 ## InstallerOwner
 
 Owns `bin/nullform.mjs`, `tools/install-harness.mjs`, `tools/harness-adapters.mjs`, `tools/harness-config.mjs`, `tools/installation-state.mjs`, `tools/self-update.mjs`, `tools/doctor.mjs`, and their installer/portable-runtime test files. Reuse ProfileCore exports; no second capability/home resolver. Public CLI adds `inspect`, `--host-home`, `--host-manifest`, optional inspect-only `--probe`; custom requires a manifest and projectRoot. Existing init/doctor/update carry the selected host profile, not a newly changed environment profile.
