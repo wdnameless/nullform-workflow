@@ -39,6 +39,14 @@ Non-OMP profiles SHALL avoid mandatory external task state, dashboard startup, c
 - **WHEN** the adaptive profile is installed in an isolated Hermes home
 - **THEN** human settings are preserved, SOUL.md is not created/changed, no default MCP server is registered, and the full home-skill catalogue is not copied
 - **AND** instructions do not force a second task tracker or coding ceremony for unrelated requests
+- **AND** exactly one generated adaptive quality skill is registered via Hermes's native skills.auto_load, preserving existing entries; unused home AGENTS.md is not the only instruction-delivery surface
+- **AND** unavailable/disabled skill loading, malformed YAML schema or human skill-name collisions produce explicit refusal/manual action without overwriting or re-enabling human policy
+
+#### Scenario: Native quality policy loading has a real consumer boundary
+- **GIVEN** a Hermes profile with native skill loading and existing human auto_load entries
+- **WHEN** the adaptive policy is installed/reapplied
+- **THEN** the generated SKILL.md has valid native frontmatter and its single auto_load entry points to that exact selected-profile file, preserving all other entries and SOUL bytes
+- **AND** the report distinguishes configured registration from actual runtime loading and notes the skills-tool/HERMES_IGNORE_RULES prerequisites and delegated-child context boundary
 
 #### Scenario: Evidenced native task state and delegation are reused
 - **GIVEN** a validated host contract or configured-tool probe reports native taskState and delegation available
