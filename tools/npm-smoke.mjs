@@ -318,6 +318,11 @@ async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome,
       assert.ok(soul.includes(fixture.humanBefore) && soul.includes(fixture.humanAfter), "R04: Human SOUL notes lost");
       assert.equal(soul.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into SOUL.md");
     }
+    if (fixture.mdHomeAgents && pass === 1) {
+      const home = readFileSync(fixture.mdHomeAgents, "utf8");
+      assert.ok(home.includes(fixture.humanBefore) && home.includes(fixture.humanAfter), "R04: Human home AGENTS notes lost");
+      assert.equal(home.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into home AGENTS.md");
+    }
     assert.equal(readFileSync(join(customRoot, ".env"), "utf8"), `USER_ENV_SECRET=${secretToken}\n`, "R04: User .env file altered");
 
     for (const cfgPath of fixture.cfgFiles) {
