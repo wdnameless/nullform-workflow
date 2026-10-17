@@ -5,10 +5,11 @@ import { join, dirname, basename, resolve, relative, delimiter } from 'node:path
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot } from './worktree-snapshot.mjs';
+import { sanitizeError } from './installation-state.mjs';
 
 export const EVIDENCE_FILE = 'review-evidence.json';
 export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
-export const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)\s+ACCEPT(?:ED)?)\*{0,2}\b)/im;
+export const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)[ \t]*(?:(?:#+[ \t]*)?\*{0,2}Verdict:?\*{0,2}:?[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]|$|[.,])|\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]*[.,]?[ \t]*\r?$))|\|[ \t]*\*{0,2}Verdict:?\*{0,2}:?[ \t]*\|[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}\b/im;
 export { isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath };
 export const computeFileHash = hashFile;
 export const computeSourceDigest = sourceDigest;
@@ -17,8 +18,8 @@ export function computeEventProjectionHash(value) { return createHash('sha256').
 export function isPositiveOracleVerdict(text) { return typeof text === 'string' && POSITIVE_VERDICT_RE.test(text) && !NEGATIVE_VERDICT_RE.test(text); }
 export function isNegativeOracleVerdict(text) { return typeof text === 'string' && NEGATIVE_VERDICT_RE.test(text); }
 export function isOracleEvidenceFilename(path) { return /^oracle(-+[a-z0-9]+)*\.md$/i.test(basename(String(path || ''))) || basename(String(path || '')).toLowerCase() === 'acceptance.md'; }
-export function computeManifestHash(root, changeId) { return hashFile(join(changeDirectory(root, changeId), 'manifest.md')); }
-export function computeRolePromptHash(root, role) { return hashFile(safeFile(root, join('agent', 'agents', `${role}.md`))); }
+export function computeManifestHash(root, changeId) { return hashFile(join(changeDirectory(root, changeId), 'manifest.md'), true); }
+export function computeRolePromptHash(root, role) { return hashFile(safeFile(root, join('agent', 'agents', `${role}.md`)), true); }
 export function getPorcelainStatusRaw(root) {
   try { return git(root, ['-c', 'core.quotepath=false', 'status', '--porcelain', '-z', '-uall', '--', '.']); } catch { return null; }
 }
@@ -170,9 +171,15 @@ function buildPrompt(root, changeId, role, baseRef, productCommand) {
     const changed = baseRef ? git(root, ['diff', '--name-only', '-z', baseRef, '--', '.']).split('\0').filter(p => p && !isStructuralExcludedPath(p) && !isSecretOrCredentialPath(p) && !isAcceptancePath(p)) : [];
     const untracked = Object.keys(snapshot.untracked || {}).filter(p => !isStructuralExcludedPath(p) && !isSecretOrCredentialPath(p) && !isAcceptancePath(p));
     const relevant = baseRef ? [...new Set([...changed, ...untracked])] : paths;
-    context = `\n## Baseline revision\n${baseRef || 'Non-git or working tree root'}\n## Changed source paths (${relevant.length} files)\n${relevant.sort().join('\n')}\n## Available product paths (${paths.length} files)\n${paths.sort().join('\n')}\nUse inspect_product with batch requests: [{path, kind:'diff'|'source', offset:0}]. When nextOffset is not null, follow continuations to inspect the complete content before reaching your verdict.`;
+    context = `\n## Baseline revision\n${baseRef || 'Non-git or working tree root'}\n## Changed source paths (${relevant.length} files)\n${relevant.sort().join('\n')}\n## Available product paths (${paths.length} files)\nQuery full path catalogue on demand via inspect_product with [{path:'', kind:'source', offset:0}].\nUse inspect_product with batch requests: [{path, kind:'diff'|'source', offset:0}]. When nextOffset is not null, follow continuations to inspect the complete content before reaching your verdict.`;
   }
-  return `${roleBody}\n\n# ${role === 'oracle' ? 'Blind product acceptance' : 'Implementation review'}\nChange: ${changeId}\n## Original manifest\n${manifest}${context}\nUse inspect_product to read relevant implementation and consumer files in bounded batches; follow all page continuations until complete. Oracle planning documents are inaccessible. Use exercise_product to run the operator-authorized consumer command: ${JSON.stringify(productCommand)}. Report all requirement results, preserve negative findings, and finish with ${role === 'reviewer' ? 'complete JSON containing findings, overall_correctness (correct or incorrect), overall_explanation, and overall_confidence_score (0..1)' : 'an explicit Verdict: ACCEPT or Verdict: REJECT'}.`;
+  const exerciseInstruction = productCommand
+    ? `Use exercise_product with {offset:0} to run the operator-authorized consumer command once: ${JSON.stringify(productCommand)}. Read its bounded product-output pages by calling exercise_product with {offset:nextOffset} until nextOffset is null; continuations never rerun the command. Concatenate page text in byte-offset order to recover the complete JSON containing cwd, exitCode, stdout and stderr; contentHash binds all output bytes to the native execution event. Follow product-output pages, not artifact URIs. Incomplete or failed execution evidence is not PASS.`
+    : 'No operator consumer command was provided; do not invoke exercise_product.';
+  const terminalContract = role === 'reviewer'
+    ? 'Your ENTIRE final assistant response MUST be a single valid JSON object (no Markdown headings, prose, or text before or after the JSON) containing findings, overall_correctness ("correct" or "incorrect"), overall_explanation (non-empty string including all R## requirement results and lean/simplification observations), and overall_confidence_score (0..1).'
+    : 'Report all requirement results, preserve negative findings, and finish with an explicit Verdict: ACCEPT or Verdict: REJECT.';
+  return `${roleBody}\n\n# ${role === 'oracle' ? 'Blind product acceptance' : 'Implementation review'}\nChange: ${changeId}\n## Original manifest\n${manifest}${context}\nUse inspect_product to read relevant implementation and consumer files in bounded batches; follow all page continuations until complete. Oracle planning documents are inaccessible. ${exerciseInstruction} ${terminalContract}`;
 }
 function isRunnableCli(file) {
   if (!file || typeof file !== 'string' || !existsSync(file)) return false;
@@ -194,20 +201,6 @@ function cliPath() {
   if (!found) throw new Error('Installed OMP CLI not found; set OMP_CLI_PATH to dist/cli.js');
   return realpathSync(found);
 }
-function redactSensitive(text, maxLen = 4000) {
-  if (!text || typeof text !== 'string') return '';
-  const redacted = text
-    .replace(/(?:Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
-    .replace(/ey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._~+/-]*/g, '[REDACTED_JWT]')
-    .replace(/(?:AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}/g, '[REDACTED_AWS_KEY]')
-    .replace(/-----BEGIN[ A-Z_-]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z_-]*PRIVATE KEY-----/gi, '[REDACTED_PRIVATE_KEY]')
-    .replace(/(?:sk-[A-Za-z0-9_-]{8,})/gi, 'sk-[REDACTED]')
-    .replace(/(?:ghp_[A-Za-z0-9]{20,})/gi, 'ghp_[REDACTED]')
-    .replace(/(?:postgres|mysql|mongodb(?:\+srv)?|redis|amqp):\/\/[^\s"']+/gi, '[REDACTED_CONNECTION_URI]')
-    .replace(/((?:key|token|auth|password|secret|credential|api_key|apikey)[=:]\s*["']?)[A-Za-z0-9._~+/-]{8,}(["']?)/gi, '$1[REDACTED]$2');
-  const trimmed = redacted.trim();
-  return trimmed.length > maxLen ? trimmed.slice(-maxLen) : trimmed;
-}
 function invokeNative(root, prompt, model, sessionDir, options, runner) {
   if (runner) {
     const result = runner({ root, prompt, model, sessionDir, provenance: options.provenance, changeId: options.changeId, productCommand: options.productCommand });
@@ -220,7 +213,8 @@ function invokeNative(root, prompt, model, sessionDir, options, runner) {
   const result = spawnSync('bun', args, { cwd: root, input: prompt, encoding: 'utf8', shell: false, windowsHide: true, timeout: 910000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, WORKFLOW_REVIEW_OPTIONS: JSON.stringify(options) } });
   if (result.error || result.status !== 0) {
     const code = result.error?.code || result.error?.message || (result.status !== null ? `exit ${result.status}` : 'unknown');
-    const stderrSnippet = redactSensitive(result.stderr);
+    const cleanStderr = sanitizeError(result.stderr || '').trim();
+    const stderrSnippet = cleanStderr.length > 4000 ? cleanStderr.slice(-4000) : cleanStderr;
     const detail = stderrSnippet || (result.status !== 0 ? `child process exited with status ${result.status}` : 'no diagnostic error output');
     throw new Error(`Native OMP failed (${code}, status ${result.status}): ${detail} [retained session: ${sessionDir}]`);
   }
@@ -237,7 +231,7 @@ export function runReviewRecord(options) {
   if (productCommand !== null && (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(p => typeof p !== 'string' || p.includes('\0')) || !productCommand[0].trim())) throw new Error('product-command must be a JSON argv array');
   if (role === 'oracle' && !ompRunner && !productCommand) throw new Error('Oracle requires --product-command JSON argv to exercise product');
   const dir = changeDirectory(root, changeId);
-  const manifestHash = hashFile(safeFile(root, join('openspec', 'changes', changeId, 'manifest.md')));
+  const manifestHash = hashFile(safeFile(root, join('openspec', 'changes', changeId, 'manifest.md')), true);
   const rolePromptHash = computeRolePromptHash(root, role);
   const source = sourceDigest(root), tests = testFilesHash(root);
   const data = loadReviewEvidence(dir) || { version: 2, changeId, reviewer: null, stageB: null, oracles: [], history: [] };
@@ -278,14 +272,43 @@ export function runReviewRecord(options) {
   saveReviewEvidence(dir, data);
   return { ok: true, record };
 }
-function executeTests(root, testCmd, testRunner) {
-  const result = testRunner ? testRunner(testCmd) : spawnSync(testCmd, { cwd: root, encoding: 'utf8', shell: true, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
-  if (result.error || result.status !== 0) throw new Error(`Stage-B frozen test suite failed with exit code ${result.status}`);
-  return { exitCode: result.status, output: `${result.stdout || ''}${result.stderr || ''}` };
+function resolveTestTimeoutMs(options = {}) {
+  const rawMs = options.testTimeoutMs;
+  if (rawMs === undefined || rawMs === null) return 120000;
+  if (typeof rawMs !== 'number' || !Number.isSafeInteger(rawMs) || rawMs < 1 || rawMs > 3600000) {
+    throw new Error('Stage-B testTimeoutMs (--test-timeout 1..3600s) must be a safe integer between 1 and 3600000ms');
+  }
+  return rawMs;
+}
+function executeTests(root, testCmd, testRunner, timeoutMs = 120000) {
+  const startedMs = Date.now();
+  const result = testRunner ? testRunner(testCmd, { timeoutMs }) : spawnSync(testCmd, { cwd: root, encoding: 'utf8', shell: true, windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
+  const elapsedMs = Date.now() - startedMs;
+  if (result.error || result.status !== 0) {
+    const combinedOut = sanitizeError(`${result.stdout || ''}${result.stderr || ''}`);
+    let logPath = null;
+    try {
+      const logDir = join(resolve(root), '.tmp');
+      mkdirSync(logDir, { recursive: true });
+      logPath = join(logDir, `stage-b-failed-${Date.now()}-${process.pid}.log`);
+      writeFileSync(logPath, combinedOut, 'utf8');
+    } catch {}
+    const errCode = result.error?.code || (result.signal ? `signal ${result.signal}` : `exit ${result.status}`);
+    const err = new Error(`Stage-B frozen test suite failed with exit code ${result.status} (${errCode}, elapsed ${elapsedMs}ms, deadline ${timeoutMs}ms)${logPath ? ` [retained output: ${logPath}]` : ''}`);
+    err.exitCode = result.status;
+    err.errorCode = result.error?.code || null;
+    err.signal = result.signal || null;
+    err.elapsedMs = elapsedMs;
+    err.timeoutMs = timeoutMs;
+    err.logPath = logPath;
+    throw err;
+  }
+  return { exitCode: result.status, output: `${result.stdout || ''}${result.stderr || ''}`, elapsedMs, timeoutMs };
 }
 export function recordStageB(options) {
   const { root = '.', changeId, phase = 'after', disposition = 'lean-already', testCmd, summary = '', testRunner = null } = options;
   if (!testCmd || !['before', 'after'].includes(phase) || !['lean-already', 'simplified'].includes(disposition)) throw new Error('Stage-B requires before|after, test-cmd, and lean-already|simplified disposition');
+  const timeoutMs = resolveTestTimeoutMs(options);
   const dir = changeDirectory(root, changeId), data = loadReviewEvidence(dir);
   if (data?.reviewer?.verdict !== 'ACCEPT') throw new Error('implementation reviewer ACCEPT record required before Stage-B');
   if (data.oracles?.some(o => o.verdict === 'REJECT')) throw new Error('Negative oracle evidence requires intentional reviewer --redo before Stage-B');
@@ -294,11 +317,11 @@ export function recordStageB(options) {
   if (phase === 'before' && source !== reviewer.sourceDigest) throw new Error('Stage-B before must run on reviewer source A');
   if (phase === 'after' && !data.stageB?.before && (disposition !== 'lean-already' || source !== reviewer.sourceDigest)) throw new Error('Stage-B before execution on A is required before simplification');
   if (phase === 'after' && !data.stageB?.before) {
-    recordStageB({ ...options, phase: 'before' });
-    return recordStageB(options);
+    recordStageB({ ...options, phase: 'before', testTimeoutMs: timeoutMs });
+    return recordStageB({ ...options, testTimeoutMs: timeoutMs });
   }
   const startedAt = new Date().toISOString();
-  const result = executeTests(root, testCmd, testRunner);
+  const result = executeTests(root, testCmd, testRunner, timeoutMs);
   if (testFilesHash(root) !== tests) throw new Error('frozen test files were modified during Stage-B run');
   if (sourceDigest(root) !== source) throw new Error('Test execution mutated product source');
   const execution = { sourceDigest: source, testFilesHash: tests, testCmd, startedAt, completedAt: new Date().toISOString(), ...result };

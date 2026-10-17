@@ -1,0 +1,130 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Successful repo-gate run ID from which to download certified candidate artifact'
+        type: string
+        required: true
+      dry_run:
+        description: 'Verify preflight only without uploading to npm registry'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Authenticated Public Release
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Validate input run_id and verify certification CI run
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid run_id: must be numeric digits only."
+            exit 1
+          fi
+          echo "Verifying run $RUN_ID via GitHub API..."
+          RUN_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID")
+          WORKFLOW_PATH=$(echo "$RUN_JSON" | jq -r '.path // empty')
+          CONCLUSION=$(echo "$RUN_JSON" | jq -r '.conclusion // empty')
+          HEAD_SHA=$(echo "$RUN_JSON" | jq -r '.head_sha // empty')
+          CURRENT_SHA="${{ github.sha }}"
+
+          echo "Run workflow path: $WORKFLOW_PATH, conclusion: $CONCLUSION, head_sha: $HEAD_SHA, current_sha: $CURRENT_SHA"
+          if [ "$WORKFLOW_PATH" != ".github/workflows/repo-gate.yml" ]; then
+            echo "::error::Certification run $RUN_ID is not from .github/workflows/repo-gate.yml (got '$WORKFLOW_PATH')."
+            exit 1
+          fi
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::Certification run $RUN_ID conclusion is not 'success' (got '$CONCLUSION')."
+            exit 1
+          fi
+          if [ "$HEAD_SHA" != "$CURRENT_SHA" ]; then
+            echo "::error::Certification run commit ($HEAD_SHA) does not match current commit ($CURRENT_SHA)."
+            exit 1
+          fi
+
+      - name: Checkout repository at exact candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js 24 (npm >= 11.5.1 for OIDC provenance)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Download certified candidate tarball from certified CI run
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-tarball
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .tmp
+
+      - name: Download candidate checksums from certified CI run
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-checksums
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .tmp
+
+      - name: Download all platform certificates from certified CI run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cert-*
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .tmp/certs
+
+      - name: Verify candidate archive matches recorded CI checksums
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_NAME="nullform-workflow-${PKG_VERSION}.tgz"
+          if [ ! -f ".tmp/${EXPECTED_NAME}" ]; then
+            echo "Expected candidate .tmp/${EXPECTED_NAME} missing from download"
+            exit 1
+          fi
+          MATCH_COUNT=$(ls -1 .tmp/nullform-workflow-*.tgz | wc -l)
+          if [ "$MATCH_COUNT" -ne 1 ]; then
+            echo "Expected exactly one candidate tarball, found $MATCH_COUNT"
+            exit 1
+          fi
+          echo "Verifying checksums for candidate: .tmp/${EXPECTED_NAME}"
+          node -e "import('./tools/package-archive.mjs').then(m => { m.verifyChecksumFile('.tmp/tarball.sha256', '.tmp'); m.verifyChecksumFile('.tmp/tarball.sha512', '.tmp'); console.log('Candidate checksums verified via Node crypto'); })"
+
+      - name: Run release preflight (immutable certificates, current source review evidence, auth context)
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          node tools/publish-release.mjs \
+            --tarball ".tmp/nullform-workflow-${PKG_VERSION}.tgz" \
+            --certificates .tmp/certs \
+            --check-only
+
+      - name: Execute publish to npm
+        if: ${{ !inputs.dry_run }}
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          node tools/publish-release.mjs \
+            --tarball ".tmp/nullform-workflow-${PKG_VERSION}.tgz" \
+            --certificates .tmp/certs \
+            --publish

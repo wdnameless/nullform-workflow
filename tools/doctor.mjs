@@ -47,13 +47,20 @@ import {
   preflightYamlConfig,
   preflightManagedMarkers,
   safeJsonErrorMessage,
+  loadYaml,
+  MANAGED_START,
+  MANAGED_END,
 } from "./harness-config.mjs";
+import { checkVersionAlignment, checkHarnessCapabilities } from "./harness-capabilities.mjs";
+import { inspectHarness, resolveHostHome } from "./harness-profiles.mjs";
+import { readInstallationState } from "./installation-state.mjs";
+import { loadHostManifest } from "./install-harness.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export const CORE_TOOLS = [
-  "workflow.mjs", "review-evidence.mjs", "review-native-tools.mjs", "worktree-snapshot.mjs",
+  "workflow.mjs", "workflow-workspaces.mjs", "review-evidence.mjs", "review-native-tools.mjs", "worktree-snapshot.mjs",
   "prompt-lint.mjs", "skill-audit.mjs", "skills-doctor.mjs", "glossary.mjs",
   "replay.mjs", "codemap.mjs", "return-contract.mjs", "cache-policy.mjs",
   "cache-doctor.mjs", "context-inbox.mjs", "domain-context.mjs", "oracle-model.mjs",
@@ -477,6 +484,7 @@ export async function probeProviders(modelsYamlPath) {
 export function parseCliArgs(args) {
   let harness = null, targetHarness = null, projectRoot = null, userHome = null;
   let agentDir = null, agentsHome = null, mode = null, releaseUrl = null;
+  let hostHome = null, hostManifest = null;
   let json = false, quiet = false, probe = false, requirePlugins = false;
   let pruneLogs = false, skipPluginCheck = false, skipReleaseCheck = false;
 
@@ -490,6 +498,10 @@ export function parseCliArgs(args) {
     else if (arg.startsWith("--project-root=")) projectRoot = arg.slice("--project-root=".length);
     else if (arg === "--user-home") userHome = args[++i];
     else if (arg.startsWith("--user-home=")) userHome = arg.slice("--user-home=".length);
+    else if (arg === "--host-home") hostHome = args[++i];
+    else if (arg.startsWith("--host-home=")) hostHome = arg.slice("--host-home=".length);
+    else if (arg === "--host-manifest") hostManifest = args[++i];
+    else if (arg.startsWith("--host-manifest=")) hostManifest = arg.slice("--host-manifest=".length);
     else if (arg === "--agent-dir") agentDir = args[++i];
     else if (arg.startsWith("--agent-dir=")) agentDir = arg.slice("--agent-dir=".length);
     else if (arg === "--agents-home") agentsHome = args[++i];
@@ -509,145 +521,133 @@ export function parseCliArgs(args) {
 
   const defaultHarness = resolve(__dirname, "..");
   const home = userHome ? resolve(userHome) : homedir();
+  if (probe && targetHarness && targetHarness !== "omp") throw new Error("--probe is inspect-only for adaptive hosts; use nullform inspect --probe");
   return {
     harness: harness ? resolve(harness) : defaultHarness,
     targetHarness: targetHarness || null,
     projectRoot: projectRoot ? resolve(projectRoot) : null,
     userHome: home,
-    agentDir: agentDir ? resolve(agentDir) : join(home, ".omp", "agent"),
+    hostHome: hostHome ? resolve(hostHome) : null,
+    hostManifest,
+    agentDir: agentDir ? resolve(agentDir) : null,
     agentsHome: agentsHome ? resolve(agentsHome) : join(home, ".agents"),
     mode, json, quiet, probe, requirePlugins, skipPluginCheck, releaseUrl, skipReleaseCheck, pruneLogs, help: false,
   };
 }
 
-function checkNonOmpHarness({ harness, targetHarness, userHome, projectRoot }) {
-  const hostCommands = {
-    claude: "claude", codex: "codex", opencode: "opencode", cursor: "cursor",
-    openclaw: "openclaw", hermes: "hermes", openhuman: "openhuman",
-  };
-  const cmd = hostCommands[targetHarness] || targetHarness;
-  const isAvailable = isCommandInPath(cmd) || (cmd === "openhuman" && isCommandInPath("openhuman-core"));
+function checkNonOmpHarness({ harness, targetHarness, projectRoot, profile, env }) {
+  const errors = [];
   const checks = [{
-    id: "host-runtime",
-    status: isAvailable ? "pass" : "warn",
-    detail: isAvailable
-      ? `Хост '${cmd}' обнаружен в PATH (проверка синтаксиса и интеграции; валидация провайдера выполняется хостом)`
-      : `[SETUP] Исполняемый файл '${cmd}' не найден в PATH. Установите хост-приложение для полноценной работы`,
+    id: "host-runtime", status: "warn",
+    detail: "Native runtime/session not verified. Installed files, documented APIs and declarations are not proof of active tools, credentials or execution.",
   }];
-
-  const integrationErrors = [];
-  const checkMdAdapter = (p, label) => {
-    const text = readFileSync(p, "utf8");
-    try { preflightManagedMarkers(p, text); } catch (e) { integrationErrors.push(e.message); }
-    if (!text.includes("NULLFORM WORKFLOW") && !text.includes("AGENTS.md")) {
-      integrationErrors.push(`${label} не содержит инструкций NULLFORM WORKFLOW`);
-    }
+  const checkMd = path => {
+    if (!existsSync(path)) { errors.push(`Missing instruction file: ${path}`); return; }
+    const content = readFileSync(path, "utf8");
+    try { preflightManagedMarkers(path, content); } catch (error) { errors.push(error.message); }
+    if (!content.includes(MANAGED_START) || !content.includes(MANAGED_END)) errors.push(`Managed policy missing: ${path}`);
   };
-
-  if (targetHarness === "claude") {
-    const rootClaude = join(harness, "CLAUDE.md");
-    if (!existsSync(rootClaude)) integrationErrors.push("CLAUDE.md отсутствует в корне харнесса");
-    else checkMdAdapter(rootClaude, "CLAUDE.md");
-  } else if (targetHarness === "codex") {
-    const rootAgents = join(harness, "AGENTS.md");
-    if (!existsSync(rootAgents)) integrationErrors.push("AGENTS.md отсутствует в корне харнесса");
-    else checkMdAdapter(rootAgents, "AGENTS.md");
-  } else if (targetHarness === "opencode") {
-    const mds = [join(harness, "AGENTS.md"), join(userHome, ".config", "opencode", "AGENTS.md")].filter((p) => existsSync(p));
-    if (mds.length === 0) integrationErrors.push("AGENTS.md отсутствует в корне харнесса или ~/.config/opencode/AGENTS.md");
-    else for (const m of mds) checkMdAdapter(m, "AGENTS.md");
-    const cfgs = [
-      join(harness, "opencode.json"), join(harness, "opencode.jsonc"),
-      join(userHome, ".config", "opencode", "opencode.json"), join(userHome, ".config", "opencode", "opencode.jsonc"),
-      join(userHome, ".opencode", "opencode.json"), join(userHome, ".opencode", "opencode.jsonc"),
-    ].filter((p) => existsSync(p));
-    if (cfgs.length === 0) integrationErrors.push("opencode.json/opencode.jsonc отсутствует в корне харнесса или ~/.config/opencode");
-    else for (const f of cfgs) { try { preflightJsoncConfig(f); } catch (err) { integrationErrors.push(err.message); } }
-  } else if (targetHarness === "cursor") {
-    const cursorBase = projectRoot || harness;
-    const mdcFile = [
-      join(cursorBase, ".cursor", "rules", "00-workflow.mdc"),
-      join(harness, ".cursor", "rules", "00-workflow.mdc"),
-      join(userHome, ".cursor", "rules", "00-workflow.mdc"),
-    ].find((p) => existsSync(p));
-    if (!mdcFile) {
-      integrationErrors.push("Правило .cursor/rules/00-workflow.mdc не найдено");
-    } else {
-      const text = readFileSync(mdcFile, "utf8");
-      try { preflightManagedMarkers(mdcFile, text); } catch (e) { integrationErrors.push(e.message); }
-      if (!text.includes("alwaysApply: true")) integrationErrors.push("Правило .cursor/rules/00-workflow.mdc не содержит frontmatter 'alwaysApply: true'");
+  if (targetHarness === "custom") checkMd(join(projectRoot, profile.hostManifest.instructionsFile));
+  else if (targetHarness === "cursor") checkMd(join(projectRoot || harness, ".cursor", "rules", "00-workflow.mdc"));
+  else checkMd(join(harness, targetHarness === "claude" ? "CLAUDE.md" : "AGENTS.md"));
+  if (targetHarness === "opencode") {
+    for (const dir of new Set([harness, profile.hostHome])) {
+      for (const name of ["opencode.json", "opencode.jsonc"]) {
+        const path = join(dir, name);
+        if (existsSync(path)) try { preflightJsoncConfig(path); } catch (error) { errors.push(error.message); }
+      }
     }
-  } else if (targetHarness === "openclaw") {
-    const cfgs = [join(harness, "openclaw.json"), join(userHome, ".openclaw", "openclaw.json")].filter((p) => existsSync(p));
-    if (cfgs.length === 0) integrationErrors.push("openclaw.json отсутствует в корне харнесса или ~/.openclaw/openclaw.json");
-    else for (const f of cfgs) {
-      try {
-        const parsed = preflightJson5Config(f);
-        if (!parsed.agents?.entries?.workflow?.workspace) integrationErrors.push("openclaw.json не содержит записи workflow в agents.entries с полем workspace");
-      } catch (err) { integrationErrors.push(err.message); }
-    }
-  } else if (targetHarness === "hermes") {
-    const hermesHome = process.env.HERMES_HOME || join(userHome, ".hermes");
-    const cfgs = [join(harness, "config.yaml"), join(hermesHome, "config.yaml")].filter((p) => existsSync(p));
-    if (cfgs.length === 0) integrationErrors.push("config.yaml отсутствует в корне харнесса или ~/.hermes/config.yaml");
-    else for (const f of cfgs) {
-      try {
-        const content = preflightYamlConfig(f);
-        if (!content.includes("mcp_servers:")) integrationErrors.push("config.yaml не содержит секции mcp_servers");
-      } catch (err) { integrationErrors.push(err.message); }
-    }
-  } else if (targetHarness === "openhuman") {
-    const mds = [join(harness, "AGENTS.md"), join(userHome, ".openhuman", "AGENTS.md"), join(harness, "agents", "workflow", "AGENTS.md")].filter((p) => existsSync(p));
-    if (mds.length === 0) integrationErrors.push("Инструкции OpenHuman (AGENTS.md) не найдены");
-    else for (const m of mds) checkMdAdapter(m, "AGENTS.md");
   }
-
-  checks.push({
-    id: "harness-integration",
-    status: integrationErrors.length > 0 ? "fail" : "pass",
-    detail: integrationErrors.length > 0 ? integrationErrors.join("; ") : `Интеграция ${targetHarness} проверена и корректна`,
-  });
-  const skillsDir = join(harness, "skills");
-  checks.push({
-    id: "skills",
-    status: existsSync(skillsDir) ? "pass" : "fail",
-    detail: existsSync(skillsDir) ? `Папка навыков присутствует (${skillsDir})` : `Папка навыков отсутствует (${skillsDir})`,
-  });
+  if (targetHarness === "openclaw") {
+    const path = join(harness, "openclaw.json");
+    try {
+      if (!preflightJson5Config(path)?.agents?.entries?.workflow?.workspace) errors.push("OpenClaw workflow workspace missing");
+    } catch (error) { errors.push(error.message); }
+  }
+  if (targetHarness === "hermes") {
+    try {
+      const path = join(profile.hostHome, "config.yaml");
+      const settings = loadYaml().parse(preflightYamlConfig(path) || "{}") || {};
+      const manual = /^(1|true|yes|on)$/i.test(env.HERMES_IGNORE_RULES || "") || settings.skills?.enabled === false || profile.capabilities.skills?.status === "unavailable";
+      const auto = settings.skills?.auto_load;
+      if (!manual && (!Array.isArray(auto) || auto.some(name => typeof name !== "string") || auto.filter(name => name === "nullform-workflow").length !== 1)) {
+        errors.push("Hermes skills.auto_load must register nullform-workflow exactly once");
+      }
+      const skill = join(profile.hostHome, "skills", "nullform-workflow", "SKILL.md");
+      if (!manual && !existsSync(skill)) errors.push("Hermes quality skill missing in selected profile");
+      else if (!manual) {
+        const text = readFileSync(skill, "utf8");
+        const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+        const metadata = match ? loadYaml().parse(match[1]) : null;
+        if (metadata?.name !== "nullform-workflow" || typeof metadata?.description !== "string") errors.push("Invalid Hermes quality skill frontmatter");
+      }
+      if (manual) {
+        checks.push({ id: "policy-loading", status: "warn", detail: "Native skill loading disabled/unavailable: manual project instructions required; registration is not activation." });
+      } else checks.push({
+        id: "policy-loading", status: "warn",
+        detail: "skills.auto_load configured, not runtime-proven; skills tools and HERMES_IGNORE_RULES permit loading. Delegated children may skip skills; parent must pass scoped requirements and checks.",
+      });
+      if (settings.mcp_servers && Object.keys(settings.mcp_servers).length) checks.push({ id: "legacy-extras", status: "warn", detail: "Existing MCP registrations preserved; legacy servers may remain active." });
+    } catch (error) { errors.push(error.message); }
+  }
+  checks.push({ id: "harness-integration", status: errors.length ? "fail" : "pass", detail: errors.length ? errors.join("; ") : `${targetHarness}: installed policy/configuration checked; native consumption remains unverified.` });
+  checks.push({ id: "skills", status: "skip", detail: "No bulk native-home skill catalogue required by adaptive profiles." });
   return checks;
 }
 
 export function runDoctor(options) {
-  const { harness, agentDir, agentsHome, mode: requestedMode } = options;
+  const { harness, mode: requestedMode } = options;
   const explicitTargetHarness = Boolean(options.targetHarness || options.harnessName);
   const targetHarness = options.targetHarness || options.harnessName || "omp";
   const userHome = options.userHome ? resolve(options.userHome) : homedir();
-  let projectRoot = options.projectRoot ? resolve(options.projectRoot) : null;
-  if (!projectRoot && options.userHome) {
-    try {
-      const stPath = join(userHome, ".nullform", "installation.json");
-      if (existsSync(stPath)) {
-        const st = JSON.parse(readFileSync(stPath, "utf8"));
-        if (typeof st?.projectRoot === "string" && st.projectRoot.trim()) projectRoot = resolve(st.projectRoot);
-      }
-    } catch {}
-  }
+  const saved = readInstallationState(userHome);
+  const sameSaved = saved?.harness === targetHarness;
+  const env = options.env || process.env;
+  const selectedHostHome = resolveHostHome({ harness: targetHarness, userHome, hostHome: options.hostHome || (sameSaved ? saved.hostHome : undefined), env }).path;
+  const agentDir = options.agentDir
+    ? resolve(options.agentDir)
+    : targetHarness === "omp"
+      ? selectedHostHome
+      : null;
+  const agentsHome = options.agentsHome
+    ? resolve(options.agentsHome)
+    : targetHarness === "omp"
+      ? join(userHome, ".agents")
+      : null;
+  const projectRoot = options.projectRoot ? resolve(options.projectRoot) : sameSaved ? saved.projectRoot : null;
+  const profile = inspectHarness({
+    harness: targetHarness, userHome, env, projectRoot,
+    hostHome: selectedHostHome,
+    hostManifest: loadHostManifest(options.hostManifest || (sameSaved ? saved.hostManifest : undefined), targetHarness),
+  });
   const probeResults = options.probeResults || null;
-  const harnessRootFile = join(agentDir, ".harness-root");
   let hasHarnessRoot = false;
   let harnessRootMatches = false;
   let harnessRootTarget = "";
 
-  if (existsSync(harnessRootFile)) {
-    hasHarnessRoot = true;
-    try {
-      harnessRootTarget = stripBom(readFileSync(harnessRootFile, "utf8")).trim();
-      harnessRootMatches = normalizePath(harnessRootTarget) === normalizePath(harness);
-    } catch {
-      harnessRootMatches = false;
+  if (agentDir) {
+    const harnessRootFile = join(agentDir, ".harness-root");
+    if (existsSync(harnessRootFile)) {
+      hasHarnessRoot = true;
+      try {
+        harnessRootTarget = stripBom(readFileSync(harnessRootFile, "utf8")).trim();
+        harnessRootMatches = normalizePath(harnessRootTarget) === normalizePath(harness);
+      } catch {
+        harnessRootMatches = false;
+      }
     }
   }
 
-  const isInstalledDetected = hasHarnessRoot && harnessRootMatches;
+  const isInstalledDetected = targetHarness === "omp"
+    ? (hasHarnessRoot && harnessRootMatches)
+    : (existsSync(harness) && (
+        existsSync(join(harness, "VERSION")) ||
+        existsSync(join(harness, "AGENTS.md")) ||
+        existsSync(join(harness, "CLAUDE.md")) ||
+        existsSync(join(harness, "openclaw.json")) ||
+        existsSync(join(harness, "config.yaml")) ||
+        Boolean(projectRoot && existsSync(join(projectRoot, ".cursor")))
+      ));
   const mode = requestedMode || (isInstalledDetected ? "installed" : "repo");
   const checks = [];
 
@@ -1333,7 +1333,7 @@ export function runDoctor(options) {
     }
   }
   } else {
-    checks.push(...checkNonOmpHarness({ harness, targetHarness, userHome, projectRoot }));
+    checks.push(...checkNonOmpHarness({ harness, targetHarness, projectRoot, profile, env }));
   }
   // 14. check 'release-drift': сверка локального VERSION с GitHub latest release.
   // WARN при отставании (никогда FAIL), SKIP при offline/отсутствии VERSION.
@@ -1366,6 +1366,11 @@ export function runDoctor(options) {
       }
     }
   }
+  // 15. check 'version-alignment' & 16. check 'harness-capabilities'
+  checks.push(checkVersionAlignment({ harness, userHome, activePid: options.activePid }));
+  checks.push(targetHarness === "omp" ? checkHarnessCapabilities(targetHarness) : {
+    id: "harness-capabilities", status: "warn", detail: profile.runtimeReady.reason,
+  });
 
   // Summary calculation
   const summary = {
@@ -1381,8 +1386,9 @@ export function runDoctor(options) {
     mode,
     harness,
     targetHarness,
+    ...(profile ? { profile } : {}),
     ...(projectRoot ? { projectRoot } : {}),
-    agentDir,
+    ...(agentDir ? { agentDir } : {}),
     requirePlugins: options.requirePlugins === true,
     checks,
     summary,
@@ -1394,7 +1400,7 @@ export function printHumanReport(result, quiet) {
   const { mode, harness, agentDir, checks, summary, ok } = result;
 
   if (!quiet) {
-    console.log(`\ndoctor: режим=${mode} харнесс=${harness}\nагентская директория=${agentDir}\n`);
+    console.log(`\ndoctor: режим=${mode} харнесс=${harness}\nагентская директория=${agentDir || "не требуется (non-omp)"}\n`);
     for (const c of checks) {
       const tag = c.status.toUpperCase().padEnd(4);
       let symbol = "•";
@@ -1415,7 +1421,7 @@ export function printHumanReport(result, quiet) {
 export async function main(argv = process.argv.slice(2)) {
   const opts = parseCliArgs(argv);
   if (opts.help) {
-    console.log(`Использование: node tools/doctor.mjs [--harness <dir>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet] [--probe] [--require-plugins]
+    console.log(`Использование: node tools/doctor.mjs [--harness <dir>] [--target-harness <name>] [--host-home <dir>] [--host-manifest <file>] [--agent-dir <dir>] [--agents-home <dir>] [--json] [--quiet] [--probe] [--require-plugins]
 
   --probe  опросить провайдеров из models.yml (GET {baseUrl}/models) и сопоставить
            с ролями config.yml; недостижимые дают WARN. Требует сети.
@@ -1426,7 +1432,9 @@ export async function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const probeResults = opts.probe ? await probeProviders(join(opts.agentDir, "models.yml")) : null;
+  const probeResults = opts.probe ? await probeProviders(join(
+    opts.agentDir || resolveHostHome({ harness: "omp", userHome: opts.userHome, hostHome: opts.hostHome }).path, "models.yml",
+  )) : null;
   let releaseInfo = opts.releaseInfo || null;
   if (!releaseInfo && !opts.skipReleaseCheck && existsSync(join(opts.harness, "VERSION"))) {
     try {

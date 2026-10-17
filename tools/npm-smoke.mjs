@@ -2,11 +2,13 @@
 
 import assert from "node:assert/strict";
 import {
+  closeSync,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -14,16 +16,28 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { resolve, join, dirname, delimiter } from "node:path";
+import { resolve, join, dirname, basename, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createLocalRegistry } from "./tests/npm-registry.mjs";
+import {
+  REPO_ROOT,
+  ALL_8_HARNESSES as HARNESS_CHOICES,
+  computeFileDigests,
+  deriveHigherVersion,
+  resolveNpmInvocation,
+  safeExtractArchive,
+  inspectArchiveContents,
+  buildHarnessFixture,
+  seedHarnessFiles,
+} from "./package-archive.mjs";
+export { computeFileDigests, deriveHigherVersion, resolveNpmInvocation, safeExtractArchive, inspectArchiveContents };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, "..");
-const HARNESS_CHOICES = ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman"];
+// Deployment includes asset copies, durable writes, native adapters, and doctor.
+const DEPLOYMENT_TIMEOUT_MS = 180_000;
 
 function terminateChildTree(child) {
   if (!child?.pid || child.exitCode !== null) return;
@@ -35,6 +49,7 @@ function terminateChildTree(child) {
 
 function spawnAsync(command, args = [], options = {}) {
   const { cwd = REPO_ROOT, env = process.env, input = "", timeoutMs = 120_000, tracker = null } = options;
+  const startedAt = Date.now();
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command, args, { cwd, env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     if (tracker) tracker.add(child);
@@ -64,34 +79,20 @@ function spawnAsync(command, args = [], options = {}) {
     });
     child.on("close", (code, signal) => {
       cleanupChild();
+      const elapsedMs = Date.now() - startedAt;
+      const stdout = Buffer.concat(outChunks).toString("utf8");
+      const rawStderr = Buffer.concat(errChunks).toString("utf8");
+      const stderr = rawStderr || (timedOut ? `Command timed out after ${timeoutMs}ms (elapsed: ${elapsedMs}ms): ${command} ${args.join(" ")}` : "");
       resolveRun({
         status: timedOut ? 124 : (code ?? 1),
         signal,
         timedOut,
-        stdout: Buffer.concat(outChunks).toString("utf8"),
-        stderr: Buffer.concat(errChunks).toString("utf8"),
+        elapsedMs,
+        stdout,
+        stderr,
       });
     });
   });
-}
-
-function resolveNpmInvocation(env = process.env) {
-  const execDir = dirname(process.execPath);
-  const candidates = [
-    env.npm_execpath,
-    join(execDir, "node_modules", "npm", "bin", "npm-cli.js"),
-    join(execDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
-    ...(env.PATH || "").split(delimiter).filter(Boolean).flatMap((d) => [
-      join(d, "node_modules", "npm", "bin", "npm-cli.js"),
-      join(d, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
-    ]),
-  ];
-  for (const c of candidates) {
-    if (c && /\.[cm]?js$/i.test(c) && existsSync(c)) return { command: process.execPath, prefixArgs: [c] };
-  }
-  return process.platform === "win32"
-    ? { command: env.ComSpec || "cmd.exe", prefixArgs: ["/d", "/c", "npm.cmd"] }
-    : { command: "npm", prefixArgs: [] };
 }
 
 function getGlobalBinPath(prefixDir) {
@@ -149,7 +150,13 @@ function createSmokeEnv(baseTemp) {
       const env = { ...isolatedEnv, ...(options.extraEnv || {}) };
       const command = process.platform === "win32" ? env.ComSpec || "cmd.exe" : binPath;
       const fullArgs = process.platform === "win32" ? ["/d", "/c", "nullform.cmd", ...args] : args;
-      return spawnAsync(command, fullArgs, { cwd: options.cwd || spaceBase, env, input: options.input ?? "", timeoutMs: options.timeoutMs ?? 60_000, tracker: activeChildren });
+      return spawnAsync(command, fullArgs, {
+        cwd: options.cwd || spaceBase,
+        env,
+        input: options.input ?? "",
+        timeoutMs: options.timeoutMs ?? 60_000,
+        tracker: activeChildren,
+      });
     },
     async dispose() {
       for (const child of activeChildren) terminateChildTree(child);
@@ -206,8 +213,7 @@ async function prepareDependencyTarballs(ctx, registry, pkgJson) {
         assert.equal(packDep.status, 0, `Failed to fetch/pack dependency ${depName}@${depVersion}: ${packDep.stderr}`);
         const unpackDepDir = join(ctx.tempPackDir, `unpack_${depName.replace(/[^a-zA-Z0-9_-]/g, "_")}`);
         mkdirSync(unpackDepDir, { recursive: true });
-        const untar = await ctx.spawnAsync("tar", ["-xzf", depTarballPath, "-C", unpackDepDir], { cwd: unpackDepDir, env: ctx.isolatedEnv });
-        assert.equal(untar.status, 0, `Failed to inspect dependency tarball ${depTarballPath}: ${untar.stderr}`);
+        safeExtractArchive(depTarballPath, unpackDepDir);
         const rawPkg = JSON.parse(readFileSync(join(unpackDepDir, "package", "package.json"), "utf8"));
         delete rawPkg.scripts;
         delete rawPkg.devDependencies;
@@ -221,50 +227,31 @@ async function prepareDependencyTarballs(ctx, registry, pkgJson) {
   );
 }
 
-async function verifyPackAndInventory(ctx, registry) {
-  const pkgPath = join(REPO_ROOT, "package.json");
-  assert.equal(existsSync(pkgPath), true, "package.json missing in repository root");
-  const pkgJson = JSON.parse(readFileSync(pkgPath, "utf8"));
-  assert.equal(pkgJson.name, "nullform-workflow", "R07: package name must be nullform-workflow");
-  assert.equal(pkgJson.bin?.nullform, "bin/nullform.mjs", "R07: bin.nullform must point to bin/nullform.mjs");
-  assert.ok(pkgJson.engines?.node === ">=18.19.0" || pkgJson.engines?.node === ">=18.0.0", "package.json engines.node must match");
-  assert.equal(readFileSync(join(REPO_ROOT, "VERSION"), "utf8").trim(), pkgJson.version, "VERSION must match package.json");
-
-  const dryPack = await ctx.runNpm(["pack", "--dry-run", "--json"], REPO_ROOT);
-  assert.equal(dryPack.status, 0, `R01: npm pack --dry-run failed: ${dryPack.stderr}`);
-  const parsed = JSON.parse(dryPack.stdout);
-  const packedFiles = (parsed[0]?.files || []).map((f) => f.path.replace(/\\/g, "/"));
-
-  const bannedPrefixes = [
-    ".tmp", ".workflow", "bench/runs", "history", "openspec", "tools/tests",
-    "tools/npm-smoke.mjs", ".git", "node_modules", "agent/config.yml", "agent/models.yml", "agent/mcp.json",
-  ];
-  for (const file of packedFiles) {
-    for (const b of bannedPrefixes) {
-      assert.ok(file !== b && !file.startsWith(`${b}/`) && !file.includes("/node_modules/"), `R01/R04: Banned path "${file}" in tarball`);
-    }
-    assert.ok(!file.endsWith("CODEMAP.md"), `R01: CODEMAP.md packed: ${file}`);
-    assert.ok(!(/\.env(\.|$)/i.test(file) && !file.endsWith("secrets.example.env")), `R04: Secret env packed: ${file}`);
+async function verifyPackAndInventory(ctx, registry, candidateTarballPath = null) {
+  const rootVer = readFileSync(join(REPO_ROOT, "VERSION"), "utf8").trim();
+  let tarballPath = candidateTarballPath ? resolve(candidateTarballPath) : null;
+  if (!tarballPath) {
+    const packRes = await ctx.runNpm(["pack", "--ignore-scripts", "--pack-destination", ctx.tempPackDir], REPO_ROOT);
+    assert.equal(packRes.status, 0, `npm pack failed: ${packRes.stderr}`);
+    tarballPath = join(ctx.tempPackDir, `nullform-workflow-${rootVer}.tgz`);
   }
+  assert.ok(existsSync(tarballPath) && statSync(tarballPath).size > 1024, "Tarball must be non-empty");
 
-  const requiredFiles = [
-    "package.json", "VERSION", "LICENSE", "jev/LICENSE", "README.md", "CONTEXT.md",
-    ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/harness-config.mjs",
-    "tools/installation-state.mjs", "tools/doctor.mjs", "tools/self-update.mjs", "tools/workflow.mjs",
-    "tools/verify.mjs", "tools/sync-manifest.json", "verify.ps1", "verify.sh",
-  ];
-  for (const req of requiredFiles) assert.ok(packedFiles.includes(req), `R01: Required asset "${req}" missing from tarball`);
+  const inspectDir = join(ctx.spaceBase, "candidate_inspect");
+  const { pkgJson, pkgDir } = inspectArchiveContents(tarballPath, inspectDir);
+  const packedFiles = listFilesRecursive(pkgDir).map((f) => f.slice(pkgDir.length + 1).replace(/\\/g, "/"));
+  const banned = [".tmp", ".workflow", "bench/runs", "history", "openspec", "tools/tests", "tools/npm-smoke.mjs", "tools/certify-package.mjs", "tools/publish-release.mjs", "tools/package-archive.mjs", ".git", "node_modules", "agent/config.yml", "agent/models.yml", "agent/mcp.json"];
+  for (const f of packedFiles) {
+    for (const b of banned) assert.ok(f !== b && !f.startsWith(`${b}/`) && !f.includes("/node_modules/"), `Banned: ${f}`);
+    assert.ok(!f.endsWith("CODEMAP.md") && !(/\.env(\.|$)/i.test(f) && !f.endsWith("secrets.example.env")));
+  }
+  const reqs = ["package.json", "VERSION", "LICENSE", "jev/LICENSE", "README.md", "CONTEXT.md", ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/harness-config.mjs", "tools/installation-state.mjs", "tools/doctor.mjs", "tools/self-update.mjs", "tools/workflow.mjs", "tools/verify.mjs", "tools/sync-manifest.json", "verify.ps1", "verify.sh"];
+  for (const req of reqs) assert.ok(packedFiles.includes(req), `Missing asset: ${req}`);
 
-  const packRes = await ctx.runNpm(["pack", "--ignore-scripts", "--pack-destination", ctx.tempPackDir], REPO_ROOT);
-  assert.equal(packRes.status, 0, `R01: npm pack failed: ${packRes.stderr}`);
-  const tarballName = `nullform-workflow-${pkgJson.version}.tgz`;
-  const tarballPath = join(ctx.tempPackDir, tarballName);
-  assert.equal(existsSync(tarballPath), true, `R01: Tarball not created at ${tarballPath}`);
-  assert.ok(statSync(tarballPath).size > 1024, "R01/R08: Packed tarball must be non-empty");
-
+  const digests = computeFileDigests(tarballPath);
   await prepareDependencyTarballs(ctx, registry, pkgJson);
   registry.addPackage({ name: "nullform-workflow", version: pkgJson.version, tarballPath, manifest: pkgJson });
-  return { pkgJson, packedFiles, tarballName, tarballPath };
+  return { pkgJson, packedFiles, tarballName: basename(tarballPath), tarballPath, sha256: digests.sha256, sha512: digests.sha512, size: digests.size };
 }
 
 async function verifyGlobalInstall(ctx, registry, pkgJson) {
@@ -296,53 +283,18 @@ async function verifyGlobalInstall(ctx, registry, pkgJson) {
   return binExecutable;
 }
 
-function buildHarnessFixture(harness, root, home, proj, secret) {
-  const hb = `Preserve human top note for ${harness} verbatim.`;
-  const ha = `Preserve human bottom note for ${harness} verbatim.`;
-  const stdMd = `# User Heading (${harness})\n\n${hb}\n\n<!-- BEGIN NULLFORM WORKFLOW -->\nOld workflow block to replace cleanly.\n<!-- END NULLFORM WORKFLOW -->\n\n${ha}\n`;
-  const opencodeJsonc = `{\n  // User JSONC comment preserved at trust boundary\n  "$schema": "https://opencode.ai/config.json",\n  "share": "manual",\n  "provider": { "openai": { "options": { "apiKey": "${secret}", }, }, },\n}\n`;
-  const openclawJson5 = `{\n  // OpenClaw JSON5 user configuration\n  env: { vars: { OPENAI_API_KEY: '${secret}', }, },\n  agents: { entries: { customAgent: { workspace: '/tmp/custom-agent', }, }, },\n}\n`;
-  const hermesYaml = `# User Hermes YAML config\nmodel: "anthropic/claude-3-5-sonnet"\napi_key: "${secret} # hash inside quoted YAML string"\ncustom_multiline: |\n  first line # keep comment char in literal block\n  second line\ndefaults: &default_settings\n  timeout: 45\nservice:\n  <<: *default_settings\nmcp_servers:\n  customUserServer:\n    command: "node"\n    args: ["custom-server.js"]\n    env:\n      API_TOKEN: "${secret}"\n`;
-  const ompMcp = JSON.stringify({ mcpServers: { customUserMcp: { command: "node", args: ["mcp.js"], env: { TOKEN: secret } } } }, null, 2) + "\n";
-  const openhumanToml = `# User OpenHuman TOML config\n[agent]\nagents_md_enabled = true\n\n[env]\nOPENAI_API_KEY = "${secret}"\n`;
-  const cursorMdc = `---\ndescription: Custom User Cursor Rule\nalwaysApply: true\n---\n\n${hb}\n\n<!-- BEGIN NULLFORM WORKFLOW -->\nOld workflow block to replace cleanly.\n<!-- END NULLFORM WORKFLOW -->\n\n${ha}\n`;
-
-  const map = {
-    claude: { md: [join(root, "CLAUDE.md"), join(home, ".claude", "CLAUDE.md")], skills: join(home, ".claude", "skills") },
-    codex: { md: [join(root, "AGENTS.md"), join(home, ".codex", "AGENTS.md")], skills: join(home, ".codex", "skills") },
-    opencode: { md: [join(root, "AGENTS.md"), join(home, ".config", "opencode", "AGENTS.md")], cfg: [join(root, "opencode.json"), join(home, ".config", "opencode", "opencode.json")], cfgBody: opencodeJsonc, cfgKind: "jsonc", skills: join(home, ".config", "opencode", "skills") },
-    cursor: { md: [join(proj, ".cursor", "rules", "00-workflow.mdc")], mdBody: cursorMdc, skills: join(root, "skills") },
-    omp: { md: [join(home, ".omp", "agent", "AGENTS.md")], cfg: [join(home, ".omp", "agent", "mcp.json")], cfgBody: ompMcp, cfgKind: "omp-json", skills: join(home, ".agents", "skills") },
-    openclaw: { md: [join(root, "AGENTS.md"), join(root, "SOUL.md"), join(root, "USER.md")], cfg: [join(root, "openclaw.json"), join(home, ".openclaw", "openclaw.json")], cfgBody: openclawJson5, cfgKind: "json5", skills: join(home, ".openclaw", "skills") },
-    hermes: { md: [join(root, "AGENTS.md"), join(home, ".hermes", "SOUL.md"), join(home, ".hermes", "AGENTS.md")], cfg: [join(root, "config.yaml"), join(home, ".hermes", "config.yaml")], cfgBody: hermesYaml, cfgKind: "yaml", skills: join(home, ".hermes", "skills") },
-    openhuman: { md: [join(root, "AGENTS.md"), join(home, ".openhuman", "AGENTS.md")], cfg: [join(home, ".openhuman", "config.toml")], cfgBody: openhumanToml, cfgKind: "toml", skills: join(home, ".openhuman", "skills"), noSymlink: true },
-  };
-  const e = map[harness];
-  return { mdFiles: e.md, mdContent: e.mdBody || stdMd, cfgFiles: e.cfg || [], cfgContent: e.cfgBody, cfgKind: e.cfgKind, skillsDir: e.skills, noSymlinkSkills: e.noSymlink, humanBefore: hb, humanAfter: ha };
-}
-
-function seedHarnessFiles(fixture, customRoot, secretToken) {
-  writeFileSync(join(customRoot, "unrelated-notes.txt"), "Unrelated user file content.\n", "utf8");
-  writeFileSync(join(customRoot, ".env"), `USER_ENV_SECRET=${secretToken}\n`, "utf8");
-  for (const mdPath of fixture.mdFiles) {
-    mkdirSync(dirname(mdPath), { recursive: true });
-    writeFileSync(mdPath, fixture.mdContent, "utf8");
-  }
-  for (const cfgPath of fixture.cfgFiles) {
-    mkdirSync(dirname(cfgPath), { recursive: true });
-    writeFileSync(cfgPath, fixture.cfgContent, "utf8");
-  }
-}
 
 async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome, projectDir, secretToken, pkgVersion) {
+  const hermesHostHome = harness === "hermes" ? join(harnessHome, ".hermes") : null;
   const initArgs = [
     "init", "--harness", harness, "--root", customRoot, "--user-home", harnessHome,
+    ...(hermesHostHome ? ["--host-home", hermesHostHome] : []),
     ...(projectDir ? ["--project-root", projectDir] : []), "--yes",
   ];
 
   let firstPassMdSnapshots = {};
   for (let pass = 1; pass <= 2; pass++) {
-    const res = await ctx.runInstalledBin(initArgs);
+    const res = await ctx.runInstalledBin(initArgs, { timeoutMs: DEPLOYMENT_TIMEOUT_MS });
     assert.equal(res.status, 0, `R02/R04: init pass ${pass} for ${harness} failed: ${res.stderr || res.stdout}`);
 
     for (const mdPath of fixture.mdFiles) {
@@ -362,6 +314,17 @@ async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome,
     }
 
     assert.equal(readFileSync(join(customRoot, "unrelated-notes.txt"), "utf8"), "Unrelated user file content.\n", "R04: Unrelated file altered");
+    if (fixture.mdSoul && pass === 1) {
+      // SOUL.md is identity: adaptive installer must leave human bytes untouched, no managed block.
+      const soul = readFileSync(fixture.mdSoul, "utf8");
+      assert.ok(soul.includes(fixture.humanBefore) && soul.includes(fixture.humanAfter), "R04: Human SOUL notes lost");
+      assert.equal(soul.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into SOUL.md");
+    }
+    if (fixture.mdHomeAgents && pass === 1) {
+      const home = readFileSync(fixture.mdHomeAgents, "utf8");
+      assert.ok(home.includes(fixture.humanBefore) && home.includes(fixture.humanAfter), "R04: Human home AGENTS notes lost");
+      assert.equal(home.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into home AGENTS.md");
+    }
     assert.equal(readFileSync(join(customRoot, ".env"), "utf8"), `USER_ENV_SECRET=${secretToken}\n`, "R04: User .env file altered");
 
     for (const cfgPath of fixture.cfgFiles) {
@@ -383,11 +346,23 @@ async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome,
       }
     }
 
-    assert.equal(existsSync(fixture.skillsDir), true, `R03: Skills directory missing at ${fixture.skillsDir} for ${harness}`);
-    const skills = readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
-    assert.ok(skills.length > 0, `R03: No skills installed in ${fixture.skillsDir} for ${harness}`);
-    if (fixture.noSymlinkSkills) {
-      for (const entry of skills) {
+    if (harness === "omp") {
+      assert.equal(existsSync(fixture.skillsDir), true, `R03: Skills directory missing at ${fixture.skillsDir} for ${harness}`);
+      const skills = readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+      assert.ok(skills.length > 0, `R03: No skills installed in ${fixture.skillsDir} for ${harness}`);
+    } else if (harness === "hermes") {
+      // Adaptive Hermes: exactly one native auto-load skill, no bulk catalogue, no SOUL write.
+      const skillFile = join(fixture.skillsDir, "nullform-workflow", "SKILL.md");
+      assert.equal(existsSync(skillFile), true, `R03: Hermes quality skill missing at ${skillFile}`);
+    } else if (harness === "cursor") {
+      // Cursor is project-scoped: target-root skills/ is legitimate project context, not a home catalogue.
+      assert.equal(existsSync(fixture.skillsDir), true, `R03: Cursor project skills missing at ${fixture.skillsDir}`);
+    } else {
+      // Adaptive non-OMP: no bulk home-skill catalogue by design (doctor reports skills:skip).
+      assert.equal(existsSync(fixture.skillsDir), false, `R03: Unexpected bulk skills catalogue at ${fixture.skillsDir} for adaptive ${harness}`);
+    }
+    if (fixture.noSymlinkSkills && existsSync(fixture.skillsDir)) {
+      for (const entry of readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
         const fullSkillPath = join(fixture.skillsDir, entry.name);
         assert.equal(lstatSync(fullSkillPath).isSymbolicLink(), false, `R03: Skill must not be symlink: ${fullSkillPath}`);
       }
@@ -422,7 +397,8 @@ async function verifyHarnessDoctor(ctx, harness, harnessHome) {
     const integrationCheck = (docJson.checks || []).find((c) => c.id === "harness-integration");
     assert.equal(integrationCheck?.status, "pass", `R03: harness-integration check must pass for ${harness}`);
     const skillsCheck = (docJson.checks || []).find((c) => c.id === "skills");
-    assert.equal(skillsCheck?.status, "pass", `R03: skills check must pass for ${harness}`);
+    // Adaptive non-OMP reports skills:skip (no bulk catalogue by design); OMP still requires pass.
+    assert.equal(skillsCheck?.status, "skip", `R03: skills check must skip for adaptive ${harness}`);
     const runtimeCheck = (docJson.checks || []).find((c) => c.id === "host-runtime");
     assert.ok(runtimeCheck, `R03: host-runtime check must be present for ${harness}`);
     assert.notEqual(runtimeCheck.status, "fail", `R03: Missing host runtime for ${harness} must be SETUP/warn, never FAIL`);
@@ -499,103 +475,141 @@ async function verifyBoundaries(ctx) {
   assert.equal(existsSync(join(badMarkerHome, ".nullform", "installation.json")), false);
 }
 
-async function verifyRegistryUpgrade(ctx, registry, v11TarballPath, pkgJson) {
-  const unpackDir = join(ctx.spaceBase, "v120_unpack");
+async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJson) {
+  const upgradeVersion = deriveHigherVersion(pkgJson.version, 1);
+  const brokenVersion = deriveHigherVersion(pkgJson.version, 2);
+  const unpackDir = join(ctx.spaceBase, "upgrade_unpack");
   mkdirSync(unpackDir, { recursive: true });
-  assert.equal((await ctx.spawnAsync("tar", ["-xzf", v11TarballPath, "-C", unpackDir], { cwd: unpackDir, env: ctx.isolatedEnv })).status, 0);
+  safeExtractArchive(candidateTarballPath, unpackDir);
 
-  const v12Source = join(unpackDir, "package");
-  assert.ok(existsSync(join(v12Source, "CONTEXT.md")) && existsSync(join(v12Source, ".code-size.baseline.json")));
-  const v12Pkg = { ...pkgJson, version: "1.2.0" };
-  writeFileSync(join(v12Source, "package.json"), JSON.stringify(v12Pkg, null, 2) + "\n", "utf8");
-  writeFileSync(join(v12Source, "VERSION"), "1.2.0\n", "utf8");
+  const vUpSource = join(unpackDir, "package");
+  const vUpPkg = { ...pkgJson, version: upgradeVersion };
+  writeFileSync(join(vUpSource, "package.json"), JSON.stringify(vUpPkg, null, 2) + "\n", "utf8");
+  writeFileSync(join(vUpSource, "VERSION"), `${upgradeVersion}\n`, "utf8");
 
-  const opencodeSkills = join(ctx.spaceBase, "home_opencode", ".config", "opencode", "skills");
-  const ownedSkillFile = join(opencodeSkills, "ui-ux-pro-max", "scripts", "core.py");
-  const userSkillFile = join(opencodeSkills, "ui-ux-pro-max", "scripts", "validate_data.py");
-  assert.ok(existsSync(ownedSkillFile), "R03: Owned skill asset should exist prior to update");
-  assert.ok(existsSync(userSkillFile), "R03: Skill asset to be edited should exist prior to update");
+  const ompSkills = join(ctx.spaceBase, "home_omp", ".agents", "skills");
+  const ownedSkillFile = join(ompSkills, "ui-ux-pro-max", "scripts", "core.py");
+  const userSkillFile = join(ompSkills, "ui-ux-pro-max", "scripts", "validate_data.py");
   writeFileSync(userSkillFile, "# User edit to validate_data.py preserved\n", "utf8");
-  writeFileSync(join(v12Source, "skills", "ui-ux-pro-max", "scripts", "core.py"), "# Upgraded core.py v1.2.0\n", "utf8");
-  writeFileSync(join(v12Source, "skills", "ui-ux-pro-max", "scripts", "validate_data.py"), "# Upgraded validate_data.py v1.2.0\n", "utf8");
-  assert.equal((await ctx.runNpm(["pack", "--ignore-scripts", "--pack-destination", ctx.tempPackDir], v12Source)).status, 0);
-  const v12TarballPath = join(ctx.tempPackDir, "nullform-workflow-1.2.0.tgz");
-  assert.ok(existsSync(v12TarballPath), "R06: v1.2.0 tarball missing");
+  writeFileSync(join(vUpSource, "skills", "ui-ux-pro-max", "scripts", "core.py"), `# Upgraded core.py v${upgradeVersion}\n`, "utf8");
+  writeFileSync(join(vUpSource, "skills", "ui-ux-pro-max", "scripts", "validate_data.py"), `# Upgraded validate_data.py v${upgradeVersion}\n`, "utf8");
+  assert.equal((await ctx.runNpm(["pack", "--ignore-scripts", "--pack-destination", ctx.tempPackDir], vUpSource)).status, 0);
+  const vUpTarballPath = join(ctx.tempPackDir, `nullform-workflow-${upgradeVersion}.tgz`);
 
-  registry.addPackage({ name: "nullform-workflow", version: "1.2.0", tarballPath: v12TarballPath, manifest: v12Pkg });
+  registry.addPackage({ name: "nullform-workflow", version: upgradeVersion, tarballPath: vUpTarballPath, manifest: vUpPkg });
   const metaRes = await fetch(`${registry.url}/nullform-workflow`);
   assert.equal(metaRes.status, 200);
-  assert.equal((await metaRes.json())["dist-tags"]?.latest, "1.2.0");
+  assert.equal((await metaRes.json())["dist-tags"]?.latest, upgradeVersion);
 
-  const opencodeHome = join(ctx.spaceBase, "home_opencode");
-  const opencodeRoot = join(ctx.spaceBase, "root_opencode");
+  const opencodeHome = join(ctx.spaceBase, "home_omp");
+  const opencodeRoot = join(ctx.spaceBase, "root_omp");
   const envReg = { npm_config_registry: registry.url, NPM_CONFIG_REGISTRY: registry.url, NULLFORM_REGISTRY: registry.url };
-  const updateRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], { extraEnv: envReg });
-  assert.equal(updateRes.status, 0, `R06: update failed: ${updateRes.stderr || updateRes.stdout}`);
-  assert.equal((await ctx.runInstalledBin(["--version"])).stdout.trim(), "1.2.0");
+  const updateRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: DEPLOYMENT_TIMEOUT_MS });
+  assert.equal(updateRes.status, 0, `R06: update failed (status: ${updateRes.status}, elapsed: ${updateRes.elapsedMs}ms): ${updateRes.stderr || updateRes.stdout}`);
+  assert.equal((await ctx.runInstalledBin(["--version"])).stdout.trim(), upgradeVersion);
 
   const updatedState = JSON.parse(readFileSync(join(opencodeHome, ".nullform", "installation.json"), "utf8"));
-  assert.equal(updatedState.version, "1.2.0");
-  assert.equal(updatedState.harness, "opencode");
-  assert.equal(resolve(updatedState.root), resolve(opencodeRoot));
-  assert.equal(readFileSync(join(opencodeRoot, "VERSION"), "utf8").trim(), "1.2.0");
-  assert.ok(readFileSync(join(opencodeHome, ".config", "opencode", "AGENTS.md"), "utf8").includes("Preserve human top note for opencode verbatim."));
-  assert.ok(readFileSync(join(opencodeHome, ".config", "opencode", "opencode.json"), "utf8").includes("sk-secret-opencode-98765"));
+  assert.equal(updatedState.version, upgradeVersion);
+  assert.equal(readFileSync(join(opencodeRoot, "VERSION"), "utf8").trim(), upgradeVersion);
+  assert.equal(readFileSync(ownedSkillFile, "utf8"), `# Upgraded core.py v${upgradeVersion}\n`, "R03/R06: Owned asset updated");
+  assert.equal(readFileSync(userSkillFile, "utf8"), "# User edit to validate_data.py preserved\n", "R03/R06: User edit preserved");
 
-  assert.equal(readFileSync(ownedSkillFile, "utf8"), "# Upgraded core.py v1.2.0\n", "R03/R04/R06: Unchanged owned asset should update to v1.2.0");
-  assert.equal(readFileSync(userSkillFile, "utf8"), "# User edit to validate_data.py preserved\n", "R03/R04/R06: User-edited asset should not be overwritten");
-  assert.ok(updatedState.managedFiles?.[ownedSkillFile], "R03/R05: Owned skill file hash should be recorded in managedFiles");
-  assert.ok(updatedState.managedFiles?.[userSkillFile], "R03/R05: User skill file prior hash should be preserved in managedFiles");
-  const cursorHome = join(ctx.spaceBase, "home_cursor");
-  const cursorRoot = join(ctx.spaceBase, "root_cursor");
-  const cursorProject = join(ctx.spaceBase, "project_cursor");
-  const cUpRes = await ctx.runInstalledBin(["update", "--force", "--yes", "--user-home", cursorHome, "--registry", registry.url], { extraEnv: envReg });
-  assert.equal(cUpRes.status, 0);
-  const cursorState = JSON.parse(readFileSync(join(cursorHome, ".nullform", "installation.json"), "utf8"));
-  assert.equal(cursorState.version, "1.2.0");
-  assert.equal(resolve(cursorState.root), resolve(cursorRoot));
-  assert.equal(resolve(cursorState.projectRoot), resolve(cursorProject));
-  assert.equal(readFileSync(join(cursorRoot, "VERSION"), "utf8").trim(), "1.2.0");
-  assert.ok(readFileSync(join(cursorProject, ".cursor", "rules", "00-workflow.mdc"), "utf8").includes("Preserve human top note for cursor verbatim."));
+  for (const h of HARNESS_CHOICES.filter((c) => c !== "opencode")) {
+    const hHome = join(ctx.spaceBase, `home_${h}`);
+    const hRoot = join(ctx.spaceBase, `root_${h}`);
+    const hProj = h === "cursor" ? join(ctx.spaceBase, `project_${h}`) : null;
+    const hSecret = `sk-secret-${h}-98765`;
+    const fixture = buildHarnessFixture(h, hRoot, hHome, hProj || hRoot, hSecret);
 
-  const v13Pkg = { ...pkgJson, version: "1.3.0" };
-  registry.addPackage({ name: "nullform-workflow", version: "1.3.0", tarballPath: v12TarballPath, manifest: v13Pkg, tarballStatus: 404 });
+    const hUp = await ctx.runInstalledBin(["update", "--yes", "--user-home", hHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: DEPLOYMENT_TIMEOUT_MS });
+    assert.equal(hUp.status, 0, `R06: ${h} update failed: ${hUp.stderr || hUp.stdout}`);
+    const hState = JSON.parse(readFileSync(join(hHome, ".nullform", "installation.json"), "utf8"));
+    assert.equal(hState.version, upgradeVersion);
+    assert.equal(hState.harness, h);
+    assert.equal(resolve(hState.root), resolve(hRoot));
+    if (hProj) assert.equal(resolve(hState.projectRoot), resolve(hProj));
+    assert.equal(readFileSync(join(hRoot, "VERSION"), "utf8").trim(), upgradeVersion);
+
+    for (const mdPath of fixture.mdFiles) {
+      const md = readFileSync(mdPath, "utf8");
+      assert.ok(md.includes(fixture.humanBefore) && md.includes(fixture.humanAfter), `Human notes lost in ${mdPath}`);
+      assert.ok(md.includes("NULLFORM WORKFLOW"), `Adapter missing in ${mdPath}`);
+    }
+    for (const cfgPath of fixture.cfgFiles) {
+      assert.ok(readFileSync(cfgPath, "utf8").includes(hSecret), `Secret lost in ${cfgPath}`);
+    }
+    assert.equal(readFileSync(join(hRoot, "unrelated-notes.txt"), "utf8"), "Unrelated user file content.\n");
+    assert.equal(readFileSync(join(hRoot, ".env"), "utf8"), `USER_ENV_SECRET=${hSecret}\n`);
+  }
+
+  registry.addPackage({ name: "nullform-workflow", version: brokenVersion, tarballPath: vUpTarballPath, manifest: { ...pkgJson, version: brokenVersion }, tarballStatus: 404 });
   const tarballFailRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], {
     timeoutMs: 30_000,
     extraEnv: { ...envReg, npm_config_fetch_retries: "0", NPM_CONFIG_FETCH_RETRIES: "0" },
   });
-  assert.notEqual(tarballFailRes.status, 0, "R06: Broken 404 tarball during npm install must exit nonzero");
-  assert.equal((await ctx.runInstalledBin(["--version"])).stdout.trim(), "1.2.0", "R06: Failed update must leave global version at 1.2.0");
-  assert.equal(JSON.parse(readFileSync(join(opencodeHome, ".nullform", "installation.json"), "utf8")).version, "1.2.0", "R06: Failed update must preserve verified installation.json version");
-  assert.equal(readFileSync(join(opencodeRoot, "VERSION"), "utf8").trim(), "1.2.0", "R06: Failed update must preserve target root VERSION");
+  assert.notEqual(tarballFailRes.status, 0, "R06: Broken 404 tarball must exit nonzero");
+  assert.equal((await ctx.runInstalledBin(["--version"])).stdout.trim(), upgradeVersion);
+  assert.equal(JSON.parse(readFileSync(join(opencodeHome, ".nullform", "installation.json"), "utf8")).version, upgradeVersion);
 
-  const unreachable = "http://127.0.0.1:1/unreachable";
-  const failRes = await ctx.runInstalledBin(["update", "--yes", "--timeout", "2", "--user-home", opencodeHome, "--registry", unreachable], {
+  const failRes = await ctx.runInstalledBin(["update", "--yes", "--timeout", "2", "--user-home", opencodeHome, "--registry", "http://127.0.0.1:1/unreachable"], {
     timeoutMs: 15_000,
-    extraEnv: { npm_config_registry: unreachable, NPM_CONFIG_REGISTRY: unreachable, NULLFORM_REGISTRY: unreachable, npm_config_fetch_retries: "0", NPM_CONFIG_FETCH_RETRIES: "0" },
+    extraEnv: { npm_config_registry: "http://127.0.0.1:1/unreachable", npm_config_fetch_retries: "0" },
   });
   assert.notEqual(failRes.status, 0, "R06: Unreachable registry must exit nonzero");
 }
 
+let inProcessSmokePromise = Promise.resolve();
+
+async function acquireHostLock(lockPath, timeoutMs = 60_000) {
+  const start = Date.now();
+  while (true) {
+    try {
+      const fd = openSync(lockPath, "wx");
+      writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
+      closeSync(fd);
+      return () => { try { rmSync(lockPath, { force: true }); } catch {} };
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      try {
+        const [p, t] = readFileSync(lockPath, "utf8").trim().split("\n");
+        let alive = false;
+        if (p) { try { process.kill(parseInt(p, 10), 0); alive = true; } catch {} }
+        if (!alive || (Date.now() - parseInt(t, 10) > 180_000)) { rmSync(lockPath, { force: true }); continue; }
+      } catch {}
+      if (Date.now() - start > timeoutMs) throw new Error(`npm-smoke lock timeout at ${lockPath}`);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+}
+
 export async function runSmoke(options = {}) {
+  const prior = inProcessSmokePromise;
+  let releaseInProcess = null;
+  inProcessSmokePromise = new Promise((res) => { releaseInProcess = res; });
+  await prior;
+
+  const lockPath = join(tmpdir(), "nullform-smoke.lock");
+  let releaseHostLock = null;
   const keepTemp = Boolean(options.keepTemp);
   const baseTemp = options.baseTemp || mkdtempSync(join(tmpdir(), "nullform-smoke-"));
+  const candidateTarballPath = options.tarballPath ? resolve(options.tarballPath) : null;
   let registry = null;
   let ctx = null;
   let primaryError = null;
 
   try {
+    releaseHostLock = await acquireHostLock(lockPath);
     ctx = createSmokeEnv(baseTemp);
     const registryServer = createLocalRegistry({ host: "127.0.0.1", port: 0 });
     registry = await registryServer.start();
 
-    const packInfo = await verifyPackAndInventory(ctx, registry);
+    const packInfo = await verifyPackAndInventory(ctx, registry, candidateTarballPath);
     const binExecutable = await verifyGlobalInstall(ctx, registry, packInfo.pkgJson);
 
-    await Promise.all([
-      ...HARNESS_CHOICES.map((harness) => seedAndVerifyHarness(ctx, harness, packInfo.pkgJson.version)),
-      verifyBoundaries(ctx),
-    ]);
+    for (const harness of HARNESS_CHOICES) {
+      await seedAndVerifyHarness(ctx, harness, packInfo.pkgJson.version);
+    }
+    await verifyBoundaries(ctx);
     await verifyRegistryUpgrade(ctx, registry, packInfo.tarballPath, packInfo.pkgJson);
 
     const workspaceTmp = join(REPO_ROOT, ".tmp");
@@ -622,21 +636,38 @@ export async function runSmoke(options = {}) {
     assert.ok(readFileSync(deliveredTarball).equals(sourceBuf), "R08: Delivered tarball in .tmp/ must match verified pack exactly");
     return {
       status: "success",
+      tarballPath: packInfo.tarballPath,
+      tarballName: packInfo.tarballName,
+      tarballSha256: packInfo.sha256,
+      tarballSha512: packInfo.sha512,
+      version: packInfo.pkgJson.version,
       evidence: {
         R01: `Packed ${packInfo.tarballName} (${packInfo.packedFiles.length} files, private/node_modules excluded) with real json5@2.2.3, yaml@2.9.1, and jsonc-parser@3.3.1 dependency tarballs; installed globally via --ignore-scripts at ${binExecutable}`,
         R02: `Initialized all 8 harnesses (${HARNESS_CHOICES.join(", ")}); non-TTY missing selection, --harness auto, and cancelled prompt fail closed without writes`,
         R03: `Source-verified native routes and skills validated for all 8 harnesses; doctor verified targetHarness and excluded OMP-only checks for non-OMP`,
         R04: `Mixed managed-block human notes, JSONC/JSON5/YAML/TOML secrets, YAML #/multiline/anchors, and unrelated files preserved across repeat init and update; dry-run, malformed config, and malformed marker preflight made zero writes`,
         R05: `Persisted schemaVersion 1 installation.json (including custom root and Cursor projectRoot) verified across all 8 harnesses and respected by doctor/update`,
-        R06: `Upgraded global bin, installation.json, and target VERSION from ${packInfo.pkgJson.version} to 1.2.0 via loopback registry without Git; bounded unreachable registry exited nonzero`,
+        R06: `Upgraded global bin, installation.json, and target VERSION from ${packInfo.pkgJson.version} to ${deriveHigherVersion(packInfo.pkgJson.version, 1)} via loopback registry without Git; bounded unreachable registry exited nonzero`,
         R07: `Single package nullform-workflow with nullform CLI backed by installHarness`,
         R08: `Verified tarball delivered at ${deliveredTarball} and upgraded via loopback registry ${registry.url}`,
+      },
+      outcomes: {
+        globalInstall: "passed",
+        harnesses: HARNESS_CHOICES,
+        updatedHarnesses: HARNESS_CHOICES,
+        doctor: "passed",
+        boundaries: "passed",
+        registryUpgrade: "passed",
       },
     };
   } catch (err) {
     primaryError = err;
     throw err;
   } finally {
+    if (releaseHostLock) {
+      try { releaseHostLock(); } catch {}
+    }
+    if (releaseInProcess) releaseInProcess();
     let cleanupError = null;
     if (ctx) {
       try { await ctx.dispose(); } catch (err) { cleanupError ||= err; }
@@ -644,12 +675,16 @@ export async function runSmoke(options = {}) {
     if (registry) {
       try { await registry.close(); } catch (err) { cleanupError ||= err; }
     }
-    if (!keepTemp && existsSync(baseTemp)) {
+    if (!keepTemp && !primaryError && existsSync(baseTemp)) {
       try {
         rmSync(baseTemp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       } catch (err) {
         cleanupError ||= err;
       }
+    }
+    if (primaryError && existsSync(baseTemp)) {
+      try { primaryError.diagnosticsPath = baseTemp; } catch {}
+      console.error(`[npm-smoke] Failure diagnostics preserved at ${baseTemp}`);
     }
     if (cleanupError) {
       if (primaryError) {
@@ -664,7 +699,15 @@ export async function runSmoke(options = {}) {
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const keepTemp = process.argv.includes("--keep-temp");
   const asJson = process.argv.includes("--json");
-  runSmoke({ keepTemp })
+  let tarballPath = null;
+  const tarballIdx = process.argv.indexOf("--tarball");
+  if (tarballIdx !== -1 && process.argv[tarballIdx + 1]) {
+    tarballPath = process.argv[tarballIdx + 1];
+  } else {
+    const tarballEq = process.argv.find((a) => a.startsWith("--tarball="));
+    if (tarballEq) tarballPath = tarballEq.slice("--tarball=".length);
+  }
+  runSmoke({ keepTemp, tarballPath })
     .then((res) => {
       if (asJson) console.log(JSON.stringify(res, null, 2));
       else {

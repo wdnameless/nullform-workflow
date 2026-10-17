@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "claimStatus": "not-proven",
+  "model": "nullform-gateway/gemini-3.8-flash-high",
+  "tariffSource": "installed SDK fixed catalog; not independent provider invoice",
+  "sourceHash": "c4817077f4d2c4dcbdb979a6664c0759feeadafde441a9d5be9a474bd7afcce2",
+  "summary": {
+    "totalConstructedPairs": 4,
+    "reviewPairs": 3,
+    "workflowPairs": 1,
+    "review": {
+      "baselineAccurate": 3,
+      "baselineTotal": 3,
+      "candidateAccurate": 3,
+      "candidateTotal": 3,
+      "baselineTariffUsd": 0.0033195,
+      "candidateTariffUsd": 0.00665775,
+      "assessment": "equal accuracy (3/3 each); candidate roughly 2x tariff; quality gain not proven"
+    },
+    "workflow": {
+      "baselineStatus": "passed",
+      "baselineAssistantTurns": 5,
+      "baselineTariffUsd": 0.0051855,
+      "baselineStopReason": "stop",
+      "candidateStatus": "failed",
+      "candidateAssistantTurns": 6,
+      "candidateTariffUsd": 0.01945125,
+      "candidateStopReason": "toolUse",
+      "candidateTerminalFailure": "request count cap reached without final report",
+      "assessment": "baseline succeeded in 5 turns; candidate halted at 6-turn cap without final report"
+    },
+    "cohort": {
+      "totalRequests": 17,
+      "cumulativeTariffUsd": 0.034614
+    },
+    "spendLedger": {
+      "totalSettledRequests": 18,
+      "cumulativeTariffUsd": 0.0362235,
+      "unsettledRequests": 0,
+      "ceilingUsd": 1.0,
+      "status": "ok",
+      "note": "Historical snapshot: 17 comparison requests ($0.034614 USD) plus 1 separate network proof smoke ($0.0016095 USD)"
+    }
+  },
+  "limitations": [
+    "Four constructed code examples on a single model with single repetition; not representative of general or current-release development quality.",
+    "Installed SDK fixed catalog pricing; actual API provider invoices are unverified.",
+    "Equal or adverse outcomes observed; no causal quality, speed, or accuracy improvement is proven.",
+    "Measured equal/adverse outcome is not equivalent to universal 0% benefit or zero value.",
+    "Current release prompts and instructions do not retag or overwrite historical observations.",
+    "No paid A/B experiments performed for this release."
+  ],
+  "pairs": [
+    {
+      "task": "eval-review-positive",
+      "type": "review",
+      "fixtureHash": "d659a1371806e2d80bd17e969d94bfe3866560c1540d57b9864670ff04268fd8",
+      "baseline": {
+        "sessionId": "01a10d03-1b3e-7717-9091-fb7c610686a3",
+        "model": "nullform-gateway/gemini-3.8-flash-high",
+        "assistantTurns": 1,
+        "tariff_usd": 0.0013665,
+        "stopReason": "stop",
+        "evaluationStatus": "passed",
+        "requirementsSatisfied": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "skillHash": null
+      },
+      "candidate": {
+        "sessionId": "01a10d03-93de-74c7-8b42-21443e98261c",
+        "model": "nullform-gateway/gemini-3.8-flash-high",
+        "assistantTurns": 1,
+        "tariff_usd": 0.00242925,
+        "stopReason": "stop",
+        "evaluationStatus": "passed",
+        "requirementsSatisfied": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2"
+      }
+    },
+    {
+      "task": "eval-review-near-negative",
+      "type": "review",
+      "fixtureHash": "6bf1970c4d843828fae2d61af7d5cdfa7693f8a1f8db62b32f583b8e54f0e1ad",
+      "baseline": {
+        "sessionId": "01a10d03-c441-7467-86fb-8ad68702b0f1",
+        "model": "nullform-gateway/gemini-3.8-flash-high",
+        "assistantTurns": 1,
+        "tariff_usd": 0.0004455,
+        "stopReason": "stop",
+        "evaluationStatus": "passed",
+        "requirementsSatisfied": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "skillHash": null
+      },
+      "candidate": {
+        "sessionId": "01a10d03-e393-7354-a30d-6e60f17320fa",
+        "model": "nullform-gateway/gemini-3.8-flash-high",
+        "assistantTurns": 1,
+        "tariff_usd": 0.001602,
+        "stopReason": "stop",
+        "evaluationStatus": "passed",
+        "requirementsSatisfied": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2"
+      }
+    },
+    {
+      "task": "eval-review-defect-outcome",
+      "type": "review",
+      "fixtureHash": "6269e3512776f32e3a5cfeb4c326088e7d75878e355fd5faddbb8caf1ee0dd79",
+      "baseline": {
+        "sessionId": "01a10d04-1649-73dd-baa2-175a542923c3",
+        "model": "nullform-gateway/gemini-3.8-flash-high",
+        "assistantTurns": 1,
+        "tariff_usd": 0.0015075,
+        "stopReason": "stop",
+        "evaluationStatus": "passed",
+        "requirementsSatisfied": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "skillHash": null
+      },
+      "candidate": {
+        "sessionId": "01a10d04-57f3-7357-9af8-9ba815a101dc",
+        "model": "nullform-gateway/gemini-3.8-flash-high",
+        "assistantTurns": 1,
+        "tariff_usd": 0.0026265,
+        "stopReason": "stop",
+        "evaluationStatus": "passed",
+        "requirementsSatisfied": true,
+        "missedDefects": 0,
+        "falsePositives": 0,
+        "skillHash": "c5e04f5d1017ef125b08dba7e0aa02a90209fedec9006a5cdf4d5a482579b2b2"
+      }
+    },
+    {
+      "task": "eval-workflow-execution-outcome",
+      "type": "workflow",
+      "fixtureHash": "2ac2675bf860259da78f0343bef7fbd6241e54da5b987c1c8752d06b75bb0489",
+      "baseline": {
+        "sessionId": "01a10d2c-a4bd-762a-8b85-c62d3a5cbb0d",
+        "model": "nullform-gateway/gemini-3.8-flash-high",
+        "assistantTurns": 5,
+        "tariff_usd": 0.0051855,
+        "stopReason": "stop",
+        "evaluationStatus": "passed",
+        "requirementsSatisfied": true,
+        "skillHash": null
+      },
+      "candidate": {
+        "sessionId": "01a10d2c-ee0d-744e-8840-ee85535e4971",
+        "model": "nullform-gateway/gemini-3.8-flash-high",
+        "assistantTurns": 6,
+        "tariff_usd": 0.01945125,
+        "stopReason": "toolUse",
+        "evaluationStatus": "failed",
+        "requirementsSatisfied": false,
+        "skillHash": "356612ee6ee380c802cb200ef23e133e51541681aa45ade4f35742dbb723a81e",
+        "failure": "Request count cap reached without final report"
+      }
+    }
+  ]
+}

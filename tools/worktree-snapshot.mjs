@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from 'node:fs';
-import { join, resolve, relative, isAbsolute, basename } from 'node:path';
+import { readFileSync, existsSync, statSync, readdirSync, realpathSync, lstatSync } from 'node:fs';
+import { join, resolve, relative, isAbsolute, basename, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 export function isPathInsideRoot(root, path) {
@@ -8,9 +8,52 @@ export function isPathInsideRoot(root, path) {
   const rel = relative(resolve(root), resolve(root, path));
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && !isAbsolute(rel);
 }
-export function isRealPathInsideRoot(root, path) {
-  if (!isPathInsideRoot(root, path)) return false;
-  try { return isPathInsideRoot(realpathSync(root), realpathSync(resolve(root, path))); } catch { return false; }
+export function isRealPathInsideRoot(root, path) { if (!isPathInsideRoot(root, path)) return false;
+try { return isPathInsideRoot(realpathSync(root), realpathSync(resolve(root, path))); } catch { return false; } }
+
+export function normalizePath(path) {
+  const full = resolve(path);
+  return full.startsWith('\\\\?\\') ? full.slice(4) : full;
+}
+export function isInsideOrEqual(parent, child) {
+  let p = normalizePath(parent), c = normalizePath(child);
+  const sep = process.platform === 'win32' ? '\\' : '/';
+  if (process.platform === 'win32') { p = p.toLowerCase(); c = c.toLowerCase(); }
+  return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
+}
+export function resolveRealPath(path) { try { return normalizePath(realpathSync.native ? realpathSync.native(path) : realpathSync(path)); } catch { return null; } }
+export function getCanonicalPath(path, cache = null) {
+  try { return canonicalEntry(path, cache).real; } catch { return null; }
+}
+function canonicalEntry(path, cache) {
+  const full = normalizePath(path);
+  if (cache?.has(full)) return cache.get(full);
+  let stat, entry;
+  try { stat = lstatSync(full); } catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
+  if (stat) {
+    const real = resolveRealPath(full);
+    entry = { real, link: stat.isSymbolicLink(), directory: stat.isDirectory() || Boolean(stat.isSymbolicLink() && real && statSync(full).isDirectory()) };
+  } else {
+    const parent = dirname(full);
+    const ancestor = parent === full ? null : canonicalEntry(parent, cache);
+    entry = { real: ancestor?.directory && ancestor.real ? join(ancestor.real, basename(full)) : null, link: false, directory: true };
+  }
+  cache?.set(full, entry);
+  return entry;
+}
+export function validateRootPath(path) {
+  if (typeof path !== 'string' || !path.trim()) throw new Error('Preflight failed: root path is empty or invalid');
+  const full = normalizePath(path), entry = canonicalEntry(full);
+  if (entry.link) throw new Error(`Preflight failed: root path "${full}" escapes declared root or is a symlink/junction`);
+  if (!entry.real || !entry.directory) throw new Error(`Preflight failed: root path "${full}" is not a resolvable directory`);
+  return full;
+}
+export function validatePathWithinScope(path, scope, cache = null, allowRootLink = false) {
+  try {
+    if (!isInsideOrEqual(scope, path)) return false;
+    const root = canonicalEntry(scope, cache), target = canonicalEntry(path, cache);
+    return Boolean(root.real && root.directory && target.real && (allowRootLink || !root.link) && isInsideOrEqual(root.real, target.real));
+  } catch { return false; }
 }
 export function isStructuralExcludedPath(path) {
   const parts = String(path || '').replace(/\\/g, '/').split('/');
@@ -27,12 +70,21 @@ export function isAcceptanceArtifactFilename(path) {
 export function isAcceptancePath(path) {
   return /^openspec\/changes\/[^/]+\//.test(path.replace(/\\/g, '/')) && isAcceptanceArtifactFilename(path);
 }
-export function hashFile(path) {
-  try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return null; }
+export function hashFile(path, text = false) {
+  try {
+    let bytes = readFileSync(path);
+    // Latin-1 roundtrips every byte; only declared text may lose CRLF bytes.
+    if (text && bytes.includes(13) && !bytes.subarray(0, 8000).includes(0)) {
+      bytes = Buffer.from(bytes.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+    }
+    return createHash('sha256').update(bytes).digest('hex');
+  } catch { return null; }
 }
+const TEXT_PATH = /(?:\.(?:md|mdc|mjs|cjs|js|jsx|ts|tsx|py|json|jsonc|json5|jsonl|ya?ml|toml|txt|ps1|psm1|sh|bash|css|html|xml|svg|csv|srt|example)|(?:^|\/)(?:VERSION|LICENSE|Dockerfile|Makefile|\.gitattributes|\.gitignore))$/i;
 export function scanWorktree(root) {
-  const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  const git = (args, input) => execFileSync('git', args, { cwd: root, input, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
   const secretEntries = [];
+  const textAttributes = new Map();
   function collect(paths, untracked) {
     const files = {};
     for (const rel of paths) {
@@ -48,7 +100,9 @@ export function scanWorktree(root) {
         continue;
       }
       const stat = statSync(full);
-      const hash = hashFile(full);
+      const attribute = textAttributes.get(rel);
+      const isText = attribute === 'set' || attribute === 'auto' || (attribute !== 'unset' && TEXT_PATH.test(rel));
+      const hash = hashFile(full, isText);
       if (!hash) throw new Error(`Cannot snapshot ${rel}`);
       files[rel] = { hash, mtimeMs: stat.mtimeMs, size: stat.size };
     }
@@ -56,9 +110,8 @@ export function scanWorktree(root) {
   }
   let trackedPaths, untrackedPaths, commitSha = null;
   try {
-    trackedPaths = git(['ls-files', '-z']).split('\0');
-    untrackedPaths = git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0');
-    try { commitSha = git(['rev-parse', 'HEAD']).trim(); } catch {}
+    trackedPaths = git(['ls-files', '-z']).split('\0').filter(Boolean);
+    untrackedPaths = git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean);
   } catch {
     const paths = [];
     function walk(dir) {
@@ -73,6 +126,12 @@ export function scanWorktree(root) {
     walk(root);
     return { isGit: false, files: collect(paths, true) };
   }
+  const paths = [...trackedPaths, ...untrackedPaths];
+  if (paths.length) {
+    const attributes = git(['check-attr', '-z', '--stdin', 'text'], paths.join('\0') + '\0').split('\0');
+    for (let i = 0; i + 2 < attributes.length; i += 3) textAttributes.set(attributes[i], attributes[i + 2]);
+  }
+  try { commitSha = git(['rev-parse', 'HEAD']).trim(); } catch {}
   const tracked = collect(trackedPaths, false);
   const untracked = collect(untrackedPaths, true);
   const secretDigest = createHash('sha256').update(JSON.stringify(secretEntries.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))).digest('hex');

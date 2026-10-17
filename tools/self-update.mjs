@@ -3,12 +3,14 @@
  * tools/self-update.mjs — npm registry version check and global package self-update.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join, dirname, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
+import { resolveNpmRunner, spawnAsync, spawnSafe } from './installation-state.mjs';
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
-import { parseArgs } from "node:util";
+import { homedir, tmpdir } from "node:os";
+import { parseArgs, isDeepStrictEqual } from "node:util";
+import { resolveHostHome } from "./harness-profiles.mjs";
 
 import {
   PACKAGE_NAME,
@@ -46,6 +48,7 @@ export {
   detectEffectivePrefix,
   resolveInstalledBinPath,
   sanitizeError,
+  sanitizeResultObject,
 };
 
 export const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -58,13 +61,13 @@ export function validateHttpUrl(value, label = "url") {
   }
   const trimmed = value.trim();
   if (/[\x00-\x20\x7f]/.test(trimmed) || trimmed.startsWith("-")) {
-    throw new Error(`Invalid ${label}: "${value}" contains unsafe characters`);
+    throw new Error(`Invalid ${label}: "${sanitizeError(value)}" contains unsafe characters`);
   }
   let parsed;
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error(`Invalid ${label}: "${value}" is not a valid URL`);
+    throw new Error(`Invalid ${label}: "${sanitizeError(value)}" is not a valid URL`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`Invalid ${label}: protocol must be http: or https: (got ${parsed.protocol})`);
@@ -177,93 +180,64 @@ function buildComparisonResult(current, extracted) {
   };
 }
 
+
+
 export async function checkRelease(options = {}) {
-  const root = resolve(options.root || REPO_ROOT);
+  const root = resolve(options.root || REPO_ROOT), env = options.env || process.env;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const fetchFn = options.fetchFn || globalThis.fetch;
-
-  const localRaw = options.currentVersion || readLocalVersion(root);
-  if (!localRaw) {
-    return { status: "setup", ok: true, offline: false, missingVersion: true, current: null, latest: null, detail: `VERSION file missing in ${root}` };
-  }
-
-  const localSem = parseSemVer(localRaw);
-  const current = localSem ? localSem.raw : localRaw;
-
+  const raw = options.currentVersion || readLocalVersion(root), current = parseSemVer(raw)?.raw || raw;
+  const setup = (detail, fields = {}) => ({ status: 'setup', ok: true, offline: false, current, latest: null, ...fields, detail: sanitizeError(detail) });
+  if (!raw) return setup(`VERSION file missing in ${root}`, { missingVersion: true, current: null });
   let config;
-  try {
-    config = resolveRegistryConfig({ ...options, root });
-  } catch (err) {
-    return { status: "setup", ok: false, offline: false, invalidConfig: true, current, latest: null, error: err.message, detail: err.message };
+  try { config = resolveRegistryConfig({ ...options, root }); }
+  catch (error) { return setup(error.message, { ok: false, invalidConfig: true, error: sanitizeError(error.message) }); }
+
+  // An explicit JSON endpoint is not an npm registry: never forward npm credentials to it.
+  if (options.apiUrl || env.NULLFORM_RELEASE_URL || options.fetchFn) {
+    let lastStatus, parseError;
+    for (const url of config.metadataUrls) {
+      let response;
+      try { response = await (options.fetchFn || globalThis.fetch)(url, { method: 'GET', headers: { Accept: 'application/vnd.npm.install-v1+json, application/json', 'User-Agent': 'nullform-workflow-cli' }, signal: AbortSignal.timeout(timeoutMs) }); }
+      catch (error) { return setup(`npm registry unreachable: ${error.message}`, { offline: true, error: sanitizeError(error.message) }); }
+      lastStatus = response.status;
+      if (lastStatus === 404) continue;
+      if (!response.ok) return setup(`npm registry returned HTTP ${lastStatus}`, { offline: true, error: `HTTP ${lastStatus}` });
+      try { const metadata = extractNpmMetadata(await response.json()); if (metadata) return buildComparisonResult(current, metadata); }
+      catch (error) { parseError = error; }
+    }
+    if (lastStatus === 404) return setup(`No releases found for ${PACKAGE_NAME} in npm registry (HTTP 404)`, { notPublished: true });
+    return setup(parseError ? `Failed to parse npm registry response: ${parseError.message}` : 'Could not parse npm package version from registry metadata', { ok: false });
   }
 
-  let lastStatus = null;
-  let parseErr = null;
-
-  for (const url of config.metadataUrls) {
-    let res;
-    try {
-      res = await fetchFn(url, {
-        method: "GET",
-        headers: { Accept: "application/vnd.npm.install-v1+json, application/json", "User-Agent": "nullform-workflow-cli" },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (err) {
-      return { status: "setup", ok: true, offline: true, current, latest: null, error: err.message, detail: `npm registry unreachable: ${err.message}` };
-    }
-
-    lastStatus = res.status;
-    if (res.status === 404) continue;
-    if (!res.ok) {
-      return { status: "setup", ok: true, offline: true, current, latest: null, error: `HTTP ${res.status}`, detail: `npm registry returned HTTP ${res.status}` };
-    }
-
-    try {
-      const extracted = extractNpmMetadata(await res.json());
-      if (extracted) return buildComparisonResult(current, extracted);
-    } catch (err) {
-      parseErr = err;
-    }
+  const runner = resolveNpmRunner({ npmCliJs: options.npmCliJs, env, execPath: options.execPath });
+  const home = options.userHome ? resolve(options.userHome) : null;
+  const userconfig = env.npm_config_userconfig || env.NPM_CONFIG_USERCONFIG || (home ? join(home, '.npmrc') : null);
+  const cache = mkdtempSync(join(tmpdir(), 'nullform-metadata-'));
+  const childEnv = { ...env, ...(home ? { HOME: home, USERPROFILE: home, NULLFORM_USER_HOME: home } : {}), ...(userconfig && existsSync(userconfig) ? { npm_config_userconfig: userconfig, NPM_CONFIG_USERCONFIG: userconfig } : {}), npm_config_cache: cache, NPM_CONFIG_CACHE: cache, npm_config_fetch_retries: '0', NPM_CONFIG_FETCH_RETRIES: '0' };
+  const args = [...runner.prefixArgs, 'view', PACKAGE_NAME, '--json', '--fetch-retries=0'];
+  if (config.registryUrl) args.push('--registry', config.registryUrl);
+  if (userconfig && existsSync(userconfig)) args.push(`--userconfig=${userconfig}`);
+  let result;
+  try { result = await (options.spawnAsyncFn || spawnAsync)(runner.command, args, { cwd: root, env: childEnv, timeoutMs }); }
+  catch (error) { return setup(`npm view failed: ${error.message}`, { offline: true, error: sanitizeError(error.message) }); }
+  finally { rmSync(cache, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+  if (result.status === 0) {
+    try { const metadata = extractNpmMetadata(JSON.parse(result.stdout)); if (metadata) return buildComparisonResult(current, metadata); }
+    catch (error) { return setup(`Failed to parse npm registry response: ${error.message}`, { ok: false }); }
+    return setup('Could not parse npm package version from registry metadata', { ok: false });
   }
-
-  if (lastStatus === 404) {
-    return { status: "setup", ok: true, offline: false, notPublished: true, current, latest: null, detail: `No releases found for ${PACKAGE_NAME} in npm registry (HTTP 404)` };
+  let failure;
+  for (const text of [result.stdout, result.stderr]) {
+    try { const data = JSON.parse(text); if (data?.error) { failure = data.error; break; } } catch {}
   }
-  return {
-    status: "setup",
-    ok: false,
-    offline: false,
-    current,
-    latest: null,
-    detail: parseErr ? `Failed to parse npm registry response: ${parseErr.message}` : "Could not parse npm package version from registry metadata",
-  };
+  const code = failure?.code || result.error?.code || '';
+  const summary = failure?.summary || result.stderr || result.error?.message || `exit ${result.status}`;
+  if (code === 'E404' || /404\b|Not Found/i.test(summary)) return setup(`No releases found for ${PACKAGE_NAME} in npm registry (HTTP 404)`, { notPublished: true });
+  if (['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EAI_AGAIN'].includes(code) || /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|fetch failed|network|unreachable/i.test(summary)) return setup(`npm registry unreachable: ${summary}`, { offline: true, error: sanitizeError(code || summary) });
+  if (code === 'E401' || /401\b|Unauthorized/i.test(summary)) return setup(`npm registry returned HTTP 401: ${summary}`, { offline: true, error: 'HTTP 401' });
+  return setup(`npm view failed: ${summary}`, { ok: false, error: sanitizeError(code || `exit ${result.status}`) });
 }
 
-export function resolveNpmRunner(options = {}) {
-  const env = options.env || process.env;
-  const execPath = options.execPath || process.execPath;
-  const nodeDir = dirname(execPath);
-  const pathSep = process.platform === "win32" ? ";" : ":";
-  const pathDirs = (env.PATH || "").split(pathSep).filter(Boolean);
-
-  const candidates = [
-    options.npmCliJs,
-    env.npm_execpath,
-    join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"),
-    resolve(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
-    ...pathDirs.flatMap((dir) => [
-      join(dir, "node_modules", "npm", "bin", "npm-cli.js"),
-      resolve(dir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
-    ]),
-  ].filter((c) => typeof c === "string" && /\.[cm]?js$/i.test(c));
-
-  for (const cliPath of candidates) {
-    try {
-      if (existsSync(cliPath)) return { command: execPath, prefixArgs: [cliPath], usesNode: true };
-    } catch {}
-  }
-  return { command: process.platform === "win32" ? "npm.cmd" : "npm", prefixArgs: [], usesNode: false };
-}
 
 function resolveUpdateTargetState(options, userHome) {
   const existing = readInstallationState(userHome);
@@ -275,6 +249,7 @@ function resolveUpdateTargetState(options, userHome) {
         : null;
     return { ok: true, state: { ...existing, ...(projectRoot ? { projectRoot } : {}) } };
   }
+  if (options.harness === "custom") return { ok: false, error: "missing_state", detail: "Custom host update requires a saved normalized manifest/profile. Run nullform init first." };
 
   if (options.harness && options.root && HARNESS_CHOICES.includes(options.harness)) {
     validateSafePath(options.root, "root");
@@ -294,6 +269,7 @@ function resolveUpdateTargetState(options, userHome) {
         root: resolve(options.root),
         ...(projectRoot ? { projectRoot } : {}),
         userHome,
+        hostHome: resolveHostHome({ harness: options.harness, userHome, hostHome: options.hostHome, env: options.env || process.env }).path,
         version: ver,
       },
     };
@@ -301,17 +277,6 @@ function resolveUpdateTargetState(options, userHome) {
   return { ok: false, error: "missing_state", detail: `No saved installation found at ${getStateFilePath(userHome)}. Run 'nullform init' first.` };
 }
 
-function spawnSafe(spawnFn, command, args, rootDir, env) {
-  const isWin = process.platform === "win32";
-  const needsShell = isWin && /\.(cmd|bat)$/i.test(command);
-  return spawnFn(command, args, {
-    cwd: existsSync(rootDir) ? rootDir : process.cwd(),
-    env,
-    encoding: "utf8",
-    shell: needsShell,
-    windowsHide: isWin,
-  });
-}
 
 function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, userHome, childEnv, check }) {
   const targetVersion = check.latest;
@@ -329,6 +294,7 @@ function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, 
     "--root",
     savedState.root,
     ...(savedState.projectRoot ? ["--project-root", savedState.projectRoot] : []),
+    ...(savedState.hostHome ? ["--host-home", savedState.hostHome] : []),
     "--user-home",
     userHome,
     "--yes",
@@ -345,11 +311,13 @@ function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, 
 
   if (reinitStatus !== 0 || (reinitJson && reinitJson.ok === false)) {
     const stageErr = reinitJson?.stage === "doctor" || reinitJson?.error === "doctor_failed" ? "doctor_failed" : "install_failed";
-    const rawDetail = reinitJson?.detail || reinitJson?.error || (reinitRes.stderr || reinitRes.stdout || reinitRes.error?.message || `exit ${reinitStatus}`).trim();
+    const rawDetail = (reinitJson?.detail || reinitJson?.error || reinitRes.error?.message || (reinitRes.stderr || "").trim() || (reinitRes.stdout || "").trim().slice(0, 500) || `exit ${reinitStatus}`).trim();
     return {
       ok: false,
       updated: false,
       error: stageErr,
+      status: "pending",
+      recoverable: true,
       current: check.current,
       latest: targetVersion,
       doctor: reinitJson?.doctor || null,
@@ -359,12 +327,22 @@ function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, 
 
   let finalState = null;
   try { finalState = readInstallationState(userHome); } catch {}
+  if (finalState && ((savedState.hostHome && finalState.hostHome !== savedState.hostHome) ||
+      (savedState.hostManifest && !isDeepStrictEqual(finalState.hostManifest, savedState.hostManifest)))) {
+    return {
+      ok: false, updated: false, error: "profile_mismatch", status: "pending", recoverable: true,
+      current: check.current, latest: targetVersion,
+      detail: "Updated package did not preserve the saved native profile/manifest; readiness is unverified.",
+    };
+  }
   const finalVersion = finalState?.version || reinitJson?.version || null;
   if (!finalVersion || compareSemVer(finalVersion, targetVersion) !== 0) {
     return {
       ok: false,
       updated: false,
       error: "version_mismatch",
+      status: "pending",
+      recoverable: true,
       current: check.current,
       latest: targetVersion,
       detail: `Update verification failed: expected v${targetVersion}, got ${finalVersion ? `v${finalVersion}` : "unverified version"}`,
@@ -382,6 +360,8 @@ function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, 
     harness: finalState?.harness || savedState.harness,
     root: finalState?.root || savedState.root,
     ...(finalState?.projectRoot || savedState.projectRoot ? { projectRoot: finalState?.projectRoot || savedState.projectRoot } : {}),
+    ...(savedState.hostHome ? { hostHome: savedState.hostHome } : {}),
+    ...(savedState.hostManifest ? { hostManifest: savedState.hostManifest } : {}),
     userHome,
     prefix: effectivePrefix,
     newBinPath,
@@ -401,7 +381,7 @@ function resolveUpdateContext(options, env) {
     if (options.projectRoot) validateSafePath(options.projectRoot, "projectRoot");
     userHome = resolve(rawHome);
   } catch (err) {
-    return { ok: false, error: "invalid_arguments", detail: err.message };
+    return { ok: false, error: "invalid_arguments", detail: sanitizeError(err.message) };
   }
 
 
@@ -410,9 +390,9 @@ function resolveUpdateContext(options, env) {
     targetResolved = resolveUpdateTargetState(options, userHome);
   } catch (err) {
     const isArgErr = err.message.startsWith("Invalid root");
-    return { ok: false, error: isArgErr ? "invalid_arguments" : "invalid_state", detail: err.message };
+    return { ok: false, error: isArgErr ? "invalid_arguments" : "invalid_state", detail: sanitizeError(err.message) };
   }
-  if (!targetResolved.ok) return targetResolved;
+  if (!targetResolved.ok) return { ...targetResolved, detail: sanitizeError(targetResolved.detail) };
 
   try {
     const effectivePrefix = detectEffectivePrefix({
@@ -430,7 +410,7 @@ function resolveUpdateContext(options, env) {
     });
     return { ok: true, userHome, savedState: targetResolved.state, effectivePrefix, registryConfig };
   } catch (err) {
-    return { ok: false, error: "invalid_arguments", detail: err.message };
+    return { ok: false, error: "invalid_arguments", detail: sanitizeError(err.message) };
   }
 }
 
@@ -438,7 +418,7 @@ export async function executeUpdate(options = {}) {
   const env = options.env || process.env;
   const spawnFn = options.spawnFn || spawnSync;
   const ctx = resolveUpdateContext(options, env);
-  if (!ctx.ok) return { ok: false, updated: false, error: ctx.error, detail: ctx.detail };
+  if (!ctx.ok) return { ok: false, updated: false, error: ctx.error, detail: sanitizeError(ctx.detail) };
   const { userHome, savedState, effectivePrefix, registryConfig } = ctx;
 
   const verifiedVersion = savedState?.version || null;
@@ -451,11 +431,14 @@ export async function executeUpdate(options = {}) {
     registry: options.registry,
     timeoutMs: options.timeoutMs,
     fetchFn: options.fetchFn,
+    spawnAsyncFn: options.spawnAsyncFn,
+    npmCliJs: options.npmCliJs,
+    execPath: options.execPath,
     env,
   });
 
   if (check.status === "setup" || !check.ok || !check.latest) {
-    return { ok: false, updated: false, error: "release_check_failed", current: check.current, latest: null, detail: check.detail || "Unable to determine latest version from npm registry" };
+    return { ok: false, updated: false, error: "release_check_failed", current: check.current, latest: null, detail: sanitizeError(check.detail || "Unable to determine latest version from npm registry") };
   }
   const isUpToDate = check.status === "clean" && (!verifiedVersion || compareSemVer(verifiedVersion, check.latest) >= 0);
   if (isUpToDate && !options.force && !options.dryRun) {
@@ -467,6 +450,8 @@ export async function executeUpdate(options = {}) {
       harness: savedState.harness,
       root: savedState.root,
       ...(savedState.projectRoot ? { projectRoot: savedState.projectRoot } : {}),
+      ...(savedState.hostHome ? { hostHome: savedState.hostHome } : {}),
+      ...(savedState.hostManifest ? { hostManifest: savedState.hostManifest } : {}),
       userHome,
       detail: `Already up to date (v${check.latest}).`,
     };
@@ -489,12 +474,14 @@ export async function executeUpdate(options = {}) {
       harness: savedState.harness,
       root: savedState.root,
       ...(savedState.projectRoot ? { projectRoot: savedState.projectRoot } : {}),
+      ...(savedState.hostHome ? { hostHome: savedState.hostHome } : {}),
+      ...(savedState.hostManifest ? { hostManifest: savedState.hostManifest } : {}),
       userHome,
       prefix: effectivePrefix,
-      registry: registryUrl,
+      registry: sanitizeError(registryUrl),
       plan: [
-        `npm install --global --ignore-scripts${effectivePrefix ? ` --prefix ${JSON.stringify(effectivePrefix)}` : ""}${registryUrl ? ` --registry ${JSON.stringify(registryUrl)}` : ""} -- ${pkgSpec}`,
-        `nullform init --harness ${savedState.harness} --root ${JSON.stringify(savedState.root)}${savedState.projectRoot ? ` --project-root ${JSON.stringify(savedState.projectRoot)}` : ""} --user-home ${JSON.stringify(userHome)} --yes`,
+        `npm install --global --ignore-scripts${effectivePrefix ? ` --prefix ${JSON.stringify(effectivePrefix)}` : ""}${registryUrl ? ` --registry ${JSON.stringify(sanitizeError(registryUrl))}` : ""} -- ${pkgSpec}`,
+        `nullform init --harness ${savedState.harness} --root ${JSON.stringify(savedState.root)}${savedState.projectRoot ? ` --project-root ${JSON.stringify(savedState.projectRoot)}` : ""}${savedState.hostHome ? ` --host-home ${JSON.stringify(savedState.hostHome)}` : ""} --user-home ${JSON.stringify(userHome)} --yes (reuse saved normalized host manifest)`,
       ],
       detail: `[dry-run] Update plan for ${pkgSpec} ready. No changes written.`,
     };
@@ -515,11 +502,13 @@ export async function executeUpdate(options = {}) {
   const currentPath = env.PATH || env.Path || "";
   const newPath = [...extraPaths.filter(Boolean), currentPath].join(pathSep);
 
+  const userRc = env.npm_config_userconfig || env.NPM_CONFIG_USERCONFIG || join(userHome, ".npmrc");
   const childEnv = {
     ...env,
     HOME: userHome,
     USERPROFILE: userHome,
     NULLFORM_USER_HOME: userHome,
+    ...(existsSync(userRc) ? { npm_config_userconfig: userRc, NPM_CONFIG_USERCONFIG: userRc } : {}),
     npm_config_cache: cacheDir,
     NPM_CONFIG_CACHE: cacheDir,
     npm_config_fetch_retries: env.npm_config_fetch_retries ?? "0",
@@ -534,7 +523,7 @@ export async function executeUpdate(options = {}) {
   const npmRes = spawnSafe(spawnFn, runner.command, [...runner.prefixArgs, ...npmArgs], savedState.root, childEnv);
   const npmStatus = npmRes.status ?? (npmRes.error ? 1 : 0);
   if (npmStatus !== 0) {
-    const errMsg = (npmRes.stderr || npmRes.stdout || npmRes.error?.message || `exit ${npmStatus}`).trim();
+    const errMsg = (npmRes.error?.message || (npmRes.stderr || "").trim() || (npmRes.stdout || "").trim().slice(0, 500) || `exit ${npmStatus}`).trim();
     return { ok: false, updated: false, error: "npm_install_failed", current: check.current, latest: targetVersion, detail: `npm install --global failed: ${sanitizeError(errMsg)}` };
   }
 
@@ -629,13 +618,19 @@ Options:
 `.trim()
   );
 }
+function sanitizeResultObject(res) {
+  if (typeof res === 'string') return sanitizeError(res);
+  if (Array.isArray(res)) return res.map(sanitizeResultObject);
+  if (res && typeof res === 'object') return Object.fromEntries(Object.entries(res).map(([key, value]) => [key, sanitizeResultObject(value)]));
+  return res;
+}
 
 export async function main(argv = process.argv.slice(2)) {
   let opts;
   try {
     opts = parseCliArgs(argv);
   } catch (err) {
-    process.stderr.write(`self-update error: ${err.message}\n`);
+    process.stderr.write(`self-update error: ${sanitizeError(err.message)}\n`);
     return 2;
   }
 
@@ -646,32 +641,34 @@ export async function main(argv = process.argv.slice(2)) {
 
   if (opts.command === "check") {
     const res = await checkRelease({ ...opts, root: opts.root || REPO_ROOT });
+    const safeRes = sanitizeResultObject(res);
     if (opts.json) {
-      console.log(JSON.stringify(res, null, 2));
+      console.log(JSON.stringify(safeRes, null, 2));
     } else if (res.status === "drift") {
       console.log(`self-update: drift — local v${res.current} is behind npm v${res.latest}`);
       console.log(`To update, run: nullform update`);
     } else if (res.status === "clean") {
       console.log(`self-update: clean — local v${res.current} is up to date.`);
     } else {
-      console.log(`self-update: setup — ${res.detail}`);
+      console.log(`self-update: setup — ${safeRes.detail}`);
     }
     return res.ok === false ? 1 : 0;
   }
 
   if (opts.command === "update") {
     const res = await executeUpdate(opts);
+    const safeRes = sanitizeResultObject(res);
     if (opts.json) {
-      console.log(JSON.stringify(res, null, 2));
+      console.log(JSON.stringify(safeRes, null, 2));
     } else if (!res.ok) {
-      console.error(`self-update error: [${res.error}] ${res.detail}`);
+      console.error(`self-update error: [${safeRes.error}] ${safeRes.detail}`);
     } else if (res.dryRun) {
       console.log(`[dry-run] Update plan for ${PACKAGE_NAME}@${res.latest}:`);
-      for (const step of res.plan) console.log(`  - ${step}`);
+      for (const step of safeRes.plan || []) console.log(`  - ${step}`);
     } else if (res.updated) {
       console.log(`self-update: successfully updated from v${res.from} to v${res.to}.`);
     } else {
-      console.log(`self-update: ${res.detail}`);
+      console.log(`self-update: ${safeRes.detail}`);
     }
     return res.ok ? 0 : 1;
   }
@@ -685,8 +682,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
       process.exitCode = code;
     },
     (err) => {
-      process.stderr.write(`self-update: unhandled error: ${err.message}\n`);
-      process.exitCode = 2;
+      process.stderr.write(`self-update: unhandled error: ${sanitizeError(err.message)}\n`);
     }
   );
 }

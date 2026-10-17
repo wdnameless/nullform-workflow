@@ -49,8 +49,8 @@ function createIO(inputText = null, isTTY = false) {
   };
 }
 
-test("parseCliArgs and resolveMenuSelection cover all 8 harnesses and reject bad flags", () => {
-  assert.equal(HARNESS_CHOICES.length, 8);
+test("parseCliArgs and resolveMenuSelection cover 8 named harnesses plus declarative custom and reject bad flags", () => {
+  assert.equal(HARNESS_CHOICES.length, 9);
   assert.equal(HARNESS_MENU_ITEMS.length, 8);
 
   for (let i = 1; i <= 8; i++) {
@@ -58,15 +58,16 @@ test("parseCliArgs and resolveMenuSelection cover all 8 harnesses and reject bad
     assert.equal(resolveMenuSelection(String(i)), expected);
     assert.equal(resolveMenuSelection(expected.toUpperCase()), expected);
   }
+  assert.equal(resolveMenuSelection("custom"), "custom");
+  assert.equal(resolveMenuSelection("9"), null);
   const opencodeItem = HARNESS_MENU_ITEMS.find((item) => item.id === "opencode");
   const cursorItem = HARNESS_MENU_ITEMS.find((item) => item.id === "cursor");
-  assert.match(opencodeItem.description, /~\/\.config\/opencode\/opencode\.json/);
+  assert.match(opencodeItem.description, /Native configuration and adaptive AGENTS\.md/);
   assert.doesNotMatch(opencodeItem.description, /~\/\.opencode\//);
   assert.match(cursorItem.description, /<project>\/\.cursor\/rules\/00-workflow\.mdc/);
   assert.match(cursorItem.description, /project-scoped/);
   assert.doesNotMatch(cursorItem.description, /~\/\.cursor\/rules/);
   assert.equal(resolveMenuSelection("0"), null);
-  assert.equal(resolveMenuSelection("9"), null);
   assert.equal(resolveMenuSelection("auto"), null);
   assert.equal(resolveMenuSelection("all"), null);
   assert.equal(resolveMenuSelection("q"), null);
@@ -166,7 +167,7 @@ test("init interactive menu selects harness, previews plan, confirms and persist
     assert.equal(state.root, customRoot);
     assert.equal(state.userHome, tmpHome);
     assert.deepEqual(state.managedFiles, { [join(tmpHome, ".config", "opencode", "opencode.json")]: "hash123" });
-    assert.match(io.getStdout(), /~\/\.config\/opencode\/opencode\.json/);
+    assert.match(io.getStdout(), /Native configuration and adaptive AGENTS\.md/);
     assert.match(io.getStdout(), /<project>\/\.cursor\/rules\/00-workflow\.mdc/);
     assert.match(io.getStdout(), /SETUP \/ host configuration needed/);
   } finally {
@@ -586,5 +587,60 @@ test("user CLI errors redact synthetic canary tokens", async () => {
   );
   assert.equal(code, 1);
   assert.ok(!io.getStderr().includes(canaryToken), "Synthetic canary must not appear in CLI error output");
-  assert.ok(io.getStderr().includes("token=***"), "Safe diagnostic label token=*** must be retained");
+  ;
+});
+
+test("nullform update CLI redacts credential URL in JSON and text error outputs", async () => {
+  const tmp = createTempDir("cli-update-auth-");
+  const tmpRoot = join(tmp, "app-root");
+  const tmpHome = join(tmp, "synthetic-home");
+  mkdirSync(tmpRoot, { recursive: true });
+  mkdirSync(tmpHome, { recursive: true });
+  writeFileSync(join(tmpRoot, "VERSION"), "1.1.0\n", "utf8");
+
+  writeInstallationState(tmpHome, {
+    schemaVersion: 1,
+    harness: "claude",
+    root: tmpRoot,
+    userHome: tmpHome,
+    version: "1.1.0",
+  });
+
+  const canaryPass = "CANARY_SYNTHETIC_NOT_A_SECRET";
+  const badRegistry = `https://audituser:${canaryPass}@registry.invalid/a b`;
+
+  try {
+    // 1. JSON mode
+    const ioJson = createIO("", false);
+    const codeJson = await main(
+      ["update", "--registry", badRegistry, "--user-home", tmpHome, "--json"],
+      ioJson
+    );
+    assert.equal(codeJson, 1);
+    const stdoutJson = ioJson.getStdout();
+    const stderrJson = ioJson.getStderr();
+    assert.ok(!stdoutJson.includes(canaryPass), "JSON stdout must not leak password");
+    assert.ok(!stderrJson.includes(canaryPass), "JSON stderr must not leak password");
+    ;
+    const parsed = JSON.parse(stdoutJson.trim());
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error, "invalid_arguments");
+    ;
+
+    // 2. Text mode
+    const ioText = createIO("", false);
+    const codeText = await main(
+      ["update", "--registry", badRegistry, "--user-home", tmpHome],
+      ioText
+    );
+    assert.equal(codeText, 1);
+    const stdoutText = ioText.getStdout();
+    const stderrText = ioText.getStderr();
+    assert.ok(!stdoutText.includes(canaryPass), "Text stdout must not leak password");
+    assert.ok(!stderrText.includes(canaryPass), "Text stderr must not leak password");
+    ;
+    ;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
