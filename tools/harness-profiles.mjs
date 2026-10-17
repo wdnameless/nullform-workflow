@@ -293,7 +293,10 @@ function hermesProbe({ executable, userHome, hostHome, env }) {
     entry.status = "unrecognized";
     entry.reason = "Output did not match the bounded nonsecret consumer format; raw output withheld.";
     if (args[0] === "--version") {
-      const match = output.match(/^(?:hermes(?:-agent)?\s+(?:version\s+)?v?)?(\d{1,4}\.\d{1,4}\.\d{1,4}(?:[-+][a-zA-Z0-9.-]{1,64})?)$/i);
+      // Real `hermes --version` is multi-line (version + install/python/sdk rows).
+      // Accept the version from the first non-empty line only; never retain other rows.
+      const firstLine = output.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || "";
+      const match = firstLine.match(/^(?:hermes(?:-agent|\s+agent)?\s+(?:version\s+)?v?)?(\d{1,4}\.\d{1,4}\.\d{1,4}(?:[-+][a-zA-Z0-9.-]{1,64})?)(?:\s+\(.*\))?$/i);
       if (match) { entry.status = "observed"; entry.version = match[1]; delete entry.reason; }
     } else if (args[0] === "config") {
       if (!CONTROLS.test(output) && output === join(hostHome, "config.yaml")) {
