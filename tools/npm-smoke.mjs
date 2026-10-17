@@ -341,6 +341,9 @@ async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome,
       // Adaptive Hermes: exactly one native auto-load skill, no bulk catalogue, no SOUL write.
       const skillFile = join(fixture.skillsDir, "nullform-workflow", "SKILL.md");
       assert.equal(existsSync(skillFile), true, `R03: Hermes quality skill missing at ${skillFile}`);
+    } else if (harness === "cursor") {
+      // Cursor is project-scoped: target-root skills/ is legitimate project context, not a home catalogue.
+      assert.equal(existsSync(fixture.skillsDir), true, `R03: Cursor project skills missing at ${fixture.skillsDir}`);
     } else {
       // Adaptive non-OMP: no bulk home-skill catalogue by design (doctor reports skills:skip).
       assert.equal(existsSync(fixture.skillsDir), false, `R03: Unexpected bulk skills catalogue at ${fixture.skillsDir} for adaptive ${harness}`);
