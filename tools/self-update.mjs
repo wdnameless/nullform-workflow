@@ -9,7 +9,8 @@ import { spawnSync } from "node:child_process";
 import { resolveNpmRunner, spawnAsync, spawnSafe } from './installation-state.mjs';
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
-import { parseArgs } from "node:util";
+import { parseArgs, isDeepStrictEqual } from "node:util";
+import { resolveHostHome } from "./harness-profiles.mjs";
 
 import {
   PACKAGE_NAME,
@@ -248,6 +249,7 @@ function resolveUpdateTargetState(options, userHome) {
         : null;
     return { ok: true, state: { ...existing, ...(projectRoot ? { projectRoot } : {}) } };
   }
+  if (options.harness === "custom") return { ok: false, error: "missing_state", detail: "Custom host update requires a saved normalized manifest/profile. Run nullform init first." };
 
   if (options.harness && options.root && HARNESS_CHOICES.includes(options.harness)) {
     validateSafePath(options.root, "root");
@@ -267,6 +269,7 @@ function resolveUpdateTargetState(options, userHome) {
         root: resolve(options.root),
         ...(projectRoot ? { projectRoot } : {}),
         userHome,
+        hostHome: resolveHostHome({ harness: options.harness, userHome, hostHome: options.hostHome, env: options.env || process.env }).path,
         version: ver,
       },
     };
@@ -291,6 +294,7 @@ function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, 
     "--root",
     savedState.root,
     ...(savedState.projectRoot ? ["--project-root", savedState.projectRoot] : []),
+    ...(savedState.hostHome ? ["--host-home", savedState.hostHome] : []),
     "--user-home",
     userHome,
     "--yes",
@@ -323,6 +327,14 @@ function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, 
 
   let finalState = null;
   try { finalState = readInstallationState(userHome); } catch {}
+  if (finalState && ((savedState.hostHome && finalState.hostHome !== savedState.hostHome) ||
+      (savedState.hostManifest && !isDeepStrictEqual(finalState.hostManifest, savedState.hostManifest)))) {
+    return {
+      ok: false, updated: false, error: "profile_mismatch", status: "pending", recoverable: true,
+      current: check.current, latest: targetVersion,
+      detail: "Updated package did not preserve the saved native profile/manifest; readiness is unverified.",
+    };
+  }
   const finalVersion = finalState?.version || reinitJson?.version || null;
   if (!finalVersion || compareSemVer(finalVersion, targetVersion) !== 0) {
     return {
@@ -348,6 +360,8 @@ function runInstalledBinReinit({ options, spawnFn, effectivePrefix, savedState, 
     harness: finalState?.harness || savedState.harness,
     root: finalState?.root || savedState.root,
     ...(finalState?.projectRoot || savedState.projectRoot ? { projectRoot: finalState?.projectRoot || savedState.projectRoot } : {}),
+    ...(savedState.hostHome ? { hostHome: savedState.hostHome } : {}),
+    ...(savedState.hostManifest ? { hostManifest: savedState.hostManifest } : {}),
     userHome,
     prefix: effectivePrefix,
     newBinPath,
@@ -436,6 +450,8 @@ export async function executeUpdate(options = {}) {
       harness: savedState.harness,
       root: savedState.root,
       ...(savedState.projectRoot ? { projectRoot: savedState.projectRoot } : {}),
+      ...(savedState.hostHome ? { hostHome: savedState.hostHome } : {}),
+      ...(savedState.hostManifest ? { hostManifest: savedState.hostManifest } : {}),
       userHome,
       detail: `Already up to date (v${check.latest}).`,
     };
@@ -458,12 +474,14 @@ export async function executeUpdate(options = {}) {
       harness: savedState.harness,
       root: savedState.root,
       ...(savedState.projectRoot ? { projectRoot: savedState.projectRoot } : {}),
+      ...(savedState.hostHome ? { hostHome: savedState.hostHome } : {}),
+      ...(savedState.hostManifest ? { hostManifest: savedState.hostManifest } : {}),
       userHome,
       prefix: effectivePrefix,
       registry: sanitizeError(registryUrl),
       plan: [
         `npm install --global --ignore-scripts${effectivePrefix ? ` --prefix ${JSON.stringify(effectivePrefix)}` : ""}${registryUrl ? ` --registry ${JSON.stringify(sanitizeError(registryUrl))}` : ""} -- ${pkgSpec}`,
-        `nullform init --harness ${savedState.harness} --root ${JSON.stringify(savedState.root)}${savedState.projectRoot ? ` --project-root ${JSON.stringify(savedState.projectRoot)}` : ""} --user-home ${JSON.stringify(userHome)} --yes`,
+        `nullform init --harness ${savedState.harness} --root ${JSON.stringify(savedState.root)}${savedState.projectRoot ? ` --project-root ${JSON.stringify(savedState.projectRoot)}` : ""}${savedState.hostHome ? ` --host-home ${JSON.stringify(savedState.hostHome)}` : ""} --user-home ${JSON.stringify(userHome)} --yes (reuse saved normalized host manifest)`,
       ],
       detail: `[dry-run] Update plan for ${pkgSpec} ready. No changes written.`,
     };

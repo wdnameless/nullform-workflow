@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   applyManagedSection,
@@ -16,7 +16,10 @@ import {
   updateHermesConfigYaml,
   getMarkdownAdapter,
   getOpenclawSoul,
-  getOpenclawUser,
+  hashContent,
+  loadYaml,
+  MANAGED_START,
+  MANAGED_END,
   preflightJsoncConfig,
   preflightJson5Config,
   preflightYamlConfig,
@@ -31,6 +34,7 @@ export function installOmpHomeAssets({
   targetRoot,
   slashRoot,
   userHome,
+  hostHome,
   plan,
   writeAdapter,
   readExisting,
@@ -41,7 +45,7 @@ export function installOmpHomeAssets({
   installRoleRoster,
   translateStdioEntry,
 }) {
-  const homeAgentDir = join(userHome, ".omp", "agent");
+  const homeAgentDir = hostHome;
   const agentsHome = join(userHome, ".agents");
   const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
   const rawLaw = existsSync(lawSource)
@@ -82,139 +86,138 @@ export function installOmpHomeAssets({
   }
 }
 
-export function applyOpencodeAdapter({
-  targetRoot,
-  slashRoot,
-  userHome,
-  shouldWriteHome,
-  writeAdapter,
-  readExisting,
-  copyHomeSkills,
-}) {
-  const rootAgents = join(targetRoot, "AGENTS.md");
-  const rawAgents = getMarkdownAdapter(slashRoot, "OpenCode NULLFORM WORKFLOW Adapter");
-  writeAdapter(rootAgents, applyManagedSection(readExisting(rootAgents), rawAgents));
-  for (const rootJson of resolveOpencodeConfigPaths(targetRoot)) {
-    writeAdapter(rootJson, updateOpencodeJson(rootJson, preflightJsoncConfig(rootJson)));
+/** Prepare the complete native activation before core copying or journaling starts. */
+export function prepareHermesActivation({ hostHome, slashRoot, report, managedFiles = {}, env = process.env, translateStdioEntry }) {
+  const configPath = join(hostHome, "config.yaml");
+  const skillPath = join(hostHome, "skills", "nullform-workflow", "SKILL.md");
+  const original = preflightYamlConfig(configPath);
+  let config = updateHermesConfigYaml(configPath, original);
+  const settings = loadYaml().parse(original || "{}") || {};
+  const auto = settings.skills?.auto_load || [];
+  const ownedHash = managedFiles[skillPath];
+  if (existsSync(join(hostHome, "skills", "nullform-workflow")) &&
+      (!existsSync(skillPath) || !ownedHash || hashContent(readFileSync(skillPath)) !== ownedHash)) {
+    throw new Error("Hermes quality skill collision: preserve the unowned/modified nullform-workflow skill; choose a separate host home or resolve manually.");
   }
-  if (shouldWriteHome) {
-    const configDir = join(userHome, ".config", "opencode");
-    const homeAgents = join(configDir, "AGENTS.md");
-    writeAdapter(homeAgents, applyManagedSection(readExisting(homeAgents), rawAgents));
-    for (const homeJson of resolveOpencodeConfigPaths(configDir)) {
-      writeAdapter(homeJson, updateOpencodeJson(homeJson, preflightJsoncConfig(homeJson)));
+  if (auto.includes("nullform-workflow") && !ownedHash) {
+    throw new Error("Hermes quality skill name is already registered without proven ownership; preserve the human registration and resolve the collision manually.");
+  }
+  if (ownedHash && !auto.includes("nullform-workflow")) {
+    throw new Error("Hermes quality skill was removed from auto_load by the operator; refusing to re-enable it. Restore it explicitly or use project instructions manually.");
+  }
+  const skills = report.capabilities?.skills;
+  if (skills?.status === "unavailable" ||
+      /^(1|true|yes|on)$/i.test(env.HERMES_IGNORE_RULES || "") ||
+      settings.skills?.enabled === false || settings.skills?.disabled?.includes?.("nullform-workflow")) {
+    return {
+      writes: [],
+      warnings: [
+        "Native skill loading is disabled/unavailable. Use the generated installation-root AGENTS.md as explicit project instructions manually; no auto-load changes were made.",
+        "Any existing legacy assets/registrations are preserved and may remain active; this is not a deactivation claim.",
+      ],
+      activation: { status: "manual", detail: "No native activation; skills tools/HERMES_IGNORE_RULES or declared support prevent loading." },
+    };
+  }
+  const policy = getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter", report);
+  const content = `---\nname: nullform-workflow\ndescription: Native-first task quality and truthful result verification.\n---\n\n${policy}`;
+  const writes = [[skillPath, content], [configPath, config]];
+  const warnings = [];
+  // Exact generated managed bytes prove block ownership without adopting surrounding human text.
+  const soulPath = join(hostHome, "SOUL.md");
+  if (existsSync(soulPath)) {
+    const text = readFileSync(soulPath, "utf8");
+    const legacy = `${MANAGED_START}\n${getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter").trim()}\n${MANAGED_END}`;
+    if (text.includes(legacy) && text.indexOf(MANAGED_START) === text.lastIndexOf(MANAGED_START) &&
+        text.indexOf(MANAGED_END) === text.lastIndexOf(MANAGED_END)) writes.push([soulPath, text.replace(legacy, "")]);
+    else if (text.includes(MANAGED_START) || managedFiles[soulPath]) {
+      warnings.push("Modified/unknown legacy SOUL policy preserved; its legacy behavior may remain active.");
     }
-    const legacyOpencodeDir = join(userHome, ".opencode");
-    if (existsSync(legacyOpencodeDir)) {
-      for (const legacyCfg of resolveOpencodeConfigPaths(legacyOpencodeDir)) {
-        if (existsSync(legacyCfg)) {
-          writeAdapter(legacyCfg, updateOpencodeJson(legacyCfg, preflightJsoncConfig(legacyCfg)));
-        }
+  }
+  if (original && managedFiles[configPath] === hashContent(original)) {
+    const example = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
+    const doc = loadYaml().parseDocument(config, { keepSourceTokens: true });
+    for (const [name, entry] of Object.entries(example.mcpServers || {})) {
+      if (JSON.stringify(entry).includes("__")) continue;
+      const translated = translateStdioEntry ? translateStdioEntry(entry) : entry;
+      const expected = {
+        ...(translated.command ? { command: translated.command } : {}),
+        ...(translated.args?.length ? { args: translated.args } : {}),
+        ...(translated.env && Object.keys(translated.env).length ? { env: translated.env } : {}),
+      };
+      if (isDeepStrictEqual(settings.mcp_servers?.[name], expected)) {
+        doc.deleteIn(["mcp_servers", name]);
+        delete settings.mcp_servers[name];
       }
     }
-    copyHomeSkills(join(configDir, "skills"));
+    config = doc.toString();
+    writes[1][1] = config;
+  }
+  if (settings.mcp_servers && Object.keys(settings.mcp_servers).length) {
+    warnings.push("Existing MCP registrations preserved: per-entry ownership is not proven; legacy servers may still run.");
+  }
+  const skillPrefix = `${join(hostHome, "skills").replace(/\\/g, "/")}/`;
+  if (Object.keys(managedFiles).some(path => path.replace(/\\/g, "/").startsWith(skillPrefix) && path !== skillPath)) {
+    warnings.push("Legacy managed home-skill catalogue preserved; old skill entries may remain discoverable.");
+  }
+  return {
+    writes, warnings,
+    activation: {
+      status: "configured", skill: "nullform-workflow", path: skillPath,
+      detail: "Native skills.auto_load registration only; runtime loading is unverified and requires skills tools and HERMES_IGNORE_RULES unset. Delegated children may skip skills.",
+    },
+  };
+}
+
+export function applyOpencodeAdapter(ctx) {
+  const { targetRoot, hostHome, slashRoot, report, shouldWriteHome, writeAdapter, readExisting } = ctx;
+  const raw = getMarkdownAdapter(slashRoot, "OpenCode NULLFORM WORKFLOW Adapter", report);
+  for (const dir of new Set([targetRoot, ...(shouldWriteHome ? [hostHome] : [])])) {
+    const path = join(dir, "AGENTS.md");
+    writeAdapter(path, applyManagedSection(readExisting(path), raw));
+    for (const config of resolveOpencodeConfigPaths(dir)) {
+      writeAdapter(config, updateOpencodeJson(config, preflightJsoncConfig(config)));
+    }
   }
 }
 
 export function applyHarnessAdapter(h, ctx) {
-  const {
-    targetRoot,
-    projectRoot,
-    slashRoot,
-    userHome,
-    options,
-    shouldWriteHome,
-    writeAdapter,
-    readExisting,
-    copyHomeSkills,
-    copyDirRecursive,
-    installSkills,
-    installRoleRoster,
-    translateStdioEntry,
-  } = ctx;
-
-  switch (h) {
-    case "claude": {
-      const rawAdapter = getMarkdownAdapter(slashRoot, "Claude Code NULLFORM WORKFLOW Adapter");
-      writeAdapter(join(targetRoot, "CLAUDE.md"), applyManagedSection(readExisting(join(targetRoot, "CLAUDE.md")), rawAdapter));
-      if (shouldWriteHome) {
-        const homePath = join(userHome, ".claude", "CLAUDE.md");
-        writeAdapter(homePath, applyManagedSection(readExisting(homePath), rawAdapter));
-        copyHomeSkills(join(userHome, ".claude", "skills"));
+  const { targetRoot, projectRoot, hostHome, slashRoot, report, shouldWriteHome, writeAdapter, readExisting, hostManifest } = ctx;
+  if (h === "omp") {
+    if (shouldWriteHome) installOmpHomeAssets(ctx);
+    return;
+  }
+  const raw = getMarkdownAdapter(slashRoot, `${h} NULLFORM WORKFLOW Adapter`, report);
+  const writeMd = path => writeAdapter(path, applyManagedSection(readExisting(path), raw));
+  if (h === "custom") {
+    writeMd(join(projectRoot, hostManifest.instructionsFile));
+  } else if (h === "cursor") {
+    const path = join(projectRoot || targetRoot, ".cursor", "rules", "00-workflow.mdc");
+    writeAdapter(path, applyCursorMdc(readExisting(path), raw));
+  } else if (h === "opencode") {
+    applyOpencodeAdapter(ctx);
+  } else {
+    const filename = h === "claude" ? "CLAUDE.md" : "AGENTS.md";
+    writeMd(join(targetRoot, filename));
+    if (h === "hermes") {
+      for (const [path, content] of ctx.hermesActivation.writes) writeAdapter(path, content);
+      ctx.plan.activation = ctx.hermesActivation.activation;
+      ctx.plan.warnings.push(...ctx.hermesActivation.warnings);
+    } else {
+      if (shouldWriteHome) writeMd(join(hostHome, filename));
+      if (h === "openclaw") {
+        const soulPath = join(targetRoot, "SOUL.md");
+        if (existsSync(soulPath)) {
+          const text = readExisting(soulPath);
+          const legacy = `${MANAGED_START}\n${getOpenclawSoul(slashRoot).trim()}\n${MANAGED_END}`;
+          if (text.includes(legacy) && text.indexOf(MANAGED_START) === text.lastIndexOf(MANAGED_START) &&
+              text.indexOf(MANAGED_END) === text.lastIndexOf(MANAGED_END)) writeAdapter(soulPath, text.replace(legacy, ""));
+          else if (text.includes(MANAGED_START)) ctx.plan.warnings.push("Modified/unknown legacy OpenClaw SOUL block preserved; its behavior may remain active.");
+        }
+        for (const dir of new Set([targetRoot, ...(shouldWriteHome ? [hostHome] : [])])) {
+          const path = join(dir, "openclaw.json");
+          writeAdapter(path, updateOpenclawJson(path, preflightJson5Config(path), slashRoot));
+        }
       }
-      break;
-    }
-    case "codex": {
-      const rawAdapter = getMarkdownAdapter(slashRoot, "Codex NULLFORM WORKFLOW Adapter");
-      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), rawAdapter));
-      if (shouldWriteHome) {
-        const homePath = join(userHome, ".codex", "AGENTS.md");
-        writeAdapter(homePath, applyManagedSection(readExisting(homePath), rawAdapter));
-        copyHomeSkills(join(userHome, ".codex", "skills"));
-      }
-      break;
-    }
-    case "opencode":
-      applyOpencodeAdapter(ctx);
-      break;
-    case "cursor": {
-      const rootMdc = join(projectRoot || targetRoot, ".cursor", "rules", "00-workflow.mdc");
-      writeAdapter(rootMdc, applyCursorMdc(readExisting(rootMdc), getMarkdownAdapter(slashRoot, "Cursor NULLFORM WORKFLOW Adapter")));
-      break;
-    }
-    case "omp": {
-      if (shouldWriteHome) {
-        installOmpHomeAssets({
-          ...ctx,
-          copyDirRecursive,
-          installSkills,
-          installRoleRoster,
-          translateStdioEntry,
-        });
-      }
-      break;
-    }
-    case "openclaw": {
-      const rootJson = join(targetRoot, "openclaw.json");
-      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenClaw NULLFORM WORKFLOW Adapter")));
-      writeAdapter(join(targetRoot, "SOUL.md"), applyManagedSection(readExisting(join(targetRoot, "SOUL.md")), getOpenclawSoul(slashRoot)));
-      writeAdapter(join(targetRoot, "USER.md"), applyManagedSection(readExisting(join(targetRoot, "USER.md")), getOpenclawUser(slashRoot)));
-      writeAdapter(rootJson, updateOpenclawJson(rootJson, preflightJson5Config(rootJson), slashRoot));
-      if (shouldWriteHome || options.dryRun) {
-        const homeJson = join(userHome, ".openclaw", "openclaw.json");
-        writeAdapter(homeJson, updateOpenclawJson(homeJson, preflightJson5Config(homeJson), slashRoot));
-        copyHomeSkills(join(userHome, ".openclaw", "skills"));
-      }
-      break;
-    }
-    case "hermes": {
-      const rootConfig = join(targetRoot, "config.yaml");
-      const mcpEx = join(REPO_ROOT, "agent", "mcp.json.example");
-      const rawHermes = getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter");
-      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), rawHermes));
-      writeAdapter(rootConfig, updateHermesConfigYaml(rootConfig, preflightYamlConfig(rootConfig), slashRoot, mcpEx, translateStdioEntry));
-      if (shouldWriteHome || options.dryRun) {
-        const isDefaultHome = resolve(userHome) === resolve(homedir());
-        const hermesHome = (isDefaultHome && process.env.HERMES_HOME) || join(userHome, ".hermes");
-        const homeConfig = join(hermesHome, "config.yaml");
-        writeAdapter(homeConfig, updateHermesConfigYaml(homeConfig, preflightYamlConfig(homeConfig), slashRoot, mcpEx, translateStdioEntry));
-        writeAdapter(join(hermesHome, "SOUL.md"), applyManagedSection(readExisting(join(hermesHome, "SOUL.md")), rawHermes));
-        writeAdapter(join(hermesHome, "AGENTS.md"), applyManagedSection(readExisting(join(hermesHome, "AGENTS.md")), rawHermes));
-        copyHomeSkills(join(hermesHome, "skills"));
-      }
-      break;
-    }
-    case "openhuman": {
-      const agentDir = join(targetRoot, "agents", "workflow");
-      writeAdapter(join(targetRoot, "AGENTS.md"), applyManagedSection(readExisting(join(targetRoot, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter")));
-      writeAdapter(join(agentDir, "AGENTS.md"), applyManagedSection(readExisting(join(agentDir, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman Workflow Agent")));
-      copyHomeSkills(join(agentDir, "skills"));
-      if (shouldWriteHome || options.dryRun) {
-        const homeOh = join(userHome, ".openhuman");
-        writeAdapter(join(homeOh, "AGENTS.md"), applyManagedSection(readExisting(join(homeOh, "AGENTS.md")), getMarkdownAdapter(slashRoot, "OpenHuman NULLFORM WORKFLOW Adapter")));
-        copyHomeSkills(join(homeOh, "skills"));
-      }
-      break;
     }
   }
 }

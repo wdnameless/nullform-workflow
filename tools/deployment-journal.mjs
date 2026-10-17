@@ -5,10 +5,40 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync, lstatSync, readlinkSync, symlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { resolve, join, dirname, isAbsolute, basename } from "node:path";
-import { homedir } from "node:os";
 import { hashContent } from "./harness-config.mjs";
 import { writeInstallationState, readInstallationState } from "./installation-state.mjs";
 import { normalizePath, validatePathWithinScope } from "./worktree-snapshot.mjs";
+import { resolveHostHome } from "./harness-profiles.mjs";
+
+function selectedHostScope(hostHome, userHome, harness = "custom") {
+  if (hostHome === undefined || hostHome === null) return null;
+  if (typeof hostHome !== "string" || hostHome.length > 4096 || !isAbsolute(hostHome) || /[\x00-\x1f\x7f]/.test(hostHome)) {
+    throw new Error("Invalid selected hostHome: expected a bounded absolute path");
+  }
+  const path = normalizePath(resolveHostHome({ harness: harness === "all" ? "hermes" : harness, userHome, hostHome }).path);
+  if (path !== normalizePath(resolve(path))) {
+    throw Object.assign(new Error("Selected hostHome is not normalized"), { code: "ESCOPE" });
+  }
+  return path;
+}
+/**
+ * Validated multi-home write scope for harness=all installs. Accepts a single
+ * path, an array, or a harness->path map; every entry is validated exactly
+ * like a single selected hostHome. Fail-closed: invalid entries throw.
+ */
+function selectedHostScopes(hostHomes, userHome, harness = "custom") {
+  if (hostHomes === undefined || hostHomes === null) return [];
+  const list = Array.isArray(hostHomes)
+    ? hostHomes
+    : (typeof hostHomes === "object" ? Object.values(hostHomes) : [hostHomes]);
+  const out = [];
+  for (const home of list) {
+    if (home === undefined || home === null) continue;
+    const scope = selectedHostScope(home, userHome, harness);
+    if (scope && !out.includes(scope)) out.push(scope);
+  }
+  return out.sort();
+}
 
 export function getDeploymentLockPath(userHome) {
   return join(normalizePath(resolve(userHome)), ".nullform", "deployment.lock");
@@ -65,6 +95,9 @@ export function acquireDeploymentLock({
   userHome,
   targetRoot,
   harness,
+  projectRoot = null,
+  hostHome = null,
+  hostHomes = null,
   dryRun = false,
 } = {}) {
   if (dryRun) {
@@ -79,6 +112,8 @@ export function acquireDeploymentLock({
 
   const normHome = normalizePath(resolve(userHome));
   const normTarget = normalizePath(resolve(targetRoot));
+  const hostScopes = selectedHostScopes(hostHomes ?? hostHome, normHome, harness);
+  const hostScope = hostScopes[0] ?? null;
   const lockPath = getDeploymentLockPath(normHome);
   mkdirSync(dirname(lockPath), { recursive: true });
 
@@ -105,11 +140,21 @@ export function acquireDeploymentLock({
     }
 
     // Process is verified dead (ESRCH): recover abandoned journal with ONLY trusted scopes (caller + last verified)
-    recoverAbandonedJournal(normHome, { targetRoot: normTarget });
+    recoverAbandonedJournal(normHome, { targetRoot: normTarget, projectRoot, hostHome: hostScope, hostHomes: hostScopes, harness });
 
     try {
       unlinkSync(lockPath);
     } catch {}
+  }
+  const journalPath = getDeploymentJournalPath(normHome);
+  if (existsSync(journalPath)) {
+    let pending;
+    try { pending = JSON.parse(readFileSync(journalPath, "utf8")); }
+    catch { throw Object.assign(new Error("Corrupted deployment journal; recovery requires operator inspection"), { code: "ECORRUPT_JOURNAL" }); }
+    if (!isProcessAlive(pending.pid).verifiedDead) {
+      throw Object.assign(new Error("Deployment journal owner is live or uncertain; refusing concurrent recovery"), { code: "ELOCKED" });
+    }
+    recoverAbandonedJournal(normHome, { targetRoot: normTarget, projectRoot, hostHome: hostScope, hostHomes: hostScopes, harness });
   }
 
   const lockData = {
@@ -252,10 +297,12 @@ function restoreSingleEntry(entry, _userHome, backupDir, allowedScopes) {
 }
 
 export class DeploymentJournal {
-  constructor({ userHome, targetRoot, projectRoot = null, harness, targetVersion, dryRun = false, extraScopes = [] }) {
+  constructor({ userHome, targetRoot, projectRoot = null, hostHome = null, hostHomes = null, harness, targetVersion, dryRun = false }) {
     this.userHome = normalizePath(resolve(userHome));
     this.targetRoot = normalizePath(resolve(targetRoot));
     this.projectRoot = projectRoot ? normalizePath(resolve(projectRoot)) : null;
+    this.hostHomes = selectedHostScopes(hostHomes ?? hostHome, this.userHome, harness);
+    this.hostHome = this.hostHomes[0] ?? null;
     this.harness = harness;
     this.targetVersion = targetVersion;
     this.dryRun = Boolean(dryRun);
@@ -264,10 +311,7 @@ export class DeploymentJournal {
     this.backupDir = getDeploymentBackupDir(this.userHome, this.journalId);
     this.allowedScopes = [this.targetRoot, this.userHome];
     if (this.projectRoot) this.allowedScopes.push(this.projectRoot);
-    if (resolve(this.userHome) === resolve(homedir()) && process.env.HERMES_HOME) {
-      this.allowedScopes.push(normalizePath(resolve(process.env.HERMES_HOME)));
-    }
-    for (const s of extraScopes) if (s) this.allowedScopes.push(normalizePath(resolve(s)));
+    for (const scope of this.hostHomes) this.allowedScopes.push(scope);
     this.entries = [];
     this.status = "in-progress";
     this.committed = false;
@@ -290,6 +334,8 @@ export class DeploymentJournal {
       userHome: this.userHome,
       targetRoot: this.targetRoot,
       projectRoot: this.projectRoot,
+      hostHome: this.hostHome,
+      hostHomes: this.hostHomes,
       harness: this.harness,
       targetVersion: this.targetVersion,
       entries: this.entries,
@@ -537,6 +583,7 @@ export function recoverAbandonedJournal(userHome, options = {}) {
     const savedState = readInstallationState(normHome);
     if (savedState?.root) trustedScopes.push(normalizePath(savedState.root));
     if (savedState?.projectRoot) trustedScopes.push(normalizePath(savedState.projectRoot));
+    if (savedState?.hostHome) trustedScopes.push(selectedHostScope(savedState.hostHome, normHome, savedState.harness));
   } catch {}
 
   if (options.targetRoot && typeof options.targetRoot === "string") {
@@ -545,6 +592,8 @@ export function recoverAbandonedJournal(userHome, options = {}) {
   if (options.projectRoot && typeof options.projectRoot === "string") {
     trustedScopes.push(normalizePath(options.projectRoot));
   }
+  const callerScopes = selectedHostScopes(options.hostHomes ?? options.hostHome, normHome, options.harness);
+  for (const scope of callerScopes) trustedScopes.push(scope);
 
   // Verify journal.targetRoot is within trusted scopes (CANONICAL GUARD ONLY, NO LEXICAL FALLBACK)
   if (!journal.targetRoot || typeof journal.targetRoot !== "string") {
@@ -571,6 +620,58 @@ export function recoverAbandonedJournal(userHome, options = {}) {
       );
       err.code = "ETAMPERED";
       throw err;
+    }
+  }
+
+  // The interrupted journal's own host set must exactly match the caller's or
+  // the validated saved identity's set. Pre-feature journals without hostHomes
+  // fall back to their single legacy hostHome. Any mismatch fails ESCOPE so an
+  // arbitrary caller home cannot authorize recovery of another profile set.
+  let journalScopes = null;
+  try {
+    journalScopes = ("hostHomes" in journal)
+      ? selectedHostScopes(journal.hostHomes, normHome, journal.harness)
+      : (journal.hostHome === undefined || journal.hostHome === null
+        ? null
+        : [selectedHostScope(journal.hostHome, normHome, journal.harness)]);
+  } catch {
+    const err = new Error("Tampered journal detected: invalid journal host scope");
+    err.code = "ETAMPERED";
+    throw err;
+  }
+  if (journalScopes !== null && !("hostHomes" in journal) && journal.hostHome !== undefined && journal.hostHome !== null) {
+    const normJournalHost = normalizePath(journal.hostHome);
+    if (journalScopes[0] !== normJournalHost) {
+      const err = new Error("Tampered journal detected: journal hostHome is not normalized");
+      err.code = "ETAMPERED";
+      throw err;
+    }
+  }
+  if (journalScopes !== null) {
+    const savedScopes = (() => {
+      try {
+        const savedState = readInstallationState(normHome);
+        if (!savedState?.hostHome) return null;
+        return [selectedHostScope(savedState.hostHome, normHome, savedState.harness)];
+      } catch { return null; }
+    })();
+    const matches = (candidate) => candidate !== null &&
+      candidate.length === journalScopes.length &&
+      candidate.every((scope) => journalScopes.includes(scope));
+    if (!matches(callerScopes) && !matches(savedScopes)) {
+      const claimed = callerScopes.length > 0 || savedScopes !== null;
+      const err = claimed
+        ? new Error("Recovery refused: journal host scope does not match the caller-selected or validated saved profile set")
+        : new Error(`Tampered journal detected: journal host scope "${journalScopes[0] ?? journal.hostHome}" escapes trusted boundaries`);
+      err.code = claimed ? "ESCOPE" : "ETAMPERED";
+      throw err;
+    }
+    for (const scope of journalScopes) {
+      if (!trustedScopes.some((trusted) => validatePathWithinScope(scope, trusted))) {
+        const err = new Error(`Tampered journal detected: journal host scope "${scope}" escapes trusted boundaries`);
+        err.code = "ETAMPERED";
+        throw err;
+      }
     }
   }
 

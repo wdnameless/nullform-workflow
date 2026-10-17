@@ -8,8 +8,9 @@ import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { HARNESS_CHOICES, readInstallationState, compareSemVer } from "./installation-state.mjs";
+import { CONCRETE_HARNESSES, readInstallationState, compareSemVer } from "./installation-state.mjs";
 import { isCommandInPath } from "./harness-config.mjs";
+import { inspectHarness } from "./harness-profiles.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
@@ -30,9 +31,9 @@ export function getHostPresence() {
   };
 }
 
-export function getCapabilitiesInfo({ userHome = homedir(), env = process.env } = {}) {
+export function getCapabilitiesInfo({ userHome = homedir(), env = process.env, harness, hostHome, hostManifest, projectRoot, platform = process.platform, probe = false } = {}) {
   const hostPresence = getHostPresence();
-  const adapters = HARNESS_CHOICES.map((id) => ({
+  const adapters = CONCRETE_HARNESSES.map((id) => ({
     id,
     configuration: true,
     automatedReview: id === "omp",
@@ -41,8 +42,13 @@ export function getCapabilitiesInfo({ userHome = homedir(), env = process.env } 
 
   return {
     ok: true,
-    configurationAdapters: [...HARNESS_CHOICES],
+    configurationAdapters: [...CONCRETE_HARNESSES],
     adapters,
+    customHostContract: {
+      schemaVersion: 1, supported: true, requires: ["hostManifest", "projectRoot"],
+      evidence: "declared", runtimeLoading: "not-verified", executableCommands: false,
+    },
+    ...(harness ? { profile: inspectHarness({ harness, userHome, env, hostHome, hostManifest, projectRoot, platform, probe }) } : {}),
     coreWorkflowGates: {
       supported: true,
       runtime: "node",
@@ -52,7 +58,7 @@ export function getCapabilitiesInfo({ userHome = homedir(), env = process.env } 
     },
     automatedReview: {
       supportedHarnesses: ["omp"],
-      unsupportedHarnesses: HARNESS_CHOICES.filter((h) => h !== "omp"),
+      unsupportedHarnesses: [...CONCRETE_HARNESSES.filter((h) => h !== "omp"), "custom"],
       requiresBun: true,
       requiresOmp: true,
       status: "omp_only",
@@ -178,13 +184,14 @@ export function checkVersionAlignment({ harness, userHome, packageRoot = REPO_RO
   };
 }
 
-export function checkHarnessCapabilities(targetHarness) {
+export function checkHarnessCapabilities(targetHarness, options = {}) {
   const automatedReviewSupported = targetHarness === "omp";
   return {
     id: "harness-capabilities",
     status: "pass",
     automatedReviewSupported,
-    detail: `Конфигурация поддерживается для 8 адаптеров; базовые гейты Node-native; автоматическое ревью ${
+    ...(options.userHome ? { profile: inspectHarness({ ...options, harness: targetHarness }) } : {}),
+    detail: `Конфигурация поддерживается для 8 именованных адаптеров и декларативного custom-контракта (не доказательство загрузки/исполнения); базовые гейты Node-native; автоматическое ревью ${
       automatedReviewSupported ? "поддерживается (omp)" : `не поддерживается для '${targetHarness}' (только omp с Bun)`
     }.`,
   };

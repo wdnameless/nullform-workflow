@@ -21,7 +21,7 @@ const transactionChild = String.raw`
   import { syncBuiltinESMExports } from 'node:module';
   import { join, resolve } from 'node:path';
   const options = JSON.parse(process.argv[1]);
-  const { userHome, targetRoot, boundary, mode, standalone } = options;
+  const { userHome, targetRoot, hostHome, boundary, mode, standalone } = options;
   const native = { ...fs };
   const statePath = join(userHome, '.nullform', 'installation.json');
   const journalPath = join(userHome, '.nullform', 'deployment-journal.json');
@@ -74,24 +74,30 @@ const transactionChild = String.raw`
   const { readInstallationState } = await import(options.stateModule);
   const { hashContent } = await import(options.configModule);
   const prior = readInstallationState(userHome) || options.prior;
-  acquireDeploymentLock({ userHome, targetRoot, harness: 'opencode' });
-  const journal = new DeploymentJournal({ userHome, targetRoot, harness: 'opencode', targetVersion: '1.2.0' });
+  acquireDeploymentLock({ userHome, targetRoot, hostHome, harness: 'opencode' });
+  const journal = new DeploymentJournal({ userHome, targetRoot, hostHome, harness: 'opencode', targetVersion: '1.2.0' });
   journal.start();
   const owned = join(targetRoot, 'owned.txt');
   journal.recordBeforeWrite(owned, 'NEW');
   safeAtomicWrite(owned, 'NEW');
   journal.recordWritten(owned);
+  const nativeFile = hostHome && join(hostHome, 'native-policy.md');
+  if (nativeFile) {
+    journal.recordBeforeWrite(nativeFile, 'NATIVE NEW');
+    safeAtomicWrite(nativeFile, 'NATIVE NEW');
+    journal.recordWritten(nativeFile);
+  }
   armed = true;
   try {
     if (standalone) journal.finalize();
-    else journal.commit({ ...prior, version: '1.2.0', managedFiles: { [owned]: hashContent('NEW') } });
+    else journal.commit({ ...prior, version: '1.2.0', managedFiles: { [owned]: hashContent('NEW'), ...(nativeFile ? { [nativeFile]: hashContent('NATIVE NEW') } : {}) } });
   } catch (err) {
     if (mode !== 'fault' || !['EIO', 'EACCES'].includes(err.code)) throw err;
     native.writeSync(1, err.code + '\n');
   }
 `;
 
-function transactionFixture({ identity = true } = {}) {
+function transactionFixture({ identity = true, nativeProfile = false } = {}) {
   const sandbox = mkdtempSync(join(tmpdir(), "transaction-sandbox-"));
   const userHome = join(sandbox, "home");
   const targetRoot = join(sandbox, "target");
@@ -101,17 +107,21 @@ function transactionFixture({ identity = true } = {}) {
   const human = join(targetRoot, "human-notes.md");
   writeFileSync(owned, "OLD");
   writeFileSync(human, "# Human original notes");
+  const hostHome = nativeProfile ? join(sandbox, "selected-profile") : undefined;
+  const nativeFile = hostHome && join(hostHome, "native-policy.md");
+  if (hostHome) { mkdirSync(hostHome); writeFileSync(nativeFile, "NATIVE OLD"); }
   const prior = {
     schemaVersion: 1, harness: "opencode", root: targetRoot, userHome, version: "1.0.0", managedFiles: {},
+    ...(hostHome ? { hostHome } : {}),
   };
   if (identity) writeInstallationState(userHome, prior);
   const identityBytes = identity ? readFileSync(getStateFilePath(userHome)) : null;
-  return { sandbox, userHome, targetRoot, owned, human, prior, identityBytes };
+  return { sandbox, userHome, targetRoot, hostHome, nativeFile, owned, human, prior, identityBytes };
 }
 
 function transactionArgs(fixture, options) {
   return ["--input-type=module", "-e", transactionChild, JSON.stringify({
-    userHome: fixture.userHome, targetRoot: fixture.targetRoot, prior: fixture.prior, ...options,
+    userHome: fixture.userHome, targetRoot: fixture.targetRoot, hostHome: fixture.hostHome, prior: fixture.prior, ...options,
     journalModule: new URL("../deployment-journal.mjs", import.meta.url).href,
     stateModule: new URL("../installation-state.mjs", import.meta.url).href,
     configModule: new URL("../harness-config.mjs", import.meta.url).href,
@@ -242,3 +252,127 @@ test("2. kill first identity: recovery removes a newly published identity and re
   }
 });
 
+
+for (const identity of [false, true]) {
+  for (const boundary of ["before-identity", "after-identity", "before-backup-cleanup", "backup-cleanup", "journal-cleanup"]) {
+    test(`native profile SIGKILL recovery: saved=${identity}, ${boundary}`, async () => {
+      const fixture = transactionFixture({ identity, nativeProfile: true });
+      try {
+        await killAtBoundary(fixture, { boundary });
+        if (!identity && boundary === "before-identity") {
+          const snapshot = readFileSync(getDeploymentJournalPath(fixture.userHome));
+          assert.throws(() => acquireDeploymentLock({
+            userHome: fixture.userHome, targetRoot: fixture.targetRoot, harness: "opencode",
+          }), { code: "ETAMPERED" });
+          assert.equal(readFileSync(fixture.nativeFile, "utf8"), "NATIVE NEW");
+          assert.deepEqual(readFileSync(getDeploymentJournalPath(fixture.userHome)), snapshot);
+        }
+        const lock = acquireDeploymentLock({
+          userHome: fixture.userHome, targetRoot: fixture.targetRoot, ...(identity ? {} : { hostHome: fixture.hostHome }), harness: "opencode",
+        });
+        lock.release();
+        const committed = ["before-backup-cleanup", "backup-cleanup", "journal-cleanup"].includes(boundary);
+        assert.equal(readFileSync(fixture.nativeFile, "utf8"), committed ? "NATIVE NEW" : "NATIVE OLD");
+        assert.equal(readFileSync(fixture.owned, "utf8"), committed ? "NEW" : "OLD");
+        if (committed) {
+          assert.equal(readInstallationState(fixture.userHome).hostHome, fixture.hostHome);
+          assert.equal(readInstallationState(fixture.userHome).version, "1.2.0");
+        } else if (identity) {
+          assert.deepEqual(readFileSync(getStateFilePath(fixture.userHome)), fixture.identityBytes);
+        } else assert.equal(existsSync(getStateFilePath(fixture.userHome)), false);
+        assert.equal(existsSync(getDeploymentJournalPath(fixture.userHome)), false);
+        assert.equal(readFileSync(fixture.human, "utf8"), "# Human original notes");
+      } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+    });
+  }
+}
+
+for (const boundary of ["identity-write", "identity-rename", "marker-write", "marker-rename"]) {
+  test("native profile filesystem fault rolls back exact identity and profile bytes: " + boundary, () => {
+    const fixture = transactionFixture({ nativeProfile: true });
+    try {
+      const result = spawnSync(process.execPath, transactionArgs(fixture, { mode: "fault", boundary }), {
+        cwd: REPO_ROOT, encoding: "utf8", timeout: 20000,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, boundary.endsWith("rename") ? "EACCES\n" : "EIO\n");
+      assert.equal(readFileSync(fixture.nativeFile, "utf8"), "NATIVE OLD");
+      assert.equal(readFileSync(fixture.owned, "utf8"), "OLD");
+      assert.deepEqual(readFileSync(getStateFilePath(fixture.userHome)), fixture.identityBytes);
+    } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+  });
+}
+
+test("journal-declared and ambient host homes never authorize an external recovery scope", async () => {
+  const fixture = transactionFixture({ identity: false, nativeProfile: true });
+  try {
+    await killAtBoundary(fixture, { boundary: "before-identity" });
+    const journalPath = getDeploymentJournalPath(fixture.userHome);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    journal.extraScopes = [fixture.hostHome];
+    journal.hostHome = fixture.hostHome;
+    writeFileSync(journalPath, JSON.stringify(journal));
+    const script = `import { recoverAbandonedJournal } from ${JSON.stringify(new URL("../deployment-journal.mjs", import.meta.url).href)}; try { recoverAbandonedJournal(process.argv[1], {targetRoot:process.argv[2]}); process.exitCode=2; } catch(error) { console.log(error.code); }`;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script, fixture.userHome, fixture.targetRoot], {
+      cwd: REPO_ROOT, encoding: "utf8",
+      env: { ...process.env, HOME: fixture.userHome, USERPROFILE: fixture.userHome, NULLFORM_USER_HOME: fixture.userHome, LOCALAPPDATA: join(fixture.userHome, "AppData", "Local"), HERMES_HOME: fixture.hostHome },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "ETAMPERED");
+    assert.equal(readFileSync(fixture.nativeFile, "utf8"), "NATIVE NEW");
+    assert.equal(existsSync(journalPath), true);
+  } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+});
+
+test("cross-profile caller hostHome is rejected with ESCOPE while matching caller recovers", async () => {
+  const fixture = transactionFixture({ identity: false, nativeProfile: true });
+  try {
+    await killAtBoundary(fixture, { boundary: "before-identity" });
+    const journalPath = getDeploymentJournalPath(fixture.userHome);
+    const foreignHome = join(fixture.sandbox, "foreign-profile");
+    mkdirSync(foreignHome, { recursive: true });
+    assert.throws(() => recoverAbandonedJournal(fixture.userHome, {
+      targetRoot: fixture.targetRoot, hostHome: foreignHome, harness: "opencode",
+    }), { code: "ESCOPE" });
+    assert.equal(existsSync(journalPath), true);
+    const recovery = recoverAbandonedJournal(fixture.userHome, {
+      targetRoot: fixture.targetRoot, hostHome: fixture.hostHome, harness: "opencode",
+    });
+    assert.equal(recovery.recovered, true);
+    assert.equal(existsSync(journalPath), false);
+  } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+});
+
+test("absent-hostHome legacy journal recovers without a caller host scope", async () => {
+  const fixture = transactionFixture({ identity: false });
+  try {
+    await killAtBoundary(fixture, { boundary: "before-identity" });
+    const journalPath = getDeploymentJournalPath(fixture.userHome);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    assert.ok(journal.hostHome === undefined || journal.hostHome === null);
+    const recovery = recoverAbandonedJournal(fixture.userHome, { targetRoot: fixture.targetRoot });
+    assert.equal(recovery.recovered, true);
+    assert.equal(existsSync(journalPath), false);
+  } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+});
+
+test("all-mode journal authorizes every target home and recovery verifies the same set", async () => {
+  const fixture = transactionFixture({ identity: false, nativeProfile: true });
+  try {
+    await killAtBoundary(fixture, { boundary: "before-identity" });
+    const journalPath = getDeploymentJournalPath(fixture.userHome);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    journal.harness = "all";
+    journal.hostHomes = [fixture.hostHome];
+    assert.deepEqual([...journal.hostHomes].sort(), [fixture.hostHome].sort());
+    assert.throws(() => recoverAbandonedJournal(fixture.userHome, {
+      targetRoot: fixture.targetRoot, hostHomes: [join(fixture.sandbox, "other-profile")], harness: "all",
+    }), { code: "ESCOPE" });
+    assert.equal(existsSync(journalPath), true);
+    const recovery = recoverAbandonedJournal(fixture.userHome, {
+      targetRoot: fixture.targetRoot, hostHomes: [fixture.hostHome], harness: "all",
+    });
+    assert.equal(recovery.recovered, true);
+    assert.equal(existsSync(journalPath), false);
+  } finally { rmSync(fixture.sandbox, { recursive: true, force: true }); }
+});
