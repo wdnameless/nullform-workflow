@@ -285,7 +285,7 @@ async function verifyGlobalInstall(ctx, registry, pkgJson) {
 
 
 async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome, projectDir, secretToken, pkgVersion) {
-  const hermesHostHome = harness === "hermes" ? path.join(harnessHome, ".hermes") : null;
+  const hermesHostHome = harness === "hermes" ? join(harnessHome, ".hermes") : null;
   const initArgs = [
     "init", "--harness", harness, "--root", customRoot, "--user-home", harnessHome,
     ...(hermesHostHome ? ["--host-home", hermesHostHome] : []),
