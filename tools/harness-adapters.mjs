@@ -16,6 +16,7 @@ import {
   updateHermesConfigYaml,
   getMarkdownAdapter,
   getOpenclawSoul,
+  getOpenclawUser,
   hashContent,
   loadYaml,
   MANAGED_START,
@@ -205,14 +206,10 @@ export function applyHarnessAdapter(h, ctx) {
     } else {
       if (shouldWriteHome) writeMd(join(hostHome, filename));
       if (h === "openclaw") {
-        const soulPath = join(targetRoot, "SOUL.md");
-        if (existsSync(soulPath)) {
-          const text = readExisting(soulPath);
-          const legacy = `${MANAGED_START}\n${getOpenclawSoul(slashRoot).trim()}\n${MANAGED_END}`;
-          if (text.includes(legacy) && text.indexOf(MANAGED_START) === text.lastIndexOf(MANAGED_START) &&
-              text.indexOf(MANAGED_END) === text.lastIndexOf(MANAGED_END)) writeAdapter(soulPath, text.replace(legacy, ""));
-          else if (text.includes(MANAGED_START)) ctx.plan.warnings.push("Modified/unknown legacy OpenClaw SOUL block preserved; its behavior may remain active.");
-        }
+        // OpenClaw natively reads SOUL.md/USER.md: write managed policy via standard replace
+        // (any old block is replaced, human text preserved). This is native format, not bloat.
+        writeAdapter(join(targetRoot, "SOUL.md"), applyManagedSection(readExisting(join(targetRoot, "SOUL.md")), getOpenclawSoul(slashRoot)));
+        writeAdapter(join(targetRoot, "USER.md"), applyManagedSection(readExisting(join(targetRoot, "USER.md")), getOpenclawUser(slashRoot)));
         for (const dir of new Set([targetRoot, ...(shouldWriteHome ? [hostHome] : [])])) {
           const path = join(dir, "openclaw.json");
           writeAdapter(path, updateOpenclawJson(path, preflightJson5Config(path), slashRoot));
