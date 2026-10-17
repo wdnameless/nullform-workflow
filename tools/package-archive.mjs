@@ -39,11 +39,11 @@ export function buildHarnessFixture(harness, root, home, proj, secret) {
     cursor: { md: [join(proj, ".cursor", "rules", "00-workflow.mdc")], mdBody: cursorMdc, skills: join(root, "skills") },
     omp: { md: [join(home, ".omp", "agent", "AGENTS.md")], cfg: [join(home, ".omp", "agent", "mcp.json")], cfgBody: ompMcp, cfgKind: "omp-json", skills: join(home, ".agents", "skills") },
     openclaw: { md: [join(root, "AGENTS.md"), join(root, "SOUL.md"), join(root, "USER.md")], cfg: [join(root, "openclaw.json"), join(home, ".openclaw", "openclaw.json")], cfgBody: openclawJson5, cfgKind: "json5", skills: join(home, ".openclaw", "skills") },
-    hermes: { md: [join(root, "AGENTS.md"), join(home, ".hermes", "SOUL.md"), join(home, ".hermes", "AGENTS.md")], cfg: [join(root, "config.yaml"), join(home, ".hermes", "config.yaml")], cfgBody: hermesYaml, cfgKind: "yaml", skills: join(home, ".hermes", "skills") },
+    hermes: { md: [join(root, "AGENTS.md"), join(home, ".hermes", "AGENTS.md")], mdSoul: join(home, ".hermes", "SOUL.md"), cfg: [join(root, "config.yaml"), join(home, ".hermes", "config.yaml")], cfgBody: hermesYaml, cfgKind: "yaml", skills: join(home, ".hermes", "skills") },
     openhuman: { md: [join(root, "AGENTS.md"), join(home, ".openhuman", "AGENTS.md")], cfg: [join(home, ".openhuman", "config.toml")], cfgBody: openhumanToml, cfgKind: "toml", skills: join(home, ".openhuman", "skills"), noSymlink: true },
   };
   const e = map[harness];
-  return { mdFiles: e.md, mdContent: e.mdBody || stdMd, cfgFiles: e.cfg || [], cfgContent: e.cfgBody, cfgKind: e.cfgKind, skillsDir: e.skills, noSymlinkSkills: e.noSymlink, humanBefore: hb, humanAfter: ha };
+  return { mdFiles: e.md, mdSoul: e.mdSoul || null, mdContent: e.mdBody || stdMd, cfgFiles: e.cfg || [], cfgContent: e.cfgBody, cfgKind: e.cfgKind, skillsDir: e.skills, noSymlinkSkills: e.noSymlink, humanBefore: hb, humanAfter: ha };
 }
 
 export function seedHarnessFiles(fixture, customRoot, secretToken) {
@@ -52,6 +52,11 @@ export function seedHarnessFiles(fixture, customRoot, secretToken) {
   for (const mdPath of fixture.mdFiles) {
     mkdirSync(dirname(mdPath), { recursive: true });
     writeFileSync(mdPath, fixture.mdContent, "utf8");
+  }
+  if (fixture.mdSoul) {
+    // SOUL is identity, never managed: seed human-only content, assert byte-preservation later.
+    mkdirSync(dirname(fixture.mdSoul), { recursive: true });
+    writeFileSync(fixture.mdSoul, `# Human identity\n\n${fixture.humanBefore}\n\n${fixture.humanAfter}\n`, "utf8");
   }
   for (const cfgPath of fixture.cfgFiles) {
     mkdirSync(dirname(cfgPath), { recursive: true });

@@ -206,10 +206,12 @@ export function applyHarnessAdapter(h, ctx) {
     } else {
       if (shouldWriteHome) writeMd(join(hostHome, filename));
       if (h === "openclaw") {
-        // OpenClaw natively reads SOUL.md/USER.md: write managed policy via standard replace
-        // (any old block is replaced, human text preserved). This is native format, not bloat.
-        writeAdapter(join(targetRoot, "SOUL.md"), applyManagedSection(readExisting(join(targetRoot, "SOUL.md")), getOpenclawSoul(slashRoot)));
-        writeAdapter(join(targetRoot, "USER.md"), applyManagedSection(readExisting(join(targetRoot, "USER.md")), getOpenclawUser(slashRoot)));
+        // OpenClaw natively reads SOUL.md/USER.md: replace managed policy ONLY in existing files.
+        // Never create identity surfaces fresh (identity-clean install); never leave stale blocks.
+        for (const [name, gen] of [["SOUL.md", getOpenclawSoul], ["USER.md", getOpenclawUser]]) {
+          const path = join(targetRoot, name);
+          if (existsSync(path)) writeAdapter(path, applyManagedSection(readExisting(path), gen(slashRoot)));
+        }
         for (const dir of new Set([targetRoot, ...(shouldWriteHome ? [hostHome] : [])])) {
           const path = join(dir, "openclaw.json");
           writeAdapter(path, updateOpenclawJson(path, preflightJson5Config(path), slashRoot));

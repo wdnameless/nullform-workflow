@@ -312,6 +312,12 @@ async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome,
     }
 
     assert.equal(readFileSync(join(customRoot, "unrelated-notes.txt"), "utf8"), "Unrelated user file content.\n", "R04: Unrelated file altered");
+    if (fixture.mdSoul && pass === 1) {
+      // SOUL.md is identity: adaptive installer must leave human bytes untouched, no managed block.
+      const soul = readFileSync(fixture.mdSoul, "utf8");
+      assert.ok(soul.includes(fixture.humanBefore) && soul.includes(fixture.humanAfter), "R04: Human SOUL notes lost");
+      assert.equal(soul.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into SOUL.md");
+    }
     assert.equal(readFileSync(join(customRoot, ".env"), "utf8"), `USER_ENV_SECRET=${secretToken}\n`, "R04: User .env file altered");
 
     for (const cfgPath of fixture.cfgFiles) {
