@@ -47,6 +47,14 @@
     "liveRel": "extensions/nullform-jev.ts"
   },
   {
+    "rel": "agent/extensions/nullform-delete-guard.ts"
+  },
+  {
+    "rel": "agent/extensions/nullform-delete-guard.ts",
+    "liveRoot": "@agentdir",
+    "liveRel": "extensions/nullform-delete-guard.ts"
+  },
+  {
     "rel": "rules/enterprise-directives.md"
   },
   {
@@ -77,6 +85,9 @@
   },
   {
     "rel": "tools/workflow.mjs"
+  },
+  {
+    "rel": "tools/workflow-workspaces.mjs"
   },
   {
     "rel": "tools/code-size.mjs"

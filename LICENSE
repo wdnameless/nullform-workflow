@@ -2,6 +2,10 @@ MIT License
 
 Copyright (c) 2026 NULLFORM WORKFLOW Contributors
 
+Portions copyright (c) 2026 Nick Vels: the six destructive-command rules
+in agent/extensions/nullform-delete-guard.ts, derived from nick-vels/skills delete-guard.
+Upstream: https://github.com/nick-vels/skills
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

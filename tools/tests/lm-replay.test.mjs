@@ -14,6 +14,8 @@ import {
   recordCassette,
   replayCassette,
   verifyCassette,
+  recordBenchmarkRun,
+  executeReplayTurn,
 } from "../lm-replay.mjs";
 import { runBenchmark } from "../benchmark.mjs";
 import { createTempDir, createGitRepo } from "./test-helpers.mjs";
@@ -340,6 +342,76 @@ test("verify catches unredacted secrets in turn files and names file", () => {
     });
     assert.equal(cliRes.status, 1);
     assert.match(cliRes.stdout + cliRes.stderr, /turn 0: UNREDACTED SECRET in files\[src\/secret-config\.json\]/);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("recordBenchmarkRun preserves exact model and does not misattribute arm as model", () => {
+  const tmpDir = createTempDir("lm-replay-bench-record-");
+  try {
+    const outPath = join(tmpDir, "cassette.json");
+    const cassette = recordBenchmarkRun({
+      out: outPath,
+      absRoot: tmpDir,
+      prompt: "Implement multiply function",
+      response: "export function multiply(a, b) { return a * b; }",
+      arm: "candidate-skill",
+      model: "nullform-gateway/gemini-3.8-flash-high",
+      cost: { total_usd: 0.005 },
+    });
+
+    assert.equal(cassette.version, 1);
+    assert.equal(cassette.model, "nullform-gateway/gemini-3.8-flash-high");
+    assert.equal(cassette.arm, "candidate-skill");
+    assert.equal(cassette.turns.length, 1);
+    assert.equal(cassette.turns[0].promptHash, hashRecordedPrompt("Implement multiply function"));
+
+    // When model is omitted, arm is NOT used as the model name
+    const outPath2 = join(tmpDir, "cassette-nomodel.json");
+    const cassette2 = recordBenchmarkRun({
+      out: outPath2,
+      absRoot: tmpDir,
+      prompt: "Simple task",
+      response: "Simple answer",
+      arm: "candidate-skill",
+    });
+    assert.equal(cassette2.model, "recorded");
+    assert.equal(cassette2.arm, "candidate-skill");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("executeReplayTurn preserves recorded historical usage while returning clean turn", () => {
+  const tmpDir = createTempDir("lm-replay-turn-");
+  try {
+    const cassettePath = join(tmpDir, "cassette.json");
+    const repoDir = join(tmpDir, "repo");
+    mkdirSync(repoDir, { recursive: true });
+
+    recordCassette({
+      prompt: "Write greeting in hello.txt",
+      response: "Wrote hello.txt",
+      usage: { input: 100, output: 50, cost: { total: 0.001 } },
+      files: { "hello.txt": "Hello from cassette!\n" },
+      out: cassettePath,
+      model: "test-model",
+    });
+
+    const res = executeReplayTurn({
+      replay: cassettePath,
+      absRoot: tmpDir,
+      prompt: "Write greeting in hello.txt",
+      repoDir,
+    });
+
+    assert.equal(res.status, "ok");
+    assert.equal(res.exitCode, 0);
+    assert.equal(res.stdout, "Wrote hello.txt");
+    assert.equal(res.usage.input, 100);
+    assert.equal(res.usage.output, 50);
+    assert.equal(res.usage.cost.total, 0.001);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

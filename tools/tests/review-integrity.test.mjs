@@ -4,11 +4,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { computeSourceDigest } from '../review-evidence.mjs';
 import { readFileSync, symlinkSync } from 'node:fs';
 import { runReviewRecord, recordStageB, validateReviewEvidence, loadReviewEvidence, saveReviewEvidence, computeEventProjectionHash, countSourceChanges, validateOracleArtifact } from '../review-evidence.mjs';
 import { nativeRunner, prepareEvidence, writeEvidence } from './fixtures/review-execution.mjs';
-import { inspectProduct, executeProduct } from '../review-native-tools.mjs';
+import registerNativeTools, { inspectProduct, executeProduct } from '../review-native-tools.mjs';
 import { cmdStart, cmdArtifact, cmdClose, cmdCheckCi } from '../workflow.mjs';
 
 // Parent-owned execution: node --test tools/tests/review-integrity.test.mjs
@@ -49,6 +50,27 @@ function fixture() {
   writeFileSync(join(root, 'tests', 'consumer.cjs'), "require('node:assert/strict').equal(require('../product.cjs').answer(), 42);\n");
   const testCmd = `"${process.execPath}" tests/consumer.cjs`;
   return { root, changeId, changeDir, testCmd, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+function nativeToolFixture(f, productCommand) {
+  const provenance = { role: 'oracle', sourceDigest: computeSourceDigest(f.root), productCommandHash: computeEventProjectionHash(productCommand) };
+  const tools = new Map(), hooks = new Map(), entries = [];
+  // Registration-only native fixture; consumer execution is the actual Node process.
+  const schema = { int() { return this; }, min() { return this; }, max() { return this; }, default() { return this; }, strict() { return this; } };
+  const previous = process.env.WORKFLOW_REVIEW_OPTIONS;
+  try {
+    process.env.WORKFLOW_REVIEW_OPTIONS = JSON.stringify({ root: f.root, changeId: f.changeId, role: 'oracle', productCommand, provenance });
+    registerNativeTools({
+      zod: { object: () => schema, array: () => schema, string: () => schema, enum: () => schema, number: () => schema },
+      registerTool: tool => tools.set(tool.name, tool),
+      on: (name, handler) => hooks.set(name, handler),
+      appendEntry: (kind, data) => entries.push({ kind, data }),
+    });
+  } finally {
+    if (previous === undefined) delete process.env.WORKFLOW_REVIEW_OPTIONS;
+    else process.env.WORKFLOW_REVIEW_OPTIONS = previous;
+  }
+  hooks.get('session_start')();
+  return { exercise: params => tools.get('exercise_product').execute('fixture-call', params), entries, provenance };
 }
 function review(f, role = 'reviewer', extra = {}) {
   return runReviewRecord({ root: f.root, changeId: f.changeId, role, ompRunner: nativeRunner(undefined, undefined, 'correct', extra) });
@@ -198,6 +220,141 @@ test('product tool executes fixed argv without shell interpolation and detects s
     const result = JSON.parse(executeProduct({ root: f.root, productCommand: [process.execPath, '-e', 'process.stdout.write(process.argv[1])', argument] }));
     assert.equal(result.stdout, argument);
     assert.throws(() => executeProduct({ root: f.root, productCommand: [process.execPath, '-e', "require('fs').writeFileSync('product.cjs', 'modified')"] }), /mutated source/);
+  } finally { f.cleanup(); }
+});
+
+test('native exercise pages reassemble >120KiB UTF-8 consumer evidence exactly, bound JSON and execute once per session', async () => {
+  const f = fixture();
+  const stdout = '\uFEFF' + 'Привет 🚀 测试 \\ " CRLF\r\n\t\u0000'.repeat(6000);
+  const stderr = 'Diagnostic: 世界 🚀\r\n';
+  try {
+    mkdirSync(join(f.root, '.tmp'));
+    writeFileSync(join(f.root, 'tests', 'consumer.cjs'), [
+      "require('node:assert/strict').equal(require('../product.cjs').answer(), 42);",
+      "require('fs').appendFileSync('.tmp/execution-count', 'x');",
+      `process.stdout.write(${JSON.stringify(stdout)});`,
+      `process.stderr.write(${JSON.stringify(stderr)});`,
+    ].join('\n'));
+    const productCommand = [process.execPath, 'tests/consumer.cjs'];
+    const native = nativeToolFixture(f, productCommand);
+    const count = () => readFileSync(join(f.root, '.tmp', 'execution-count'), 'utf8');
+    for (const offset of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '0', null, undefined]) {
+      await assert.rejects(native.exercise({ offset }), /Invalid output offset/);
+    }
+    await assert.rejects(native.exercise({ offset: 1 }), /initial execution/);
+    for (const params of [{ argv: productCommand }, { command: productCommand }, { productCommand }, { path: 'product.cjs' }, { url: 'https://example.invalid' }]) {
+      await assert.rejects(native.exercise(params), /only an offset/);
+    }
+    assert.throws(count, { code: 'ENOENT' });
+    assert.equal(native.entries.filter(e => e.kind === 'workflow-product-execution').length, 0);
+    const expected = Buffer.from(JSON.stringify({ cwd: f.root, exitCode: 0, stdout, stderr }), 'utf8');
+    assert.ok(expected.length > 120 * 1024);
+    const contentHash = createHash('sha256').update(expected).digest('hex');
+    let offset = 0, first = null;
+    const chunks = [];
+    while (offset !== null) {
+      const result = await native.exercise({ offset });
+      assert.equal(result.isError, false);
+      const rendered = result.content[0].text;
+      assert.ok(Buffer.byteLength(rendered, 'utf8') <= 30 * 1024);
+      const page = JSON.parse(rendered);
+      first ||= page;
+      assert.equal(page.offset, offset);
+      assert.equal(page.cwd, f.root);
+      assert.equal(page.exitCode, 0);
+      assert.equal(page.contentHash, contentHash);
+      assert.equal(page.commandHash, native.provenance.productCommandHash);
+      assert.equal(page.sourceDigest, native.provenance.sourceDigest);
+      assert.equal(page.startedAt, first.startedAt);
+      assert.equal(page.completedAt, first.completedAt);
+      assert.equal(page.totalBytes, expected.length);
+      const bytes = Buffer.from(page.text, 'utf8');
+      assert.deepEqual(bytes, expected.subarray(offset, offset + bytes.length));
+      if (page.nextOffset !== null) assert.equal(page.nextOffset, offset + bytes.length);
+      chunks.push(bytes);
+      offset = page.nextOffset;
+      assert.equal(count(), 'x');
+    }
+    assert.deepEqual(Buffer.concat(chunks), expected);
+    const executions = native.entries.filter(e => e.kind === 'workflow-product-execution');
+    assert.equal(executions.length, 1);
+    assert.deepEqual(executions[0].data, { commandHash: native.provenance.productCommandHash, sourceDigest: native.provenance.sourceDigest, exitCode: 0, startedAt: first.startedAt, completedAt: first.completedAt, outputHash: contentHash });
+    assert.ok(Number.isFinite(Date.parse(first.startedAt)));
+    assert.ok(Date.parse(first.completedAt) >= Date.parse(first.startedAt));
+    assert.deepEqual(JSON.parse((await native.exercise({})).content[0].text), first);
+    await assert.rejects(native.exercise({ offset: expected.indexOf(Buffer.from('🚀')) + 1 }), /Invalid UTF-8 offset/);
+    await assert.rejects(native.exercise({ offset: expected.length + 1 }), /exceeds total bytes/);
+    await assert.rejects(native.exercise({ offset: 0, argv: ['unapproved'] }), /only an offset/);
+    writeFileSync(join(f.root, 'product.cjs'), 'exports.answer = () => 41;\n');
+    await assert.rejects(native.exercise({ offset: first.nextOffset }), /source changed/);
+    assert.equal(count(), 'x');
+    assert.equal(native.entries.filter(e => e.kind === 'workflow-product-execution').length, 1);
+    writeFileSync(join(f.root, 'product.cjs'), 'exports.answer = () => 42 + 0;\n');
+    const secondSession = nativeToolFixture(f, productCommand);
+    await secondSession.exercise({});
+    assert.equal(count(), 'xx');
+    assert.equal(secondSession.entries.filter(e => e.kind === 'workflow-product-execution').length, 1);
+  } finally { f.cleanup(); }
+});
+
+test('native exercise rejects pre-execution mutation and latches execution/source/UTF-8 errors without rerunning', async () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.root, '.tmp'));
+    const product = readFileSync(join(f.root, 'product.cjs'), 'utf8');
+    const native = nativeToolFixture(f, [process.execPath, 'tests/consumer.cjs']);
+    writeFileSync(join(f.root, 'product.cjs'), 'exports.answer = () => 41;\n');
+    await assert.rejects(native.exercise({}), /source changed/);
+    assert.equal(native.entries.filter(e => e.kind === 'workflow-product-execution').length, 0);
+    writeFileSync(join(f.root, 'product.cjs'), product);
+    for (const [body, expected] of [
+      ["require('fs').writeFileSync('product.cjs', 'mutated');", /mutated source/],
+      ['process.stdout.write(Buffer.from([0xff, 0xfe]));', /encoded data|encoding/i],
+    ]) {
+      writeFileSync(join(f.root, 'tests', 'consumer.cjs'), "require('fs').appendFileSync('.tmp/error-count', 'x');\n" + body);
+      const failing = nativeToolFixture(f, [process.execPath, 'tests/consumer.cjs']);
+      await assert.rejects(failing.exercise({}), expected);
+      writeFileSync(join(f.root, 'product.cjs'), product);
+      await assert.rejects(failing.exercise({}), expected);
+      assert.equal(readFileSync(join(f.root, '.tmp', 'error-count'), 'utf8'), 'x');
+      assert.equal(failing.entries.filter(e => e.kind === 'workflow-product-execution').length, 0);
+      rmSync(join(f.root, '.tmp', 'error-count'));
+    }
+    const missing = nativeToolFixture(f, [join(f.root, '.tmp', 'nonexistent-command')]);
+    await assert.rejects(missing.exercise({}), /execution failed/);
+    await assert.rejects(missing.exercise({}), /execution failed/);
+    assert.equal(missing.entries.filter(e => e.kind === 'workflow-product-execution').length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('native exercise preserves pageable nonzero-exit diagnostics as errors with one failed execution event', async () => {
+  const f = fixture();
+  try {
+    mkdirSync(join(f.root, '.tmp'));
+    const stderr = 'Consumer requirement failed: 🚀\n'.repeat(6000);
+    writeFileSync(join(f.root, 'tests', 'consumer.cjs'), [
+      "require('fs').appendFileSync('.tmp/failure-count', 'x');",
+      `process.stderr.write(${JSON.stringify(stderr)});`,
+      'process.exitCode = 7;',
+    ].join('\n'));
+    const native = nativeToolFixture(f, [process.execPath, 'tests/consumer.cjs']);
+    const chunks = [];
+    let offset = 0;
+    while (offset !== null) {
+      const result = await native.exercise({ offset });
+      assert.equal(result.isError, true);
+      assert.ok(Buffer.byteLength(result.content[0].text, 'utf8') <= 30 * 1024);
+      const page = JSON.parse(result.content[0].text);
+      assert.equal(page.exitCode, 7);
+      chunks.push(page.text);
+      offset = page.nextOffset;
+    }
+    assert.deepEqual(JSON.parse(chunks.join('')), { cwd: f.root, exitCode: 7, stdout: '', stderr });
+    assert.equal(readFileSync(join(f.root, '.tmp', 'failure-count'), 'utf8'), 'x');
+    const executions = native.entries.filter(e => e.kind === 'workflow-product-execution');
+    assert.equal(executions.length, 1);
+    assert.equal(executions[0].data.exitCode, 7);
+    assert.equal(executions[0].data.outputHash, createHash('sha256').update(chunks.join('')).digest('hex'));
   } finally { f.cleanup(); }
 });
 

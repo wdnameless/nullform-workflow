@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "my-host",
+  "displayName": "My host (operator-declared capabilities)",
+  "instructionsFile": ".my-host/AGENTS.md",
+  "capabilities": {
+    "taskState": "unknown",
+    "delegation": "unknown",
+    "worktree": "unknown",
+    "terminal": "unknown",
+    "browser": "unknown",
+    "skills": "unknown",
+    "verification": "unknown",
+    "mcp": "unknown"
+  }
+}

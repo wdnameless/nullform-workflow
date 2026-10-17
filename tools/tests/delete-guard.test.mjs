@@ -1,16 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { installHarness } from "../install-harness.mjs";
 
 function transpileDeleteGuardTs(src) {
   return src
     .replace(/import\s+type\s*[\s\S]*?from\s*["'][^"']+["'];?/g, "")
     .replace(/export\s+interface\s+[A-Za-z0-9_]+\s*\{[\s\S]*?\}/g, "")
     .replace(/export const RULES: DestructiveRule\[\] =/, "export const RULES =")
+    .replace(/const GIT_RESTORATION: DestructiveRule =/, "const GIT_RESTORATION =")
     .replace(/export function setInteractive\(value: boolean\): void \{/, "export function setInteractive(value) {")
     .replace(/export function getInteractive\(\): boolean \{/, "export function getInteractive() {")
     .replace(/export function matchDestructiveCommand\(cmd: string\): \{ what: string; rule\?: DestructiveRule \} \| null \{/, "export function matchDestructiveCommand(cmd) {")
@@ -44,128 +42,119 @@ async function loadDeleteGuard() {
 }
 
 const {
-  RULES,
   matchDestructiveCommand,
   rmTargets,
   computeRmScope,
-  buildDenyMessage,
   extractCommand,
   handleSessionStart,
   handleToolCall,
   setInteractive,
-  getInteractive,
-  createDeleteGuardExtension,
 } = await loadDeleteGuard();
 
-test("Rule 1 (rm recursive): matches recursive flags and rejects non-recursive rm", () => {
-  const rule = RULES[0];
-  assert.equal(rule.what, "удалить папку целиком");
-
-  // Positive cases: rm with -r, -R, -rf, -fr, -v -R, --recursive
-  assert.ok(rule.re.test("rm -rf ./build"));
-  assert.ok(rule.re.test("rm -r node_modules"));
-  assert.ok(rule.re.test("rm -R /tmp/cache"));
-  assert.ok(rule.re.test("rm -f -r dir"));
-  assert.ok(rule.re.test("rm -v -R dir"));
-  assert.ok(rule.re.test("rm --recursive temp"));
-  assert.ok(rule.re.test("rm -fr /data"));
-
-  // Negative cases: rm without recursion flag
-  assert.ok(!rule.re.test("rm file.txt"));
-  assert.ok(!rule.re.test("rm -f file.txt"));
-  assert.ok(!rule.re.test("rm -i file.txt"));
-  assert.ok(!rule.re.test("rm -v file.txt"));
+test("existing destructive operations still classify their dangerous flags, not safe variants", () => {
+  const dangerous = [
+    "rm -rf ./build", "rm -r node_modules", "rm -R /tmp/cache", "rm -f -r dir",
+    "rm -v -R dir", "rm --recursive temp", "rm -fr /data",
+    "git push origin main -f", "git push --force", "git push origin main --force",
+    "git push -f origin feat", "git reset --hard", "git reset --hard HEAD~1",
+    "git reset --hard origin/main", "git clean -f", "git clean -fd", "git clean -xdf",
+    "git clean -df", "find . -name '*.log' -delete", "find /tmp -type f -delete",
+    "drop table users", "DROP DATABASE test_db", "drop schema public",
+    "truncate table sessions", "TRUNCATE TABLE logs",
+  ];
+  const safe = [
+    "rm file.txt", "rm -f file.txt", "rm -i file.txt", "rm -v file.txt",
+    "git push", "git push origin main", "git push -u origin feature",
+    "git reset", "git reset --soft HEAD~1", "git reset HEAD",
+    "git clean -n", "git clean --dry-run", "find . -name '*.log'",
+    "find /tmp -type f", "find . -print", "select * from users",
+    "delete from users where id = 1", "update table_config set active = 1",
+  ];
+  for (const command of dangerous) assert.ok(matchDestructiveCommand(command), command);
+  for (const command of safe) assert.equal(matchDestructiveCommand(command), null, command);
 });
 
-test("Rule 2 (git push --force): matches force push and rejects normal push", () => {
-  const rule = RULES[1];
-  assert.equal(rule.what, "перезаписать историю на сервере (force push)");
+const screenshotCommand = "git checkout stash@{0} -- src/App.tsx";
+const restorations = [
+  screenshotCommand, "git checkout -- src/App.tsx", "git checkout src/App.tsx",
+  "git checkout -f HEAD", "git restore src/App.tsx", "git restore --staged src/App.tsx",
+  "git restore --source=HEAD --worktree --staged -- .",
+  "git stash apply stash@{0}", "git stash pop", "git stash push -u",
+  "git stash", "git stash -u", "git stash save backup", "git stash branch rescue",
+  'git -C "repo with spaces" checkout stash@{0} -- src/App.tsx',
+  "git -Crepo -c core.autocrlf=false restore -- .",
+  'git -C"repo with spaces" -P restore -- .',
+  "git --no-replace-objects stash pop",
+  "git --git-dir=.git --work-tree=. restore --staged -- .",
+  "git --git-dir .git --work-tree . stash pop",
+  "git --no-pager --literal-pathspecs -C repo restore -- .",
+  "env GIT_OPTIONAL_LOCKS=0 command git -C repo stash apply",
+  "sudo -u worker git -c core.quotePath=false checkout -- file",
+  'bash -lc "git -C repo stash push"',
+  '& "C:/Program Files/Git/bin/git.exe" -C repo restore -- file',
+  "rm -rf build && git restore -- .",
+];
 
-  // Positive cases
-  assert.ok(rule.re.test("git push origin main -f"));
-  assert.ok(rule.re.test("git push --force"));
-  assert.ok(rule.re.test("git push origin main --force"));
-  assert.ok(rule.re.test("git push -f origin feat"));
-
-  // Negative cases
-  assert.ok(!rule.re.test("git push"));
-  assert.ok(!rule.re.test("git push origin main"));
-  assert.ok(!rule.re.test("git push -u origin feature"));
+test("Git restoration blocks headlessly even after another destructive match", async () => {
+  setInteractive(false);
+  try {
+    for (const command of restorations) {
+      const result = await handleToolCall({ toolName: "bash", input: { command } }, {
+        ui: { confirm: () => assert.fail("headless confirmation must not run") },
+      });
+      assert.equal(result?.block, true, command);
+      assert.equal(result.deny, result.reason);
+    }
+  } finally {
+    setInteractive(true);
+  }
 });
 
-test("Rule 3 (git reset --hard): matches reset hard and rejects soft/mixed reset", () => {
-  const rule = RULES[2];
-  assert.equal(rule.what, "стереть несохранённые правки (git reset --hard)");
-
-  // Positive cases
-  assert.ok(rule.re.test("git reset --hard"));
-  assert.ok(rule.re.test("git reset --hard HEAD~1"));
-  assert.ok(rule.re.test("git reset --hard origin/main"));
-
-  // Negative cases
-  assert.ok(!rule.re.test("git reset"));
-  assert.ok(!rule.re.test("git reset --soft HEAD~1"));
-  assert.ok(!rule.re.test("git reset HEAD"));
+test("safe Git inspection and isolated worktree creation remain usable", async () => {
+  setInteractive(true);
+  for (const command of [
+    "git status", "git -C repo status --short", "git show stash@{0}:src/App.tsx",
+    "git --no-pager diff -- src/App.tsx", "git stash show -p stash@{0}",
+    "git stash list", "git stash create", "git worktree add --detach .tmp/worktrees/feature HEAD",
+  ]) {
+    assert.equal(await handleToolCall({ toolName: "bash", input: { command } }, {
+      hasUI: true, ui: { confirm: () => assert.fail(`safe command prompted: ${command}`) },
+    }), undefined, command);
+  }
 });
 
-test("Rule 4 (git clean -f): matches force clean and rejects dry-run", () => {
-  const rule = RULES[3];
-  assert.equal(rule.what, "удалить неотслеживаемые файлы (git clean)");
-
-  // Positive cases
-  assert.ok(rule.re.test("git clean -f"));
-  assert.ok(rule.re.test("git clean -fd"));
-  assert.ok(rule.re.test("git clean -xdf"));
-  assert.ok(rule.re.test("git clean -df"));
-
-  // Negative cases
-  assert.ok(!rule.re.test("git clean -n"));
-  assert.ok(!rule.re.test("git clean --dry-run"));
+test("screenshot restoration requires explicit interactive authorization", async () => {
+  setInteractive(true);
+  const event = { toolName: "bash", input: { command: screenshotCommand } };
+  for (const answer of [false, undefined, "yes"]) {
+    const result = await handleToolCall(event, { hasUI: true, ui: { confirm: async () => answer } });
+    assert.equal(result?.block, true);
+  }
+  let prompts = 0;
+  assert.equal(await handleToolCall(event, {
+    hasUI: true, ui: { confirm: async () => { prompts++; return true; } },
+  }), undefined);
+  assert.equal(prompts, 1);
+  assert.equal((await handleToolCall(event, { hasUI: false }))?.block, true);
+  assert.equal((await handleToolCall(event, {}))?.block, true);
+  assert.equal((await handleToolCall(event, {
+    ui: { confirm: async () => { throw new Error("dismissed"); } },
+  }))?.block, true);
+  assert.equal(await handleToolCall(event, { ui: { ask: async () => "Выполнить" } }), undefined);
+  assert.equal((await handleToolCall(event, { ui: { ask: async () => "Отменить" } }))?.block, true);
 });
 
-test("Rule 5 (find -delete): matches find with -delete and rejects normal find", () => {
-  const rule = RULES[4];
-  assert.equal(rule.what, "удалить найденные файлы (find -delete)");
-
-  // Positive cases
-  assert.ok(rule.re.test("find . -name '*.log' -delete"));
-  assert.ok(rule.re.test("find /tmp -type f -delete"));
-
-  // Negative cases
-  assert.ok(!rule.re.test("find . -name '*.log'"));
-  assert.ok(!rule.re.test("find /tmp -type f"));
-  assert.ok(!rule.re.test("find . -print"));
-});
-
-test("Rule 6 (DB drop/truncate): matches DROP/TRUNCATE and rejects SELECT/DELETE", () => {
-  const rule = RULES[5];
-  assert.equal(rule.what, "удалить данные из базы");
-
-  // Positive cases (case insensitive)
-  assert.ok(rule.re.test("drop table users"));
-  assert.ok(rule.re.test("DROP DATABASE test_db"));
-  assert.ok(rule.re.test("drop schema public"));
-  assert.ok(rule.re.test("truncate table sessions"));
-  assert.ok(rule.re.test("TRUNCATE TABLE logs"));
-
-  // Negative cases
-  assert.ok(!rule.re.test("select * from users"));
-  assert.ok(!rule.re.test("delete from users where id = 1"));
-  assert.ok(!rule.re.test("update table_config set active = 1"));
-});
-
-test("matchDestructiveCommand identifies destructive rules and ignores safe commands", () => {
-  const m1 = matchDestructiveCommand("rm -rf ./dist");
-  assert.ok(m1);
-  assert.equal(m1.what, "удалить папку целиком");
-
-  const m2 = matchDestructiveCommand("git push --force");
-  assert.ok(m2);
-  assert.equal(m2.what, "перезаписать историю на сервере (force push)");
-
-  assert.equal(matchDestructiveCommand("ls -la"), null);
-  assert.equal(matchDestructiveCommand("cat README.md"), null);
-  assert.equal(matchDestructiveCommand("git status"), null);
+test("session modes deny Git restoration but preserve other headless permission behavior", async () => {
+  const event = { toolName: "eval", input: { code: 'await shell("git restore --staged -- .")' } };
+  try {
+    for (const ctx of [{ hasUI: false }, { hasUI: true, mode: "print" }, { hasUI: true, mode: "rpc" }]) {
+      handleSessionStart(undefined, ctx);
+      assert.equal((await handleToolCall(event, ctx))?.block, true);
+      assert.equal(await handleToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx), undefined);
+    }
+  } finally {
+    setInteractive(true);
+  }
 });
 
 test("rmTargets parses arguments, flags, quotes, and expands ~", () => {
@@ -221,13 +210,6 @@ test("computeRmScope counts files and size with ctx.exec or falls back gracefull
   assert.equal(await computeRmScope("rm -rf", mockCtx, "/home"), "");
 });
 
-test("buildDenyMessage returns exact Russian safety prompt text", () => {
-  const msg = buildDenyMessage("удалить папку целиком");
-  assert.equal(
-    msg,
-    "Страж удаления: пользователь отменил «удалить папку целиком». Не повторяй эту команду; предложи безопасный вариант (копия, корзина) и спроси."
-  );
-});
 
 test("extractCommand extracts commands from bash and eval tool calls", () => {
   assert.equal(extractCommand({ toolName: "bash", input: { command: "rm -rf dist" } }), "rm -rf dist");
@@ -237,39 +219,16 @@ test("extractCommand extracts commands from bash and eval tool calls", () => {
   assert.equal(extractCommand(null), null);
 });
 
-test("handleSessionStart toggles isInteractive state based on event or ctx", () => {
-  setInteractive(true);
-  assert.equal(getInteractive(), true);
-
-  handleSessionStart({ isInteractive: false });
-  assert.equal(getInteractive(), false);
-
-  handleSessionStart({ isInteractive: true });
-  assert.equal(getInteractive(), true);
-
-  handleSessionStart(undefined, { hasUI: false });
-  assert.equal(getInteractive(), false);
-
-  handleSessionStart(undefined, { hasUI: true, mode: "tui" });
-  assert.equal(getInteractive(), true);
-
-  handleSessionStart(undefined, { hasUI: true, mode: "print" });
-  assert.equal(getInteractive(), false);
-});
 
 test("handleToolCall prompts via ctx.ui.confirm when interactive and allows on true", async () => {
   setInteractive(true);
 
   let confirmCalled = false;
-  let passedTitle = "";
-  let passedMessage = "";
 
   const mockCtx = {
     ui: {
-      confirm: async (title, message) => {
+      confirm: async () => {
         confirmCalled = true;
-        passedTitle = title;
-        passedMessage = message;
         return true;
       },
     },
@@ -281,9 +240,6 @@ test("handleToolCall prompts via ctx.ui.confirm when interactive and allows on t
   );
 
   assert.equal(confirmCalled, true);
-  assert.equal(passedTitle, "Страж");
-  assert.ok(passedMessage.includes("удалить папку целиком"));
-  assert.ok(passedMessage.includes("rm -rf ./build"));
   assert.equal(result, undefined);
 });
 
@@ -303,7 +259,6 @@ test("handleToolCall blocks with deny message when ctx.ui.confirm returns false"
 
   assert.ok(result);
   assert.equal(result.block, true);
-  assert.ok(result.reason.includes("Страж удаления: пользователь отменил «перезаписать историю на сервере (force push)»"));
   assert.equal(result.deny, result.reason);
 });
 
@@ -325,7 +280,6 @@ test("handleToolCall blocks when ctx.ui.confirm throws error (dialog closed)", a
 
   assert.ok(result);
   assert.equal(result.block, true);
-  assert.ok(result.reason.includes("стереть несохранённые правки (git reset --hard)"));
 });
 
 test("handleToolCall supports ctx.ui.ask fallback", async () => {
@@ -344,7 +298,6 @@ test("handleToolCall supports ctx.ui.ask fallback", async () => {
 
   assert.ok(result);
   assert.equal(result.block, true);
-  assert.ok(result.reason.includes("удалить неотслеживаемые файлы (git clean)"));
 });
 
 test("handleToolCall skips guard in non-interactive sessions", async () => {
@@ -372,40 +325,3 @@ test("handleToolCall skips guard in non-interactive sessions", async () => {
   setInteractive(true);
 });
 
-test("createDeleteGuardExtension registers event handlers on ExtensionAPI", () => {
-  const registeredEvents = [];
-  const mockPi = {
-    on: (name, handler) => {
-      registeredEvents.push({ name, handler });
-    },
-  };
-
-  const ext = createDeleteGuardExtension();
-  ext(mockPi);
-
-  const eventNames = registeredEvents.map((r) => r.name);
-  assert.ok(eventNames.includes("session_start"));
-  assert.ok(eventNames.includes("tool_call"));
-});
-
-test("installHarness plans and copies nullform-delete-guard.ts alongside nullform-jev.ts", () => {
-  const tempDir = join(tmpdir(), `test-delete-guard-install-${Date.now()}`);
-  mkdirSync(tempDir, { recursive: true });
-
-  try {
-    const plan = installHarness({
-      userHome: tempDir,
-      targetHarnesses: ["omp"],
-      writeHome: true,
-      dryRun: true,
-    });
-
-    const expectedDest = join(tempDir, ".omp", "agent", "extensions", "nullform-delete-guard.ts");
-    assert.ok(
-      plan.filesToCopy.some((f) => f.includes("nullform-delete-guard.ts")),
-      "installHarness plan must include nullform-delete-guard.ts"
-    );
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});

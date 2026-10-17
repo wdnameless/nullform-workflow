@@ -776,6 +776,7 @@ export function runBenchmark(options) { // code-size:allow
         baseSha,
         cost,
         arm: effectiveArm,
+        model: item.model || task.model,
       });
     }
   }

@@ -51,7 +51,9 @@ import {
   isSupersededOracleArtifact,
 } from "./review-evidence.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
-
+import { validateReviewCapability, printWorkflowHelp } from "./harness-capabilities.mjs";
+import { runWorkspaceCommand } from "./workflow-workspaces.mjs";
+import { runClaimCommand } from "./task-claim.mjs";
 const DIR = ".workflow";
 const FILE = "state.json";
 const BUDGETS_FILE = "budgets.json";
@@ -1655,7 +1657,33 @@ function validateCheckCiOracleFiles(root, relChangeDir) {
   return { ok: true, oracleRelForCommit };
 }
 
+function checkPushEvidence(root, flags) {
+  const baseRef = flags['base-ref'] || flags.baseRef || flags['base_ref'];
+  if (!baseRef || /^0+$/.test(baseRef)) {
+    console.error('workflow check-ci: push requires a resolvable previous commit in --base-ref; use a reviewed PR to initialize the branch.');
+    return 1;
+  }
+  const changedFiles = getBaseDiffFiles(root, baseRef);
+  if (!changedFiles) return 1;
+  const changes = [...new Set(changedFiles.map(path => /^openspec\/changes\/([A-Za-z0-9_-]+)\//.exec(path)?.[1]).filter(Boolean))];
+  if (changes.length) {
+    for (const change of changes) {
+      const tier = existsSync(join(root, 'openspec', 'changes', change, 'worktrees.md')) ? 'T3' : 'T2';
+      if (cmdCheckCi(root, { tier, change, 'base-ref': baseRef }) !== 0) return 1;
+    }
+    return 0;
+  }
+  if (changedFiles.length > 9) {
+    console.error(`workflow check-ci: push changes ${changedFiles.length} files; committed T2/T3 acceptance evidence is required.`);
+    return 1;
+  }
+  const tier = changedFiles.length <= 2 ? 'T0' : 'T1';
+  const recon = ['.workflow-recon.md', 'recon.md', ...changedFiles.filter(path => /(?:^|\/)(?:recon|\.workflow-recon)\.md$/i.test(path))].find(path => existsSync(join(root, path)));
+  return cmdCheckCi(root, { tier, recon, 'base-ref': baseRef });
+}
+
 function cmdCheckCi(root, flags) {
+  if (flags.push) return checkPushEvidence(root, flags);
   let tier = null;
   if (flags.labels !== undefined) {
     const raw = Array.isArray(flags.labels) ? flags.labels : String(flags.labels).split(/[\s,]+/);
@@ -1825,69 +1853,84 @@ function cmdCheckCi(root, flags) {
   return 0;
 }
 function cmdReviewRun(root, flags) {
-  try {
-    const res = runReviewRecord({ root, changeId: flags.change, role: flags.role, model: flags.model, baseRef: flags["base-ref"], prompt: flags.prompt, redo: Boolean(flags.redo), productCommand: flags["product-command"] ? JSON.parse(flags["product-command"]) : null, dryRun: Boolean(flags["dry-run"]) });
-    if (res.ok) { console.log(res.dryRun ? `workflow review-run: dry-run plan verified for ${flags.role} on '${flags.change}'.` : `workflow review-run: successfully recorded ${flags.role} execution for '${flags.change}'.`); return 0; }
+  const gate = validateReviewCapability(flags.harness, {
+    dryRun: Boolean(flags["dry-run"] || flags.dryRun),
+    userHome: flags["user-home"],
+  });
+  if (!gate.ok) {
+    console.error(gate.error);
     return 1;
-  } catch (err) { console.error(`workflow review-run error: ${err.message}`); return 1; }
+  }
+  const targetHarness = flags.harness ? String(flags.harness).trim().toLowerCase() : (gate.harness || null);
+  try {
+    const res = runReviewRecord({
+      root,
+      changeId: flags.change,
+      role: flags.role,
+      model: flags.model,
+      baseRef: flags["base-ref"],
+      prompt: flags.prompt,
+      redo: Boolean(flags.redo),
+      productCommand: flags["product-command"] ? JSON.parse(flags["product-command"]) : null,
+      dryRun: Boolean(flags["dry-run"] || flags.dryRun),
+      harness: targetHarness,
+    });
+    if (res.ok) {
+      console.log(res.dryRun ? `workflow review-run: dry-run plan verified for ${flags.role} on '${flags.change}'.` : `workflow review-run: successfully recorded ${flags.role} execution for '${flags.change}'.`);
+      return 0;
+    }
+    return 1;
+  } catch (err) {
+    console.error(`workflow review-run error: ${err.message}`);
+    return 1;
+  }
 }
 
 function cmdStageB(root, flags) {
   try {
-    const res = recordStageB({ root, changeId: flags.change, phase: flags.phase || "after", disposition: flags.disposition || "lean-already", testCmd: flags["test-cmd"] || flags.testCmd, summary: flags.summary });
+    const res = recordStageB({ root, changeId: flags.change, phase: flags.phase || "after", disposition: flags.disposition || "lean-already", testCmd: flags["test-cmd"] || flags.testCmd, summary: flags.summary, ...(flags["test-timeout"] !== undefined ? { testTimeoutMs: /^[1-9]\d*$/.test(String(flags["test-timeout"])) && typeof flags["test-timeout"] !== "boolean" ? Number(flags["test-timeout"]) * 1000 : NaN } : {}) });
     if (res.ok) { console.log(`workflow stage-b: recorded ${flags.phase || "after"} execution (${res.stageB.disposition || "frozen baseline"}) for '${flags.change}'.`); return 0; }
     return 1;
   } catch (err) { console.error(`workflow stage-b error: ${err.message}`); return 1; }
 }
-/* ---------------------------------------------------------------------- main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB };
+export function runWorkflowCli(argv = [], options = {}) {
+  const args = parse(argv);
+  const root = args.flags.root ? String(args.flags.root) : (options.cwd || process.cwd());
+  const cmd = args._[0];
+  let code;
+  switch (cmd) {
+    case "workspace": case "integrate": code = runWorkspaceCommand(cmd, root, args.flags, args._.length); break;
+    case "claim": case "release": case "context": code = runClaimCommand(cmd, root, args.flags); break;
+    case "start":
+      code = cmdStart(root, args.flags);
+      if (code === 0 && !options.noDashboard) autoOpenDashboard(root, args.flags);
+      break;
+    case "suggest":      code = cmdSuggest(args.flags); break;
+    case "artifact":     code = cmdArtifact(root, args.flags); break;
+    case "check":        code = cmdCheck(root); break;
+    case "status":       code = cmdStatus(root, args.flags); break;
+    case "check-budget": code = cmdCheckBudget(root, args.flags); break;
+    case "close":        code = cmdClose(root, args.flags); break;
+    case "escalate":     code = cmdEscalate(root, args.flags); break;
+    case "metrics":      code = cmdMetrics(root); break;
+    case "check-ci":     code = cmdCheckCi(root, args.flags); break;
+    case "review-run":   code = cmdReviewRun(root, args.flags); break;
+    case "stage-b":      code = cmdStageB(root, args.flags); break;
+    default:
+      if (cmd !== undefined) console.error(`workflow: unknown command '${cmd}'\n`);
+      printWorkflowHelp();
+      code = cmd !== undefined ? 2 : 0;
+  }
+  return code;
+}
+
+/* ---------------------------------------------------------------------- exports and main */
+
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, printWorkflowHelp };
 
 import { fileURLToPath } from "node:url";
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
-  const args = parse(process.argv.slice(2));
-  const root = args.flags.root ? String(args.flags.root) : process.cwd();
-  const cmd = args._[0];
-
-  let code;
-  switch (cmd) {
-    case "start":
-      code = cmdStart(root, args.flags);
-      // Автозапуск дашборда: только в CLI-режиме (не в тестах и не при программном вызове).
-      if (code === 0) autoOpenDashboard(root, args.flags);
-      break;
-    case "suggest":  code = cmdSuggest(args.flags); break;
-    case "artifact": code = cmdArtifact(root, args.flags); break;
-    case "check":    code = cmdCheck(root); break;
-    case "status":       code = cmdStatus(root, args.flags); break;
-    case "check-budget": code = cmdCheckBudget(root, args.flags); break;
-    case "close":    code = cmdClose(root, args.flags); break;
-    case "escalate": code = cmdEscalate(root, args.flags); break;
-    case "metrics":  code = cmdMetrics(root); break;
-    case "check-ci": code = cmdCheckCi(root, args.flags); break;
-    case "review-run": code = cmdReviewRun(root, args.flags); break;
-    case "stage-b":    code = cmdStageB(root, args.flags); break;
-    default:
-      // An unrecognised subcommand is an error, not a help request: exiting 0 on a typo
-      // tells every calling script and CI gate that the run succeeded.
-      if (cmd !== undefined) console.error(`workflow: unknown command '${cmd}'\n`);
-      console.log("workflow.mjs — tier enforcement\n");
-      console.log("  node workflow.mjs suggest --files a.ts,b.ts [--task \"...\"]");
-      console.log("  node workflow.mjs start --tier T2 --task \"add rate limiting\"");
-      console.log("  node workflow.mjs start --tier T0 --auto --allow \"src/**\" --max-diff 5");
-      console.log("  node workflow.mjs artifact --kind manifest --path openspec/changes/x/manifest.md");
-      console.log("  node workflow.mjs check      # exit 1 if the tier's artifacts are missing");
-      console.log("  node workflow.mjs status");
-      console.log("  node workflow.mjs check-budget [--sessions <dir>] [--json]");
-      console.log("  node workflow.mjs escalate --tier T2");
-      console.log("  node workflow.mjs close [--force --reason \"...\"] [--auto] [--diff-lines N]");
-      console.log("  node workflow.mjs metrics [--root .]");
-      console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
-      console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
-      console.log("  node workflow.mjs review-run --role <reviewer|oracle> --change <name> --model <provider/model> --base-ref <base> [--product-command <JSON argv>] [--redo]");
-      console.log("  node workflow.mjs stage-b --change <name> --phase <before|after> --test-cmd \"<cmd>\" [--disposition <lean-already|simplified>]");
-      if (cmd !== undefined) code = 2;
-  }
-  process.exitCode = code;
+  process.exitCode = runWorkflowCli(process.argv.slice(2));
 }

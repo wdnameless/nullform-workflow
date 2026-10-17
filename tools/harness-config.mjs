@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { resolveHostHome } from "./harness-profiles.mjs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -330,16 +331,17 @@ export function extractManagedSection(content, filePath = "markdown") {
 /**
  * Preflights all existing configuration and instruction files before any writes occur.
  */
-export function preflightAllConfigs({ harnesses, targetRoot, projectRoot, userHome }) {
+export function preflightAllConfigs({ harnesses, targetRoot, projectRoot, userHome, hostHomes = {}, hostManifest }) {
   const configsToPreflight = [];
   const markdownsToPreflight = [];
 
   for (const h of harnesses) {
+    const hostHome = hostHomes[h] || resolveHostHome({ harness: h, userHome }).path;
     const is = (target) => h === target || h === "all";
-    if (is("claude")) markdownsToPreflight.push(join(targetRoot, "CLAUDE.md"), join(userHome, ".claude", "CLAUDE.md"));
-    if (is("codex")) markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(userHome, ".codex", "AGENTS.md"));
+    if (is("claude")) markdownsToPreflight.push(join(targetRoot, "CLAUDE.md"), join(hostHome, "CLAUDE.md"));
+    if (is("codex")) markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(hostHome, "AGENTS.md"));
     if (is("opencode")) {
-      for (const dir of [targetRoot, join(userHome, ".config", "opencode"), join(userHome, ".opencode")]) {
+      for (const dir of [targetRoot, hostHome]) {
         configsToPreflight.push({ path: join(dir, "opencode.json"), type: "jsonc" }, { path: join(dir, "opencode.jsonc"), type: "jsonc" });
         markdownsToPreflight.push(join(dir, "AGENTS.md"));
       }
@@ -350,20 +352,20 @@ export function preflightAllConfigs({ harnesses, targetRoot, projectRoot, userHo
       if (cursorBase !== targetRoot) markdownsToPreflight.push(join(targetRoot, ".cursor", "rules", "00-workflow.mdc"));
     }
     if (is("openclaw")) {
-      configsToPreflight.push({ path: join(targetRoot, "openclaw.json"), type: "json5" }, { path: join(userHome, ".openclaw", "openclaw.json"), type: "json5" });
-      markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(targetRoot, "SOUL.md"), join(targetRoot, "USER.md"), join(userHome, ".openclaw", "AGENTS.md"));
+      configsToPreflight.push({ path: join(targetRoot, "openclaw.json"), type: "json5" }, { path: join(hostHome, "openclaw.json"), type: "json5" });
+      markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(hostHome, "AGENTS.md"));
     }
     if (is("hermes")) {
-      configsToPreflight.push({ path: join(targetRoot, "config.yaml"), type: "yaml" }, { path: join(userHome, ".hermes", "config.yaml"), type: "yaml" });
-      if (process.env.HERMES_HOME) configsToPreflight.push({ path: join(process.env.HERMES_HOME, "config.yaml"), type: "yaml" });
-      markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(userHome, ".hermes", "SOUL.md"), join(userHome, ".hermes", "AGENTS.md"));
+      configsToPreflight.push({ path: join(hostHome, "config.yaml"), type: "yaml" });
+      markdownsToPreflight.push(join(targetRoot, "AGENTS.md"));
     }
+    if (is("custom")) markdownsToPreflight.push(join(projectRoot, hostManifest.instructionsFile));
     if (is("openhuman")) {
-      markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(targetRoot, "agents", "workflow", "AGENTS.md"), join(userHome, ".openhuman", "AGENTS.md"));
+      markdownsToPreflight.push(join(targetRoot, "AGENTS.md"), join(targetRoot, "agents", "workflow", "AGENTS.md"), join(hostHome, "AGENTS.md"));
     }
     if (is("omp")) {
-      configsToPreflight.push({ path: join(userHome, ".omp", "agent", "mcp.json"), type: "json" });
-      markdownsToPreflight.push(join(targetRoot, "agent", "AGENTS.md"), join(userHome, ".omp", "agent", "AGENTS.md"));
+      configsToPreflight.push({ path: join(hostHome, "mcp.json"), type: "json" });
+      markdownsToPreflight.push(join(targetRoot, "agent", "AGENTS.md"), join(hostHome, "AGENTS.md"));
     }
   }
 
@@ -421,25 +423,35 @@ export function applyManagedSection(existingContent, newManagedContent, defaultP
 
   // Exact prior known un-marked markdown adapter / law block migration
   const legacyBlockRules = [
-    {
-      matchStart: (s) =>
-        /^#\s+(?:[A-Za-z0-9 ]+)?(?:NULLFORM WORKFLOW|Oh My Pi Orchestrator Law|OpenHuman Workflow Agent)/i.test(s) ||
-        s.includes("Полный свод законов и протокол оркестратора:"),
-      endMarker: "- Возвратный контракт (≤25 строк): STATUS | FILES | TESTS было->стало | CONCERNS.",
-    },
-    {
-      matchStart: (s) => /^#\s+ORCHESTRATOR LAW\b/i.test(s),
-      endMarker: "before `skill://<name>` resolves (its rules may already be embedded in the agent files above).",
-    },
-    {
-      matchStart: (s) => /^#\s+OpenClaw SOUL:\s+NULLFORM WORKFLOW/i.test(s),
-      endMarker: "- Return contract: STATUS | FILES | TESTS было->стало | CONCERNS (<=25 lines).",
-    },
-    {
-      matchStart: (s) => /^#\s+OpenClaw USER:\s+Context & Operating Preferences/i.test(s),
-      endMarker: "- Verification: verify all fixes before final response.",
-    },
-  ];
+      {
+        matchStart: s => {
+          const text = s.replace(/\r\n/g, '\n');
+          const match = /^# ([^\n]+)\n\nПолный свод законов и протокол оркестратора: ([^\n]+)\/agent\/AGENTS\.md\n/.exec(text);
+          return Boolean(match && text.startsWith(getMarkdownAdapter(match[2], match[1]).trimEnd()));
+        },
+        endMarker: '- Возвратный контракт (≤25 строк): STATUS | FILES | TESTS было->стало | CONCERNS.',
+      },
+      {
+        matchStart: s => (() => { const text = s.replace(/\r\n/g, '\n'), known = trimmedManaged.replace(/\r\n/g, '\n'); const pattern = /^Full protocol: `([^`\n]+)\/agent\/agents\/orchestrator\.md`/m; const oldRoot = pattern.exec(text)?.[1], newRoot = pattern.exec(known)?.[1]; return Boolean(oldRoot && newRoot && text.startsWith(known.split(newRoot).join(oldRoot))); })(),
+        endMarker: 'before `skill://<name>` resolves (its rules may already be embedded in the agent files above).',
+      },
+      {
+        matchStart: s => {
+          const text = s.replace(/\r\n/g, '\n');
+          const match = /^- Law reference: (.+)\/agent\/AGENTS\.md$/m.exec(text);
+          return Boolean(match && text.startsWith(getOpenclawSoul(match[1]).trimEnd()));
+        },
+        endMarker: '- Return contract: STATUS | FILES | TESTS было->стало | CONCERNS (<=25 lines).',
+      },
+      {
+        matchStart: s => {
+          const text = s.replace(/\r\n/g, '\n');
+          const match = /^Target workspace: (.+)$/m.exec(text);
+          return Boolean(match && text.startsWith(getOpenclawUser(match[1]).trimEnd()));
+        },
+        endMarker: '- Verification: verify all fixes before final response.',
+      },
+    ];
 
   for (const rule of legacyBlockRules) {
     const contractIdx = existingContent.indexOf(rule.endMarker);
@@ -508,9 +520,7 @@ export function updateOpencodeJson(existingPath, preflightedJson) {
   }
 
   const cfg = preflightedJson ? structuredClone(preflightedJson) : {};
-  if (!cfg["$schema"]) {
-    cfg["$schema"] = "https://opencode.ai/config.json";
-  }
+  if (!cfg["$schema"]) cfg["$schema"] = "https://opencode.ai/config.json";
   return JSON.stringify(cfg, null, 2) + "\n";
 }
 
@@ -541,7 +551,27 @@ export function updateOpenclawJson(existingPath, preflightedJson, slashRoot) {
   return JSON5.stringify(cfg, null, 2) + "\n";
 }
 
-export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter") {
+export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter", report = null) {
+  if (report) {
+    const modules = Object.entries(report.modules).map(([id, value]) => ({ id, ...value }));
+    return [
+      `# ${title}`,
+      "",
+      "Use host tools only when actually available in this session and permitted. Configuration/declarations are not execution evidence.",
+      "For general requests and routine edits work directly: no mandatory external tracker, dashboard, interview or coding specification. Escalate planning and independent checks with risk.",
+      "Understand the request and existing implementation first. Reuse > stdlib > platform > installed dependency > minimum code. Preserve human data and security boundaries.",
+      "Validate the actual result with an appropriate command, scenario or inspected output. Report what ran, its result and unverified limits; never claim completion from configuration alone.",
+      "",
+      ...modules.flatMap(m => [`- ${m.id}: ${m.decision} (${m.evidence}) — ${m.reason}`, ...m.actions.map(action => `  - ${action}`)]),
+      "",
+      "Reuse means conditionally use the native mechanism, not a second tracker or delegation loop. Unavailable delegation means single-agent work or explicit operator handoff with requirements and verifiable return contract. Unknown support needs evidence or explicit portable-tool opt-in, not speculative installation.",
+      "Portable task actions above are opt-in for explicit coding needs, not a second native board. Never down-classify risky work to pass a gate. T2/T3 recorded native review requires compatible OMP/Bun execution; otherwise disclose that boundary and arrange explicit manual/operator review.",
+      "For a worktree gap with Git available: `nullform workflow workspace --feature SLUG` from the integration checkout; dispatch only to its returned absolute cwd. Start from committed HEAD; one writer per worktree. Commit the result, then the parent uses `nullform workflow integrate --feature SLUG` on the recorded integration branch with a clean target. Without Git, request that prerequisite; do not install automatically.",
+      "Parent delegation context MUST include scoped requirements, constraints, ownership and verification criteria. Native Hermes children may skip context files/skills; never assume policy inheritance.",
+      `Portable tools: ${slashRoot}/tools/workflow.mjs. Automated native review remains OMP/Bun-only. No automatic MCP, browser or terminal installation.`,
+      "",
+    ].join("\n");
+  }
   return [
     `# ${title}`,
     "",
@@ -549,9 +579,9 @@ export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter
     "",
     "## 1. Запуск задачи и гейты (T0–T3)",
     "Перед изменением любых файлов определите tier и зафиксируйте задачу:",
-    `- \`node '${slashRoot}/tools/workflow.mjs' start --tier <T0|T1|T2|T3> --task "<описание>"\``,
-    `- \`node '${slashRoot}/tools/workflow.mjs' check\` (exit 1 при отсутствии обязательных артефактов)`,
-    `- \`node '${slashRoot}/tools/workflow.mjs' close\` (фиксирует завершение задачи)`,
+    `- \`nullform workflow start --tier <T0|T1|T2|T3> --task "<описание>"\` (или \`node '${slashRoot}/tools/workflow.mjs' start ...\`)`,
+    `- \`nullform workflow check\` (exit 1 при отсутствии обязательных артефактов)`,
+    `- \`nullform workflow close\` (фиксирует завершение задачи)`,
     "",
     "Уровни (Lanes):",
     "- `⚡ [T0 FAST]`: 1–2 известных файла, точечные правки, без OpenSpec/интервью/oracle.",
@@ -560,17 +590,21 @@ export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter
     "- `🌌 [T3 PROGRAM]`: мульти-фича программа (T2 на каждый слайс).",
     "",
     "## 2. Фиксация артефактов",
-    `- Манифест требований: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind manifest --path openspec/changes/<id>/manifest.md\``,
-    `- Спецификация/OpenSpec: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind openspec --path openspec/changes/<id>\``,
-    `- Границы и интерфейсы: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind interfaces --path openspec/changes/<id>/interfaces.md\``,
-    `- Вердикт оракула: \`node '${slashRoot}/tools/workflow.mjs' artifact --kind oracle --detail "ACCEPT: <причина>"\``,
+    `- Манифест требований: \`nullform workflow artifact --kind manifest --path openspec/changes/<id>/manifest.md\``,
+    `- Спецификация/OpenSpec: \`nullform workflow artifact --kind openspec --path openspec/changes/<id>\``,
+    `- Границы и интерфейсы: \`nullform workflow artifact --kind interfaces --path openspec/changes/<id>/interfaces.md\``,
+    `- Вердикт оракула: \`nullform workflow artifact --kind oracle --detail "ACCEPT: <причина>"\``,
     "",
     "## 3. Дашборд наблюдаемости",
     "При `workflow.mjs start` автоматически запускается фоновый дашборд.",
     "- URL хранится в `.workflow/dashboard.json`",
     `- Получить URL: \`node '${slashRoot}/tools/dashboard.mjs' --url\``,
     "",
-    "## 4. Базовые законы",
+    "## 4. Возможности и лимиты адаптеров",
+    "- 8 адаптеров для настройки; базовые гейты Node-native (без OMP/Bun); automated review только для OMP с Bun.",
+    "- Для workspace/integrate нужен исполняемый Git. Перед dispatch: `nullform workflow workspace --feature SLUG` из integration checkout; worker MUST работать только в возвращённом абсолютном cwd со свежим контекстом. Один writer на worktree; повторное выделение отказывает, не разрешает reuse.\n- База — committed HEAD, без несохранённых prerequisites; общие prerequisites сначала commit. Готовую фичу commit, затем единственный parent-integrator: `nullform workflow integrate --feature SLUG` на записанной integration branch.\n- Dirty integration target отказывает без stash; видимый Git conflict разрешает вручную только integrator. Один репозиторий/final branch ≠ общий физический checkout; не восстанавливай целые файлы из stash и не скрывай конфликт reset/ours/theirs.\n- Native interception только в OMP: delete-guard требует явное подтверждение для распознанных checkout/restore/stash замен и блокирует их headlessly. Остальные адаптеры — portable CLI + guidance, не shell/filesystem sandbox.",
+    "",
+    "## 5. Базовые законы",
     "- Честность: никаких заявлений о готовности без выполненных проверок.",
     "- Анализ до кода: инвентаризация существующего кода (reuse > extend > create).",
     "- Ladder решений: reuse -> stdlib -> platform -> installed dep -> 1 line -> minimum.",
@@ -598,7 +632,7 @@ export function getOpenclawUser(slashRoot) {
     "# OpenClaw USER: Context & Operating Preferences",
     "",
     `Target workspace: ${slashRoot}`,
-    "- Workflow execution: use `node tools/workflow.mjs` for task gating.",
+    "- Workflow execution: use `nullform workflow` (or `node tools/workflow.mjs`) for task gating.",
     "- Observability: dashboard URL available in `.workflow/dashboard.json`.",
     "- Verification: verify all fixes before final response.",
     "",
@@ -606,50 +640,28 @@ export function getOpenclawUser(slashRoot) {
 }
 
 /**
- * Updates Hermes config.yaml using real yaml Document AST.
- * Preserves user comments, anchors, models, and custom settings.
- * Registers MCP servers under top-level mcp_servers without creating fake profiles.
+ * Registers one quality policy using the native auto-load list, preserving YAML nodes/comments.
+ * Also used during preflight before any filesystem mutation.
  */
-export function updateHermesConfigYaml(existingPath, preflightedContent, slashRoot, mcpExamplePath, translateStdioEntry) {
+export function updateHermesConfigYaml(existingPath, preflightedContent) {
   const yaml = loadYaml();
-  let doc;
-  if (!preflightedContent || preflightedContent.trim() === "") {
-    doc = new yaml.Document({});
-    doc.commentBefore = " Hermes Agent Configuration — NULLFORM WORKFLOW";
-  } else {
-    doc = yaml.parseDocument(preflightedContent, { keepSourceTokens: true });
-    if (doc.errors && doc.errors.length > 0) {
-      throw new Error(`Preflight failed: malformed YAML in ${existingPath}`);
+  const doc = yaml.parseDocument(preflightedContent || "{}\n", { keepSourceTokens: true });
+  if (doc.errors.length) throw new Error(`Preflight failed: malformed YAML in ${existingPath}`);
+  if (doc.has("skills") && !yaml.isMap(doc.get("skills", true))) {
+    throw new Error("Preflight failed: Hermes skills must be a mapping");
+  }
+  const skills = doc.get("skills", true);
+  if (skills?.has("auto_load")) {
+    const auto = skills.get("auto_load", true);
+    if (!yaml.isSeq(auto) || auto.items.some(item => !yaml.isScalar(item) || typeof item.value !== "string" || !item.value.trim())) {
+      throw new Error("Preflight failed: Hermes skills.auto_load must be a list of skill names");
     }
+    if (auto.items.filter(item => item.value === "nullform-workflow").length > 1) throw new Error("Preflight failed: duplicate nullform-workflow auto_load registration");
   }
-
-  if (mcpExamplePath && existsSync(mcpExamplePath)) {
-    try {
-      const ex = JSON.parse(readFileSync(mcpExamplePath, "utf8"));
-      if (ex.mcpServers && typeof ex.mcpServers === "object") {
-        if (!doc.has("mcp_servers")) {
-          doc.set("mcp_servers", doc.createNode({}));
-        }
-        for (const [name, entry] of Object.entries(ex.mcpServers)) {
-          if (!JSON.stringify(entry).includes("__")) {
-            if (!doc.hasIn(["mcp_servers", name])) {
-              const translated = translateStdioEntry ? translateStdioEntry(entry) : entry;
-              const serverObj = {};
-              if (translated.command) serverObj.command = translated.command;
-              if (Array.isArray(translated.args) && translated.args.length > 0) {
-                serverObj.args = translated.args;
-              }
-              if (translated.env && typeof translated.env === "object" && Object.keys(translated.env).length > 0) {
-                serverObj.env = translated.env;
-              }
-              doc.setIn(["mcp_servers", name], doc.createNode(serverObj));
-            }
-          }
-        }
-      }
-    } catch {}
-  }
-
+  if (!doc.has("skills")) doc.set("skills", doc.createNode({}));
+  if (!doc.hasIn(["skills", "auto_load"])) doc.setIn(["skills", "auto_load"], doc.createNode([]));
+  const auto = doc.getIn(["skills", "auto_load"], true);
+  if (!auto.items.some(item => item.value === "nullform-workflow")) auto.add("nullform-workflow");
   return doc.toString();
 }
 
@@ -657,7 +669,13 @@ export function updateHermesConfigYaml(existingPath, preflightedContent, slashRo
  * Calculates a SHA-256 hash of text content.
  */
 export function hashContent(content) {
-  return createHash("sha256").update(content, "utf8").digest("hex");
+  const hash = createHash("sha256");
+  if (Buffer.isBuffer(content)) {
+    hash.update(content);
+  } else {
+    hash.update(String(content), "utf8");
+  }
+  return hash.digest("hex");
 }
 
 /**
@@ -667,13 +685,11 @@ export function isCommandInPath(cmd) {
   const pathEnv = process.env.PATH || "";
   const sep = process.platform === "win32" ? ";" : ":";
   const extensions = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
-  const dirs = pathEnv.split(sep);
-  for (const dir of dirs) {
+  for (const dir of pathEnv.split(sep)) {
     if (!dir) continue;
     for (const ext of extensions) {
-      const full = join(dir, cmd + ext);
       try {
-        if (existsSync(full)) return true;
+        if (existsSync(join(dir, cmd + ext))) return true;
       } catch {}
     }
   }

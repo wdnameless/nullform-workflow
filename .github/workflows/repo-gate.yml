@@ -6,36 +6,128 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
     branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Workflow tier to validate (e.g. T3, T2)'
+        type: string
+        required: false
+        default: 'T3'
+      change:
+        description: 'OpenSpec change ID (e.g. portable-product-release)'
+        type: string
+        required: false
+        default: 'portable-product-release'
 
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  portable-install:
-    name: Portable install (${{ matrix.os }}, Node ${{ matrix.node }})
+  build-tarball:
+    name: Build Candidate Tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build immutable archive
+        run: |
+          mkdir -p .tmp
+          npm pack --ignore-scripts --pack-destination .tmp
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_NAME="nullform-workflow-${PKG_VERSION}.tgz"
+          if [ ! -f ".tmp/${EXPECTED_NAME}" ]; then
+            echo "Expected package .tmp/${EXPECTED_NAME} not found"
+            exit 1
+          fi
+          MATCH_COUNT=$(ls -1 .tmp/nullform-workflow-*.tgz | wc -l)
+          if [ "$MATCH_COUNT" -ne 1 ]; then
+            echo "Expected exactly one candidate tarball, found $MATCH_COUNT"
+            exit 1
+          fi
+          echo "Built candidate tarball: .tmp/${EXPECTED_NAME}"
+          (cd .tmp && sha256sum "${EXPECTED_NAME}" > tarball.sha256 && sha512sum "${EXPECTED_NAME}" > tarball.sha512)
+          cat .tmp/tarball.sha256
+      - name: Upload candidate tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-tarball
+          path: .tmp/nullform-workflow-*.tgz
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Upload candidate checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-checksums
+          path: |
+            .tmp/tarball.sha256
+            .tmp/tarball.sha512
+          include-hidden-files: true
+          if-no-files-found: error
+  portable-certify:
+    name: Certify candidate (${{ matrix.os }}, Node ${{ matrix.node }})
+    needs: build-tarball
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [20]
-        include:
-          - os: ubuntu-latest
-            node: 18
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install OMP in a sandbox and verify it
-        run: node --test tools/tests/install-harness.test.mjs
-      - name: Check Windows PowerShell installer
-        if: runner.os == 'Windows' && matrix.node == 20
-        run: node --test tools/tests/paseo-install.test.mjs
+      - name: Download candidate tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-tarball
+          path: .tmp
+      - name: Download candidate checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: candidate-checksums
+          path: .tmp
+      - name: Verify downloaded candidate matches producer checksums before certify
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_NAME="nullform-workflow-${PKG_VERSION}.tgz"
+          if [ ! -f ".tmp/${EXPECTED_NAME}" ]; then
+            echo "Expected candidate .tmp/${EXPECTED_NAME} missing from download"
+            exit 1
+          fi
+          node -e "import('./tools/package-archive.mjs').then(m => { m.verifyChecksumFile('.tmp/tarball.sha256', '.tmp'); m.verifyChecksumFile('.tmp/tarball.sha512', '.tmp'); console.log('Candidate checksums verified via Node crypto'); })"
+      - name: Certify candidate archive
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          node tools/certify-package.mjs --tarball ".tmp/nullform-workflow-${PKG_VERSION}.tgz" --output ".tmp/cert-${{ matrix.os }}-node${{ matrix.node }}.json"
+      - name: Upload platform certificate
+        uses: actions/upload-artifact@v4
+        with:
+          name: cert-${{ matrix.os }}-node${{ matrix.node }}
+          path: .tmp/cert-${{ matrix.os }}-node${{ matrix.node }}.json
+          include-hidden-files: true
+          if-no-files-found: error
 
   gate:
     name: Repository Verification Gate
@@ -45,12 +137,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -108,7 +201,7 @@ jobs:
         # Includes review-integrity native-proof/security consumer regressions.
         run: |
           if [ -d "tools/tests" ]; then
-            node --test tools/tests/*.test.mjs
+            node --test --test-concurrency=2 tools/tests/*.test.mjs
           fi
 
       - name: Auto-review gate
@@ -116,12 +209,26 @@ jobs:
           node tools/auto-review.mjs --root .
 
       - name: Workflow gate validation
-        if: github.event_name == 'pull_request'
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
           BASE_REF: '${{ github.base_ref
             || github.event.repository.default_branch }}'
         run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            node tools/workflow.mjs check-ci --push --base-ref "$PUSH_BASE"
+            exit $?
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            DISPATCH_TIER="${{ inputs.tier || 'T3' }}"
+            DISPATCH_CHANGE="${{ inputs.change || 'portable-product-release' }}"
+            echo "Validating workflow_dispatch current-source certification ($DISPATCH_TIER, $DISPATCH_CHANGE)..."
+            node tools/workflow.mjs check-ci \
+              --tier "$DISPATCH_TIER" --change "$DISPATCH_CHANGE" \
+              --base-ref "origin/$BASE_REF" || exit $?
+            exit 0
+          fi
           TIER_LABELS=$(
             echo "$LABELS_JSON" \
               | jq -r '.[].name // empty' \
@@ -254,10 +361,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Setup Node.js 20
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund

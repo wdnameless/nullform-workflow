@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
+import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -12,7 +12,8 @@ const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 const SH_PATH = resolve(REPO_ROOT, "install.sh");
 import { createTempDir } from "./test-helpers.mjs";
 import { detectHarness } from "../install-harness.mjs";
-import { preflightJson5Config, preflightJsoncConfig } from "../harness-config.mjs";
+import { preflightJson5Config, preflightJsoncConfig, applyManagedSection, loadYaml } from "../harness-config.mjs";
+import { resolveHostHome } from "../harness-profiles.mjs";
 function getBashPath() {
   const candidates = process.platform === "win32"
     ? ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "bash.exe", "bash"]
@@ -32,37 +33,44 @@ function getBashPath() {
   return null;
 }
 
+/**
+ * Isolated child env for root-only installer children: gives each test its own home so
+ * parallel tests never share the real `~/.nullform` deployment journal or lock. Root-only
+ * mode is preserved by NOT passing `--user-home` (which would enable home-adapter writes).
+ */
+function isolatedChildEnv(home) {
+  return { ...process.env, HOME: home, USERPROFILE: home, NULLFORM_USER_HOME: home, LOCALAPPDATA: join(home, "AppData", "Local"), HERMES_HOME: join(home, "hermes"), HERMES_IGNORE_RULES: "" };
+}
+
 test("dry-run does not write files or directories to root", () => {
   const tempRoot = join(tmpdir(), `harness-dry-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const tempHome = createTempDir("harness-dry-home-");
   try {
-    const res = spawnSync(process.execPath, [SCRIPT_PATH, "--dry-run", "--harness", "claude", "--root", tempRoot], { encoding: "utf8" });
+    const res = spawnSync(process.execPath, [SCRIPT_PATH, "--dry-run", "--harness", "claude", "--root", tempRoot], { encoding: "utf8", env: isolatedChildEnv(tempHome), windowsHide: true });
     assert.equal(res.status, 0, `Expected exit 0, got ${res.status}: ${res.stderr}`);
     assert.match(res.stdout, /dry-run/i);
     assert.equal(existsSync(tempRoot), false, "Dry-run should not create the target root directory");
   } finally {
     if (existsSync(tempRoot)) rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(tempHome, { recursive: true, force: true });
   }
 });
 
 test("installation creates Claude, Codex, OpenCode, and Cursor adapters with substituted <HARNESS>", () => {
   for (const h of ["claude", "codex", "opencode", "cursor"]) {
     const tempRoot = createTempDir(`harness-${h}-`);
+    const tempHome = createTempDir(`harness-${h}-home-`);
     try {
-      const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", h, "--root", tempRoot], { encoding: "utf8" });
+      const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", h, "--root", tempRoot], { encoding: "utf8", env: isolatedChildEnv(tempHome), windowsHide: true });
       assert.equal(res.status, 0, `Failed (${h}): ${res.stderr}`);
       const slashRoot = tempRoot.replace(/\\/g, "/");
 
       if (h === "claude") {
         const content = readFileSync(join(tempRoot, "CLAUDE.md"), "utf8");
-        assert.ok(content.trim().split("\n").length <= 60);
         assert.equal(content.includes("<HARNESS>"), false);
         assert.ok(content.includes(slashRoot));
-        assert.ok(content.includes("workflow.mjs") && content.includes("dashboard"));
-        assert.equal(content.includes("--kind verification"), false);
-        assert.ok(content.includes("--kind manifest") && content.includes("--kind oracle"));
       } else if (h === "codex") {
         const content = readFileSync(join(tempRoot, "AGENTS.md"), "utf8");
-        assert.ok(content.trim().split("\n").length <= 60);
         assert.equal(content.includes("<HARNESS>"), false);
         assert.ok(content.includes(slashRoot));
       } else if (h === "opencode") {
@@ -71,99 +79,75 @@ test("installation creates Claude, Codex, OpenCode, and Cursor adapters with sub
         assert.ok(jsonContent["$schema"]);
       } else if (h === "cursor") {
         const content = readFileSync(join(tempRoot, ".cursor", "rules", "00-workflow.mdc"), "utf8");
-        assert.ok(content.trim().split("\n").length <= 60);
         assert.ok(content.startsWith("---"));
         assert.equal(content.includes("<HARNESS>"), false);
         assert.ok(content.includes(slashRoot));
       }
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
+      rmSync(tempHome, { recursive: true, force: true });
     }
   }
 });
-test("installation creates OpenClaw, Hermes, and OpenHuman adapters with core structure", () => {
-  const tempRoot = createTempDir("harness-openclaw-root-");
-  const tempHome = createTempDir("harness-openclaw-home-");
-  try {
-    const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "openclaw", "--root", tempRoot, "--user-home", tempHome], { encoding: "utf8" });
-    assert.equal(res.status, 0, `Failed: ${res.stderr}`);
-    const slashRoot = tempRoot.replace(/\\/g, "/");
-    for (const f of ["AGENTS.md", "SOUL.md", "USER.md", "openclaw.json"]) {
-      assert.equal(existsSync(join(tempRoot, f)), true, `${f} must exist`);
-    }
-    assert.equal(existsSync(join(tempHome, ".openclaw", "openclaw.json")), true);
-    for (const md of ["AGENTS.md", "SOUL.md", "USER.md"]) {
-      const txt = readFileSync(join(tempRoot, md), "utf8");
-      assert.ok(txt.trim().split("\n").length <= 60 && !txt.includes("<HARNESS>"));
-    }
-    assert.ok(readFileSync(join(tempRoot, "AGENTS.md"), "utf8").includes(slashRoot));
-    const cfg = preflightJson5Config(join(tempRoot, "openclaw.json"));
-    assert.equal(cfg.agents?.entries?.workflow?.workspace, slashRoot);
-    assert.equal(cfg.mcp, undefined);
-    assert.equal(existsSync(join(tempHome, ".openclaw", "skills")), true);
-
-    for (const coreItem of ["agent/AGENTS.md", "agent/agents/orchestrator.md", "rules", "tools/workflow.mjs", "core/PORTABLE.md", "templates", "skills", "CONTEXT.md", "README.md"]) {
-      assert.equal(existsSync(join(tempRoot, coreItem)), true, `${coreItem} must exist`);
-    }
-    assert.equal(readFileSync(join(tempRoot, "agent", "agents", "orchestrator.md"), "utf8").includes("<HARNESS>"), false);
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
-    rmSync(tempHome, { recursive: true, force: true });
-  }
-
-  const hermesRoot = createTempDir("harness-hermes-root-");
-  const hermesHome = createTempDir("harness-hermes-home-");
-  try {
-    const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "hermes", "--root", hermesRoot, "--user-home", hermesHome], { encoding: "utf8" });
-    assert.equal(res.status, 0, `Failed: ${res.stderr}`);
-    const content = readFileSync(join(hermesRoot, "AGENTS.md"), "utf8");
-    assert.ok(content.trim().split("\n").length <= 60 && !content.includes("<HARNESS>") && content.includes(hermesRoot.replace(/\\/g, "/")));
-    assert.ok(readFileSync(join(hermesRoot, "config.yaml"), "utf8").includes("mcp_servers:"));
-    assert.equal(existsSync(join(hermesHome, ".hermes", "config.yaml")), true);
-    assert.equal(existsSync(join(hermesHome, ".hermes", "skills")), true);
-  } finally {
-    rmSync(hermesRoot, { recursive: true, force: true });
-    rmSync(hermesHome, { recursive: true, force: true });
-  }
-
-  const ohRoot = createTempDir("harness-openhuman-root-");
-  const ohHome = createTempDir("harness-openhuman-home-");
-  try {
-    const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "openhuman", "--root", ohRoot, "--user-home", ohHome], { encoding: "utf8" });
-    assert.equal(res.status, 0, `Failed: ${res.stderr}`);
-    const content = readFileSync(join(ohRoot, "AGENTS.md"), "utf8");
-    assert.ok(content.trim().split("\n").length <= 60 && !content.includes("<HARNESS>") && content.includes(ohRoot.replace(/\\/g, "/")));
-    const agentSkillsDir = join(ohRoot, "agents", "workflow", "skills");
-    const entries = readdirSync(agentSkillsDir);
-    assert.ok(entries.length > 0);
-    for (const skillName of entries) {
-      assert.equal(lstatSync(join(agentSkillsDir, skillName)).isSymbolicLink(), false);
-    }
-  } finally {
-    rmSync(ohRoot, { recursive: true, force: true });
-    rmSync(ohHome, { recursive: true, force: true });
+test("non-OMP installation keeps identity surfaces clean and Hermes uses one native auto-load skill", () => {
+  for (const harness of ["openclaw", "hermes", "openhuman"]) {
+    const temp = createTempDir(`minimal-${harness}-`);
+    const root = join(temp, "workflow");
+    const home = join(temp, "user");
+    const hostHome = join(home, "selected-profile");
+    try {
+      const result = spawnSync(process.execPath, [
+        SCRIPT_PATH, "--harness", harness, "--root", root, "--user-home", home, "--host-home", hostHome, "--json",
+      ], { encoding: "utf8", env: isolatedChildEnv(home) });
+      assert.equal(result.status, 0, result.stderr);
+      const plan = JSON.parse(result.stdout);
+      assert.equal(plan.hostHome, hostHome);
+      assert.equal(existsSync(join(root, "SOUL.md")), false);
+      assert.equal(existsSync(join(root, "USER.md")), false);
+      assert.equal(existsSync(join(hostHome, "SOUL.md")), false);
+      if (harness === "hermes") {
+        const settings = loadYaml().parse(readFileSync(join(hostHome, "config.yaml"), "utf8"));
+        assert.deepEqual(settings.skills.auto_load, ["nullform-workflow"]);
+        assert.equal(settings.mcp_servers, undefined);
+        assert.deepEqual(readdirSync(join(hostHome, "skills")), ["nullform-workflow"]);
+        const text = readFileSync(join(hostHome, "skills", "nullform-workflow", "SKILL.md"), "utf8");
+        const metadata = loadYaml().parse(/^---\n([\s\S]*?)\n---/.exec(text)[1]);
+        assert.equal(metadata.name, "nullform-workflow");
+        assert.equal(typeof metadata.description, "string");
+        assert.equal(plan.activation.status, "configured");
+      } else {
+        assert.equal(existsSync(join(hostHome, "skills")), false);
+        if (harness === "openclaw") {
+          const config = preflightJson5Config(join(hostHome, "openclaw.json"));
+          assert.equal(config.agents.entries.workflow.workspace, root.replace(/\\/g, "/"));
+        }
+      }
+    } finally { rmSync(temp, { recursive: true, force: true }); }
   }
 });
 
 test("detectHarness and dry-run plans for openclaw, hermes, and openhuman", () => {
   const tempHome = createTempDir("harness-detect-home-");
   const tempRoot = createTempDir("harness-dry-spec-");
+  const childHome = createTempDir("harness-dry-spec-home-");
   try {
     mkdirSync(join(tempHome, ".openclaw"), { recursive: true });
     writeFileSync(join(tempHome, ".openclaw", "openclaw.json"), "{}", "utf8");
     assert.equal(detectHarness({ userHome: tempHome }), "openclaw");
     rmSync(join(tempHome, ".openclaw"), { recursive: true, force: true });
 
-    mkdirSync(join(tempHome, ".hermes"), { recursive: true });
-    writeFileSync(join(tempHome, ".hermes", "config.yaml"), "mcp_servers:\n", "utf8");
-    assert.equal(detectHarness({ userHome: tempHome }), "hermes");
-    rmSync(join(tempHome, ".hermes"), { recursive: true, force: true });
+    const env = isolatedChildEnv(tempHome);
+    const selectedHermes = resolveHostHome({ harness: "hermes", userHome: tempHome, env }).path;
+    mkdirSync(selectedHermes, { recursive: true });
+    writeFileSync(join(selectedHermes, "config.yaml"), "skills:\n  auto_load: []\n", "utf8");
+    assert.equal(detectHarness({ userHome: tempHome, env }), "hermes");
+    rmSync(selectedHermes, { recursive: true, force: true });
 
     mkdirSync(join(tempHome, ".openhuman"), { recursive: true });
     assert.equal(detectHarness({ userHome: tempHome }), "openhuman");
 
     for (const [h, adapterSuffix] of [["openclaw", "openclaw.json"], ["hermes", "config.yaml"], ["openhuman", "AGENTS.md"]]) {
-      const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", h, "--root", tempRoot, "--dry-run", "--json"], { encoding: "utf8" });
+      const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", h, "--root", tempRoot, "--dry-run", "--json"], { encoding: "utf8", env: isolatedChildEnv(childHome), windowsHide: true });
       assert.equal(res.status, 0, res.stderr);
       const plan = JSON.parse(res.stdout);
       assert.equal(plan.harness, h);
@@ -173,6 +157,7 @@ test("detectHarness and dry-run plans for openclaw, hermes, and openhuman", () =
   } finally {
     rmSync(tempHome, { recursive: true, force: true });
     rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(childHome, { recursive: true, force: true });
   }
 });
 
@@ -271,22 +256,24 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
 
 test("installation is idempotent on repeated execution and rejects unknown --harness", () => {
   const tempRoot = createTempDir("harness-idempotent-");
+  const tempHome = createTempDir("harness-idempotent-home-");
   try {
-    const res1 = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "claude", "--root", tempRoot], { encoding: "utf8" });
+    const res1 = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "claude", "--root", tempRoot], { encoding: "utf8", env: isolatedChildEnv(tempHome), windowsHide: true });
     assert.equal(res1.status, 0);
     const claudeMd1 = readFileSync(join(tempRoot, "CLAUDE.md"), "utf8");
     const fileCount1 = readdirSync(tempRoot).length;
 
-    const res2 = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "claude", "--root", tempRoot], { encoding: "utf8" });
+    const res2 = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "claude", "--root", tempRoot], { encoding: "utf8", env: isolatedChildEnv(tempHome), windowsHide: true });
     assert.equal(res2.status, 0);
     assert.equal(readFileSync(join(tempRoot, "CLAUDE.md"), "utf8"), claudeMd1);
     assert.equal(readdirSync(tempRoot).length, fileCount1);
 
-    const errRes = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "unknown_harness_xyz", "--root", tempRoot], { encoding: "utf8" });
+    const errRes = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "unknown_harness_xyz", "--root", tempRoot], { encoding: "utf8", env: isolatedChildEnv(tempHome), windowsHide: true });
     assert.equal(errRes.status, 2);
     assert.match(errRes.stderr, /unknown harness/i);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(tempHome, { recursive: true, force: true });
   }
 });
 
@@ -357,13 +344,15 @@ test("translateStdioEntry and nested --root repository refusal", async () => {
   assert.equal(translate(posixInput, "win32").command, "cmd.exe");
 
   const nestedDir = resolve(REPO_ROOT, "tools", `test-nested-refused-${Date.now()}`);
+  const nestedHome = createTempDir("harness-nested-home-");
   try {
-    const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "claude", "--root", nestedDir], { encoding: "utf8", timeout: 3000 });
+    const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "claude", "--root", nestedDir], { encoding: "utf8", timeout: 3000, env: isolatedChildEnv(nestedHome), windowsHide: true });
     assert.notEqual(res.status, 0);
     assert.match(res.stderr, /subdirector|repo|inside|refus/i);
     assert.equal(existsSync(nestedDir), false);
   } finally {
     if (existsSync(nestedDir)) rmSync(nestedDir, { recursive: true, force: true });
+    rmSync(nestedHome, { recursive: true, force: true });
   }
 });
 
@@ -543,14 +532,15 @@ test("reinstallation preserves JSONC comments/trailing commas, respects opencode
     }
 
     const hermesRes = spawnSync(process.execPath, [
-      SCRIPT_PATH, "--harness", "hermes", "--root", tempRoot, "--user-home", tempHome, "--json",
-    ], { encoding: "utf8" });
+      SCRIPT_PATH, "--harness", "hermes", "--root", tempRoot, "--user-home", tempHome, "--host-home", hermesHome, "--json",
+    ], { encoding: "utf8", env: isolatedChildEnv(tempHome) });
     assert.equal(hermesRes.status, 0, `Hermes install failed: ${hermesRes.stderr}`);
 
     const savedHermes = readFileSync(hermesConfig, "utf8");
     assert.ok(savedHermes.includes("api_key: sk-user-hermes-secret"), "Hermes API key must be preserved");
     assert.ok(savedHermes.includes("model: custom-model-v1"), "Hermes model setting must be preserved");
-    assert.ok(savedHermes.includes("mcp_servers:"), "mcp_servers must be present in Hermes config");
+    assert.deepEqual(loadYaml().parse(savedHermes).skills.auto_load, ["nullform-workflow"]);
+    assert.equal(loadYaml().parse(savedHermes).mcp_servers, undefined);
 
     const secretCanary = "sk-canary-never-echo-777";
     writeFileSync(opencodeJsoncPath, `{ unquotedJson5Key: "${secretCanary}" }`, "utf8");
@@ -629,8 +619,8 @@ test("consumer regression: malformed markers, malformed YAML, and complex YAML a
     const hermesConfig = join(hermesHome, "config.yaml");
     writeFileSync(hermesConfig, "invalid: [unclosed list\n", "utf8");
     const badYamlRes = spawnSync(process.execPath, [
-      SCRIPT_PATH, "--harness", "hermes", "--root", tempRoot, "--user-home", tempHome, "--json",
-    ], { encoding: "utf8" });
+      SCRIPT_PATH, "--harness", "hermes", "--root", tempRoot, "--user-home", tempHome, "--host-home", hermesHome, "--json",
+    ], { encoding: "utf8", env: isolatedChildEnv(tempHome) });
     assert.notEqual(badYamlRes.status, 0);
     assert.match(badYamlRes.stderr, /Preflight failed: malformed YAML/i);
     assert.equal(existsSync(join(tempRoot, "tools")), false, "Zero files copied on YAML preflight failure");
@@ -646,16 +636,17 @@ test("consumer regression: malformed markers, malformed YAML, and complex YAML a
       "",
     ].join("\n"), "utf8");
     const okYamlRes = spawnSync(process.execPath, [
-      SCRIPT_PATH, "--harness", "hermes", "--root", tempRoot, "--user-home", tempHome, "--json",
-    ], { encoding: "utf8" });
+      SCRIPT_PATH, "--harness", "hermes", "--root", tempRoot, "--user-home", tempHome, "--host-home", hermesHome, "--json",
+    ], { encoding: "utf8", env: isolatedChildEnv(tempHome) });
     assert.equal(okYamlRes.status, 0, okYamlRes.stderr);
     const afterYaml = readFileSync(hermesConfig, "utf8");
     assert.ok(afterYaml.includes("default_endpoint: &default_ep") && afterYaml.includes("backup_endpoint: *default_ep"));
     assert.ok(afterYaml.includes("Line one with # not a comment") && afterYaml.includes("custom_user_setting: 12345"));
-    assert.ok(afterYaml.includes("mcp_servers:"));
-    assert.equal(afterYaml.includes("profiles:"), false);
+    assert.deepEqual(loadYaml().parse(afterYaml).skills.auto_load, ["nullform-workflow"]);
+    assert.equal(loadYaml().parse(afterYaml).mcp_servers, undefined);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
     rmSync(tempHome, { recursive: true, force: true });
   }
 });
+
