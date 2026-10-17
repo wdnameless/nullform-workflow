@@ -285,8 +285,10 @@ async function verifyGlobalInstall(ctx, registry, pkgJson) {
 
 
 async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome, projectDir, secretToken, pkgVersion) {
+  const hermesHostHome = harness === "hermes" ? path.join(harnessHome, ".hermes") : null;
   const initArgs = [
     "init", "--harness", harness, "--root", customRoot, "--user-home", harnessHome,
+    ...(hermesHostHome ? ["--host-home", hermesHostHome] : []),
     ...(projectDir ? ["--project-root", projectDir] : []), "--yes",
   ];
 
@@ -485,9 +487,9 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   writeFileSync(join(vUpSource, "package.json"), JSON.stringify(vUpPkg, null, 2) + "\n", "utf8");
   writeFileSync(join(vUpSource, "VERSION"), `${upgradeVersion}\n`, "utf8");
 
-  const opencodeSkills = join(ctx.spaceBase, "home_opencode", ".config", "opencode", "skills");
-  const ownedSkillFile = join(opencodeSkills, "ui-ux-pro-max", "scripts", "core.py");
-  const userSkillFile = join(opencodeSkills, "ui-ux-pro-max", "scripts", "validate_data.py");
+  const ompSkills = join(ctx.spaceBase, "home_omp", ".agents", "skills");
+  const ownedSkillFile = join(ompSkills, "ui-ux-pro-max", "scripts", "core.py");
+  const userSkillFile = join(ompSkills, "ui-ux-pro-max", "scripts", "validate_data.py");
   writeFileSync(userSkillFile, "# User edit to validate_data.py preserved\n", "utf8");
   writeFileSync(join(vUpSource, "skills", "ui-ux-pro-max", "scripts", "core.py"), `# Upgraded core.py v${upgradeVersion}\n`, "utf8");
   writeFileSync(join(vUpSource, "skills", "ui-ux-pro-max", "scripts", "validate_data.py"), `# Upgraded validate_data.py v${upgradeVersion}\n`, "utf8");
@@ -499,8 +501,8 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   assert.equal(metaRes.status, 200);
   assert.equal((await metaRes.json())["dist-tags"]?.latest, upgradeVersion);
 
-  const opencodeHome = join(ctx.spaceBase, "home_opencode");
-  const opencodeRoot = join(ctx.spaceBase, "root_opencode");
+  const opencodeHome = join(ctx.spaceBase, "home_omp");
+  const opencodeRoot = join(ctx.spaceBase, "root_omp");
   const envReg = { npm_config_registry: registry.url, NPM_CONFIG_REGISTRY: registry.url, NULLFORM_REGISTRY: registry.url };
   const updateRes = await ctx.runInstalledBin(["update", "--yes", "--user-home", opencodeHome, "--registry", registry.url], { extraEnv: envReg, timeoutMs: DEPLOYMENT_TIMEOUT_MS });
   assert.equal(updateRes.status, 0, `R06: update failed (status: ${updateRes.status}, elapsed: ${updateRes.elapsedMs}ms): ${updateRes.stderr || updateRes.stdout}`);
