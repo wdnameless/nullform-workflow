@@ -7,7 +7,7 @@
  * Storage is the existing .workflow/ directory; no new service, DB, or dependency.
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 
