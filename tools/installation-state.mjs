@@ -353,6 +353,15 @@ export function preflightFilesystemConfinement({
       check(join(targetRoot, h === "claude" ? "CLAUDE.md" : "AGENTS.md"), targetRoot);
       if (h === "hermes") {
         for (const path of ["config.yaml", "SOUL.md", "skills/nullform-workflow/SKILL.md"]) check(join(home, path), home);
+        // The Hermes skill dir is the one adaptive home-skills write: fail if it exists as a link
+        // or contains an escaping junction (parity with the old bulk-copy preflight).
+        const skillDir = join(home, "skills", "nullform-workflow");
+        if (existsSync(skillDir)) {
+          check(skillDir, home);
+          for (const entry of readdirSync(skillDir, { withFileTypes: true })) {
+            check(join(skillDir, entry.name), home);
+          }
+        }
       } else if (shouldWriteHome) {
         check(join(home, h === "claude" ? "CLAUDE.md" : "AGENTS.md"), home);
       }

@@ -333,11 +333,20 @@ async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome,
       }
     }
 
-    assert.equal(existsSync(fixture.skillsDir), true, `R03: Skills directory missing at ${fixture.skillsDir} for ${harness}`);
-    const skills = readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
-    assert.ok(skills.length > 0, `R03: No skills installed in ${fixture.skillsDir} for ${harness}`);
-    if (fixture.noSymlinkSkills) {
-      for (const entry of skills) {
+    if (harness === "omp") {
+      assert.equal(existsSync(fixture.skillsDir), true, `R03: Skills directory missing at ${fixture.skillsDir} for ${harness}`);
+      const skills = readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+      assert.ok(skills.length > 0, `R03: No skills installed in ${fixture.skillsDir} for ${harness}`);
+    } else if (harness === "hermes") {
+      // Adaptive Hermes: exactly one native auto-load skill, no bulk catalogue, no SOUL write.
+      const skillFile = join(fixture.skillsDir, "nullform-workflow", "SKILL.md");
+      assert.equal(existsSync(skillFile), true, `R03: Hermes quality skill missing at ${skillFile}`);
+    } else {
+      // Adaptive non-OMP: no bulk home-skill catalogue by design (doctor reports skills:skip).
+      assert.equal(existsSync(fixture.skillsDir), false, `R03: Unexpected bulk skills catalogue at ${fixture.skillsDir} for adaptive ${harness}`);
+    }
+    if (fixture.noSymlinkSkills && existsSync(fixture.skillsDir)) {
+      for (const entry of readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
         const fullSkillPath = join(fixture.skillsDir, entry.name);
         assert.equal(lstatSync(fullSkillPath).isSymbolicLink(), false, `R03: Skill must not be symlink: ${fullSkillPath}`);
       }
@@ -372,7 +381,8 @@ async function verifyHarnessDoctor(ctx, harness, harnessHome) {
     const integrationCheck = (docJson.checks || []).find((c) => c.id === "harness-integration");
     assert.equal(integrationCheck?.status, "pass", `R03: harness-integration check must pass for ${harness}`);
     const skillsCheck = (docJson.checks || []).find((c) => c.id === "skills");
-    assert.equal(skillsCheck?.status, "pass", `R03: skills check must pass for ${harness}`);
+    // Adaptive non-OMP reports skills:skip (no bulk catalogue by design); OMP still requires pass.
+    assert.equal(skillsCheck?.status, "skip", `R03: skills check must skip for adaptive ${harness}`);
     const runtimeCheck = (docJson.checks || []).find((c) => c.id === "host-runtime");
     assert.ok(runtimeCheck, `R03: host-runtime check must be present for ${harness}`);
     assert.notEqual(runtimeCheck.status, "fail", `R03: Missing host runtime for ${harness} must be SETUP/warn, never FAIL`);

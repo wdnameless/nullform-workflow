@@ -95,9 +95,12 @@ test('push gate requires reconnaissance for standard changes and refuses heavy c
 });
 
 test('nested home skill junctions fail preflight before any core copy', (t) => {
+  // Adaptive installers no longer bulk-copy into home skills dirs (except OMP/Hermes single skill).
+  // The junction-escape guard is preserved on the Hermes native skill path, the one adaptive home-skills write.
   const temp = mkdtempSync(join(tmpdir(), 'home-skill-escape-'));
   const root = join(temp, 'root'), home = join(temp, 'home'), outside = join(temp, 'outside');
-  const skill = join(home, '.claude', 'skills', 'ui-ux-pro-max');
+  const hostHome = join(home, 'hermes-host');
+  const skill = join(hostHome, 'skills', 'nullform-workflow');
   const link = join(skill, 'scripts');
   let linked = false;
   try {
@@ -105,7 +108,7 @@ test('nested home skill junctions fail preflight before any core copy', (t) => {
     writeFileSync(join(outside, 'core.py'), 'HUMAN_EXTERNAL_ASSET\n');
     try { symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir'); linked = true; }
     catch (error) { if (error.code === 'EPERM') { t.skip('symlink privilege unavailable'); return; } throw error; }
-    assert.throws(() => installHarness({ harness: 'claude', root, userHome: home }), /Preflight failed/);
+    assert.throws(() => installHarness({ harness: 'hermes', root, userHome: home, hostHome }), /Preflight failed|escapes/);
     assert.equal(readFileSync(join(outside, 'core.py'), 'utf8'), 'HUMAN_EXTERNAL_ASSET\n');
     assert.equal(existsSync(join(root, 'VERSION')), false);
   } finally { if (linked) unlinkSync(link); rmSync(temp, { recursive: true, force: true }); }

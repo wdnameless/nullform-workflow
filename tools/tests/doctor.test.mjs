@@ -1533,6 +1533,7 @@ test("doctor with targetHarness: cursor projectRoot, openclaw JSON5, release-dri
     assert.match(checkOf(cursorRes, "release-drift").detail, /nullform update/i);
 
     writeFileSync(join(harness, "openclaw.json"), `// JSON5\n{\n  agents: { entries: { workflow: { workspace: "${tmp.replace(/\\/g, "/")}" } } }\n}\n`, "utf8");
+    writeFileSync(join(harness, "AGENTS.md"), "<!-- BEGIN NULLFORM WORKFLOW -->\n# OpenClaw\n<!-- END NULLFORM WORKFLOW -->\n", "utf8");
     const clawRes = runDoctor({ harness, targetHarness: "openclaw", userHome: tmp, agentDir, agentsHome });
     assert.equal(checkOf(clawRes, "harness-integration").status, "pass");
 
