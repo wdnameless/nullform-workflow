@@ -12,7 +12,7 @@
  *   - hermes    (Hermes -> config.yaml + AGENTS.md)
  *   - openhuman (OpenHuman -> AGENTS.md + copied skills)
  *   - all       (All adapters)
- *   - auto      (Auto-detect harness; fallback: omp)
+ *   - auto      (Auto-detect candidate harness; refuses if ambiguous or none)
  *
  * Options:
  *   --harness <name>      Target harness (default: auto)
@@ -47,18 +47,50 @@ function isStrictlyInside(parent, child) {
   return Boolean(rel && !rel.startsWith("..") && !isAbsolute(rel));
 }
 
-function detectHarness({ userHome = homedir(), env = process.env } = {}) {
+function discoverCandidates({ userHome = homedir(), projectRoot, env = process.env, platform = process.platform } = {}) {
   const isDefaultHome = resolve(userHome) === resolve(homedir());
-  const home = harness => resolveHostHome({ harness, userHome, env }).path;
-  for (const harness of ["claude", "codex", "opencode", "cursor"]) {
-    if (existsSync(home(harness))) return harness;
+  const candidates = [];
+  for (const h of CONCRETE_HARNESSES) {
+    let hasPresence = false;
+    if (h === "cursor") {
+      const cursorDir = projectRoot ? join(resolve(projectRoot), ".cursor") : join(process.cwd(), ".cursor");
+      if (existsSync(cursorDir)) hasPresence = true;
+      else {
+        const homePath = resolveHostHome({ harness: "cursor", userHome, env, platform }).path;
+        if (existsSync(homePath)) hasPresence = true;
+      }
+    } else if (h === "omp") {
+      const ompDir = join(userHome, ".omp");
+      const agentDir = resolveHostHome({ harness: "omp", userHome, env, platform }).path;
+      if (existsSync(ompDir) || existsSync(agentDir)) hasPresence = true;
+    } else if (h === "openclaw") {
+      const homePath = resolveHostHome({ harness: "openclaw", userHome, env, platform }).path;
+      if (existsSync(join(homePath, "openclaw.json")) || existsSync(homePath)) hasPresence = true;
+    } else if (h === "hermes") {
+      const homePath = resolveHostHome({ harness: "hermes", userHome, env, platform }).path;
+      if (existsSync(join(homePath, "config.yaml")) || existsSync(homePath)) hasPresence = true;
+    } else {
+      const homePath = resolveHostHome({ harness: h, userHome, env, platform }).path;
+      if (existsSync(homePath)) hasPresence = true;
+    }
+
+    if (!hasPresence) {
+      const hasCmd = h === "openhuman"
+        ? (isCommandInPath("openhuman", env, platform) || isCommandInPath("openhuman-core", env, platform))
+        : isCommandInPath(h, env, platform);
+      if (hasCmd && (isDefaultHome || (env && (env.PATH || env.Path)))) {
+        hasPresence = true;
+      }
+    }
+    if (hasPresence) candidates.push(h);
   }
-  if (existsSync(join(home("openclaw"), "openclaw.json")) || (isDefaultHome && isCommandInPath("openclaw"))) return "openclaw";
-  if (existsSync(join(home("hermes"), "config.yaml")) || (isDefaultHome && isCommandInPath("hermes"))) return "hermes";
-  if (existsSync(home("openhuman")) || (isDefaultHome && (isCommandInPath("openhuman-core") || isCommandInPath("openhuman")))) return "openhuman";
-  return "omp";
+  return candidates;
 }
 
+function detectHarness(options = {}) {
+  const candidates = discoverCandidates(options);
+  return candidates.length === 1 ? candidates[0] : null;
+}
 
 function isPromptSurface(srcPath) {
   const rel = relative(REPO_ROOT, srcPath);
@@ -162,121 +194,6 @@ function copyRuntimeDeps(repoRoot, targetRoot, slashRoot, assetContext) {
   }
   return copied;
 }
-/**
- * Links the roster or updates unchanged managed role files; preserves human definitions and custom links.
- */
-function installRoleRoster(linkTarget, destDir, slashRoot, assetContext) {
-  const { dryRun, journal, plan } = assetContext;
-  // Dry run mutates nothing: return before any unlink/symlink/mkdir.
-  if (dryRun) return [destDir];
-  try {
-    let stat = null;
-    try {
-      stat = lstatSync(destDir);
-    } catch {
-      stat = null;
-    }
-    if (stat) {
-      if (!stat.isSymbolicLink()) {
-        // Physical roster: copy only missing mandatory roles; never adopt user roster files.
-        const copied = [];
-        for (const entry of readdirSync(linkTarget, { withFileTypes: true })) {
-          if (!entry.isFile()) continue;
-          const dstFile = join(destDir, entry.name);
-          if (!existsSync(dstFile)) {
-            if (copyAndSubstitute(join(linkTarget, entry.name), dstFile, slashRoot, assetContext)) copied.push(dstFile);
-          }
-        }
-        return copied;
-      }
-      let currentTarget = null;
-      try {
-        currentTarget = resolve(dirname(destDir), readlinkSync(destDir));
-      } catch {
-        currentTarget = null;
-      }
-      // Known-expected link: already ours, nothing to do.
-      if (currentTarget === resolve(linkTarget)) return [];
-      // Unknown/dangling human or custom role link: preserve it and report; never silently
-      // unlink a human's link target, and never claim its bytes as owned.
-      preserveAsset(destDir, null, plan);
-      return [];
-    }
-    mkdirSync(dirname(destDir), { recursive: true });
-    if (journal) journal.recordBeforeSymlink(destDir, linkTarget);
-    symlinkSync(linkTarget, destDir, process.platform === "win32" ? "junction" : "dir");
-    if (journal) journal.recordSymlinked(destDir);
-    return [destDir];
-  } catch {
-    return copyDirRecursive(linkTarget, destDir, slashRoot, assetContext);
-  }
-}
-
-/**
- * Skills registry installer. Preserves human files by verifying against prior managed hashes.
- */
-function installSkills(srcDir, destDir, slashRoot, agentsHome, assetContext, extra = {}) {
-  if (!existsSync(srcDir)) return [];
-  
-  const skip = new Set();
-  const searchRoots = [
-    agentsHome,
-    agentsHome && join(agentsHome, ".agents"),
-    extra.targetRoot,
-    extra.targetRoot && join(extra.targetRoot, ".agents"),
-    extra.projectRoot,
-    extra.projectRoot && join(extra.projectRoot, ".agents"),
-  ].filter(Boolean);
-
-  for (const root of searchRoots) {
-    const lockPath = join(root, ".skill-lock.json");
-    try {
-      if (existsSync(lockPath)) {
-        const locked = JSON.parse(readFileSync(lockPath, "utf8").replace(/^\uFEFF/, "").trim());
-        for (const name of Object.keys(locked.skills || {})) {
-          if (existsSync(join(destDir, name, "SKILL.md")) || existsSync(join(srcDir, name, "SKILL.md"))) {
-            skip.add(name);
-          }
-        }
-      }
-    } catch {}
-
-    const disabledPath = join(root, ".skills-disabled.json");
-    try {
-      if (existsSync(disabledPath)) {
-        const disabled = JSON.parse(readFileSync(disabledPath, "utf8").replace(/^\uFEFF/, "").trim());
-        for (const name of disabled.disabled || []) {
-          if (typeof name === "string") skip.add(name);
-        }
-      }
-    } catch {}
-  }
-
-  const out = [];
-
-  function walkSkill(currentSrc, currentDest) {
-    const entries = readdirSync(currentSrc, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".tmp") continue;
-      const sPath = join(currentSrc, entry.name);
-      const dPath = join(currentDest, entry.name);
-
-      if (entry.isDirectory()) {
-        if (!assetContext.dryRun) mkdirSync(dPath, { recursive: true });
-        walkSkill(sPath, dPath);
-      } else if (entry.isFile()) {
-        if (copyAndSubstitute(sPath, dPath, slashRoot, assetContext)) out.push(dPath);
-      }
-    }
-  }
-
-  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || skip.has(entry.name)) continue;
-    walkSkill(join(srcDir, entry.name), join(destDir, entry.name));
-  }
-  return out;
-}
-
 export function translateStdioEntry(entry, platform = process.platform) {
   if (!entry || typeof entry !== "object") return entry;
   const isWin = platform === "win32";
@@ -359,8 +276,14 @@ function installHarness(options = {}) {
     );
   }
 
-  const selectedHarness = rawHarness === "auto" ? detectHarness({ userHome, env }) : rawHarness;
-  if (selectedHarness === "all" && (options.hostHome || options.hostManifest)) throw new Error("Select one harness when using profile overrides");
+  const selectedHarness = rawHarness === "auto" ? detectHarness({ userHome, projectRoot: options.projectRoot, env }) : rawHarness;
+  if (!selectedHarness && rawHarness === "auto") {
+    const candidates = discoverCandidates({ userHome, projectRoot: options.projectRoot, env });
+    if (candidates.length > 1) {
+      throw new Error(`Multiple candidate harnesses detected: ${candidates.join(", ")}. Specify --harness <name> explicitly.`);
+    }
+    throw new Error(`No supported harness detected. Specify --harness <name> explicitly. Choose one of: ${CONCRETE_HARNESSES.join(", ")}`);
+  }
   const hostManifest = loadHostManifest(options.hostManifest, selectedHarness);
   if (selectedHarness === "custom" && !options.projectRoot) throw new Error("Custom host requires --project-root");
   const rawTargetRoot = options.root
@@ -481,16 +404,6 @@ function installHarness(options = {}) {
       if (existsSync(srcFile) && copyAsset(srcFile, destFile)) plan.filesToCopy.push(destFile);
     }
 
-    if (isCursorActive) {
-      const srcSkills = join(REPO_ROOT, "skills");
-      const destSkills = join(targetRoot, "skills");
-      plan.filesToCopy.push(
-        ...installSkills(srcSkills, destSkills, slashRoot, agentsHome, assetContext, {
-          targetRoot,
-          projectRoot,
-        })
-      );
-    }
 
     plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, assetContext));
 
@@ -512,7 +425,7 @@ function installHarness(options = {}) {
         targetRoot, projectRoot, slashRoot, userHome, options, shouldWriteHome,
         hostHome: hostHomes[h], report: reports[h], hostManifest, hermesActivation,
         writeAdapter, readExisting, plan, assetContext, copyAsset,
-        copyDirRecursive, installSkills, installRoleRoster, translateStdioEntry,
+        copyDirRecursive, translateStdioEntry,
       });
     }
 
@@ -643,4 +556,4 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
   main();
 }
 
-export { installHarness, detectHarness, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath };
+export { installHarness, detectHarness, discoverCandidates, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath };

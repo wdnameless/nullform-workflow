@@ -1857,9 +1857,9 @@ function cmdCheckCi(root, flags) {
   console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
   return 0;
 }
-function cmdReviewRun(root, flags) {
+function cmdReviewRun(root, flags, positionals = 0) {
   try {
-    const { redo, dryRun } = assertReviewRunFlags(flags, 0);
+    const { redo, dryRun } = assertReviewRunFlags(flags, positionals);
     const gate = validateReviewCapability(flags.harness, { dryRun: true, userHome: flags["user-home"] });
     if (!gate.ok) throw new Error(gate.error);
     const productCommand = flags["product-command"] ? JSON.parse(flags["product-command"]) : null;
@@ -1913,7 +1913,7 @@ export function runWorkflowCli(argv = [], options = {}) {
     case "escalate":     code = cmdEscalate(root, args.flags); break;
     case "metrics":      code = cmdMetrics(root); break;
     case "check-ci":     code = cmdCheckCi(root, args.flags); break;
-    case "review-run":   code = cmdReviewRun(root, args.flags); break;
+    case "review-run":   code = cmdReviewRun(root, args.flags, Math.max(0, args._.length - 1)); break;
     case "stage-b":      code = cmdStageB(root, args.flags); break;
     default:
       if (cmd !== undefined) console.error(`workflow: unknown command '${cmd}'\n`);

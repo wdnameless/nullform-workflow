@@ -15,93 +15,6 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
 const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 
-test("actual skill asset ownership transition across versions preserves user edits and propagates unchanged scripts and binaries", async () => {
-  const tempRoot = createTempDir("harness-asset-transition-root-");
-  const tempHome = createTempDir("harness-asset-transition-home-");
-  try {
-    const res1 = spawnSync(process.execPath, [
-      SCRIPT_PATH, "--harness", "omp", "--root", tempRoot, "--user-home", tempHome, "--json",
-    ], { encoding: "utf8" });
-    assert.equal(res1.status, 0, `Initial install failed: ${res1.stderr}`);
-    const plan1 = JSON.parse(res1.stdout);
-
-    const skillsDir = join(tempHome, ".agents", "skills");
-    const pyAsset = join(skillsDir, "ui-ux-pro-max", "scripts", "core.py");
-    const userModifiedAsset = join(skillsDir, "ui-ux-pro-max", "scripts", "validate_data.py");
-    const binaryAsset = join(skillsDir, "ui-styling", "canvas-fonts", "YoungSerif-Regular.ttf");
-    const skillMd = join(skillsDir, "ui-ux-pro-max", "SKILL.md");
-
-    assert.ok(existsSync(pyAsset), "Script asset must exist after initial deploy");
-    assert.ok(existsSync(userModifiedAsset), "Script asset to be user-modified must exist");
-    assert.ok(existsSync(binaryAsset), "Binary font asset must exist after initial deploy");
-    assert.ok(existsSync(skillMd), "Markdown skill prompt must exist after initial deploy");
-
-    assert.ok(plan1.managedFiles[pyAsset], "Managed hash must be recorded for .py script");
-    assert.ok(plan1.managedFiles[userModifiedAsset], "Managed hash must be recorded for user script");
-    assert.ok(plan1.managedFiles[binaryAsset], "Managed hash must be recorded for binary .ttf asset");
-    assert.ok(plan1.managedFiles[skillMd], "Managed hash must be recorded for .md prompt");
-
-    const originalPyHash = plan1.managedFiles[pyAsset];
-    const originalUserHash = plan1.managedFiles[userModifiedAsset];
-    const originalBinaryHash = plan1.managedFiles[binaryAsset];
-
-    const humanCustomNote = "# Human local custom modifications to validate_data.py\n";
-    writeFileSync(userModifiedAsset, humanCustomNote, "utf8");
-
-    const unownedFile = join(skillsDir, "ui-ux-pro-max", "scripts", "custom_helper.py");
-    writeFileSync(unownedFile, "# Human unowned helper\n", "utf8");
-
-    const newPyContent = "# Upgraded package core.py v2.0.0\n";
-    const newValidateContent = "# Upgraded package validate_data.py v2.0.0\n";
-    const newBinaryContent = Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xaa, 0x55]);
-
-    const rootSkillsDir = join(tempRoot, "skills");
-    writeFileSync(join(rootSkillsDir, "ui-ux-pro-max", "scripts", "core.py"), newPyContent, "utf8");
-    writeFileSync(join(rootSkillsDir, "ui-ux-pro-max", "scripts", "validate_data.py"), newValidateContent, "utf8");
-    writeFileSync(join(rootSkillsDir, "ui-styling", "canvas-fonts", "YoungSerif-Regular.ttf"), newBinaryContent);
-    writeFileSync(join(rootSkillsDir, "ui-ux-pro-max", "scripts", "custom_helper.py"), "# Shipped package helper\n", "utf8");
-
-    const { installHarness: installV2Harness } = await import(
-      pathToFileURL(join(tempRoot, "tools", "install-harness.mjs")).href
-    );
-    const plan2 = installV2Harness({
-      harness: "omp",
-      root: tempRoot,
-      userHome: tempHome,
-      managedFiles: plan1.managedFiles,
-    });
-
-    assert.equal(readFileSync(pyAsset, "utf8"), newPyContent, "Unchanged owned .py asset must update from new package");
-    assert.notEqual(plan2.managedFiles[pyAsset], originalPyHash, "Managed hash for updated .py asset must change");
-
-    assert.deepEqual(readFileSync(binaryAsset), newBinaryContent, "Unchanged owned binary asset must update from new package");
-    assert.notEqual(plan2.managedFiles[binaryAsset], originalBinaryHash, "Managed hash for updated binary asset must change");
-
-    assert.equal(readFileSync(userModifiedAsset, "utf8"), humanCustomNote, "Locally modified user asset must stay untouched");
-    assert.equal(plan2.managedFiles[userModifiedAsset], originalUserHash, "Locally modified asset must retain prior hash in managedFiles");
-
-    assert.equal(readFileSync(unownedFile, "utf8"), "# Human unowned helper\n", "Unowned human file must not be overwritten by package");
-
-    const lockDir = join(tempHome, ".agents");
-    mkdirSync(lockDir, { recursive: true });
-    writeFileSync(join(lockDir, ".skill-lock.json"), JSON.stringify({ skills: { "ui-ux-pro-max": { version: "1.0.0" } } }), "utf8");
-    writeFileSync(join(lockDir, ".skills-disabled.json"), JSON.stringify({ disabled: ["web-search"] }), "utf8");
-
-    const testLockedFile = join(skillsDir, "ui-ux-pro-max", "scripts", "test_core.py");
-    if (existsSync(testLockedFile)) rmSync(testLockedFile, { force: true });
-
-    installV2Harness({
-      harness: "omp",
-      root: tempRoot,
-      userHome: tempHome,
-      managedFiles: plan2.managedFiles,
-    });
-    assert.equal(existsSync(testLockedFile), false, "Locked skill must be skipped by installer");
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
-    rmSync(tempHome, { recursive: true, force: true });
-  }
-});
 
 function copyPublicPackageFixture(dest) {
   const entries = [
@@ -226,18 +139,30 @@ test("public OMP init preserves unowned and modified-owned assets while advancin
     const core = join(root, "tools", "workflow.mjs");
     const guard = join(home, ".omp", "agent", "extensions", "nullform-delete-guard.ts");
     const role = join(home, ".omp", "agent", "agents", "fixer.md");
+    const legacyMcp = join(home, ".omp", "agent", "mcp.json");
+    const legacySkill = join(home, ".agents", "skills", "human-skill", "SKILL.md");
+    mkdirSync(dirname(legacyMcp), { recursive: true });
+    writeFileSync(legacyMcp, '{"mcpServers":{}}\n', "utf8");
+    mkdirSync(dirname(legacySkill), { recursive: true });
+    writeFileSync(legacySkill, "# Human legacy skill\n", "utf8");
+
     const unowned = new Map();
     for (const [dest, src] of [[core, "tools/workflow.mjs"], [guard, "agent/extensions/nullform-delete-guard.ts"], [role, "agent/agents/fixer.md"]]) {
       mkdirSync(dirname(dest), { recursive: true });
       cpSync(join(pkg, src), dest);
       unowned.set(dest, appendFixtureBytes(dest, "\n// HUMAN UNOWNED MODIFICATION\n"));
     }
+    unowned.set(legacyMcp, Buffer.from('{"mcpServers":{}}\n'));
+    unowned.set(legacySkill, Buffer.from("# Human legacy skill\n"));
     const law = join(root, "agent", "AGENTS.md");
     const lawBytes = Buffer.from(readFileSync(join(pkg, "agent", "AGENTS.md"), "utf8").split("<HARNESS>").join(root.replace(/\\/g, "/")) + "\n<!-- HUMAN ROOT LAW -->\n");
     mkdirSync(dirname(law), { recursive: true });
     writeFileSync(law, lawBytes);
     unowned.set(law, lawBytes);
     publicInit(pkg, "omp", root, home);
+    assert.equal(existsSync(join(home, ".agents", "rules")), false);
+    assert.equal(readFileSync(legacySkill, "utf8"), "# Human legacy skill\n");
+    assert.equal(readFileSync(legacyMcp, "utf8"), '{"mcpServers":{}}\n');
     let state = readInstallationState(home);
     for (const [path, bytes] of unowned) {
       assert.deepEqual(readFileSync(path), bytes);
@@ -247,7 +172,7 @@ test("public OMP init preserves unowned and modified-owned assets while advancin
     const priorHashes = new Map();
     for (const path of [
       join(root, "tools", "harness-capabilities.mjs"),
-      join(home, ".agents", "skills", "ui-ux-pro-max", "scripts", "validate_data.py"),
+      join(root, "skills", "ui-ux-pro-max", "scripts", "validate_data.py"),
     ]) {
       assert.equal(state.managedFiles[path], hashContent(readFileSync(path)));
       priorHashes.set(path, state.managedFiles[path]);
@@ -259,10 +184,10 @@ test("public OMP init preserves unowned and modified-owned assets while advancin
     const parserBytes = Buffer.from(JSON.stringify({ ...JSON.parse(readFileSync(parser, "utf8")), humanNote: "KEEP" }) + "\n");
     writeFileSync(parser, parserBytes);
     changed.set(parser, parserBytes);
-    const jev = join(home, ".omp", "agent", "extensions", "nullform-jev.ts");
+    const jev = join(root, "agent", "extensions", "nullform-jev.ts");
     const unchangedCore = join(root, "tools", "installation-state.mjs");
     const fontRel = join("skills", "ui-styling", "canvas-fonts", "YoungSerif-Regular.ttf");
-    const font = join(home, ".agents", fontRel);
+    const font = join(root, fontRel);
     const baseVersion = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version;
     for (const step of [1, 2]) {
       if (step === 2) {

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
-import { installHarness, SUPPORTED_HARNESSES, loadHostManifest } from "../tools/install-harness.mjs";
+import { installHarness, SUPPORTED_HARNESSES, loadHostManifest, discoverCandidates } from "../tools/install-harness.mjs";
 import { getDefaultRoot } from '../tools/installation-state.mjs';
 import { runDoctor, printHumanReport } from "../tools/doctor.mjs";
 import { runWorkflowCli } from "../tools/workflow.mjs";
@@ -372,25 +372,46 @@ function printInitSuccess(output, options, { ok, readiness, selectedHarness, sav
   output.write(`  Readiness:  ${label}\n`);
 }
 
-async function resolveInitHarness(options, existingState, session, output, errOut) {
-  if (options.harness !== null && options.harness !== undefined && !HARNESS_CHOICES.includes(options.harness)) {
-    const msg = `Invalid --harness "${options.harness}". Choose one of: ${HARNESS_CHOICES.join(", ")}`;
-    emitJsonOrText(output, errOut, options.json, { ok: false, error: "invalid_harness", detail: msg }, `Error: ${msg}\n`);
-    return { error: 2 };
-  }
-  let selected = options.harness || ((options.yes || options.dryRun) && existingState?.harness ? existingState.harness : null);
-  if (!selected) {
-    if (options.yes) {
-      const msg = "Missing --harness in headless (--yes) mode with no saved installation.";
-      emitJsonOrText(output, errOut, options.json, { ok: false, error: "missing_harness", detail: msg }, `Error: ${msg}\n`);
+async function resolveInitHarness(options, existingState, session, output, errOut, { env = process.env, userHome, projectRoot } = {}) {
+  // Precedence 1: Explicit --harness
+  if (options.harness !== null && options.harness !== undefined) {
+    if (!HARNESS_CHOICES.includes(options.harness)) {
+      const msg = `Invalid --harness "${options.harness}". Choose one of: ${HARNESS_CHOICES.join(", ")}`;
+      emitJsonOrText(output, errOut, options.json, { ok: false, error: "invalid_harness", detail: msg }, `Error: ${msg}\n`);
       return { error: 2 };
     }
-    selected = await promptHarnessMenu({ session, output, json: options.json });
-    if (!selected) {
-      const msg = "Interactive harness selection cancelled or absent in non-interactive mode.";
-      emitJsonOrText(output, errOut, options.json, { ok: false, cancelled: true, error: "cancelled", detail: msg }, `Error: ${msg}\n`);
-      return { error: 1 };
+    return { harness: options.harness };
+  }
+
+  // Precedence 2: Stable saved installation
+  if (existingState?.harness && HARNESS_CHOICES.includes(existingState.harness)) {
+    return { harness: existingState.harness };
+  }
+
+  // Precedence 3: Single known candidate
+  const candidates = discoverCandidates({ userHome, projectRoot: options.projectRoot || projectRoot, env });
+  if (candidates.length === 1) {
+    return { harness: candidates[0] };
+  }
+
+  // Precedence 4: Ambiguity or no candidate
+  const isHeadless = Boolean(options.yes || !session?.isTTY);
+  if (isHeadless) {
+    if (candidates.length > 1) {
+      const msg = `Multiple candidate harnesses detected (${candidates.join(", ")}). Specify --harness <name> to proceed. Choose one of: ${HARNESS_CHOICES.join(", ")}`;
+      emitJsonOrText(output, errOut, options.json, { ok: false, error: "ambiguous_harness", candidates, detail: msg }, `Error: ${msg}\n`);
+      return { error: 2 };
     }
+    const msg = `No supported harness detected. Specify --harness <name> to proceed. Choose one of: ${HARNESS_CHOICES.join(", ")}`;
+    emitJsonOrText(output, errOut, options.json, { ok: false, error: "missing_harness", detail: msg }, `Error: ${msg}\n`);
+    return { error: 2 };
+  }
+
+  const selected = await promptHarnessMenu({ session, output, json: options.json });
+  if (!selected) {
+    const msg = "Interactive harness selection cancelled or absent in non-interactive mode.";
+    emitJsonOrText(output, errOut, options.json, { ok: false, cancelled: true, error: "cancelled", detail: msg }, `Error: ${msg}\n`);
+    return { error: 1 };
   }
   return { harness: selected };
 }
@@ -415,7 +436,11 @@ export async function runInit(options = {}, deps = {}) {
 
   const session = createPromptSession({ input: deps.stdin || process.stdin, output: options.json ? null : output, isTTY: deps.isTTY });
   try {
-    const harnessRes = await resolveInitHarness(options, existingState, session, output, errOut);
+    const harnessRes = await resolveInitHarness(options, existingState, session, output, errOut, {
+      env,
+      userHome,
+      projectRoot: options.projectRoot,
+    });
     if (harnessRes.error) return harnessRes.error;
     const selectedHarness = harnessRes.harness;
 

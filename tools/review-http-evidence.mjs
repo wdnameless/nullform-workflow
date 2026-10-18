@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isRealPathInsideRoot } from './worktree-snapshot.mjs';
 import { EXECUTOR, PINNED_PROVIDER, EVIDENCE_CLASSES, nanoUsdToUsd, pinnedTariffsNanoPerToken, usageCostNanoUsd, redactSecret } from './review-budget.mjs';
+import { assertProductExecutionInvariant } from './review-native-tools.mjs';
 
 const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
 const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)[ \t]*(?:(?:#+[ \t]*)?\*{0,2}Verdict:?\*{0,2}:?[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]|$|[.,])|\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]*[.,]?[ \t]*\r?$))|\|[ \t]*\*{0,2}Verdict:?\*{0,2}:?[ \t]*\|[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}\b/im;
@@ -136,6 +137,19 @@ export function reprojectHttpExecution({ envelope, provenance, role, executorBra
 
   const usage = { ...totals, costUsd: nanoUsdToUsd(usageCostNanoUsd(totals, pinnedTariffsNanoPerToken())), costSource: 'controlled-http-usage' };
   const verdict = extractVerdict(role, lastContent);
+
+  for (const execution of products) {
+    assertProductExecutionInvariant({
+      execution,
+      productCommandHash: original.productCommandHash,
+      sourceDigest: original.sourceDigest,
+      startedAt,
+      completedAt,
+      verdict: verdict.verdict,
+      clockToleranceMs: CLOCK_TOLERANCE_MS,
+    });
+  }
+
   return { executionId: startup.executionId, evidenceClass, provenanceHash: startup.provenanceHash, originalProvenance: original,
     providerResponses, events: envelope.events, usage, report: lastContent, stopReason: 'stop', verdict, products,
     startedAt: envelope.startedAt, completedAt: envelope.completedAt };

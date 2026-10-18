@@ -235,6 +235,9 @@ export function resolveBudgetAuthority(root) {
 }
 
 const MAX_LEDGER_BYTES = 1024 * 1024; // 1 MiB documented bound
+const MAX_HELD_REASON_CHARS = 512;
+const REQUEST_RECORD_GROWTH_BYTES = 128;
+const TERMINAL_METADATA_GROWTH_BYTES = (MAX_HELD_REASON_CHARS * 6) + 128;
 function readLedger(ledgerPath) {
   if (!existsSync(ledgerPath)) return { settledNanoUsd: 0, reservations: [] };
   const fileSize = statSync(ledgerPath).size;
@@ -264,10 +267,15 @@ function readLedger(ledgerPath) {
 }
 
 function writeLedger(ledgerPath, ledger) {
+  const formatted = `${JSON.stringify(ledger, null, 2)}\n`;
+  const byteLength = Buffer.byteLength(formatted, 'utf8');
+  if (byteLength > MAX_LEDGER_BYTES) {
+    throw new Error(`Budget ledger '${ledgerPath}' is ${byteLength} bytes, exceeding the ${MAX_LEDGER_BYTES}-byte bound; refusing to write`);
+  }
   const temporary = `${ledgerPath}.${randomUUID()}.tmp`;
   const fd = openSync(temporary, 'wx', 0o600);
   try {
-    try { writeFileSync(fd, `${JSON.stringify(ledger, null, 2)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
+    try { writeFileSync(fd, formatted); fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(temporary, ledgerPath);
     if (process.platform !== 'win32') {
       const directory = openSync(dirname(ledgerPath), 'r');
@@ -320,9 +328,36 @@ export function admitSession({ root, policy }) {
     if (ledger.settledNanoUsd + outstanding + normalized.reserveNanoUsd > normalized.ceilingNanoUsd) {
       throw new Error(`Review budget refused: settled ${ledger.settledNanoUsd} + outstanding ${outstanding} + reserve ${normalized.reserveNanoUsd} exceeds ceiling ${normalized.ceilingNanoUsd} nanoUSD`);
     }
-    const reservation = { reservationId: randomUUID(), status: 'reserved', reservedNanoUsd: normalized.reserveNanoUsd, requests: [],
-      maxRequests: normalized.maxRequests, createdAt: new Date().toISOString(), model: normalized.model,
-      tariffsNanoPerToken: { ...normalized.tariffsNanoPerToken } };
+    // Construct the actual new reservation in memory first
+    const reservation = {
+      reservationId: randomUUID(),
+      status: 'reserved',
+      reservedNanoUsd: normalized.reserveNanoUsd,
+      requests: [],
+      maxRequests: normalized.maxRequests,
+      createdAt: new Date().toISOString(),
+      model: normalized.model,
+      tariffsNanoPerToken: { ...normalized.tariffsNanoPerToken }
+    };
+
+    // Canonical serialized size with the new reservation included (canonicalizes compact existing bytes)
+    const candidateLedger = { ...ledger, reservations: [...ledger.reservations, reservation] };
+    const baseSerializedBytes = Buffer.byteLength(`${JSON.stringify(candidateLedger, null, 2)}\n`, 'utf8');
+
+    // Conservatively account remaining request records and terminal growth for ALL outstanding reserved rows
+    let maxFutureGrowth = 0;
+    for (const row of candidateLedger.reservations) {
+      if (row.status === 'reserved') {
+        const remainingRequests = Math.max(0, (row.maxRequests || 0) - (row.requests?.length || 0));
+        maxFutureGrowth += (remainingRequests * REQUEST_RECORD_GROWTH_BYTES) + TERMINAL_METADATA_GROWTH_BYTES;
+      }
+    }
+
+    const projectedMaxBytes = baseSerializedBytes + maxFutureGrowth;
+    if (projectedMaxBytes > MAX_LEDGER_BYTES) {
+      throw new Error(`Review budget refused: ledger persistence capacity exceeded (${projectedMaxBytes} projected > ${MAX_LEDGER_BYTES} byte limit); refusing to authorize session whose accounting cannot remain writable through settlement`);
+    }
+
     ledger.reservations.push(reservation);
     writeLedger(authority.ledgerPath, ledger);
     return { reservationId: reservation.reservationId, reservedNanoUsd: reservation.reservedNanoUsd, kind: authority.kind, authority: authority.authority, ledgerPath: authority.ledgerPath };
@@ -371,11 +406,10 @@ export function settleReservation({ root, reservationId, usage }) {
   });
 }
 
-/** Unknown, failed or cancelled spend stays held and blocks fresh admission. */
 export function holdReservation({ root, reservationId, reason }) {
   return withReservation(root, reservationId, reservation => {
     reservation.status = 'held';
-    reservation.heldReason = redactSecret(String(reason || 'unknown outcome'), process.env.OPENAI_API_KEY);
+    reservation.heldReason = redactSecret(String(reason || 'unknown outcome'), process.env.OPENAI_API_KEY).slice(0, MAX_HELD_REASON_CHARS);
     reservation.heldAt = new Date().toISOString();
     return { reservationId, heldNanoUsd: reservation.reservedNanoUsd };
   });
@@ -386,14 +420,16 @@ export function holdReservation({ root, reservationId, reason }) {
  * creating directories, acquiring locks, or mutating ledger state.
  * Returns { totalSettledNanoUsd, requiredReserveNanoUsd, reservationCount, kind }.
  */
-export function inspectBudget({ root, policy }) {
-  const normalized = validatePolicy(policy);
+export function inspectBudget({ root, policy = null }) {
+  const normalized = policy ? validatePolicy(policy) : null;
   const authority = resolveBudgetAuthority(root);
   const ledger = readLedger(authority.ledgerPath);
   return {
     totalSettledNanoUsd: ledger.settledNanoUsd,
-    requiredReserveNanoUsd: normalized.reserveNanoUsd,
+    requiredReserveNanoUsd: normalized ? normalized.reserveNanoUsd : null,
     reservationCount: ledger.reservations.length,
     kind: authority.kind,
+    authority: authority.authority,
+    ...(normalized ? {} : { available: false, reason: 'No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON' }),
   };
 }

@@ -553,8 +553,9 @@ export function updateOpenclawJson(existingPath, preflightedJson, slashRoot) {
 
 export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter", report = null) {
   if (report) {
-    const modules = Object.entries(report.modules).map(([id, value]) => ({ id, ...value }));
-    return [
+    const modules = Object.entries(report.modules || {}).map(([id, value]) => ({ id, ...value }));
+    const relevant = modules.filter(m => m.decision === "reuse" || (Array.isArray(m.actions) && m.actions.length > 0));
+    const lines = [
       `# ${title}`,
       "",
       "Use host tools only when actually available in this session and permitted. Configuration/declarations are not execution evidence.",
@@ -562,52 +563,44 @@ export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter
       "Understand the request and existing implementation first. Reuse > stdlib > platform > installed dependency > minimum code. Preserve human data and security boundaries.",
       "Validate the actual result with an appropriate command, scenario or inspected output. Report what ran, its result and unverified limits; never claim completion from configuration alone.",
       "",
-      ...modules.flatMap(m => [`- ${m.id}: ${m.decision} (${m.evidence}) — ${m.reason}`, ...m.actions.map(action => `  - ${action}`)]),
-      "",
-      "Reuse means conditionally use the native mechanism, not a second tracker or delegation loop. Unavailable delegation means single-agent work or explicit operator handoff with requirements and verifiable return contract. Unknown support needs evidence or explicit portable-tool opt-in, not speculative installation.",
-      "Portable task actions above are opt-in for explicit coding needs, not a second native board. Never down-classify risky work to pass a gate. T2/T3 recorded native review requires compatible OMP/Bun execution; otherwise disclose that boundary and arrange explicit manual/operator review.",
+    ];
+    if (relevant.length) {
+      lines.push(...relevant.flatMap(m => [
+        `- Native ${m.id}: ${m.decision} (${m.evidence})`,
+        ...m.actions.map(action => `  - ${action}`),
+      ]));
+      lines.push("");
+    }
+    lines.push(
+      "Reuse means conditionally use the native mechanism, not a second tracker or delegation loop. Unavailable delegation means single-agent work or explicit operator handoff with requirements and verifiable return contract.",
+      `On-demand strict 4-Wave SDD procedures (T0-T3 lanes, OpenSpec, oracle review): ${slashRoot}/core/PORTABLE.md.`,
       "For a worktree gap with Git available: `nullform workflow workspace --feature SLUG` from the integration checkout; dispatch only to its returned absolute cwd. Start from committed HEAD; one writer per worktree. Commit the result, then the parent uses `nullform workflow integrate --feature SLUG` on the recorded integration branch with a clean target. Without Git, request that prerequisite; do not install automatically.",
       "Parent delegation context MUST include scoped requirements, constraints, ownership and verification criteria. Native Hermes children may skip context files/skills; never assume policy inheritance.",
-      `Portable tools: ${slashRoot}/tools/workflow.mjs. Automated native review remains OMP/Bun-only. No automatic MCP, browser or terminal installation.`,
-      "",
-    ].join("\n");
+      `Portable tools: ${slashRoot}/tools/workflow.mjs. Automated review is optional controlled Node execution requiring explicit spending policy and credentials; it is not a universal runtime-ready assertion. No automatic MCP, browser or terminal installation.`,
+      ""
+    );
+    return lines.join("\n");
   }
   return [
     `# ${title}`,
     "",
-    `Полный свод законов и протокол оркестратора: ${slashRoot}/agent/AGENTS.md`,
+    `Свод законов и протокол оркестратора: ${slashRoot}/agent/AGENTS.md`,
+    `On-demand руководство по 4-Wave SDD и гейтам (T0–T3): ${slashRoot}/core/PORTABLE.md`,
     "",
-    "## 1. Запуск задачи и гейты (T0–T3)",
-    "Перед изменением любых файлов определите tier и зафиксируйте задачу:",
-    `- \`nullform workflow start --tier <T0|T1|T2|T3> --task "<описание>"\` (или \`node '${slashRoot}/tools/workflow.mjs' start ...\`)`,
-    `- \`nullform workflow check\` (exit 1 при отсутствии обязательных артефактов)`,
-    `- \`nullform workflow close\` (фиксирует завершение задачи)`,
+    "## 1. Базовые принципы",
+    "- Анализ до кода: инвентаризация существующего кода (reuse > stdlib > platform > installed dep > 1 line > minimum).",
+    "- Сохранение данных: никогда не перезаписывать пользовательские секции, identity (SOUL/USER) и конфигурацию оператора.",
+    "- Честность проверки: никаких заявлений о готовности без выполненных проверок. Отчёт о проверенном и границах.",
+    "- Обычные запросы: прямое выполнение без обязательных трекеров, дашбордов и церемоний.",
     "",
-    "Уровни (Lanes):",
-    "- `⚡ [T0 FAST]`: 1–2 известных файла, точечные правки, без OpenSpec/интервью/oracle.",
-    "- `🔧 [T1 STANDARD]`: 3+ файлов, микро-план в чате, 1–2 специалиста.",
-    "- `🚀 [T2 HEAVY]`: архитектура/новые модули. 4-Wave SDD: Wave 0 (интервью) -> манифест (R##) -> OpenSpec -> TDD build -> blind Oracle.",
-    "- `🌌 [T3 PROGRAM]`: мульти-фича программа (T2 на каждый слайс).",
+    "## 2. Гейты и процедуры по запросу",
+    `- Запуск задачи: \`nullform workflow start --tier <T0|T1|T2|T3> --task "<описание>"\` (или \`node '${slashRoot}/tools/workflow.mjs' start ...\`)`,
+    "- Уровни T0–T3, OpenSpec, манифест требований и вердикт оракула применяются по требованию для сложных архитектурных изменений.",
+    `- Документация и детальные процедуры: \`${slashRoot}/core/PORTABLE.md\`.`,
     "",
-    "## 2. Фиксация артефактов",
-    `- Манифест требований: \`nullform workflow artifact --kind manifest --path openspec/changes/<id>/manifest.md\``,
-    `- Спецификация/OpenSpec: \`nullform workflow artifact --kind openspec --path openspec/changes/<id>\``,
-    `- Границы и интерфейсы: \`nullform workflow artifact --kind interfaces --path openspec/changes/<id>/interfaces.md\``,
-    `- Вердикт оракула: \`nullform workflow artifact --kind oracle --detail "ACCEPT: <причина>"\``,
-    "",
-    "## 3. Дашборд наблюдаемости",
-    "При `workflow.mjs start` автоматически запускается фоновый дашборд.",
-    "- URL хранится в `.workflow/dashboard.json`",
-    `- Получить URL: \`node '${slashRoot}/tools/dashboard.mjs' --url\``,
-    "",
-    "## 4. Возможности и лимиты адаптеров",
-    "- 8 адаптеров для настройки; базовые гейты Node-native (без OMP/Bun); automated review только для OMP с Bun.",
-    "- Для workspace/integrate нужен исполняемый Git. Перед dispatch: `nullform workflow workspace --feature SLUG` из integration checkout; worker MUST работать только в возвращённом абсолютном cwd со свежим контекстом. Один writer на worktree; повторное выделение отказывает, не разрешает reuse.\n- База — committed HEAD, без несохранённых prerequisites; общие prerequisites сначала commit. Готовую фичу commit, затем единственный parent-integrator: `nullform workflow integrate --feature SLUG` на записанной integration branch.\n- Dirty integration target отказывает без stash; видимый Git conflict разрешает вручную только integrator. Один репозиторий/final branch ≠ общий физический checkout; не восстанавливай целые файлы из stash и не скрывай конфликт reset/ours/theirs.\n- Native interception только в OMP: delete-guard требует явное подтверждение для распознанных checkout/restore/stash замен и блокирует их headlessly. Остальные адаптеры — portable CLI + guidance, не shell/filesystem sandbox.",
-    "",
-    "## 5. Базовые законы",
-    "- Честность: никаких заявлений о готовности без выполненных проверок.",
-    "- Анализ до кода: инвентаризация существующего кода (reuse > extend > create).",
-    "- Ladder решений: reuse -> stdlib -> platform -> installed dep -> 1 line -> minimum.",
+    "## 3. Возможности и лимиты адаптеров",
+    "- Базовые гейты Node-native. Автоматическое ревью выполняется управляемым Node-процессом с явной политикой и ключом (`workflow review-run`); не является универсальным утверждением готовности рантайма.",
+    "- Для workspace/integrate нужен исполняемый Git. Один writer на worktree; база — committed HEAD.",
     "- Возвратный контракт (≤25 строк): STATUS | FILES | TESTS было->стало | CONCERNS.",
     "",
   ].join("\n");
@@ -656,10 +649,10 @@ export function hashContent(content) {
 /**
  * Checks whether an executable command is present in PATH.
  */
-export function isCommandInPath(cmd) {
-  const pathEnv = process.env.PATH || "";
-  const sep = process.platform === "win32" ? ";" : ":";
-  const extensions = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
+export function isCommandInPath(cmd, env = process.env, platform = process.platform) {
+  const pathEnv = (env && (env.PATH || env.Path)) || "";
+  const sep = platform === "win32" ? ";" : ":";
+  const extensions = platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
   for (const dir of pathEnv.split(sep)) {
     if (!dir) continue;
     for (const ext of extensions) {

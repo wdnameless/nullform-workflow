@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as budget from '../review-budget.mjs';
@@ -365,4 +365,121 @@ test('inspectBudget refuses state dir symlink (clobber-free)', (t) => {
     assert.throws(() => budget.inspectBudget({ root: dir, policy: makePolicy() }));
     assert.deepEqual(JSON.parse(readFileSync(externalLedger, 'utf8')), { settledNanoUsd: 0, reservations: [] });
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('compact ledger canonicalizes expansion and checks full lifecycle headroom', () => {
+  const dir = makeTempDir();
+  try {
+    nonGitDir(dir);
+    const auth = resolveBudgetAuthority(dir);
+    mkdirSync(auth.stateDir, { recursive: true });
+
+    // Construct a compact ledger (no pretty indentation) near the 1 MiB boundary
+    const rowTemplate = (id) => ({
+      reservationId: id,
+      status: 'settled',
+      reservedNanoUsd: 1000,
+      maxRequests: 1,
+      requests: [{ ordinal: 1, at: '2026-10-18T00:00:00.000Z' }],
+      createdAt: '2026-10-18T00:00:00.000Z',
+      settledAt: '2026-10-18T00:00:01.000Z',
+      settledNanoUsd: 1000,
+      model: 'gpt-4o-mini-2024-07-18',
+      tariffsNanoPerToken: { input: 150, output: 600, cacheRead: 75, cacheWrite: 0 },
+    });
+
+    // Sample compact row size
+    const sampleRow = JSON.stringify(rowTemplate('res-00000000'));
+    const rowBytes = Buffer.byteLength(sampleRow, 'utf8') + 1; // + comma
+    const count = Math.floor((1048576 - 4000) / rowBytes);
+    const reservations = Array.from({ length: count }, (_, i) => rowTemplate(`res-${String(i).padStart(8, '0')}`));
+    const compactText = JSON.stringify({ settledNanoUsd: count * 1000, reservations });
+    writeFileSync(auth.ledgerPath, compactText, 'utf8');
+    const beforeBytes = readFileSync(auth.ledgerPath, 'utf8');
+
+    // Pretty canonical expansion of this compact ledger would exceed 1 MiB,
+    // so admitting a new session MUST refuse capacity exceeded before dispatch
+    const policy = makePolicy({ ceilingUsd: 1000, maxRequests: 3 });
+    assert.throws(
+      () => admitSession({ root: dir, policy }),
+      /ledger persistence capacity exceeded|refusing to authorize/i
+    );
+    assert.equal(readFileSync(auth.ledgerPath, 'utf8'), beforeBytes, 'Compact ledger bytes must remain unchanged after refusal');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('near-cap lifecycle: admits with ~5KiB headroom, records requests, holds with heavily-escaped NUL reason within 1 MiB bound', () => {
+  const dir = makeTempDir();
+  try {
+    nonGitDir(dir);
+    const auth = resolveBudgetAuthority(dir);
+    mkdirSync(auth.stateDir, { recursive: true });
+
+    const rowTemplate = (id) => ({
+      reservationId: id,
+      status: 'settled',
+      reservedNanoUsd: 1000,
+      maxRequests: 1,
+      requests: [{ ordinal: 1, at: '2026-10-18T00:00:00.000Z' }],
+      createdAt: '2026-10-18T00:00:00.000Z',
+      settledAt: '2026-10-18T00:00:01.000Z',
+      settledNanoUsd: 1000,
+      model: 'gpt-4o-mini-2024-07-18',
+      tariffsNanoPerToken: { input: 150, output: 600, cacheRead: 75, cacheWrite: 0 },
+    });
+
+    // Determine exact row byte step from two small complete samples
+    const sample1 = JSON.stringify({ settledNanoUsd: 1000, reservations: [rowTemplate('res-00000000')] }, null, 2);
+    const sample2 = JSON.stringify({ settledNanoUsd: 2000, reservations: [rowTemplate('res-00000000'), rowTemplate('res-00000001')] }, null, 2);
+    const rowBytes = Buffer.byteLength(sample2, 'utf8') - Buffer.byteLength(sample1, 'utf8');
+    const baseBytes = Buffer.byteLength(sample1, 'utf8') - rowBytes;
+
+    // Target ~5 KiB headroom under 1 MiB (BYTE_BOUND = 1048576)
+    const targetBytes = BYTE_BOUND - 5120;
+    const count = Math.floor((targetBytes - baseBytes) / rowBytes);
+    const reservations = Array.from({ length: count }, (_, i) => rowTemplate(`res-${String(i).padStart(8, '0')}`));
+    const totalSettled = count * 1000;
+    const initialText = `${JSON.stringify({ settledNanoUsd: totalSettled, reservations }, null, 2)}\n`;
+    writeFileSync(auth.ledgerPath, initialText, 'utf8');
+
+    const initialSize = statSync(auth.ledgerPath).size;
+    assert.ok(initialSize <= BYTE_BOUND, `Initial ledger size ${initialSize} must be <= 1 MiB`);
+    assert.ok(BYTE_BOUND - initialSize >= 4500 && BYTE_BOUND - initialSize <= 5500, 'Must have ~5 KiB canonical headroom');
+
+    // Admit session with maxRequests 2 (fits within ~5 KiB headroom)
+    const policy = makePolicy({ ceilingUsd: 1000, maxRequests: 2 });
+    const res = admitSession({ root: dir, policy });
+    assert.ok(res.reservationId);
+
+    // Record requests
+    recordRequest({ root: dir, reservationId: res.reservationId });
+    recordRequest({ root: dir, reservationId: res.reservationId });
+
+    // Hold with NUL control characters (JSON serializes each \u0000 as 6 bytes \u0000)
+    const nulReason = '\u0000'.repeat(600);
+    holdReservation({ root: dir, reservationId: res.reservationId, reason: nulReason });
+
+    // Prove durable ledger remains <= 1 MiB and inspectBudget is valid
+    const heldBytes = readFileSync(auth.ledgerPath, 'utf8');
+    assert.ok(Buffer.byteLength(heldBytes, 'utf8') <= BYTE_BOUND, 'Durable ledger must remain <= 1 MiB');
+    assert.ok(statSync(auth.ledgerPath).size <= BYTE_BOUND);
+
+    const snap = budget.inspectBudget({ root: dir, policy });
+    assert.equal(snap.totalSettledNanoUsd, totalSettled);
+    assert.equal(snap.reservationCount, count + 1);
+
+    // Status is held
+    const ledger = JSON.parse(heldBytes);
+    const heldRow = ledger.reservations.find(r => r.reservationId === res.reservationId);
+    assert.equal(heldRow.status, 'held');
+    assert.ok(heldRow.heldReason.includes('\u0000'));
+
+    // New admission must be refused due to held reservation, preserving byte-identical held history
+    assert.throws(() => admitSession({ root: dir, policy }), /held.*unknown spend/i);
+    assert.equal(readFileSync(auth.ledgerPath, 'utf8'), heldBytes, 'Held ledger bytes must remain unchanged and byte-identical');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

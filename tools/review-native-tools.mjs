@@ -170,6 +170,44 @@ export function readProductPage(state, { root, productCommand, provenance, offse
   const { text, nextOffset } = sliceUtf8Page(buffer, offset, MAX_AGGREGATE_JSON_BYTES, meta);
   return { page: { ...meta, offset, nextOffset, totalBytes: buffer.length, text }, meta, execution: state.execution };
 }
+/**
+ * Shared native/HTTP product execution invariant.
+ * Refuses failed ACCEPT verdicts, provenance mismatches, invalid output hashes, and out-of-window timestamps.
+ */
+export function assertProductExecutionInvariant({
+  execution,
+  productCommandHash,
+  sourceDigest,
+  startedAt,
+  completedAt,
+  verdict,
+  clockToleranceMs = 0,
+}) {
+  if (!execution || typeof execution !== 'object') throw new Error('Invalid product execution provenance');
+  if (execution.commandHash !== productCommandHash || execution.sourceDigest !== sourceDigest) {
+    throw new Error('Invalid product execution provenance: contract mismatch');
+  }
+  if (!Number.isSafeInteger(execution.exitCode) || execution.exitCode < 0) {
+    throw new Error('Invalid product execution provenance: exit code must be a non-negative safe integer');
+  }
+  if (typeof execution.outputHash !== 'string' || !/^[a-f0-9]{64}$/.test(execution.outputHash)) {
+    throw new Error('Invalid product execution provenance: outputHash must be a 64-character lowercase hex string');
+  }
+  const at = execution.at ? Date.parse(execution.at) : null;
+  const execStart = execution.startedAt ? Date.parse(execution.startedAt) : at;
+  const execEnd = execution.completedAt ? Date.parse(execution.completedAt) : at;
+  if (!Number.isFinite(execStart) || !Number.isFinite(execEnd) || execEnd < execStart) {
+    throw new Error('Invalid product execution provenance: invalid timestamps');
+  }
+  const startMs = typeof startedAt === 'number' ? startedAt : Date.parse(startedAt);
+  const endMs = typeof completedAt === 'number' ? completedAt : Date.parse(completedAt);
+  if (execStart < startMs - clockToleranceMs || execEnd > endMs + clockToleranceMs) {
+    throw new Error('Product execution falls outside the execution clock window');
+  }
+  if (execution.exitCode !== 0 && verdict === 'ACCEPT') {
+    throw new Error('ACCEPT despite failed product execution');
+  }
+}
 export default function (pi) {
   const options = JSON.parse(process.env.WORKFLOW_REVIEW_OPTIONS || '{}');
   let productOutput = null;

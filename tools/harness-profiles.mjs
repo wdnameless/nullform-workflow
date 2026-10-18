@@ -216,7 +216,7 @@ function decideModules(capabilities, gitPresent) {
       actions = ["Exercise the changed behavior or validate the requested artifact against its requirements. Report observed results and unverified limits; do not infer success from configuration."];
     } else if (name === "taskState" && capability.status === "unavailable") {
       decision = "enable";
-      reason = "Native durable task state is explicitly unavailable. Opt into portable state only for matching bounded tasks: choose T0 for truly trivial 1–2 known-file edits or T1 for bounded work needing reconnaissance, then record recon for T1. Routine/general requests do not acquire mandatory state. T2/T3 recorded automated acceptance remains OMP/Bun-only; outside that route review/acceptance is manual, not a portable automated fallback. Never down-classify architecture to pass these gates.";
+      reason = "Native durable task state is explicitly unavailable. Opt into portable state only for matching bounded tasks: choose T0 for truly trivial 1–2 known-file edits or T1 for bounded work needing reconnaissance, then record recon for T1. Routine/general requests do not acquire mandatory state. Automated review is optional controlled Node execution requiring explicit spending policy and credentials; it is not a universal runtime-ready assertion. Never down-classify architecture to pass these gates.";
       actions = [
         'nullform workflow start --tier T0 --task "<trivial bounded task>"',
         'nullform workflow start --tier T1 --task "<bounded task needing reconnaissance>"',
@@ -351,10 +351,11 @@ export function inspectHarness({ harness, userHome = homedir(), hostHome, hostMa
     "Documented APIs, declared capabilities, PATH entries and configured tools are not active-session/runtime proof; unknown is not absence.",
     "No dependencies, MCP servers, browsers, skills or task services are installed or activated by inspection.",
   ];
-  if (harness !== "omp") limitations.push("T0/T1 portable state is available only for tasks that genuinely fit those lanes. T2/T3 recorded automated review/acceptance requires OMP with Bun; manual review outside that route does not satisfy its automated gates. Never down-classify architecture or claim non-OMP automated acceptance.");
+  if (harness !== "omp") limitations.push("T0/T1 portable state is available only for tasks that genuinely fit those lanes. Automated review is optional controlled Node execution requiring explicit spending policy and credentials; it is not a universal runtime-ready assertion. Never down-classify architecture or claim non-OMP automated acceptance.");
   if (harness === "custom") limitations.push("A custom contract declares a project instruction destination; writing that file cannot prove the unknown host loads it.");
   if (harness === "hermes") limitations.push("Hermes consumes agent.system_prompt, not skills.auto_load. Ephemeral prompt override presence or an ignore-rules choice requires manual handling. Home AGENTS.md is not a global loader; parent must pass scoped requirements and verification criteria because delegated-child policy inheritance remains unverified.");
   if (["cursor", "openhuman", "openclaw"].includes(harness)) limitations.push("Uncertain host root/workspace conventions require explicit hostHome; the default is a deployment convention, not runtime discovery.");
+  if (harness === "openhuman") limitations.push("OpenHuman runtime AGENTS.md loader is unverified in source (uses vendor/tinyagents and tinyskills; repository AGENTS is contributor policy). Native session behavior remains manual/documented-unknown until a verified consumer is configured.");
   let probeReport = { requested: false, commands: [] };
   if (probe) {
     limitations.push("Explicit host probes may trigger native/plugin bootstrap side effects, including native configuration/credential reads. Only version/path/tool-list commands are allowed; output is bounded and raw output is withheld. The selected home is pinned against sticky-profile redirection.");

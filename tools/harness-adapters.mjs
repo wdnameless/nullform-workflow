@@ -16,6 +16,7 @@ import {
   getOpenclawSoul,
   getOpenclawUser,
   loadYaml,
+  hashContent,
   preflightJsoncConfig,
   preflightJson5Config,
   preflightYamlConfig,
@@ -35,51 +36,55 @@ export function installOmpHomeAssets({
   plan,
   writeAdapter,
   readExisting,
-  assetContext,
-  copyAsset,
-  copyDirRecursive,
-  installSkills,
-  installRoleRoster,
-  translateStdioEntry,
+  options,
 }) {
   const homeAgentDir = hostHome;
-  const agentsHome = join(userHome, ".agents");
   const lawSource = join(REPO_ROOT, "agent", "AGENTS.md");
   const rawLaw = existsSync(lawSource)
     ? readFileSync(lawSource, "utf8").split("<HARNESS>").join(slashRoot)
     : getMarkdownAdapter(slashRoot, "Oh My Pi Orchestrator Law");
   const homeAgentsFile = join(homeAgentDir, "AGENTS.md");
   writeAdapter(homeAgentsFile, applyManagedSection(readExisting(homeAgentsFile), rawLaw));
-  writeAdapter(join(homeAgentDir, ".harness-root"), `${targetRoot}\n`);
 
-  const mcpTarget = join(homeAgentDir, "mcp.json");
-  if (!existsSync(mcpTarget)) {
-    try {
-      const cfg = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
-      for (const [name, entry] of Object.entries(cfg.mcpServers || {})) {
-        if (JSON.stringify(entry).includes("__")) {
-          delete cfg.mcpServers[name];
-        } else {
-          cfg.mcpServers[name] = translateStdioEntry(entry);
-        }
+  // .harness-root pointer: follow existing ownership/manual-conflict pattern
+  const harnessRootFile = join(homeAgentDir, ".harness-root");
+  const expectedContent = `${targetRoot}\n`;
+  const managedFiles = options?.managedFiles || {};
+  const priorHash = managedFiles[harnessRootFile];
+
+  if (existsSync(harnessRootFile)) {
+    const current = readFileSync(harnessRootFile, "utf8");
+    const currentHash = hashContent(current);
+    if (current === expectedContent) {
+      writeAdapter(harnessRootFile, expectedContent);
+    } else if (priorHash && currentHash === priorHash) {
+      writeAdapter(harnessRootFile, expectedContent);
+    } else {
+      plan.preservedAssets.count++;
+      plan.preservedAssets[priorHash ? "modifiedOwned" : "unowned"]++;
+      if (plan.preservedAssets.examples.length < 3) {
+        plan.preservedAssets.examples.push({ path: harnessRootFile, reason: priorHash ? "modifiedOwned" : "unowned" });
       }
-      writeAdapter(mcpTarget, JSON.stringify(cfg, null, 2) + "\n");
-    } catch {}
+      plan.warnings.push(`Existing .harness-root in ${homeAgentDir} is human-owned or modified; preserved without overwrite.`);
+    }
+  } else {
+    writeAdapter(harnessRootFile, expectedContent);
   }
 
-  plan.filesToCopy.push(
-    ...installRoleRoster(join(targetRoot, "agent", "agents"), join(homeAgentDir, "agents"), slashRoot, assetContext)
-  );
-  for (const dst of [join(homeAgentDir, "rules"), join(agentsHome, "rules")]) {
-    plan.filesToCopy.push(...copyDirRecursive(join(REPO_ROOT, "rules"), dst, slashRoot, assetContext));
-  }
-  plan.filesToCopy.push(
-    ...installSkills(join(REPO_ROOT, "skills"), join(agentsHome, "skills"), slashRoot, agentsHome, assetContext)
-  );
-  for (const extFile of ["nullform-jev.ts", "nullform-delete-guard.ts"]) {
-    const extSource = join(REPO_ROOT, "agent", "extensions", extFile);
-    const extDest = join(homeAgentDir, "extensions", extFile);
-    if (existsSync(extSource) && copyAsset(extSource, extDest)) plan.filesToCopy.push(extDest);
+  // Preserve pre-existing legacy assets in hostHome / agentsHome and warn that extras may remain active
+  const agentsHome = join(userHome, ".agents");
+  const legacyExtras = [];
+  if (existsSync(join(homeAgentDir, "mcp.json"))) legacyExtras.push("mcp.json");
+  if (existsSync(join(homeAgentDir, "agents"))) legacyExtras.push("agents");
+  if (existsSync(join(homeAgentDir, "rules"))) legacyExtras.push("rules");
+  if (existsSync(join(agentsHome, "rules"))) legacyExtras.push("~/.agents/rules");
+  if (existsSync(join(agentsHome, "skills"))) legacyExtras.push("~/.agents/skills");
+  if (existsSync(join(homeAgentDir, "extensions"))) legacyExtras.push("extensions");
+
+  if (legacyExtras.length > 0) {
+    plan.warnings.push(
+      `Pre-existing legacy OMP assets detected (${legacyExtras.join(", ")}); preserved without modification and extras may remain active. Portable workflow assets remain in ${targetRoot}.`
+    );
   }
 }
 
@@ -158,6 +163,19 @@ export function applyHarnessAdapter(h, ctx) {
   } else {
     const filename = h === "claude" ? "CLAUDE.md" : "AGENTS.md";
     writeMd(join(targetRoot, filename));
+    if (h === "codex") {
+      const overrideTarget = join(targetRoot, "AGENTS.override.md");
+      const overrideHome = join(hostHome, "AGENTS.override.md");
+      if (existsSync(overrideTarget) || (shouldWriteHome && existsSync(overrideHome))) {
+        ctx.plan.warnings.push(
+          "Codex AGENTS.override.md is present and takes precedence over AGENTS.md; human override is preserved and may shadow generated workflow instructions."
+        );
+      }
+    } else if (h === "openhuman") {
+      ctx.plan.warnings.push(
+        "OpenHuman runtime AGENTS.md loader is unverified in source; native session behavior remains manual/documented-unknown until a verified consumer is configured."
+      );
+    }
     if (h === "hermes") {
       // A manual apply must not forget prior ownership and later restore a
       // policy the operator removed while a session override was active.

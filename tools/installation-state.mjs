@@ -287,9 +287,9 @@ export function sanitizeError(msg) {
     .replace(/Bearer\s+["']?(?:[^\s"',;]+)["']?/gi, 'Bearer ***');
 }
 export const CORE_FILES = Object.freeze(["VERSION", ".code-size.baseline.json", "CONTEXT.md", "README.md", "secrets.example.env", "verify.ps1", "verify.sh", "package.json"]);
-export function getCoreDirs(isCursorActive) { return isCursorActive
-  ? ["agent", "rules", "tools", "core", "templates", "paseo", "bin"]
-  : ["agent", "rules", "tools", "core", "templates", "skills", "paseo", "bin"]; }
+export function getCoreDirs(_isCursorActive) {
+  return ["agent", "rules", "tools", "core", "templates", "skills", "paseo", "bin"];
+}
 export function preflightFilesystemConfinement({
   harnesses,
   targetRoot,
@@ -334,7 +334,6 @@ export function preflightFilesystemConfinement({
   if (harnesses.includes("cursor")) {
     checkTree(join(REPO_ROOT, "skills"), join(targetRoot, "skills"), targetRoot);
   }
-  const checkHomeSkills = (dest, scope) => checkTree(join(REPO_ROOT, "skills"), dest, scope);
 
   for (const h of harnesses) {
     if (h !== "omp") {
@@ -380,33 +379,6 @@ export function preflightFilesystemConfinement({
         check(homeAgentDir, homeAgentDir);
         check(join(homeAgentDir, "AGENTS.md"), homeAgentDir);
         check(join(homeAgentDir, ".harness-root"), homeAgentDir);
-        check(join(homeAgentDir, "mcp.json"), homeAgentDir);
-        checkTree(join(REPO_ROOT, "rules"), join(homeAgentDir, "rules"), homeAgentDir);
-        checkTree(join(REPO_ROOT, "rules"), join(agentsHome, "rules"), userHome);
-        checkHomeSkills(join(agentsHome, "skills"), userHome);
-        check(join(homeAgentDir, "extensions", "nullform-jev.ts"), homeAgentDir);
-        check(join(homeAgentDir, "extensions", "nullform-delete-guard.ts"), homeAgentDir);
-
-        const destAgents = join(homeAgentDir, "agents");
-        const legitimateTarget = join(targetRoot, "agent", "agents");
-        if (existsSync(destAgents)) {
-          let st = null;
-          try { st = lstatSync(destAgents); } catch {}
-          if (st && st.isSymbolicLink()) {
-            const rl = resolveRealPath(destAgents);
-            if (rl !== resolveRealPath(legitimateTarget)) {
-              if (!rl || (!isInsideOrEqual(userHome, rl) && !isInsideOrEqual(homeAgentDir, rl))) {
-                throw new Error(
-                  `Preflight failed: destination path "${destAgents}" escapes declared root "${userHome}" or is an unresolved link`
-                );
-              }
-            }
-          } else {
-            checkTree(join(REPO_ROOT, "agent", "agents"), destAgents, homeAgentDir);
-          }
-        } else {
-          checkTree(join(REPO_ROOT, "agent", "agents"), destAgents, homeAgentDir);
-        }
       }
     }
   }

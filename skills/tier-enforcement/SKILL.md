@@ -5,68 +5,42 @@ description: Enforce the task-tier protocol with a command instead of a paragrap
 
 # Tier Enforcement
 
-## Why this is a command and not a rule
+Enforces the task-tier protocol via command-line gating when tier tracking is explicitly adopted by the user or project for non-trivial tasks.
 
-The lane protocol and its 4-Wave artifacts were written as prose in the agent
-prompt. Measured across 38 real sessions:
+Canonical protocol: read `<HARNESS>/core/PORTABLE.md` (or harness install root) for full lane requirements, artifact definitions, and evidence rules.
 
-| Rule | Form | Compliance |
-|---|---|---|
-| `openspec` change scaffolded | external command | **84%** |
-| memory retained | tool call | 52% |
-| manifest with verbatim quotes | prose rule | 36% |
-| interfaces contract | prose rule | 31% |
-| `CONTEXT.md` glossary used | prose rule | 13% |
-| lane verdict in the response | prose rule | **0.7%** |
-
-The pattern is unambiguous: **the easier a rule is to silently skip, the less it
-is followed.** A rule with an exit code is followed. This skill makes the protocol
-executable.
-
-## The command
+## The Commands
 
 ```bash
-node '<HARNESS>/tools/workflow.mjs' start --tier T2 --task "add rate limiting to the API"
-node '<HARNESS>/tools/workflow.mjs' artifact --kind manifest --path openspec/changes/x/manifest.md
-node '<HARNESS>/tools/workflow.mjs' check
-node '<HARNESS>/tools/workflow.mjs' close
+nullform workflow start --tier <T0|T1|T2|T3> --task "<task description>" [--no-dashboard]
+nullform workflow artifact --kind <manifest|openspec|interfaces|oracle|recon> --path <file> [--detail "<text>"]
+nullform workflow check
+nullform workflow close [--force --reason "<why>"]
 ```
+*(Also callable as `node '<HARNESS>/tools/workflow.mjs' ...`)*
 
-State lives in `.workflow/state.json` (gitignored, per project).
+State lives in `.workflow/state.json` (gitignored, per project). `start` auto-opens the dashboard by default; pass `--no-dashboard` (or `NF_NO_DASHBOARD=1`) for headless or lean execution.
 
-## What each tier requires
+## What Each Tier Requires
 
 Requirements accumulate downward: T2 needs everything T1 needs, plus its own.
 
 | Tier | Requires | Use when |
 |---|---|---|
-| **T0** | lane only | 1–2 known files, localized, obvious |
-| **T1** | + recon notes (files touched, acceptance check) | 3+ files, or an unfamiliar area |
-| **T2** | + manifest · openspec change · interfaces · oracle verdict | architecture, new module, multi-system |
-| **T3** | + isolated worktree per major slice | a program of work |
+| **T0** | lane only | 1–2 known files, localized change, no architectural ambiguity |
+| **T1** | + recon notes (files touched, acceptance check) | 3+ files, or an unfamiliar area needing small recon |
+| **T2** | + manifest · openspec change · interfaces · oracle verdict | architecture decision, new module, multi-system change |
+| **T3** | + isolated worktree per major slice (native first, or portable workspace) | multi-feature program or major migration |
 
-## The three mechanisms that make it real
+## Core Enforcement Mechanisms
 
-1. **`artifact --path` is checked on disk.** Claiming a manifest you did not write
-   fails with exit 1. This is the core anti-fabrication guard: the command verifies
-   the file exists, so "I recorded it" cannot substitute for having made it.
-2. **`check` exits 1 while anything is missing**, naming each gap and the exact
-   command to close it. Wire it into CI, a pre-commit hook, or your close-out step.
-3. **`close` refuses an incomplete tier.** The only way past is
-   `--force --reason "<why>"`, which **records the deviation** in state so it is
-   visible in review rather than silently absorbed. An unexplained shortcut is the
-   thing this exists to surface.
+1. **`artifact --path` is checked on disk.** Claiming an artifact file that does not exist fails with exit code 1.
+2. **`check` exits 1 while required artifacts are missing**, naming each gap and the exact command to provide it.
+3. **`close` refuses an incomplete tier.** The only bypass is `--force --reason "<why>"`, which records the deviation visibly in state rather than silently skipping it.
 
-## How to behave
+## How to Behave
 
-- **Run `start` before the first edit**, not after. The tier is a decision about
-  how much process the work needs; deciding it after the fact is rationalisation.
-- **The tier and the lane verdict are one decision.** Do not write `⚡T0` in prose
-  and then `start --tier T2` — pick one and be consistent.
-- **On T0, say it and move.** The gate exists for non-trivial work; a typo fix
-  does not need ceremony. One line: `⚡ [T0] typo in one known file, no artifacts`.
-- **Escalate, never quietly shrink.** Discovering mid-task that the work is a T2
-  is normal — re-run `start --tier T2 --force --task "<updated>"` and proceed.
-  Down-classifying to avoid artifacts is the failure mode this prevents.
-- **A failing `check` means the task is not done,** regardless of how good the code
-  looks. Report the gap, do not narrate past it.
+- **Run `start` when adopting tier tracking**, not retroactively. Pass `--no-dashboard` if browser visualization is not needed.
+- **On T0, state it and move.** Trivial edits (e.g. typos, 1-line fixes in 1 known file) need no ceremony: `⚡ [T0] localized edit, no artifacts`.
+- **Escalate honestly.** If mid-task discovery shows the work is T2, run `nullform workflow start --tier T2 --force --task "<updated>"` and proceed. Never down-classify to avoid artifacts.
+- **A failing `check` means the task is incomplete**, regardless of code appearance. Report the gap truthfully.

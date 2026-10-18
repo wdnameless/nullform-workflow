@@ -10,6 +10,7 @@ import * as budgetModule from './review-budget.mjs';
 const inspectBudget = budgetModule.inspectBudget;
 import { projectHttpRecord, validateHttpRecord } from './review-http-evidence.mjs';
 import { isBrandedExecutor } from './review-http-runtime.mjs';
+import { assertProductExecutionInvariant } from './review-native-tools.mjs';
 
 export const EVIDENCE_FILE = 'review-evidence.json';
 export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
@@ -200,8 +201,14 @@ function projectNative(events, role) {
   const productExecutions = events.filter(e => e.type === 'custom' && e.customType === 'workflow-product-execution').map(e => e.data);
   if (role === 'oracle' && !productExecutions.length) throw new Error('Oracle lacks actual native product execution');
   for (const execution of productExecutions) {
-    if (execution.commandHash !== context.productCommandHash || execution.sourceDigest !== context.sourceDigest || !Number.isSafeInteger(execution.exitCode) || execution.exitCode < 0 || typeof execution.outputHash !== 'string' || !/^[a-f0-9]{64}$/.test(execution.outputHash) || timestamp(execution.startedAt) < startedAt || timestamp(execution.completedAt) < timestamp(execution.startedAt) || timestamp(execution.completedAt) > completedAt) throw new Error('Invalid native product execution provenance');
-    if (execution.exitCode !== 0 && extractVerdict(role, report).verdict === 'ACCEPT') throw new Error('ACCEPT despite failed product execution');
+    assertProductExecutionInvariant({
+      execution,
+      productCommandHash: context.productCommandHash,
+      sourceDigest: context.sourceDigest,
+      startedAt,
+      completedAt,
+      verdict: extractVerdict(role, report).verdict,
+    });
   }
   return { context, productExecutions, sessionId: sessions[0].id, provider: final.provider, model: final.model, isFallback: events.some(e => e.type === 'model_change' && e.isFallback), usage: { input, output, cacheRead, cacheWrite, totalTokens, costUsd, costSource: 'native-fixed-tariff' }, report, stopReason: final.stopReason, startedAt, completedAt, ...extractVerdict(role, report) };
 }
@@ -305,17 +312,20 @@ function completeRun(options, identity) {
   const { root, changeId, role, model, productCommand = null, ompRunner, httpExecutor = null, policy = null } = options;
   // Injected runners are parser/consumer fixtures, never an admitted transport.
   if (typeof ompRunner !== 'function' && !httpExecutor) throw new Error('Unsupported native execution boundary; no model dispatch');
+  // Check retained candidate scan and matching completed work BEFORE allocating directories.
+  const candidates = retainedCandidates(root, changeId, identity.provenance);
+  if (!options.resumeSessionDir && candidates.some(row => row.status === 'held' && !row.sessionDir)) {
+    throw new Error('More than 256 retained runs; select an explicit --resume-session directory for bounded inspection');
+  }
+  const retained = candidates.filter(row => row.status === 'completed' && row.identityMatches);
+  if (retained.length && !options.resumeSessionDir && !options.redo) {
+    throw new Error(`A completed retained run already matches this exact review contract (${retained.map(row => row.sessionDir).join(', ')}). Refusing to buy another identical run: re-run with explicit --resume-session DIR to publish the retained evidence, or --redo with fresh financial authority to start a new cycle.`);
+  }
   const runs = statePath(root, '.workflow/review-runs');
   mkdirSync(runs, { recursive: true });
   const directory = mkdtempSync(join(runs, 'run-'));
   const file = join(directory, 'run.json'), transcript = join(directory, 'native.jsonl');
   const run = { schemaVersion: 1, runId: basename(directory), workspace: realpathSync(root), changeId, provenance: identity.provenance, productCommand, status: 'running', exitCode: null };
-  // A completed, identity-matching run whose publication was never written must not be
-  // silently repurchased: the operator has to choose explicit --resume-session.
-  const retained = retainedCandidates(root, changeId, identity.provenance).filter(row => row.status === 'completed' && row.identityMatches);
-  if (retained.length && !options.resumeSessionDir) {
-    throw new Error(`A completed retained run already matches this exact review contract (${retained.map(row => row.sessionDir).join(', ')}). Refusing to buy another identical run: re-run with explicit --resume-session DIR to publish the retained evidence, or --redo with fresh financial authority to start a new cycle.`);
-  }
   saveRun(file, run);
   let reservationId = null;
   try {
