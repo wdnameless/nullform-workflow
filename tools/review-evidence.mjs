@@ -1,11 +1,15 @@
-import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, dirname, basename, resolve, relative, delimiter } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, mkdtempSync, rmSync, realpathSync, lstatSync, openSync, closeSync, fstatSync, readSync, fsyncSync, renameSync, unlinkSync } from 'node:fs';
+import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot } from './worktree-snapshot.mjs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot, isPathInsideRoot, validateRootPath, validatePathWithinScope, cleanGitEnv } from './worktree-snapshot.mjs';
 import { sanitizeError } from './installation-state.mjs';
+import { admitSession, holdReservation, inspectAdmission, nanoUsdToUsd, PINNED_CONTEXT_TOKENS, settleReservation, validatePolicy, EXECUTOR, redactSecret } from './review-budget.mjs';
+import * as budgetModule from './review-budget.mjs';
+const inspectBudget = budgetModule.inspectBudget;
+import { projectHttpRecord, validateHttpRecord } from './review-http-evidence.mjs';
+import { isBrandedExecutor } from './review-http-runtime.mjs';
 
 export const EVIDENCE_FILE = 'review-evidence.json';
 export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
@@ -19,11 +23,33 @@ export function isPositiveOracleVerdict(text) { return typeof text === 'string' 
 export function isNegativeOracleVerdict(text) { return typeof text === 'string' && NEGATIVE_VERDICT_RE.test(text); }
 export function isOracleEvidenceFilename(path) { return /^oracle(-+[a-z0-9]+)*\.md$/i.test(basename(String(path || ''))) || basename(String(path || '')).toLowerCase() === 'acceptance.md'; }
 export function computeManifestHash(root, changeId) { return hashFile(join(changeDirectory(root, changeId), 'manifest.md'), true); }
-export function computeRolePromptHash(root, role) { return hashFile(safeFile(root, join('agent', 'agents', `${role}.md`)), true); }
+
+/**
+ * Resolve the role definition for a review in ANY consumer repo.
+ *
+ * A project that ships its own `agent/agents/<role>.md` tree owns that convention:
+ * a missing, linked or escaping role there is a hard failure, never a silent fallback.
+ * Only when the project has no role-definition tree at all does the shipped package
+ * role become the real default. No personal ~/.omp role is ever read.
+ */
+export function resolveRoleDefinition(root, role) {
+  const projectRoles = join(root, 'agent', 'agents');
+  if (existsSync(projectRoles)) {
+    const entry = join(projectRoles, `${role}.md`);
+    if (lstatSync(projectRoles).isSymbolicLink()) throw new Error('Project role-definition tree is a link/junction; refusing to read roles through it');
+    if (!existsSync(entry)) throw new Error(`Project defines its own role tree but '${role}' is missing: restore agent/agents/${role}.md or remove the tree to use the shipped default`);
+    return safeFile(root, join('agent', 'agents', `${role}.md`));
+  }
+  const shipped = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'agent', 'agents', `${role}.md`);
+  if (!existsSync(shipped)) throw new Error(`Shipped role definition '${role}' is missing from the installation`);
+  return shipped;
+}
+
+export function computeRolePromptHash(root, role) { return hashFile(resolveRoleDefinition(root, role), true); }
 export function getPorcelainStatusRaw(root) {
   try { return git(root, ['-c', 'core.quotepath=false', 'status', '--porcelain', '-z', '-uall', '--', '.']); } catch { return null; }
 }
-function git(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
+function git(root, args) { return execFileSync('git', args, { cwd: root, env: cleanGitEnv(), encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
 function safeFile(root, path) {
   if (!isRealPathInsideRoot(root, path)) throw new Error(`Path resolves outside project root or is missing: ${path}`);
   return resolve(root, path);
@@ -40,12 +66,30 @@ export function loadReviewEvidence(changeDir) {
 }
 export function saveReviewEvidence(changeDir, data) {
   if (existsSync(join(changeDir, EVIDENCE_FILE)) && !isRealPathInsideRoot(changeDir, EVIDENCE_FILE)) throw new Error('Evidence file escapes change directory');
-  writeFileSync(join(changeDir, EVIDENCE_FILE), JSON.stringify(data, null, 2) + '\n');
+  atomicJson(join(changeDir, EVIDENCE_FILE), data, join(changeDir, `review-evidence-${randomUUID()}.json`));
 }
 export function isFlashOrFallback(model, provider, fallback) { return Boolean(fallback) || /flash|haiku|mini|nano|lite|fallback/i.test(`${provider} ${model}`); }
 function resolveBase(root, baseRef) {
   if (!baseRef || typeof baseRef !== 'string' || baseRef.startsWith('-')) throw new Error('review-run: explicit --base-ref or recorded cycle baseline required');
   return git(root, ['rev-parse', '--verify', `${baseRef}^{commit}`]).trim();
+}
+
+/**
+ * Read and validate the project-relative spending authority. A caller can never
+ * relocate the ledger, re-price the snapshot, or lower the reserve through policy.
+ */
+function readAdmissionPolicy(root, policyPath) {
+  if (typeof policyPath !== 'string' || !policyPath) throw new Error('No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON');
+  if (isAbsolute(policyPath) || !isRealPathInsideRoot(root, policyPath)) throw new Error('Admission policy must be an existing project-relative file inside the workspace');
+  const file = resolve(root, policyPath);
+  const stat = statSync(file);
+  if (!stat.isFile() || stat.size > 16384) throw new Error('Admission policy must be a JSON file of at most 16 KiB');
+  let parsed;
+  try { parsed = JSON.parse(readFileSync(file, 'utf8')); } catch { throw new Error('Admission policy is not valid JSON'); }
+  if (parsed && typeof parsed === 'object' && typeof parsed.provider === 'string' && /openrouter|nullform-gateway/i.test(parsed.provider)) {
+    throw new Error('OpenRouter and opaque nullform-gateway providers are forbidden providers');
+  }
+  return validatePolicy(parsed);
 }
 export function countSourceChanges(root, baseRef) {
   try {
@@ -149,7 +193,7 @@ function projectNative(events, role) {
   }
   integer(totalTokens, 'aggregate');
   if (!totalTokens) throw new Error('zero token usage');
-  if (!Number.isFinite(costUsd) || costUsd <= 0) throw new Error('Unknown or nonfinite aggregate native fixed-tariff cost');
+  if (!Number.isFinite(costUsd) || costUsd < 0) throw new Error('Unknown or nonfinite aggregate native fixed-tariff cost');
   if (typeof final.provider !== 'string' || !final.provider || typeof final.model !== 'string' || !final.model) throw new Error('Missing effective model/provider');
   const completedAt = timestamp(last.timestamp ?? final.timestamp);
   if (completedAt < startedAt) throw new Error('Native timestamp inversion');
@@ -162,7 +206,7 @@ function projectNative(events, role) {
   return { context, productExecutions, sessionId: sessions[0].id, provider: final.provider, model: final.model, isFallback: events.some(e => e.type === 'model_change' && e.isFallback), usage: { input, output, cacheRead, cacheWrite, totalTokens, costUsd, costSource: 'native-fixed-tariff' }, report, stopReason: final.stopReason, startedAt, completedAt, ...extractVerdict(role, report) };
 }
 function buildPrompt(root, changeId, role, baseRef, productCommand) {
-  const roleBody = readFileSync(safeFile(root, join('agent', 'agents', `${role}.md`)), 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
+  const roleBody = readFileSync(resolveRoleDefinition(root, role), 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
   const manifest = readFileSync(safeFile(root, join('openspec', 'changes', changeId, 'manifest.md')), 'utf8');
   let context = '';
   if (role === 'reviewer') {
@@ -181,96 +225,248 @@ function buildPrompt(root, changeId, role, baseRef, productCommand) {
     : 'Report all requirement results, preserve negative findings, and finish with an explicit Verdict: ACCEPT or Verdict: REJECT.';
   return `${roleBody}\n\n# ${role === 'oracle' ? 'Blind product acceptance' : 'Implementation review'}\nChange: ${changeId}\n## Original manifest\n${manifest}${context}\nUse inspect_product to read relevant implementation and consumer files in bounded batches; follow all page continuations until complete. Oracle planning documents are inaccessible. ${exerciseInstruction} ${terminalContract}`;
 }
-function isRunnableCli(file) {
-  if (!file || typeof file !== 'string' || !existsSync(file)) return false;
-  const scopedDir = dirname(dirname(dirname(file)));
-  if (basename(scopedDir) === '@oh-my-pi' && !existsSync(join(scopedDir, 'pi-natives'))) return false;
-  return true;
-}
-function cliPath() {
-  const explicit = process.env.OMP_CLI_PATH;
-  if (explicit) {
-    if (!isRunnableCli(explicit)) throw new Error(`OMP_CLI_PATH points to invalid or incomplete CLI: ${explicit}`);
-    return realpathSync(explicit);
-  }
-  const dirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
-  const ompDirs = dirs.filter(p => ['omp', 'omp.cmd', 'omp.exe'].some(b => existsSync(join(p, b))));
-  const orderedDirs = [...new Set([...ompDirs, ...dirs])];
-  const candidates = orderedDirs.flatMap(p => [join(p, 'node_modules', '@oh-my-pi', 'pi-coding-agent', 'dist', 'cli.js'), join(p, '..', 'lib', 'node_modules', '@oh-my-pi', 'pi-coding-agent', 'dist', 'cli.js')]);
-  const found = candidates.find(isRunnableCli);
-  if (!found) throw new Error('Installed OMP CLI not found; set OMP_CLI_PATH to dist/cli.js');
-  return realpathSync(found);
-}
-function invokeNative(root, prompt, model, sessionDir, options, runner) {
-  if (runner) {
-    const result = runner({ root, prompt, model, sessionDir, provenance: options.provenance, changeId: options.changeId, productCommand: options.productCommand });
-    if (result.status !== 0) throw new Error(`runner exited with code ${result.status}`);
-    return result.stdout || result.transcriptText || '';
-  }
-  const extension = fileURLToPath(new URL('./review-native-tools.mjs', import.meta.url));
-  // Bounded 15-minute allowance accommodates measured 27-51 turns at 17-40s/turn for multi-turn product inspection.
-  const args = [cliPath(), '--mode', 'json', '--print', '--session-dir', sessionDir, '--no-extensions', '--no-skills', '--no-rules', '--no-title', '--trusted-extension', extension, '--tools', 'inspect_product,exercise_product', '--model', model, '--max-time', '900'];
-  const result = spawnSync('bun', args, { cwd: root, input: prompt, encoding: 'utf8', shell: false, windowsHide: true, timeout: 910000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, WORKFLOW_REVIEW_OPTIONS: JSON.stringify(options) } });
-  if (result.error || result.status !== 0) {
-    const code = result.error?.code || result.error?.message || (result.status !== null ? `exit ${result.status}` : 'unknown');
-    const cleanStderr = sanitizeError(result.stderr || '').trim();
-    const stderrSnippet = cleanStderr.length > 4000 ? cleanStderr.slice(-4000) : cleanStderr;
-    const detail = stderrSnippet || (result.status !== 0 ? `child process exited with status ${result.status}` : 'no diagnostic error output');
-    throw new Error(`Native OMP failed (${code}, status ${result.status}): ${detail} [retained session: ${sessionDir}]`);
-  }
-  const files = readdirSync(sessionDir).filter(p => p.endsWith('.jsonl'));
-  if (files.length !== 1 || !isRealPathInsideRoot(sessionDir, files[0])) throw new Error('Expected exactly one retained native session');
-  return readFileSync(join(sessionDir, files[0]), 'utf8');
-}
-function historySessions(data) { return [...(data.history || []).flatMap(c => [c.reviewer, ...(c.oracles || [])]), data.reviewer, ...(data.oracles || [])].filter(Boolean).map(r => r.sessionId); }
-export function runReviewRecord(options) {
-  const { root = '.', changeId, role, model, ompRunner = null, dryRun = false, redo = false, productCommand = null } = options;
-  if (!['reviewer', 'oracle'].includes(role)) throw new Error('--role must be reviewer or oracle');
-  if (options.prompt !== undefined) throw new Error('--prompt bypass is forbidden; roles and manifest are mandatory');
-  if (!ompRunner && (typeof model !== 'string' || !/^[^/\s]+\/\S+$/.test(model))) throw new Error('Exact --model provider/model selector required');
-  if (productCommand !== null && (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(p => typeof p !== 'string' || p.includes('\0')) || !productCommand[0].trim())) throw new Error('product-command must be a JSON argv array');
-  if (role === 'oracle' && !ompRunner && !productCommand) throw new Error('Oracle requires --product-command JSON argv to exercise product');
-  const dir = changeDirectory(root, changeId);
-  const manifestHash = hashFile(safeFile(root, join('openspec', 'changes', changeId, 'manifest.md')), true);
-  const rolePromptHash = computeRolePromptHash(root, role);
-  const source = sourceDigest(root), tests = testFilesHash(root);
-  const data = loadReviewEvidence(dir) || { version: 2, changeId, reviewer: null, stageB: null, oracles: [], history: [] };
-  data.history ||= [];
-  let baseRef = options.baseRef || data.reviewer?.baseRef;
-  if (baseRef) baseRef = resolveBase(root, baseRef);
-  else if (!ompRunner) baseRef = resolveBase(root, baseRef);
-  if (role === 'oracle' && (!data.stageB || data.stageB.sourceDigestAfter !== source || !data.stageB.executedAt)) throw new Error('earlier reviewer record is stale or completed Stage-B outcome required');
-  if (role === 'reviewer' && data.reviewer && !redo) throw new Error('Existing review cycle requires intentional reviewer --redo');
-  const prompt = buildPrompt(root, changeId, role, baseRef, productCommand);
-  if (dryRun) return { ok: true, dryRun: true };
-  const sessionDir = mkdtempSync(join(tmpdir(), 'omp-review-'));
-  let retained;
-  const provenance = { role, sourceDigest: source, manifestHash, rolePromptHash, testFilesHash: tests, baseRef: baseRef || null, requestedModel: model || null, promptHash: computeEventProjectionHash(prompt), productCommandHash: computeEventProjectionHash(productCommand) };
-  let succeeded = false;
+function atomicJson(file, data, temporary = `${file}.${randomUUID()}.tmp`) {
+  const fd = openSync(temporary, 'wx', 0o600);
   try {
-    retained = nativeEvents(invokeNative(root, prompt, model, sessionDir, { root: resolve(root), role, changeId, productCommand, provenance, baseRef: baseRef || null }, ompRunner));
-    // Parse the retained transcript before discarding the session directory:
-    // a malformed final report must keep its raw session for diagnosis.
-    projectNative(retained, role);
-    succeeded = true;
+    try { writeFileSync(fd, JSON.stringify(data, null, 2) + '\n'); fsyncSync(fd); }
+    finally { closeSync(fd); }
+    renameSync(temporary, file);
+    if (process.platform !== 'win32') {
+      const directory = openSync(dirname(file), 'r');
+      try { fsyncSync(directory); } finally { closeSync(directory); }
+    }
+  } finally { rmSync(temporary, { force: true }); }
+}
+function saveRun(file, run) {
+  // Raw native bytes plus the original projection hash are sufficient; do not duplicate reports.
+  const metadata = { ...run };
+  delete metadata.record;
+  if (Buffer.byteLength(JSON.stringify(metadata)) > 128 * 1024) throw new Error('Retained run metadata exceeds 128 KiB');
+  atomicJson(file, metadata);
+}
+function statePath(root, path) {
+  validateRootPath(root);
+  const full = resolve(root, path), scope = resolve(root);
+  if (!isPathInsideRoot(scope, full) || !validatePathWithinScope(full, scope)) throw new Error('Retained review state escapes workspace');
+  for (let current = full; current !== scope; current = dirname(current)) {
+    try { if (lstatSync(current).isSymbolicLink()) throw new Error('Retained review state cannot use a link/junction'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  finally { if (succeeded) rmSync(sessionDir, { recursive: true, force: true }); }
-  if (sourceDigest(root) !== source) throw new Error('source tree was mutated during review session (read-only execution violated)');
-  const parsed = projectNative(retained, role);
-  const requestedModel = model || `${parsed.provider}/${parsed.model}`;
+  return full;
+}
+function readBounded(file, maximum) {
+  const fd = openSync(file, 'r');
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > maximum) throw new Error('Invalid/oversized retained review file');
+    const bytes = Buffer.alloc(stat.size + 1);
+    let size = 0, count;
+    while (size < bytes.length && (count = readSync(fd, bytes, size, bytes.length - size, null))) size += count;
+    if (size !== stat.size) throw new Error('Retained review file changed while reading');
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size));
+  } finally { closeSync(fd); }
+}
+function loadRun(root, sessionDir, changeId) {
+  const runs = statePath(root, '.workflow/review-runs');
+  const directory = statePath(root, sessionDir);
+  if (dirname(directory) !== runs) throw new Error('Resume requires an original .workflow/review-runs/run-* directory');
+  const run = JSON.parse(readBounded(statePath(root, join(directory, 'run.json')), 128 * 1024));
+  if (run.schemaVersion !== 1 || run.runId !== basename(directory) || run.workspace !== realpathSync(root) || run.changeId !== changeId || !run.provenance) throw new Error('Retained run identity/workspace mismatch');
+  return { directory, run };
+}
+function reviewIdentity(options, previous) {
+  const { root, changeId, role, productCommand = null, ompRunner, dryRun, redo, resumeSessionDir } = options;
+  const dir = changeDirectory(root, changeId), data = loadReviewEvidence(dir);
+  if (!data && existsSync(join(dir, EVIDENCE_FILE))) throw new Error('Malformed review evidence: hold for operator reconciliation');
+  const evidence = data || { version: 2, changeId, reviewer: null, stageB: null, oracles: [], history: [] };
+  if (evidence.version !== 2 || evidence.changeId !== changeId || !Array.isArray(evidence.oracles) || !Array.isArray(evidence.history || [])) throw new Error('Malformed review evidence: hold for operator reconciliation');
+  evidence.history ||= [];
+  const errors = [];
+  let baseRef = options.baseRef || previous?.provenance.baseRef || evidence.reviewer?.baseRef;
+  try { if (baseRef || (!ompRunner && !resumeSessionDir)) baseRef = resolveBase(root, baseRef); }
+  catch (error) { if (!dryRun) throw error; errors.push(error.message); baseRef = null; }
+  const source = sourceDigest(root), tests = testFilesHash(root);
+  if (role === 'oracle' && (!evidence.stageB || evidence.stageB.sourceDigestAfter !== source || !evidence.stageB.executedAt)) errors.push('earlier reviewer record is stale or completed Stage-B outcome required');
+  if (role === 'reviewer' && evidence.reviewer && !redo && !resumeSessionDir) errors.push('Existing review cycle requires intentional reviewer --redo');
+  const prompt = buildPrompt(root, changeId, role, baseRef, productCommand);
+  const provenance = { role, sourceDigest: source, manifestHash: computeManifestHash(root, changeId), rolePromptHash: computeRolePromptHash(root, role), testFilesHash: tests, baseRef: baseRef || null, requestedModel: options.model || null, promptHash: computeEventProjectionHash(prompt), productCommandHash: computeEventProjectionHash(productCommand) };
+  return { dir, data: evidence, errors, prompt, provenance };
+}
+function projectRecord(text, provenance, role) {
+  const retained = nativeEvents(text), parsed = projectNative(retained, role);
+  const requestedModel = provenance.requestedModel || `${parsed.provider}/${parsed.model}`;
   if (requestedModel !== `${parsed.provider}/${parsed.model}`) throw new Error(`effective model mismatch: requested '${requestedModel}', got '${parsed.provider}/${parsed.model}'`);
   if (computeEventProjectionHash(parsed.context) !== computeEventProjectionHash(provenance)) throw new Error('Native review context differs from dispatched request');
-  const nativeProjection = { role, ...parsed, requestedModel, sourceDigest: source, manifestHash, rolePromptHash, testFilesHash: tests, baseRef: baseRef || null, exitCode: 0 };
-  const record = { ...nativeProjection, nativeProjection, nativeEvents: retained, nativeEventsHash: computeEventProjectionHash(retained), eventProjectionHash: computeEventProjectionHash(nativeProjection) };
-  if (historySessions(data).includes(record.sessionId)) throw new Error('duplicate session ID across review records');
-  if (role === 'reviewer') {
-    if (data.reviewer) data.history.push({ reviewer: data.reviewer, stageB: data.stageB, oracles: data.oracles });
-    data.reviewer = record; data.stageB = null; data.oracles = [];
-    if (redo) data.supersededArtifacts = readdirSync(dir).filter(isOracleEvidenceFilename).map(p => ({ path: p, hash: hashFile(safeFile(dir, p)) }));
-  } else data.oracles.push(record);
-  data.version = 2;
-  saveReviewEvidence(dir, data);
-  return { ok: true, record };
+  const nativeProjection = { role, ...parsed, requestedModel, sourceDigest: provenance.sourceDigest, manifestHash: provenance.manifestHash, rolePromptHash: provenance.rolePromptHash, testFilesHash: provenance.testFilesHash, baseRef: provenance.baseRef, exitCode: 0 };
+  return { ...nativeProjection, nativeProjection, nativeEvents: retained, nativeEventsHash: computeEventProjectionHash(retained), eventProjectionHash: computeEventProjectionHash(nativeProjection) };
+}
+/** Controlled-HTTP projection lives in review-http-evidence.mjs (strong re-projection). */
+function completeRun(options, identity) {
+  const { root, changeId, role, model, productCommand = null, ompRunner, httpExecutor = null, policy = null } = options;
+  // Injected runners are parser/consumer fixtures, never an admitted transport.
+  if (typeof ompRunner !== 'function' && !httpExecutor) throw new Error('Unsupported native execution boundary; no model dispatch');
+  const runs = statePath(root, '.workflow/review-runs');
+  mkdirSync(runs, { recursive: true });
+  const directory = mkdtempSync(join(runs, 'run-'));
+  const file = join(directory, 'run.json'), transcript = join(directory, 'native.jsonl');
+  const run = { schemaVersion: 1, runId: basename(directory), workspace: realpathSync(root), changeId, provenance: identity.provenance, productCommand, status: 'running', exitCode: null };
+  // A completed, identity-matching run whose publication was never written must not be
+  // silently repurchased: the operator has to choose explicit --resume-session.
+  const retained = retainedCandidates(root, changeId, identity.provenance).filter(row => row.status === 'completed' && row.identityMatches);
+  if (retained.length && !options.resumeSessionDir) {
+    throw new Error(`A completed retained run already matches this exact review contract (${retained.map(row => row.sessionDir).join(', ')}). Refusing to buy another identical run: re-run with explicit --resume-session DIR to publish the retained evidence, or --redo with fresh financial authority to start a new cycle.`);
+  }
+  saveRun(file, run);
+  let reservationId = null;
+  try {
+    const runner = httpExecutor ? invocation => httpExecutor.run(invocation) : ompRunner;
+    if (httpExecutor) {
+      const admitted = admitSession({ root, policy });
+      reservationId = admitted.reservationId;
+    }
+    const result = runner({ root, role, prompt: identity.prompt, model, sessionDir: directory, provenance: identity.provenance, changeId, productCommand, policy, reservationId, endpoint: httpExecutor?.endpoint || null });
+    if (httpExecutor) {
+      // Retained run metadata carries the engine identity so resume imports the SAME execution.
+      run.executor = EXECUTOR;
+      // The brand is recorded so a resumed run re-projects with the SAME eligibility.
+      run.executorBranded = isBrandedExecutor(httpExecutor);
+      run.endpoint = httpExecutor.endpoint;
+      try { run.executionId = JSON.parse(result.stdout || '{}').executionId || null; } catch { run.executionId = null; }
+      saveRun(file, run);
+    }
+    run.exitCode = Number.isSafeInteger(result?.status) ? result.status : null;
+    if (run.exitCode !== 0) {
+      // Surface the child's own refusal reason (redacted) instead of a bare exit code.
+      let reason = '';
+      try { reason = String(JSON.parse(result.stdout || '{}').reason || ''); } catch { reason = ''; }
+      throw new Error(`runner exited with code ${run.exitCode}${reason ? `: ${redactSecret(reason, process.env.OPENAI_API_KEY)}` : ''}`);
+    }
+    const text = result.stdout || result.transcriptText || '';
+    if (typeof text !== 'string' || Buffer.byteLength(text) > 32 * 1024 * 1024) throw new Error('Missing/oversized native transcript');
+    if (existsSync(transcript)) {
+      if (readBounded(statePath(root, transcript), 32 * 1024 * 1024) !== text) throw new Error('Native transcript differs from completed runner output');
+    } else writeFileSync(transcript, text, { flag: 'wx', mode: 0o600 });
+    const fd = openSync(transcript, 'r+');
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    run.transcriptHash = createHash('sha256').update(text).digest('hex');
+    if (sourceDigest(root) !== identity.provenance.sourceDigest) throw new Error('source tree was mutated during review session (read-only execution violated)');
+    run.record = httpExecutor ? projectHttpRecord({ text, provenance: identity.provenance, role, executorBranded: isBrandedExecutor(httpExecutor), root, endpoint: httpExecutor.endpoint }) : projectRecord(text, identity.provenance, role);
+    run.recordHash = computeEventProjectionHash(run.record);
+    run.status = 'completed';
+    saveRun(file, run);
+    // Settle only trustworthy observed usage, priced at the reservation's captured tariff.
+    if (reservationId) {
+      const usage = run.record.usage;
+      const settled = settleReservation({ root, reservationId, usage: { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite } });
+      run.settledNanoUsd = settled.settledNanoUsd;
+      saveRun(file, run);
+    }
+    return { directory, run };
+  } catch (error) {
+    // Unknown, failed or cancelled spend stays held and blocks fresh admission.
+    if (reservationId) {
+      try { holdReservation({ root, reservationId, reason: error.message }); }
+      catch { /* the reservation is already settled or held; never rewrite known state */ }
+    }
+    run.status = 'failed'; run.reason = sanitizeError(redactSecret(error.message, process.env.OPENAI_API_KEY));
+    saveRun(file, run);
+    throw new Error(`${run.reason} [retained session: ${directory}]`);
+  }
+}
+function resumeRun(root, pending, identity, role) {
+  const { directory, run } = pending;
+  if (run.status === 'published') throw new Error('duplicate session: retained run already published');
+  if (run.status !== 'completed' || run.exitCode !== 0 || typeof run.recordHash !== 'string') throw new Error('Cannot resume running, failed or incomplete native execution');
+  if (computeEventProjectionHash(run.provenance) !== computeEventProjectionHash(identity.provenance)) throw new Error('Retained execution contract/context mismatch: source/tests/manifest/role/model/prompt/command changed');
+  const path = statePath(root, join(directory, 'native.jsonl'));
+  const text = readBounded(path, 32 * 1024 * 1024);
+  if (createHash('sha256').update(text).digest('hex') !== run.transcriptHash) throw new Error('Retained transcript hash/integrity mismatch');
+  // Re-project with the SAME projector that created the record, never a different one.
+  const record = run.executor === EXECUTOR ? projectHttpRecord({ text, provenance: run.provenance, role, executorBranded: run.executorBranded === true, root, endpoint: run.endpoint }) : projectRecord(text, run.provenance, role);
+  if (computeEventProjectionHash(record) !== run.recordHash) throw new Error('Retained native record hash/integrity mismatch');
+  run.record = record;
+  return pending;
+}
+function retainedCandidates(root, changeId, provenance) {
+  const runs = statePath(root, '.workflow/review-runs');
+  if (!existsSync(runs)) return [];
+  const names = readdirSync(runs).filter(name => name.startsWith('run-'));
+  if (names.length > 256) return [{ status: 'held', reason: 'More than 256 retained runs; select an explicit --resume-session directory for bounded inspection' }];
+  return names.map(name => {
+    const sessionDir = relative(resolve(root), join(runs, name));
+    try {
+      const { run } = loadRun(root, sessionDir, changeId);
+      return { sessionDir, status: run.status, identityMatches: computeEventProjectionHash(run.provenance) === computeEventProjectionHash(provenance), requires: 'Explicit resume revalidates completion, transcript integrity and duplicate publication' };
+    } catch (error) { return { sessionDir, status: 'held', reason: sanitizeError(error.message) }; }
+  });
+}
+// A controlled-HTTP record has an executionId and no sessionId; either identifies one run.
+function recordKey(record) { return record?.sessionId ?? record?.executionId ?? null; }
+function historySessions(data) { return [...(data.history || []).flatMap(c => [c.reviewer, ...(c.oracles || [])]), data.reviewer, ...(data.oracles || [])].filter(Boolean).map(recordKey); }
+export function runReviewRecord(options) {
+  const { root = '.', changeId, role, model, ompRunner = null, dryRun = false, redo = false, productCommand = null, resumeSessionDir = null, httpExecutor = null } = options;
+  if (!['reviewer', 'oracle'].includes(role)) throw new Error('--role must be reviewer or oracle');
+  if (options.prompt !== undefined) throw new Error('--prompt bypass is forbidden; roles and manifest are mandatory');
+  if (!ompRunner && !httpExecutor && (typeof model !== 'string' || !/^[^/\s]+\/\S+$/.test(model))) throw new Error('Exact --model provider/model selector required');
+  if (productCommand !== null && (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(p => typeof p !== 'string' || p.includes('\0')) || !productCommand[0].trim())) throw new Error('product-command must be a JSON argv array');
+  if (role === 'oracle' && !ompRunner && !productCommand) throw new Error('Oracle requires --product-command JSON argv to exercise product');
+  if (resumeSessionDir !== null && (typeof resumeSessionDir !== 'string' || !resumeSessionDir || redo)) throw new Error('Explicit resume-session directory required; resume is not --redo');
+  // Resuming already-paid work reuses the original captured contract and needs no key.
+  // Spending authority is validated for every dispatch path. A dry run READS the policy
+  // and the existing ledger read-only so the operator sees the real reserve, route and
+  // remaining headroom; it funds nothing, locks nothing and writes nothing.
+  let policy = null;
+  if (httpExecutor || (dryRun && options.admissionPolicy)) {
+    policy = readAdmissionPolicy(root, options.admissionPolicy);
+    if (httpExecutor) {
+      // The policy fixes the verified official route; the executor declares where bytes
+      // actually go and approves its own effective route (a loopback seam is explicit).
+      if (typeof httpExecutor.approveEndpoint !== 'function' || !httpExecutor.approveEndpoint(httpExecutor.endpoint)) throw new Error('Effective transport route is not approved by the supplied executor');
+      if (model !== `${policy.provider}/${policy.model}`) throw new Error(`Requested model '${model}' is not the admitted pinned snapshot '${policy.provider}/${policy.model}'`);
+      if (!resumeSessionDir && typeof process.env.OPENAI_API_KEY !== 'string') throw new Error('OPENAI_API_KEY is required at the dispatch boundary; no credential means no dispatch');
+    }
+  }
+  const normalized = { ...options, root, productCommand, resumeSessionDir, httpExecutor, policy };
+  if (dryRun) {
+    const pending = resumeSessionDir ? loadRun(root, resumeSessionDir, changeId) : null;
+    const identity = reviewIdentity(normalized, pending?.run);
+    let resumeCompatible = false;
+    if (pending) {
+      try { resumeRun(root, pending, identity, role); resumeCompatible = true; }
+      catch (error) { identity.errors.push(error.message); }
+    }
+    return { ok: true, dryRun: true,
+      admission: { ...inspectAdmission({ policy, policyPath: options.admissionPolicy, root }),
+        ...(policy ? { reserveNanoUsd: policy.reserveNanoUsd, reserveUsd: nanoUsdToUsd(policy.reserveNanoUsd),
+          ceilingNanoUsd: policy.ceilingNanoUsd, maxRequests: policy.maxRequests, model: policy.model,
+          contextWindowTokens: PINNED_CONTEXT_TOKENS, maxOutputTokens: policy.maxOutputTokens } : {}) },
+      budget: typeof inspectBudget === 'function' ? inspectBudget({ root, policy }) : { available: false, reason: 'read-only budget preflight is not available in this build' },
+      provenance: identity.provenance, prerequisites: identity.errors,
+      releaseGate: validateReviewEvidence({ root, changeId, tier: 'T2' }), resumeCompatible,
+      retainedRuns: retainedCandidates(root, changeId, identity.provenance),
+      obligations: 'Dry-run only: no child and no provider request. Resume imports original matching completed evidence; it never reruns, retags or overrides a verdict.' };
+  }
+  const lock = statePath(root, '.workflow/review-record.lock');
+  mkdirSync(dirname(lock), { recursive: true });
+  const fd = openSync(lock, 'wx', 0o600);
+  try {
+    const pending = resumeSessionDir ? loadRun(root, resumeSessionDir, changeId) : null;
+    const identity = reviewIdentity(normalized, pending?.run);
+    if (identity.errors.length) throw new Error(identity.errors.join('; '));
+    const completed = pending ? resumeRun(root, pending, identity, role) : completeRun(normalized, identity);
+    const record = completed.run.record, data = identity.data;
+    if (historySessions(data).includes(recordKey(record))) throw new Error('duplicate session ID across review records');
+    if (role === 'reviewer') {
+      if (data.reviewer) data.history.push({ reviewer: data.reviewer, stageB: data.stageB, oracles: data.oracles });
+      data.reviewer = record; data.stageB = null; data.oracles = [];
+      if (redo) data.supersededArtifacts = readdirSync(identity.dir).filter(isOracleEvidenceFilename).map(p => ({ path: p, hash: hashFile(safeFile(identity.dir, p)) }));
+    } else data.oracles.push(record);
+    try { saveReviewEvidence(identity.dir, data); }
+    catch (error) { throw new Error(`${sanitizeError(error.message)} [retained session: ${completed.directory}; use explicit --resume-session after resolving publication]`); }
+    completed.run.status = 'published';
+    saveRun(join(completed.directory, 'run.json'), completed.run);
+    return { ok: true, record, sessionDir: completed.directory };
+  } finally { closeSync(fd); unlinkSync(lock); }
 }
 function resolveTestTimeoutMs(options = {}) {
   const rawMs = options.testTimeoutMs;
@@ -327,17 +523,46 @@ export function recordStageB(options) {
   const execution = { sourceDigest: source, testFilesHash: tests, testCmd, startedAt, completedAt: new Date().toISOString(), ...result };
   if (data.oracles?.length) data.history.push({ reviewer: null, stageB: data.stageB, oracles: data.oracles });
   data.oracles = [];
-  if (phase === 'before') data.stageB = { reviewerSessionId: reviewer.sessionId, before: execution };
+  // Stage-B binds to the reviewer's explicit identity: HTTP records have an executionId
+  // and no sessionId, so an undefined-vs-undefined comparison must never pass.
+  const reviewerKey = recordKey(reviewer);
+  if (!reviewerKey) throw new Error('Reviewer record has no session/execution identity to bind Stage-B to');
+  if (phase === 'before') data.stageB = { reviewerSessionId: reviewerKey, before: execution };
   else {
     const before = data.stageB.before;
     if (before.testCmd !== testCmd || before.testFilesHash !== tests || before.sourceDigest !== reviewer.sourceDigest) throw new Error('Stage-B frozen before/after command or source mismatch');
     if ((disposition === 'lean-already') !== (source === reviewer.sourceDigest)) throw new Error('Stage-B disposition does not match actual source change');
-    data.stageB = { reviewerSessionId: reviewer.sessionId, before, after: execution, disposition, testCmd, exitCode: 0, testFilesHashBefore: tests, testFilesHashAfter: tests, sourceDigestBefore: before.sourceDigest, sourceDigestAfter: source, executedAt: execution.completedAt, summary };
+    data.stageB = { reviewerSessionId: reviewerKey, before, after: execution, disposition, testCmd, exitCode: 0, testFilesHashBefore: tests, testFilesHashAfter: tests, sourceDigestBefore: before.sourceDigest, sourceDigestAfter: source, executedAt: execution.completedAt, summary };
   }
   saveReviewEvidence(dir, data);
   return { ok: true, stageB: data.stageB };
 }
-function validateRecord(record, role, current, errors) {
+
+/**
+ * The retained execution log for a record, so controlled-HTTP integrity is re-derived
+ * from original bytes rather than from the record's own outer claims. Native records
+ * carry their events inline and need no lookup.
+ */
+function retainedTranscript(root, record) {
+  if (!record || record.executor !== EXECUTOR) return null;
+  const runs = statePath(root, '.workflow/review-runs');
+  if (!existsSync(runs)) return null;
+  for (const name of readdirSync(runs)) {
+    const candidate = join(runs, name, 'run.json');
+    if (!existsSync(candidate)) continue;
+    try {
+      const run = JSON.parse(readBounded(candidate, 128 * 1024));
+      if (run.executionId === record.executionId && typeof run.transcriptHash === 'string') {
+        const text = readBounded(join(runs, name, 'native.jsonl'), 32 * 1024 * 1024);
+        if (createHash('sha256').update(text).digest('hex') !== run.transcriptHash) return null;
+        return text;
+      }
+    } catch { /* unreadable retained run cannot vouch for a record */ }
+  }
+  return null;
+}
+function validateRecord(record, role, current, errors, root, text = null) {
+  if (record?.executor === EXECUTOR) return validateHttpRecord({ record, role, current, errors, root, text });
   try {
     if (!record || record.role !== role || record.exitCode !== 0) throw new Error('Missing or failed role execution');
     if (!record.nativeProjection || record.eventProjectionHash !== computeEventProjectionHash(record.nativeProjection) || record.nativeEventsHash !== computeEventProjectionHash(record.nativeEvents)) throw new Error('Native projection/events integrity mismatch');
@@ -362,10 +587,14 @@ export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = n
     const dir = changeDirectory(root, changeId), data = loadReviewEvidence(dir);
     if (!data) return { ok: false, errors: ['missing review execution evidence (static ACCEPT markdown alone is not accepted)'] };
     if (data.version !== 2 || data.changeId !== changeId) errors.push('Invalid evidence schema or changeId');
-    const current = { manifestHash: computeManifestHash(root, changeId), reviewerPromptHash: computeRolePromptHash(root, 'reviewer'), oraclePromptHash: computeRolePromptHash(root, 'oracle'), source: sourceDigest(root), tests: testFilesHash(root) };
-    validateRecord(data.reviewer, 'reviewer', current, errors);
+    const current = { manifestHash: computeManifestHash(root, changeId), reviewerPromptHash: computeRolePromptHash(root, 'reviewer'), oraclePromptHash: computeRolePromptHash(root, 'oracle'), source: sourceDigest(root), tests: testFilesHash(root), model: null };
+    // The pinned snapshot is a single verified model, so any recorded execution must match it.
+    current.model = data.reviewer?.model ?? data.reviewer?.requestedModel?.split('/').slice(1).join('/') ?? null;
+    validateRecord(data.reviewer, 'reviewer', current, errors, root, retainedTranscript(root, data.reviewer));
     const sb = data.stageB, reviewer = data.reviewer;
-    if (!sb?.before || !sb?.after || !sb.executedAt || !sb.testCmd || sb.exitCode !== 0 || sb.reviewerSessionId !== reviewer?.sessionId) errors.push('Missing or invalid Stage-B disposition execution');
+    // Bind Stage-B to the reviewer's explicit identity; HTTP records have an executionId
+    // and no sessionId, and `undefined === undefined` must never pass this check.
+    if (!sb?.before || !sb?.after || !sb.executedAt || !sb.testCmd || sb.exitCode !== 0 || !recordKey(reviewer) || sb.reviewerSessionId !== recordKey(reviewer)) errors.push('Missing or invalid Stage-B disposition execution');
     else {
       for (const e of [sb.before, sb.after]) {
         if (e.exitCode !== 0 || e.testCmd !== sb.testCmd || e.testFilesHash !== current.tests || timestamp(e.completedAt) < timestamp(e.startedAt)) errors.push('Invalid frozen Stage-B execution');
@@ -378,15 +607,14 @@ export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = n
     const oracles = data.oracles || [];
     if (!Array.isArray(oracles) || !oracles.length) errors.push('Missing independent oracle acceptance record(s)');
     const historical = (data.history || []).flatMap(c => [c.reviewer, ...(c.oracles || [])]).filter(Boolean);
-    const sessions = new Set(historical.map(r => r.sessionId));
-    if (sessions.has(reviewer?.sessionId)) errors.push('duplicate reviewer session ID reused from prior cycle');
-    sessions.add(reviewer?.sessionId);
+    const sessions = new Set(historical.map(recordKey));
+    if (sessions.has(recordKey(reviewer))) errors.push('duplicate reviewer session ID reused from prior cycle');
+    sessions.add(recordKey(reviewer));
     for (const oracle of oracles) {
-      validateRecord(oracle, 'oracle', current, errors);
-      if (sessions.has(oracle.sessionId)) errors.push('duplicate session ID across review records');
-      sessions.add(oracle.sessionId);
+      validateRecord(oracle, 'oracle', current, errors, root, retainedTranscript(root, oracle));
+      if (sessions.has(recordKey(oracle))) errors.push('duplicate session ID across review records');
+      sessions.add(recordKey(oracle));
       if (oracle.sourceDigest !== current.source) errors.push('Oracle source digest is stale');
-      if (timestamp(oracle.startedAt) < timestamp(sb?.executedAt)) errors.push('Oracle must execute after Stage-B');
       if (oracle.baseRef !== reviewer?.baseRef) errors.push('Oracle review baseline mismatch');
     }
     const lite = countSourceChanges(root, baseRef || reviewer?.baseRef).isOracleLite;

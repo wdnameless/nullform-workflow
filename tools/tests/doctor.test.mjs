@@ -1552,3 +1552,29 @@ test("doctor with targetHarness: cursor projectRoot, openclaw JSON5, release-dri
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// Under Bun, `process.execPath` IS Bun and `bun --check <file>` executes the file.
+// The tools-syntax check must run a real Node for `--check` instead, or fail closed.
+test("doctor tools-syntax never executes tools under a Bun caller", (t) => {
+  const probe = spawnSync("bun", ["--version"], { encoding: "utf8", windowsHide: true });
+  if (probe.error || probe.status !== 0) return t.skip("bun not in PATH");
+
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-bun-syntax-"));
+  try {
+    const sentinel = join(tmp, "executed.txt");
+    const harness = createMockHarness(tmp);
+    // A syntactically valid tool that writes a sentinel only if it is executed, not parsed.
+    writeFileSync(
+      join(harness, "tools", "zz-sentinel.mjs"),
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(sentinel)}, "executed");\n`,
+      "utf8"
+    );
+
+    const res = spawnSync("bun", [DOCTOR_PATH, "--harness", harness, "--json"], { encoding: "utf8", windowsHide: true });
+    assert.equal(existsSync(sentinel), false, "bun --check must never execute a tool");
+    const json = JSON.parse(res.stdout);
+    assert.equal(checkOf(json, "tools-syntax").status, "pass", checkOf(json, "tools-syntax").detail);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

@@ -36,7 +36,9 @@ export function getCapabilitiesInfo({ userHome = homedir(), env = process.env, h
   const adapters = CONCRETE_HARNESSES.map((id) => ({
     id,
     configuration: true,
-    automatedReview: id === "omp",
+    // The controlled HTTP executor is a Node-only path, so automated review no longer
+    // depends on OMP or Bun being installed for any configured harness.
+    automatedReview: true,
     present: Boolean(hostPresence[id]),
   }));
 
@@ -57,11 +59,13 @@ export function getCapabilitiesInfo({ userHome = homedir(), env = process.env, h
       commands: ["start", "suggest", "artifact", "check", "status", "close", "check-ci", "stage-b", "metrics"],
     },
     automatedReview: {
-      supportedHarnesses: ["omp"],
-      unsupportedHarnesses: [...CONCRETE_HARNESSES.filter((h) => h !== "omp"), "custom"],
-      requiresBun: true,
-      requiresOmp: true,
-      status: "omp_only",
+      supportedHarnesses: [...CONCRETE_HARNESSES, "custom"],
+      unsupportedHarnesses: [],
+      requiresBun: false,
+      requiresOmp: false,
+      runtime: "node",
+      transport: "nullform-http-v1",
+      status: "node_only",
     },
     hostPresence,
   };
@@ -82,17 +86,12 @@ export function validateReviewCapability(targetHarness, { dryRun = false, userHo
       if (savedState?.harness) norm = savedState.harness.toLowerCase();
     } catch {}
   }
-  if (norm && norm !== "omp") {
-    return {
-      ok: false,
-      error: `workflow review-run: harness '${norm}' does not support automated review. Automated review execution is only supported for 'omp' with Bun; all 8 adapters support configuration deployment.`,
-    };
-  }
-  if (!dryRun && !isCommandInPath("bun")) {
-    return {
-      ok: false,
-      error: "workflow review-run: automated review execution requires Bun and OMP, but 'bun' was not found in PATH.",
-    };
+  // Automated review runs in a controlled Node child on the verified direct route, so
+  // any configured harness is acceptable and neither Bun nor OMP is required. A real
+  // dispatch still needs an admission policy and a credential; that is enforced later,
+  // at the dispatch boundary, not by this preflight.
+  if (norm && !CONCRETE_HARNESSES.includes(norm) && norm !== "custom") {
+    return { ok: false, error: `workflow review-run: unknown harness '${norm}'. Configure one of: ${CONCRETE_HARNESSES.join(", ")}` };
   }
   return { ok: true, harness: norm || "omp" };
 }
@@ -185,15 +184,14 @@ export function checkVersionAlignment({ harness, userHome, packageRoot = REPO_RO
 }
 
 export function checkHarnessCapabilities(targetHarness, options = {}) {
-  const automatedReviewSupported = targetHarness === "omp";
+  // Automated review is a controlled Node transport, independent of which harness is
+  // configured; the real gate is the admission policy and credential at dispatch.
   return {
     id: "harness-capabilities",
     status: "pass",
-    automatedReviewSupported,
+    automatedReviewSupported: true,
     ...(options.userHome ? { profile: inspectHarness({ ...options, harness: targetHarness }) } : {}),
-    detail: `Конфигурация поддерживается для 8 именованных адаптеров и декларативного custom-контракта (не доказательство загрузки/исполнения); базовые гейты Node-native; автоматическое ревью ${
-      automatedReviewSupported ? "поддерживается (omp)" : `не поддерживается для '${targetHarness}' (только omp с Bun)`
-    }.`,
+    detail: `Конфигурация поддерживается для 8 именованных адаптеров и декларативного custom-контракта (не доказательство загрузки/исполнения); базовые гейты Node-native; автоматическое ревью поддерживается управляемым Node-транспортом 'nullform-http-v1' (OMP и Bun не требуются).`,
   };
 }
 export function printWorkflowHelp() {

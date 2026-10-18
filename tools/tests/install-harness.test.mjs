@@ -39,7 +39,9 @@ function getBashPath() {
  * mode is preserved by NOT passing `--user-home` (which would enable home-adapter writes).
  */
 function isolatedChildEnv(home) {
-  return { ...process.env, HOME: home, USERPROFILE: home, NULLFORM_USER_HOME: home, LOCALAPPDATA: join(home, "AppData", "Local"), HERMES_HOME: join(home, "hermes"), HERMES_IGNORE_RULES: "" };
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("HERMES_")) delete env[key];
+  return { ...env, HOME: home, USERPROFILE: home, NULLFORM_USER_HOME: home, LOCALAPPDATA: join(home, "AppData", "Local"), HERMES_HOME: join(home, "hermes"), HERMES_IGNORE_RULES: "" };
 }
 
 test("dry-run does not write files or directories to root", () => {
@@ -89,7 +91,7 @@ test("installation creates Claude, Codex, OpenCode, and Cursor adapters with sub
     }
   }
 });
-test("non-OMP installation keeps identity surfaces clean and Hermes uses one native auto-load skill", () => {
+test("non-OMP installation keeps identity surfaces clean without native-home skill copies", () => {
   for (const harness of ["openclaw", "hermes", "openhuman"]) {
     const temp = createTempDir(`minimal-${harness}-`);
     const root = join(temp, "workflow");
@@ -105,18 +107,12 @@ test("non-OMP installation keeps identity surfaces clean and Hermes uses one nat
       assert.equal(existsSync(join(root, "SOUL.md")), false);
       assert.equal(existsSync(join(root, "USER.md")), false);
       assert.equal(existsSync(join(hostHome, "SOUL.md")), false);
+      assert.equal(existsSync(join(hostHome, "skills")), false);
       if (harness === "hermes") {
         const settings = loadYaml().parse(readFileSync(join(hostHome, "config.yaml"), "utf8"));
-        assert.deepEqual(settings.skills.auto_load, ["nullform-workflow"]);
         assert.equal(settings.mcp_servers, undefined);
-        assert.deepEqual(readdirSync(join(hostHome, "skills")), ["nullform-workflow"]);
-        const text = readFileSync(join(hostHome, "skills", "nullform-workflow", "SKILL.md"), "utf8");
-        const metadata = loadYaml().parse(/^---\n([\s\S]*?)\n---/.exec(text)[1]);
-        assert.equal(metadata.name, "nullform-workflow");
-        assert.equal(typeof metadata.description, "string");
         assert.equal(plan.activation.status, "configured");
       } else {
-        assert.equal(existsSync(join(hostHome, "skills")), false);
         if (harness === "openclaw") {
           const config = preflightJson5Config(join(hostHome, "openclaw.json"));
           assert.equal(config.agents.entries.workflow.workspace, root.replace(/\\/g, "/"));
@@ -539,7 +535,6 @@ test("reinstallation preserves JSONC comments/trailing commas, respects opencode
     const savedHermes = readFileSync(hermesConfig, "utf8");
     assert.ok(savedHermes.includes("api_key: sk-user-hermes-secret"), "Hermes API key must be preserved");
     assert.ok(savedHermes.includes("model: custom-model-v1"), "Hermes model setting must be preserved");
-    assert.deepEqual(loadYaml().parse(savedHermes).skills.auto_load, ["nullform-workflow"]);
     assert.equal(loadYaml().parse(savedHermes).mcp_servers, undefined);
 
     const secretCanary = "sk-canary-never-echo-777";
@@ -642,7 +637,6 @@ test("consumer regression: malformed markers, malformed YAML, and complex YAML a
     const afterYaml = readFileSync(hermesConfig, "utf8");
     assert.ok(afterYaml.includes("default_endpoint: &default_ep") && afterYaml.includes("backup_endpoint: *default_ep"));
     assert.ok(afterYaml.includes("Line one with # not a comment") && afterYaml.includes("custom_user_setting: 12345"));
-    assert.deepEqual(loadYaml().parse(afterYaml).skills.auto_load, ["nullform-workflow"]);
     assert.equal(loadYaml().parse(afterYaml).mcp_servers, undefined);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

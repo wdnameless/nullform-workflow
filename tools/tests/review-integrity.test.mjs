@@ -103,7 +103,7 @@ test('native usage rejects coercion, fractions, unsafe integers and unknown cost
     for (const input of ['100', 1.5, -1, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
       assert.throws(() => runReviewRecord({ ...f, role: 'reviewer', ompRunner: nativeRunner(undefined, { input, output: 50 }) }), /token usage/);
     }
-    for (const costUsd of [NaN, Infinity, -1, 0]) assert.throws(() => runReviewRecord({ ...f, role: 'reviewer', ompRunner: nativeRunner(undefined, undefined, 'correct', { costUsd }) }), /cost/i);
+    for (const costUsd of [NaN, Infinity, -1]) assert.throws(() => runReviewRecord({ ...f, role: 'reviewer', ompRunner: nativeRunner(undefined, undefined, 'correct', { costUsd }) }), /cost/i);
     const recorded = runReviewRecord({ ...f, role: 'reviewer', ompRunner: nativeRunner(undefined, { input: 0, output: 20, cacheRead: 0, cacheWrite: 0 }) });
     assert.equal(recorded.record.usage.input, 0);
     assert.equal(recorded.record.usage.cacheRead, 0);

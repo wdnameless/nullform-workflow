@@ -3,6 +3,23 @@ import { readFileSync, existsSync, statSync, readdirSync, realpathSync, lstatSyn
 import { join, resolve, relative, isAbsolute, basename, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+/**
+ * Environment for every Git READ this project performs.
+ *
+ * Ambient `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`/`GIT_OBJECT_DIRECTORY` and the
+ * external-diff/textconv/fsmonitor hooks can silently redirect a read to another
+ * repository, so a `--root A` read would report B's inventory or no inventory at all.
+ * They are stripped case-insensitively; hooks that execute code are neutralised.
+ * The external-diff variable is REMOVED, never set to an empty string: an empty value
+ * makes Git try to spawn a command named "" and every diff fails.
+ */
+export function cleanGitEnv(env = process.env) {
+  const clean = Object.fromEntries(Object.entries(env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
+  clean.GIT_TERMINAL_PROMPT = '0';
+  clean.GIT_CONFIG_NOSYSTEM = '1';
+  return clean;
+}
+
 export function isPathInsideRoot(root, path) {
   if (typeof path !== 'string' || !path) return false;
   const rel = relative(resolve(root), resolve(root, path));
@@ -82,7 +99,7 @@ export function hashFile(path, text = false) {
 }
 const TEXT_PATH = /(?:\.(?:md|mdc|mjs|cjs|js|jsx|ts|tsx|py|json|jsonc|json5|jsonl|ya?ml|toml|txt|ps1|psm1|sh|bash|css|html|xml|svg|csv|srt|example)|(?:^|\/)(?:VERSION|LICENSE|Dockerfile|Makefile|\.gitattributes|\.gitignore))$/i;
 export function scanWorktree(root) {
-  const git = (args, input) => execFileSync('git', args, { cwd: root, input, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
+  const git = (args, input) => execFileSync('git', args, { cwd: root, env: cleanGitEnv(), input, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
   const secretEntries = [];
   const textAttributes = new Map();
   function collect(paths, untracked) {

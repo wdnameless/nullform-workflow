@@ -353,7 +353,7 @@ export function inspectHarness({ harness, userHome = homedir(), hostHome, hostMa
   ];
   if (harness !== "omp") limitations.push("T0/T1 portable state is available only for tasks that genuinely fit those lanes. T2/T3 recorded automated review/acceptance requires OMP with Bun; manual review outside that route does not satisfy its automated gates. Never down-classify architecture or claim non-OMP automated acceptance.");
   if (harness === "custom") limitations.push("A custom contract declares a project instruction destination; writing that file cannot prove the unknown host loads it.");
-  if (harness === "hermes") limitations.push("Hermes policy loading uses skills.auto_load, conditional on skills tools and HERMES_IGNORE_RULES. Home AGENTS.md is not a global loader; native delegated children may skip context/skills, so parents must pass scoped requirements and verification criteria.");
+  if (harness === "hermes") limitations.push("Hermes consumes agent.system_prompt, not skills.auto_load. Ephemeral prompt override presence or an ignore-rules choice requires manual handling. Home AGENTS.md is not a global loader; parent must pass scoped requirements and verification criteria because delegated-child policy inheritance remains unverified.");
   if (["cursor", "openhuman", "openclaw"].includes(harness)) limitations.push("Uncertain host root/workspace conventions require explicit hostHome; the default is a deployment convention, not runtime discovery.");
   let probeReport = { requested: false, commands: [] };
   if (probe) {
@@ -367,9 +367,7 @@ export function inspectHarness({ harness, userHome = homedir(), hostHome, hostMa
       }
     }
   }
-  if (harness === "hermes" && truthy(env.HERMES_IGNORE_RULES)) {
-    capabilities.skills = { status: "unavailable", evidence: "configured", reason: "HERMES_IGNORE_RULES explicitly disables policy context/skill loading; do not re-enable human policy." };
-  }
+  
   const gitPresent = Boolean(commandPath("git", env, platform));
   return {
     schemaVersion: 1, harness, profileId: harness === "custom" ? `custom:${manifest.id}` : harness === "omp" ? "omp-native" : `${harness}-adaptive`,

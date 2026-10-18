@@ -8,7 +8,10 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { promisify } from "node:util";
 import { createTempDir } from "./test-helpers.mjs";
-import { loadYaml } from "../harness-config.mjs";
+import { applyManagedSection, hashContent, loadYaml, MANAGED_START, MANAGED_END } from "../harness-config.mjs";
+import { prepareHermesActivation } from "../harness-adapters.mjs";
+import { inspectHarness } from "../harness-profiles.mjs";
+import { runDoctor } from "../doctor.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nullform.mjs", import.meta.url));
 const yaml = loadYaml();
@@ -94,104 +97,258 @@ test("public inspect and init preview leave an isolated Hermes profile byte-iden
   assert.deepEqual(snapshot(fx.base), before, "Preview must not write installation identity or assets");
 });
 
-test("Hermes policy has one native auto-load consumer and preserves human configuration on reapply", (t) => {
+// These adapter/doctor regressions do not copy a full installation or claim
+// native runtime consumption; the parent verifies the installed Hermes consumer.
+function hermesPolicy(fx, { env = fx.env, managedFiles = {}, slashRoot = fx.root.replace(/\\/g, "/") } = {}) {
+  const report = inspectHarness({
+    harness: "hermes", userHome: fx.home, hostHome: fx.host,
+    projectRoot: fx.project, env,
+  });
+  return prepareHermesActivation({
+    hostHome: fx.host, slashRoot, report, managedFiles, env,
+  });
+}
+
+test("Hermes native policy preserves human prompt, YAML and legacy assets on reapply", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  const human = "Human UTF-8: Ж, 日本語.  \n\nKeep my base prompt.\n";
+  const settings = "# operator comment\ncustom_setting: keep # setting comment\nskills:\n  auto_load: [human-policy] # human entry\nmcp_servers:\n  human-server:\n    command: human-tool\n";
+  put(configPath, `agent:\n  max_turns: 17 # agent comment\n  system_prompt: |\n${human.split("\n").slice(0, -1).map(line => `    ${line}\n`).join("")}${settings}`);
+  put(join(fx.host, "SOUL.md"), "Human identity\r\nKeep these exact bytes.\r\n");
+  put(join(fx.host, "USER.md"), "Human preferences.\n");
+  put(join(fx.host, "skills", "human-policy", "SKILL.md"), "Human-owned skill.\n");
+  const assets = snapshot(fx.host).filter(([path]) => path !== "config.yaml");
+  const managedFiles = {};
+  const first = hermesPolicy(fx);
+  assert.equal(first.activation.status, "configured");
+  assert.deepEqual(first.writes.map(([path]) => path), [configPath]);
+  const text = first.writes[0][1], installed = yaml.parse(text);
+  assert.equal(installed.agent.system_prompt.startsWith(human), true, "Do not replace or trim the human base prompt");
+  assert.equal(installed.agent.system_prompt.split(MANAGED_START).length - 1, 1);
+  assert.equal(installed.agent.system_prompt.split(MANAGED_END).length - 1, 1);
+  assert.equal(installed.agent.max_turns, 17);
+  assert.equal(text.includes(settings), true, "Unrelated YAML, comments and formatting are human data");
+  assert.equal(text.includes("# agent comment"), true);
+  for (const [path, content] of first.writes) {
+    put(path, content);
+    managedFiles[path] = hashContent(content);
+  }
+  const suffix = "\nHuman addition after the owned block.  \n";
+  const doc = yaml.parseDocument(readFileSync(configPath, "utf8"), { keepSourceTokens: true });
+  doc.setIn(["agent", "system_prompt"], installed.agent.system_prompt + suffix);
+  doc.set("custom_setting", "human edit after install");
+  put(configPath, doc.toString());
+  const before = readFileSync(configPath, "utf8");
+  const reapplied = hermesPolicy(fx, { managedFiles });
+  assert.equal(reapplied.activation.status, "configured");
+  assert.deepEqual(reapplied.writes.map(([path]) => path), [configPath]);
+  assert.equal(reapplied.writes[0][1], before, "Reapply must preserve human edits outside the owned prompt block");
+  assert.deepEqual(snapshot(fx.host).filter(([path]) => path !== "config.yaml"), assets);
+});
+
+test("Hermes native policy fresh activation uses only agent.system_prompt", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml"), before = snapshot(fx.base);
+  const prepared = hermesPolicy(fx);
+  assert.equal(prepared.activation.status, "configured");
+  assert.deepEqual(prepared.writes.map(([path]) => path), [configPath]);
+  const installed = yaml.parse(prepared.writes[0][1]);
+  assert.equal(installed.agent.system_prompt.split(MANAGED_START).length - 1, 1);
+  assert.equal(installed.agent.system_prompt.split(MANAGED_END).length - 1, 1);
+  assert.equal(installed.skills, undefined);
+  assert.equal(installed.mcp_servers, undefined);
+  assert.deepEqual(snapshot(fx.base), before, "Preflight must not mutate files");
+});
+
+test("Hermes native policy honors prompt override presence and ignore-rules without writes", (t) => {
   const fx = fixture(t);
-  const configPath = join(fx.host, "config.yaml"), soulPath = join(fx.host, "SOUL.md");
-  const config = "# operator comment\ncustom_setting: keep\nskills:\n  auto_load:\n    - human-policy # human entry\nmcp_servers:\n  human-server:\n    command: human-tool\n";
-  const soul = "Human identity\r\nKeep these exact bytes.\r\n";
-  put(configPath, config);
-  put(soulPath, soul);
-  put(join(fx.host, "skills", "human-policy", "SKILL.md"), "---\nname: human-policy\ndescription: Human policy\n---\nHuman-owned policy.\n");
-  const humanSkill = readFileSync(join(fx.host, "skills", "human-policy", "SKILL.md"));
-  for (let apply = 0; apply < 2; apply++) {
-    const applied = success(fx.init("hermes"));
-    assert.equal(applied.ok, true);
-    assert.equal(applied.profile.runtimeReady.status, "not-verified", "Native registration is configuration, not a live Hermes load");
-    const installedText = readFileSync(configPath, "utf8"), installed = yaml.parse(installedText);
-    assert.deepEqual(installed.skills.auto_load, ["human-policy", "nullform-workflow"]);
-    assert.deepEqual(installed.mcp_servers, yaml.parse(config).mcp_servers);
-    assert.equal(installed.custom_setting, "keep");
-    // Comments are operator data, not a generated-prompt wording contract.
-    assert.equal(installedText.includes("# operator comment"), true);
-    assert.equal(installedText.includes("# human entry"), true);
-    assert.deepEqual(readFileSync(soulPath), Buffer.from(soul));
-    assert.deepEqual(readFileSync(join(fx.host, "skills", "human-policy", "SKILL.md")), humanSkill);
-    assert.deepEqual(readdirSync(join(fx.host, "skills")).sort(), ["human-policy", "nullform-workflow"]);
-    const skillPath = join(fx.host, "skills", installed.skills.auto_load[1], "SKILL.md");
-    const skill = readFileSync(skillPath, "utf8");
-    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(skill);
-    assert.ok(frontmatter, "Hermes consumes SKILL.md native frontmatter, not home AGENTS alone");
-    const metadata = yaml.parse(frontmatter[1]);
-    assert.equal(metadata.name, "nullform-workflow");
-    assert.equal(typeof metadata.description, "string");
-    assert.notEqual(metadata.description.trim(), "");
-    assert.equal(existsSync(join(fx.project, ".workflow", "state.json")), false);
+  put(join(fx.host, "config.yaml"), 'agent:\n  system_prompt: "Human base prompt"\n');
+  const before = snapshot(fx.base);
+  for (const override of [
+    { HERMES_IGNORE_RULES: "1" },
+    { HERMES_EPHEMERAL_SYSTEM_PROMPT: "Human session override" },
+    { HERMES_EPHEMERAL_SYSTEM_PROMPT: " " },
+    { HERMES_EPHEMERAL_SYSTEM_PROMPT: "" },
+  ]) {
+    const prepared = hermesPolicy(fx, { env: { ...fx.env, ...override } });
+    assert.equal(prepared.activation.status, "manual");
+    assert.deepEqual(prepared.writes, []);
+    assert.deepEqual(snapshot(fx.base), before);
+    assert.equal(JSON.stringify(prepared).includes("Human session override"), false, "Never echo an override's contents");
   }
 });
 
-test("fresh Hermes installation creates no SOUL, unsolicited MCP or bulk skill catalogue", (t) => {
-  const fx = fixture(t);
-  assert.equal(success(fx.init("hermes")).ok, true);
-  assert.equal(existsSync(join(fx.host, "SOUL.md")), false);
-  assert.equal(existsSync(join(fx.root, "SOUL.md")), false);
-  assert.equal(existsSync(join(fx.home, ".agents", "skills")), false);
-  const config = yaml.parse(readFileSync(join(fx.host, "config.yaml"), "utf8"));
-  assert.deepEqual(config.skills.auto_load, ["nullform-workflow"]);
-  assert.deepEqual(Object.keys(config.mcp_servers || {}), []);
-  assert.deepEqual(readdirSync(join(fx.host, "skills")), ["nullform-workflow"]);
-  assert.equal(existsSync(join(fx.project, ".workflow", "state.json")), false);
+test("Hermes native policy rejects malformed agent and prompt fields without writes", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  for (const config of [
+    "agent: false\n", "agent: []\n", "agent: human\n",
+    "agent:\n  system_prompt: false\n", "agent:\n  system_prompt: 42\n",
+    "agent:\n  system_prompt: []\n", "agent:\n  system_prompt: {}\n",
+    "agent:\n  system_prompt: null\n",
+  ]) {
+    put(configPath, config);
+    const before = snapshot(fx.base);
+    assert.throws(() => hermesPolicy(fx));
+    assert.deepEqual(snapshot(fx.base), before);
+  }
 });
 
-for (const skills of ["skills: []\n", "skills: false\n", "skills:\n  auto_load: human-policy\n", "skills:\n  auto_load: [42]\n"]) {
-  test(`Hermes rejects malformed native loader schema before mutation: ${JSON.stringify(skills)}`, (t) => {
-    const fx = fixture(t);
-    put(join(fx.host, "config.yaml"), skills);
+test("Hermes native policy preserves unknown legacy skills instead of adopting them", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  put(join(fx.host, "skills", "nullform-workflow", "SKILL.md"), "Human-owned namesake skill.\n");
+  const asset = readFileSync(join(fx.host, "skills", "nullform-workflow", "SKILL.md"));
+  for (const legacy of [
+    "skills: false\n", "skills: []\n", "skills:\n  auto_load: human-policy\n",
+    "skills:\n  auto_load: [42]\n", "skills:\n  auto_load: [nullform-workflow, human-policy]\n",
+  ]) {
+    put(configPath, `agent:\n  system_prompt: Human base\n${legacy}`);
+    const prepared = hermesPolicy(fx);
+    assert.equal(prepared.activation.status, "configured");
+    assert.deepEqual(prepared.writes.map(([path]) => path), [configPath]);
+    assert.equal(prepared.writes[0][1].includes(legacy), true);
+    assert.deepEqual(yaml.parse(prepared.writes[0][1]).skills, yaml.parse(legacy).skills);
+    assert.deepEqual(readFileSync(join(fx.host, "skills", "nullform-workflow", "SKILL.md")), asset);
+  }
+});
+
+test("Hermes native policy refuses unknown, malformed and modified managed blocks", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  const unknown = `${MANAGED_START}\nHuman-owned policy; not ours to replace.\n${MANAGED_END}`;
+  for (const prompt of [unknown, MANAGED_START, MANAGED_END, `${MANAGED_END}\n${MANAGED_START}`, `${unknown}\n${unknown}`]) {
+    put(configPath, yaml.stringify({ agent: { system_prompt: prompt } }));
     const before = snapshot(fx.base);
-    const result = fx.init("hermes");
-    assert.notEqual(result.status, 0, result.stdout);
+    assert.throws(() => hermesPolicy(fx));
     assert.deepEqual(snapshot(fx.base), before);
-  });
-}
-
-for (const disabled of ["environment", "declared"]) {
-  test(`Hermes does not enable an explicitly unavailable policy loader: ${disabled}`, (t) => {
-    const fx = fixture(t), configPath = join(fx.host, "config.yaml");
-    const config = "# user loader configuration\nskills:\n  auto_load: [human-policy]\n";
-    put(configPath, config);
-    const args = disabled === "declared"
-      ? ["--host-manifest", manifest(fx, { skills: "unavailable" }, { id: "hermes" })] : [];
-    const result = fx.init("hermes", args, disabled === "environment" ? { HERMES_IGNORE_RULES: "1" } : {});
-    const applied = success(result);
-    assert.equal(applied.activation.status, "manual");
-    assert.equal(applied.profile.modules.skills.decision, "manual");
-    assert.equal(applied.profile.runtimeReady.status, "not-verified");
-    assert.equal(existsSync(join(fx.root, "AGENTS.md")), true, "Manual delivery retains project/root instructions without claiming auto-load");
-    assert.equal(readFileSync(configPath, "utf8"), config, "Disabled native loading must not be silently re-enabled");
-    assert.equal(existsSync(join(fx.host, "skills", "nullform-workflow", "SKILL.md")), false);
-    assert.equal(existsSync(join(fx.host, "SOUL.md")), false);
-  });
-}
-
-test("Hermes refuses an unowned policy-skill name without overwriting any files", (t) => {
-  const fx = fixture(t);
-  put(join(fx.host, "config.yaml"), "skills:\n  auto_load: [human-policy]\n");
-  put(join(fx.host, "skills", "nullform-workflow", "SKILL.md"), "---\nname: nullform-workflow\ndescription: Human-owned skill\n---\nDo not replace.\n");
+  }
+  rmSync(configPath);
+  const first = hermesPolicy(fx), managedFiles = {};
+  for (const [path, content] of first.writes) {
+    put(path, content);
+    managedFiles[path] = hashContent(content);
+  }
+  const config = yaml.parse(readFileSync(configPath, "utf8"));
+  config.agent.system_prompt = config.agent.system_prompt.replace(MANAGED_START, `${MANAGED_START}\nHuman edit inside owned block.`);
+  put(configPath, yaml.stringify(config));
   const before = snapshot(fx.base);
-  const result = fx.init("hermes");
-  assert.notEqual(result.status, 0, result.stdout);
+  assert.throws(() => hermesPolicy(fx, { managedFiles }));
   assert.deepEqual(snapshot(fx.base), before);
 });
 
-test("Hermes reapply cannot re-enable a generated policy removed from auto_load by the operator", (t) => {
-  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
-  assert.equal(success(fx.init("hermes")).ok, true);
+test("Hermes native policy does not restore a policy removed by the operator", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml"), managedFiles = {};
+  const first = hermesPolicy(fx);
+  for (const [path, content] of first.writes) {
+    put(path, content);
+    managedFiles[path] = hashContent(content);
+  }
   const config = yaml.parse(readFileSync(configPath, "utf8"));
-  config.skills.auto_load = ["human-policy"];
+  config.agent = { ...config.agent, system_prompt: "Only my human prompt now" };
   put(configPath, yaml.stringify(config));
   const before = snapshot(fx.base);
-  const result = fx.run(["init", "--yes", "--skip-release-check"]);
-  assert.notEqual(result.status, 0, result.stdout);
-  assert.deepEqual(snapshot(fx.base), before, "Human disabling must survive reapply without any partial deployment");
+  assert.throws(() => hermesPolicy(fx, { managedFiles }));
+  assert.deepEqual(snapshot(fx.base), before);
+});
+
+test("Hermes native policy doctor rejects legacy-only loading and respects manual overrides", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  put(join(fx.root, "AGENTS.md"), applyManagedSection("", "Isolated installation policy."));
+  put(configPath, "skills:\n  auto_load: [nullform-workflow]\n");
+  put(join(fx.host, "skills", "nullform-workflow", "SKILL.md"), "---\nname: nullform-workflow\ndescription: Legacy policy\n---\nLegacy content.\n");
+  const options = {
+    harness: fx.root, targetHarness: "hermes", userHome: fx.home, hostHome: fx.host,
+    projectRoot: fx.project, mode: "installed", env: fx.env, skipReleaseCheck: true, skipPluginCheck: true,
+  };
+  const before = snapshot(fx.base);
+  const legacy = runDoctor(options);
+  assert.equal(legacy.checks.find(check => check.id === "harness-integration").status, "fail", "An unconsumed auto_load entry cannot establish configured policy");
+  assert.deepEqual(snapshot(fx.base), before);
+  rmSync(configPath);
+  rmSync(join(fx.host, "skills"), { recursive: true });
+  for (const [path, content] of hermesPolicy(fx).writes) put(path, content);
+  const configured = runDoctor(options);
+  assert.equal(configured.checks.find(check => check.id === "harness-integration").status, "pass");
+  assert.equal(configured.profile.runtimeReady.status, "not-verified");
+  for (const override of [{ HERMES_IGNORE_RULES: "1" }, { HERMES_EPHEMERAL_SYSTEM_PROMPT: "Human session override" }, { HERMES_EPHEMERAL_SYSTEM_PROMPT: "" }]) {
+    const snapshotBefore = snapshot(fx.base);
+    const manual = runDoctor({ ...options, env: { ...fx.env, ...override } });
+    assert.equal(manual.checks.find(check => check.id === "policy-loading").status, "warn");
+    assert.equal(manual.profile.runtimeReady.status, "not-verified");
+    assert.equal(JSON.stringify(manual).includes("Human session override"), false);
+    assert.deepEqual(snapshot(fx.base), snapshotBefore);
+  }
+});
+
+test("Hermes native policy refuses to adopt an exact generated block without ownership", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  const block = `${MANAGED_START}\nAdopted-looking policy text.\n${MANAGED_END}`;
+  put(configPath, yaml.stringify({ agent: { system_prompt: block } }));
+  const before = snapshot(fx.base);
+  // An exact-looking block that we never installed is not authority to rewrite it.
+  assert.throws(() => hermesPolicy(fx, { managedFiles: {} }));
+  assert.deepEqual(snapshot(fx.base), before);
+});
+
+test("Hermes native policy migrates an unchanged owned config to the native block", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  const legacySkill = join(fx.host, "skills", "nullform-workflow", "SKILL.md");
+  put(legacySkill, "Legacy owned skill.\n");
+  put(configPath, "agent:\n  max_turns: 7\n");
+  const managedFiles = {
+    [configPath]: hashContent(readFileSync(configPath, "utf8")),
+    [legacySkill]: hashContent(readFileSync(legacySkill)),
+  };
+  const prepared = hermesPolicy(fx, { managedFiles });
+  const installed = yaml.parse(prepared.writes[0][1]);
+  assert.equal(prepared.activation.status, "configured");
+  assert.equal(installed.agent.max_turns, 7, "Unrelated human fields survive the owned migration");
+  assert.equal(installed.agent.system_prompt.split(MANAGED_START).length - 1, 1);
+});
+
+test("Hermes native policy upgrades an unchanged owned config to a changed policy", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  const first = hermesPolicy(fx), managedFiles = {};
+  for (const [path, content] of first.writes) { put(path, content); managedFiles[path] = hashContent(content); }
+  const before = readFileSync(configPath, "utf8");
+  // Same full-config hash as persisted ownership, different generated policy/root: a legitimate upgrade.
+  const changed = hermesPolicy(fx, { managedFiles, slashRoot: `${fx.root.replace(/\\/g, "/")}/moved` });
+  assert.equal(changed.writes[0][1] !== before, true);
+  assert.equal(changed.writes[0][1].includes(`${fx.root.replace(/\\/g, "/")}/moved`), true);
+  assert.equal(changed.writes[0][1].split(MANAGED_START).length - 1, 1);
+});
+
+test("Hermes native policy never re-enables a block removed after legacy ownership", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  const legacySkill = join(fx.host, "skills", "nullform-workflow", "SKILL.md");
+  put(legacySkill, "Legacy owned skill.\n");
+  put(configPath, "agent:\n  system_prompt: Human base\n");
+  const managedFiles = {
+    [configPath]: hashContent(readFileSync(configPath, "utf8")),
+    [legacySkill]: hashContent(readFileSync(legacySkill)),
+  };
+  // Operator removed the native block and rewrote the prompt: legacy ownership is not consent.
+  put(configPath, "agent:\n  system_prompt: Only my human prompt now\n");
+  const before = snapshot(fx.base);
+  assert.throws(() => hermesPolicy(fx, { managedFiles }));
+  assert.deepEqual(snapshot(fx.base), before);
+});
+
+test("Hermes native policy rejects merge keys and YAML 1.1 boolean prompt scalars", (t) => {
+  const fx = fixture(t), configPath = join(fx.host, "config.yaml");
+  for (const config of [
+    "defaults: &d\n  system_prompt: inherited\nagent:\n  <<: *d\n  max_turns: 5\n",
+    "agent:\n  system_prompt: off\n",
+    "agent:\n  system_prompt: yes\n",
+    "agent:\n  system_prompt: on\n",
+  ]) {
+    put(configPath, config);
+    const before = snapshot(fx.base);
+    assert.throws(() => hermesPolicy(fx), `must refuse: ${JSON.stringify(config)}`);
+    assert.deepEqual(snapshot(fx.base), before);
+  }
+  // Explicit quoting and !!str keep the value a real string and are accepted.
+  for (const config of ["agent:\n  system_prompt: \"off\"\n", "agent:\n  system_prompt: !!str off\n"]) {
+    put(configPath, config);
+    assert.equal(hermesPolicy(fx).activation.status, "configured");
+  }
 });
 
 test("custom instruction destination preserves human text and uses the stored manifest on reapply", (t) => {

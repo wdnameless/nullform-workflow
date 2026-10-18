@@ -3,10 +3,11 @@ import { join, resolve } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolveNpmRunner } from './installation-state.mjs';
-import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isSecretOrCredentialPath, isStructuralExcludedPath, isAcceptancePath } from './worktree-snapshot.mjs';
+import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isSecretOrCredentialPath, isStructuralExcludedPath, isAcceptancePath, cleanGitEnv } from './worktree-snapshot.mjs';
+import { withoutProviderCredential } from './review-budget.mjs';
 
 function git(root, args) {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync('git', args, { cwd: root, env: cleanGitEnv(), encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const MAX_AGGREGATE_JSON_BYTES = 30 * 1024;
@@ -119,7 +120,12 @@ export function inspectProduct(options, requests) {
   if (totalRendered > 32 * 1024) throw new Error(`Aggregate rendered JSON (${totalRendered} bytes) exceeds 32KiB budget`);
   return pages;
 }
-export function executeProduct({ root, productCommand }) {
+/**
+ * Fixed product command execution. `safeEnv` defaults to the ambient environment with
+ * the provider credential removed: an operator-authorized command is outside the model
+ * money ceiling, but it must never inherit (and leak) the provider key.
+ */
+export function executeProduct({ root, productCommand, safeEnv = null }) {
   if (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(x => typeof x !== 'string' || x.includes('\0')) || !productCommand[0].trim()) throw new Error('No operator-authorized product command');
   const before = sourceDigest(root);
   let command = productCommand[0], args = productCommand.slice(1);
@@ -131,10 +137,38 @@ export function executeProduct({ root, productCommand }) {
     command = runner.command;
     args = [cli, ...args];
   }
-  const result = spawnSync(command, args, { cwd: root, shell: false, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
+  const env = safeEnv || withoutProviderCredential(process.env);
+  const result = spawnSync(command, args, { cwd: root, env, shell: false, windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
   if (sourceDigest(root) !== before) throw new Error('Product command mutated source; read-only execution violated');
   if (result.error || result.status === null) throw new Error(`Product execution failed or timed out${result.error?.code ? ` (${result.error.code})` : ''}`);
   return JSON.stringify({ cwd: resolve(root), exitCode: result.status, stdout: UTF8_DECODER.decode(result.stdout), stderr: UTF8_DECODER.decode(result.stderr) });
+}
+
+/**
+ * The single once-per-session product reader. Both the native OMP plugin path and the
+ * controlled HTTP loop use this, so "execute once, then page" cannot diverge.
+ * `state` carries { buffer, meta } across calls; the command runs only on offset 0 of a
+ * fresh state, and every later offset (including a repeated 0) is served from the cache.
+ */
+export function readProductPage(state, { root, productCommand, provenance, offset = 0 }) {
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error(`Invalid output offset: ${offset}`);
+  if (sourceDigest(root) !== provenance.sourceDigest) throw new Error('Product source changed from review context');
+  if (!state.buffer) {
+    if (offset !== 0) throw new Error('Output continuation requires an initial execution at offset=0');
+    const startedAt = new Date().toISOString();
+    const text = executeProduct({ root, productCommand });
+    const completedAt = new Date().toISOString();
+    let result;
+    try { result = JSON.parse(text); } catch { throw new Error('Product execution returned unparsable output'); }
+    const buffer = Buffer.from(text, 'utf8');
+    state.buffer = buffer;
+    state.meta = { cwd: result.cwd, commandHash: provenance.productCommandHash, sourceDigest: provenance.sourceDigest,
+      exitCode: result.exitCode, startedAt, completedAt, contentHash: createHash('sha256').update(buffer).digest('hex') };
+  }
+  const { buffer, meta } = state;
+  if (offset > buffer.length) throw new Error(`Output offset ${offset} exceeds total bytes ${buffer.length}`);
+  const { text, nextOffset } = sliceUtf8Page(buffer, offset, MAX_AGGREGATE_JSON_BYTES, meta);
+  return { page: { ...meta, offset, nextOffset, totalBytes: buffer.length, text }, meta, execution: state.execution };
 }
 export default function (pi) {
   const options = JSON.parse(process.env.WORKFLOW_REVIEW_OPTIONS || '{}');

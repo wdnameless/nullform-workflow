@@ -9,7 +9,7 @@
  *   - cursor    (Cursor -> .cursor/rules/00-workflow.mdc)
  *   - omp       (Oh My Pi -> ~/.omp/agent/AGENTS.md)
  *   - openclaw  (OpenClaw -> openclaw.json + AGENTS.md + SOUL.md + USER.md + skills)
- *   - hermes    (Hermes -> config.yaml + AGENTS.md + skills)
+ *   - hermes    (Hermes -> config.yaml + AGENTS.md)
  *   - openhuman (OpenHuman -> AGENTS.md + copied skills)
  *   - all       (All adapters)
  *   - auto      (Auto-detect harness; fallback: omp)
@@ -419,7 +419,7 @@ function installHarness(options = {}) {
   const report = reports[selectedHarness];
   preflightAllConfigs({ harnesses: targetHarnesses, targetRoot, projectRoot, userHome, hostHomes, hostManifest });
   const hermesActivation = targetHarnesses.includes("hermes") ? prepareHermesActivation({
-    hostHome: hostHomes.hermes, slashRoot, report: reports.hermes, managedFiles: options.managedFiles, env, translateStdioEntry,
+    hostHome: hostHomes.hermes, slashRoot, report: reports.hermes, managedFiles: options.managedFiles, env,
   }) : null;
 
   let lock = null;

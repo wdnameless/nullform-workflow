@@ -6,26 +6,22 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 
 import {
   applyManagedSection,
   applyCursorMdc,
   updateOpencodeJson,
   updateOpenclawJson,
-  updateHermesConfigYaml,
   getMarkdownAdapter,
   getOpenclawSoul,
   getOpenclawUser,
-  hashContent,
   loadYaml,
-  MANAGED_START,
-  MANAGED_END,
   preflightJsoncConfig,
   preflightJson5Config,
   preflightYamlConfig,
   resolveOpencodeConfigPaths,
 } from "./harness-config.mjs";
+import { updateHermesConfigYaml } from "./hermes-policy.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
@@ -87,84 +83,47 @@ export function installOmpHomeAssets({
   }
 }
 
-/** Prepare the complete native activation before core copying or journaling starts. */
-export function prepareHermesActivation({ hostHome, slashRoot, report, managedFiles = {}, env = process.env, translateStdioEntry }) {
+/** Prepare native prompt activation before core copying or journaling starts. */
+export function prepareHermesActivation({ hostHome, slashRoot, report, managedFiles = {}, env = process.env }) {
   const configPath = join(hostHome, "config.yaml");
-  const skillPath = join(hostHome, "skills", "nullform-workflow", "SKILL.md");
-  const original = preflightYamlConfig(configPath);
-  let config = updateHermesConfigYaml(configPath, original);
+  preflightYamlConfig(configPath);
+  const original = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
   const settings = loadYaml().parse(original || "{}") || {};
-  const auto = settings.skills?.auto_load || [];
-  const ownedHash = managedFiles[skillPath];
-  if (existsSync(join(hostHome, "skills", "nullform-workflow")) &&
-      (!existsSync(skillPath) || !ownedHash || hashContent(readFileSync(skillPath)) !== ownedHash)) {
-    throw new Error("Hermes quality skill collision: preserve the unowned/modified nullform-workflow skill; choose a separate host home or resolve manually.");
+  const warnings = [];
+  if (Object.hasOwn(settings, "skills") || existsSync(join(hostHome, "skills"))) {
+    warnings.push("Legacy Hermes skills/skills.auto_load preserved without adoption or deletion. This client does not consume auto_load; review legacy loading manually.");
   }
-  if (auto.includes("nullform-workflow") && !ownedHash) {
-    throw new Error("Hermes quality skill name is already registered without proven ownership; preserve the human registration and resolve the collision manually.");
+  if (settings.mcp_servers && Object.keys(settings.mcp_servers).length) {
+    warnings.push("Existing MCP registrations preserved; legacy servers may still run.");
   }
-  if (ownedHash && !auto.includes("nullform-workflow")) {
-    throw new Error("Hermes quality skill was removed from auto_load by the operator; refusing to re-enable it. Restore it explicitly or use project instructions manually.");
+  if (managedFiles[join(hostHome, "SOUL.md")]) {
+    warnings.push("Legacy SOUL policy preserved; resolve its ownership and behavior manually.");
   }
-  const skills = report.capabilities?.skills;
-  if (skills?.status === "unavailable" ||
-      /^(1|true|yes|on)$/i.test(env.HERMES_IGNORE_RULES || "") ||
-      settings.skills?.enabled === false || settings.skills?.disabled?.includes?.("nullform-workflow")) {
+  const override = Object.hasOwn(env, "HERMES_EPHEMERAL_SYSTEM_PROMPT");
+  const ignored = /^(1|true|yes|on)$/i.test(String(env.HERMES_IGNORE_RULES || "").trim());
+  if (override || ignored) {
+    const detail = override
+      ? "HERMES_EPHEMERAL_SYSTEM_PROMPT is present; use explicit project instructions manually or resolve that override yourself."
+      : "HERMES_IGNORE_RULES is selected; use explicit project instructions manually. No policy was re-enabled.";
     return {
-      writes: [],
-      warnings: [
-        "Native skill loading is disabled/unavailable. Use the generated installation-root AGENTS.md as explicit project instructions manually; no auto-load changes were made.",
-        "Any existing legacy assets/registrations are preserved and may remain active; this is not a deactivation claim.",
-      ],
-      activation: { status: "manual", detail: "No native activation; skills tools/HERMES_IGNORE_RULES or declared support prevent loading." },
+      writes: [], warnings: [...warnings, detail, "Existing native/legacy policy is preserved; this is not a deactivation claim."],
+      activation: { status: "manual", path: configPath, field: "agent.system_prompt", detail },
     };
   }
   const policy = getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter", report);
-  const content = `---\nname: nullform-workflow\ndescription: Native-first task quality and truthful result verification.\n---\n\n${policy}`;
-  const writes = [[skillPath, content], [configPath, config]];
-  const warnings = [];
-  // Exact generated managed bytes prove block ownership without adopting surrounding human text.
-  const soulPath = join(hostHome, "SOUL.md");
-  if (existsSync(soulPath)) {
-    const text = readFileSync(soulPath, "utf8");
-    const legacy = `${MANAGED_START}\n${getMarkdownAdapter(slashRoot, "Hermes Agent NULLFORM WORKFLOW Adapter").trim()}\n${MANAGED_END}`;
-    if (text.includes(legacy) && text.indexOf(MANAGED_START) === text.lastIndexOf(MANAGED_START) &&
-        text.indexOf(MANAGED_END) === text.lastIndexOf(MANAGED_END)) writes.push([soulPath, text.replace(legacy, "")]);
-    else if (text.includes(MANAGED_START) || managedFiles[soulPath]) {
-      warnings.push("Modified/unknown legacy SOUL policy preserved; its legacy behavior may remain active.");
-    }
-  }
-  if (original && managedFiles[configPath] === hashContent(original)) {
-    const example = JSON.parse(readFileSync(join(REPO_ROOT, "agent", "mcp.json.example"), "utf8"));
-    const doc = loadYaml().parseDocument(config, { keepSourceTokens: true });
-    for (const [name, entry] of Object.entries(example.mcpServers || {})) {
-      if (JSON.stringify(entry).includes("__")) continue;
-      const translated = translateStdioEntry ? translateStdioEntry(entry) : entry;
-      const expected = {
-        ...(translated.command ? { command: translated.command } : {}),
-        ...(translated.args?.length ? { args: translated.args } : {}),
-        ...(translated.env && Object.keys(translated.env).length ? { env: translated.env } : {}),
-      };
-      if (isDeepStrictEqual(settings.mcp_servers?.[name], expected)) {
-        doc.deleteIn(["mcp_servers", name]);
-        delete settings.mcp_servers[name];
-      }
-    }
-    config = doc.toString();
-    writes[1][1] = config;
-  }
-  if (settings.mcp_servers && Object.keys(settings.mcp_servers).length) {
-    warnings.push("Existing MCP registrations preserved: per-entry ownership is not proven; legacy servers may still run.");
-  }
-  const skillPrefix = `${join(hostHome, "skills").replace(/\\/g, "/")}/`;
-  if (Object.keys(managedFiles).some(path => path.replace(/\\/g, "/").startsWith(skillPrefix) && path !== skillPath)) {
-    warnings.push("Legacy managed home-skill catalogue preserved; old skill entries may remain discoverable.");
-  }
+  // Old deployments owned a skill as well as config.yaml. An unchanged owned config plus
+  // that proven legacy registration is the only accepted proof for the first native migration;
+  // a bare legacy skill presence is not ownership and never adopts the block.
+  const legacySkill = join(hostHome, "skills", "nullform-workflow", "SKILL.md");
+  const config = updateHermesConfigYaml(configPath, original, policy, {
+    ownedConfigHash: managedFiles[configPath] || null,
+    legacyRegistration: Boolean(managedFiles[legacySkill]),
+  });
   return {
-    writes, warnings,
+    writes: [[configPath, config]], warnings,
     activation: {
-      status: "configured", skill: "nullform-workflow", path: skillPath,
-      detail: "Native skills.auto_load registration only; runtime loading is unverified and requires skills tools and HERMES_IGNORE_RULES unset. Delegated children may skip skills.",
+      status: "configured", path: configPath, field: "agent.system_prompt",
+      detail: "Native agent.system_prompt configured; active-session/model execution and delegated-child inheritance remain unverified.",
     },
   };
 }
@@ -200,6 +159,13 @@ export function applyHarnessAdapter(h, ctx) {
     const filename = h === "claude" ? "CLAUDE.md" : "AGENTS.md";
     writeMd(join(targetRoot, filename));
     if (h === "hermes") {
+      // A manual apply must not forget prior ownership and later restore a
+      // policy the operator removed while a session override was active.
+      const configPath = join(hostHome, "config.yaml");
+      const priorHash = ctx.options?.managedFiles?.[configPath];
+      if (ctx.hermesActivation.activation.status === "manual" && priorHash) {
+        ctx.plan.managedFiles[configPath] = priorHash;
+      }
       for (const [path, content] of ctx.hermesActivation.writes) writeAdapter(path, content);
       ctx.plan.activation = ctx.hermesActivation.activation;
       ctx.plan.warnings.push(...ctx.hermesActivation.warnings);

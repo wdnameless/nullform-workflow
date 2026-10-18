@@ -198,6 +198,9 @@
     "rel": "tools/harness-config.mjs"
   },
   {
+    "rel": "tools/hermes-policy.mjs"
+  },
+  {
     "rel": "tools/install-harness.mjs"
   },
   {
@@ -259,6 +262,18 @@
   },
   {
     "rel": "tools/review-native-tools.mjs"
+  },
+  {
+    "rel": "tools/review-budget.mjs"
+  },
+  {
+    "rel": "tools/review-http-runtime.mjs"
+  },
+  {
+    "rel": "tools/review-http-child.mjs"
+  },
+  {
+    "rel": "tools/review-http-evidence.mjs"
   },
   {
     "rel": "tools/worktree-snapshot.mjs"

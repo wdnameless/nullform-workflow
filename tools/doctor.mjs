@@ -50,7 +50,9 @@ import {
   loadYaml,
   MANAGED_START,
   MANAGED_END,
+  getMarkdownAdapter,
 } from "./harness-config.mjs";
+import { updateHermesConfigYaml } from "./hermes-policy.mjs";
 import { checkVersionAlignment, checkHarnessCapabilities } from "./harness-capabilities.mjs";
 import { inspectHarness, resolveHostHome } from "./harness-profiles.mjs";
 import { readInstallationState } from "./installation-state.mjs";
@@ -86,6 +88,22 @@ export function normalizePath(p) {
 export function stripBom(text) {
   if (typeof text !== "string") return text;
   return text.replace(/^\uFEFF/, "");
+}
+
+/**
+ * Real Node executable for `--check`. Under Bun, `process.execPath` IS Bun, and
+ * `bun --check <file>` executes the file instead of only parsing it. Probe once for
+ * a real Node; if none exists, fail rather than silently executing tools under Bun.
+ */
+function resolveSyntaxChecker() {
+  if (!process.versions.bun) return process.execPath;
+  const probe = spawnSync("node", ["-p", "process.versions.bun?'':process.execPath"], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  const resolved = probe.status === 0 ? probe.stdout.trim() : "";
+  if (!resolved) throw new Error("A real Node executable is required to check tool syntax under Bun; install Node or run doctor with Node.");
+  return resolved;
 }
 
 /** Маркеры, отличающие репозиторий от живого харнесса (см. sync.ps1 Resolve-RepoRoot). */
@@ -568,25 +586,19 @@ function checkNonOmpHarness({ harness, targetHarness, projectRoot, profile, env 
     try {
       const path = join(profile.hostHome, "config.yaml");
       const settings = loadYaml().parse(preflightYamlConfig(path) || "{}") || {};
-      const manual = /^(1|true|yes|on)$/i.test(env.HERMES_IGNORE_RULES || "") || settings.skills?.enabled === false || profile.capabilities.skills?.status === "unavailable";
-      const auto = settings.skills?.auto_load;
-      if (!manual && (!Array.isArray(auto) || auto.some(name => typeof name !== "string") || auto.filter(name => name === "nullform-workflow").length !== 1)) {
-        errors.push("Hermes skills.auto_load must register nullform-workflow exactly once");
+      const manual = Object.hasOwn(env, "HERMES_EPHEMERAL_SYSTEM_PROMPT") || /^(1|true|yes|on)$/i.test(String(env.HERMES_IGNORE_RULES || "").trim());
+      if (!manual) {
+        const original = existsSync(path) ? readFileSync(path, "utf8") : null;
+        const policy = getMarkdownAdapter(harness.replace(/\\/g, "/"), "Hermes Agent NULLFORM WORKFLOW Adapter", profile);
+        if (updateHermesConfigYaml(path, original, policy, { validateOnly: true }) !== original) errors.push("Hermes agent.system_prompt managed policy is missing; legacy skills.auto_load is not a native loader.");
       }
-      const skill = join(profile.hostHome, "skills", "nullform-workflow", "SKILL.md");
-      if (!manual && !existsSync(skill)) errors.push("Hermes quality skill missing in selected profile");
-      else if (!manual) {
-        const text = readFileSync(skill, "utf8");
-        const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
-        const metadata = match ? loadYaml().parse(match[1]) : null;
-        if (metadata?.name !== "nullform-workflow" || typeof metadata?.description !== "string") errors.push("Invalid Hermes quality skill frontmatter");
-      }
-      if (manual) {
-        checks.push({ id: "policy-loading", status: "warn", detail: "Native skill loading disabled/unavailable: manual project instructions required; registration is not activation." });
-      } else checks.push({
+      checks.push({
         id: "policy-loading", status: "warn",
-        detail: "skills.auto_load configured, not runtime-proven; skills tools and HERMES_IGNORE_RULES permit loading. Delegated children may skip skills; parent must pass scoped requirements and checks.",
+        detail: manual
+          ? "HERMES_EPHEMERAL_SYSTEM_PROMPT is present or HERMES_IGNORE_RULES is selected: manual project instructions required; existing configuration preserved."
+          : "Native agent.system_prompt checked as configuration only; active-session/model execution and delegated-child inheritance remain unverified.",
       });
+      if (Object.hasOwn(settings, "skills") || existsSync(join(profile.hostHome, "skills"))) checks.push({ id: "legacy-skills", status: "warn", detail: "Existing skills/skills.auto_load preserved; auto_load is not consumed by this native client. Resolve legacy loading manually." });
       if (settings.mcp_servers && Object.keys(settings.mcp_servers).length) checks.push({ id: "legacy-extras", status: "warn", detail: "Existing MCP registrations preserved; legacy servers may remain active." });
     } catch (error) { errors.push(error.message); }
   }
@@ -728,9 +740,15 @@ export function runDoctor(options) {
         mjsFiles = [];
       }
 
-      for (const mjs of mjsFiles) {
+      let syntaxChecker = null;
+      try {
+        syntaxChecker = resolveSyntaxChecker();
+      } catch (error) {
+        syntaxErrors.push(`real Node unavailable (${error.message})`);
+      }
+      for (const mjs of syntaxChecker ? mjsFiles : []) {
         const fullPath = join(toolsDir, mjs);
-        const res = spawnSync(process.execPath, ["--check", fullPath], {
+        const res = spawnSync(syntaxChecker, ["--check", fullPath], {
           encoding: "utf8",
           windowsHide: true,
         });

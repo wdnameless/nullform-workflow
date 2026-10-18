@@ -639,31 +639,6 @@ export function getOpenclawUser(slashRoot) {
   ].join("\n");
 }
 
-/**
- * Registers one quality policy using the native auto-load list, preserving YAML nodes/comments.
- * Also used during preflight before any filesystem mutation.
- */
-export function updateHermesConfigYaml(existingPath, preflightedContent) {
-  const yaml = loadYaml();
-  const doc = yaml.parseDocument(preflightedContent || "{}\n", { keepSourceTokens: true });
-  if (doc.errors.length) throw new Error(`Preflight failed: malformed YAML in ${existingPath}`);
-  if (doc.has("skills") && !yaml.isMap(doc.get("skills", true))) {
-    throw new Error("Preflight failed: Hermes skills must be a mapping");
-  }
-  const skills = doc.get("skills", true);
-  if (skills?.has("auto_load")) {
-    const auto = skills.get("auto_load", true);
-    if (!yaml.isSeq(auto) || auto.items.some(item => !yaml.isScalar(item) || typeof item.value !== "string" || !item.value.trim())) {
-      throw new Error("Preflight failed: Hermes skills.auto_load must be a list of skill names");
-    }
-    if (auto.items.filter(item => item.value === "nullform-workflow").length > 1) throw new Error("Preflight failed: duplicate nullform-workflow auto_load registration");
-  }
-  if (!doc.has("skills")) doc.set("skills", doc.createNode({}));
-  if (!doc.hasIn(["skills", "auto_load"])) doc.setIn(["skills", "auto_load"], doc.createNode([]));
-  const auto = doc.getIn(["skills", "auto_load"], true);
-  if (!auto.items.some(item => item.value === "nullform-workflow")) auto.add("nullform-workflow");
-  return doc.toString();
-}
 
 /**
  * Calculates a SHA-256 hash of text content.
