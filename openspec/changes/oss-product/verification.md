@@ -91,3 +91,14 @@ Parent executed `node --test --test-concurrency=2 tools/tests/*.test.mjs`:1030co
 The remaining workflow-audit suite was executed in the identical-code isolated oss-internals worktree after the test-only deletion:12/12passed,0skip,26596.1955ms. No production matcher was changed for that failure. Do not relabel the earlier whole run as an all-green invocation; the forthcoming remote full-suite result and exact-archive certificate are the final current-tree evidence.
 
 After source freeze, certificate/CI results are stored in ignored `.tmp` artifacts and PR evidence so that reporting them does not mutate the certified source tree. This Markdown is a chronological record, not a release-acceptance receipt.
+
+## First frozen candidate: archive proof and CI diagnosis
+
+Candidate71fe443 passed local Windows/Node24 exact-archive certification and offline real `npm exec --package <certified archive> -- nullform init`: automatic isolated Claude selection, human-policy preservation, one managed block, repeat init and no unrequested global catalogue. This is package/CLI behavior, not execution inside a native client session.
+
+CI39313476830 certified the same producer archive on Ubuntu, Windows and macOS with Node22 and24. Parent downloaded all6certificates and verified their exact commit71fe443, common sourceDigest, archive SHA256/SHA512/size and8-harness install/update outcomes. Archive SHA256 was9bf75b73fc563273885b251fb7a612d46e1ed28b6d1030732e53e9e02f2649a8; local Windows pack had different bytes and its own certificate. Neither is approval of a later commit.
+
+The remote whole unit suite was NOT green:1029counted,1017passed,1failed,11skipped,409266.129149ms. The sole failure was install-harness237, which expected default install doctor to FAIL whenever the host had no `omp`. Default doctor no longer audits OMP plugins without explicit `--require-plugins`; requiring an ambient binary contradicts the minimal-native installation contract. The test-only correction removes that obsolete host prerequisite while retaining sandbox installation checks, doctor success and exit-code/report consistency. Strict opt-in plugin regressions remain. Subsequent acceptance requires a fresh run; no old certificate or review receipt is retagged.
+
+Parent after-proof ran the corrected sandbox-install case with a controlled PATH explicitly proven not to contain `omp`:1/1passed,0failed0skipped,46199.4593ms. Actual installation and shipped verifier were executed; production source stayed unchanged. A pre-existing Node DEP0190 shell warning was observed, not suppressed.
+

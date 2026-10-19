@@ -214,9 +214,10 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
     }
     const statusOf = (label) =>
       report.results.find((result) => result.label.startsWith(label))?.status;
-    // Installation-owned checks that do not depend on a native home catalogue: a fresh OMP
-    // install keeps skills/rules/agent under the portable root, so the verifier's home-catalogue
-    // checks are not part of this install's contract.
+    // Installation-owned checks that do not depend on a native home catalogue or a host
+    // `omp` binary: a fresh OMP install keeps skills/rules/agent under the portable root, and
+    // the verifier's install-doctor check runs the shipped doctor, whose plugin probe is
+    // opt-in (`--require-plugins`) and therefore not part of this install's contract.
     for (const label of [
       "node present",
       "no unsubstituted placeholders",
@@ -224,6 +225,7 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
       "prompt surfaces match baseline",
       "tier gate enforces artifacts",
       "portable core specification",
+      "install doctor",
     ]) {
       assert.equal(statusOf(label), "PASS", `${label}: ${JSON.stringify(report.results)}`);
     }
@@ -233,11 +235,6 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
       statusOf("openspec present"),
       hasCommand("openspec") ? "PASS" : "FAIL",
       "openspec presence must be reported honestly"
-    );
-    assert.equal(
-      statusOf("install doctor"),
-      hasCommand("omp") ? "PASS" : "FAIL",
-      "omp-dependent doctor must be reported honestly"
     );
 
     // Exit code must agree with the reported failures — no silent green.
