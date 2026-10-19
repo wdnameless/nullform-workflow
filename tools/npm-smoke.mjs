@@ -240,7 +240,7 @@ async function verifyPackAndInventory(ctx, registry, candidateTarballPath = null
     for (const b of banned) assert.ok(f !== b && !f.startsWith(`${b}/`) && !f.includes("/node_modules/"), `Banned: ${f}`);
     assert.ok(!f.endsWith("CODEMAP.md") && !(/\.env(\.|$)/i.test(f) && !f.endsWith("secrets.example.env")));
   }
-  const reqs = ["package.json", "VERSION", "LICENSE", "jev/LICENSE", "README.md", "CONTEXT.md", ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/harness-config.mjs", "tools/installation-state.mjs", "tools/doctor.mjs", "tools/self-update.mjs", "tools/workflow.mjs", "tools/verify.mjs", "tools/sync-manifest.json", "verify.ps1", "verify.sh"];
+  const reqs = ["package.json", "VERSION", "LICENSE", "jev/LICENSE", "README.md", "CONTEXT.md", ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/installation/config.mjs", "tools/installation/state.mjs", "tools/doctor.mjs", "tools/self-update.mjs", "tools/workflow.mjs", "tools/verify.mjs", "tools/sync-manifest.json", "verify.ps1", "verify.sh"];
   for (const req of reqs) assert.ok(packedFiles.includes(req), `Missing asset: ${req}`);
 
   const digests = computeFileDigests(tarballPath);
@@ -346,12 +346,20 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   writeFileSync(join(vUpSource, "package.json"), JSON.stringify(vUpPkg, null, 2) + "\n", "utf8");
   writeFileSync(join(vUpSource, "VERSION"), `${upgradeVersion}\n`, "utf8");
 
-  const ompSkills = join(ctx.spaceBase, "home_omp", ".agents", "skills");
+  // Portable assets live under the installation root; OMP keeps no home skill catalogue.
+  const ompSkills = join(ctx.spaceBase, "root_omp", "skills");
   const ownedSkillFile = join(ompSkills, "ui-ux-pro-max", "scripts", "core.py");
   const userSkillFile = join(ompSkills, "ui-ux-pro-max", "scripts", "validate_data.py");
   writeFileSync(userSkillFile, "# User edit to validate_data.py preserved\n", "utf8");
   writeFileSync(join(vUpSource, "skills", "ui-ux-pro-max", "scripts", "core.py"), `# Upgraded core.py v${upgradeVersion}\n`, "utf8");
   writeFileSync(join(vUpSource, "skills", "ui-ux-pro-max", "scripts", "validate_data.py"), `# Upgraded validate_data.py v${upgradeVersion}\n`, "utf8");
+  assert.equal(existsSync(join(ctx.spaceBase, "home_omp", ".agents", "skills")), false, "R03/R06: OMP update must not create a home skill catalogue");
+  // A pre-existing human global skill catalogue is not ours: it must survive the update
+  // byte-identically and must not be joined by an installer-created catalogue.
+  const humanGlobalSkills = join(ctx.spaceBase, "home_omp", ".agents", "skills");
+  const humanGlobalSkill = join(humanGlobalSkills, "human-owned", "SKILL.md");
+  mkdirSync(dirname(humanGlobalSkill), { recursive: true });
+  writeFileSync(humanGlobalSkill, "# Human global skill\nNever adopt or rewrite.\n", "utf8");
   assert.equal((await ctx.runNpm(["pack", "--ignore-scripts", "--pack-destination", ctx.tempPackDir], vUpSource)).status, 0);
   const vUpTarballPath = join(ctx.tempPackDir, `nullform-workflow-${upgradeVersion}.tgz`);
 
@@ -371,6 +379,8 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   assert.equal(updatedState.version, upgradeVersion);
   assert.equal(readFileSync(join(opencodeRoot, "VERSION"), "utf8").trim(), upgradeVersion);
   assert.equal(readFileSync(ownedSkillFile, "utf8"), `# Upgraded core.py v${upgradeVersion}\n`, "R03/R06: Owned asset updated");
+  assert.equal(readFileSync(humanGlobalSkill, "utf8"), "# Human global skill\nNever adopt or rewrite.\n", "R03/R06: Human global skill must stay byte-identical across update");
+  assert.deepEqual(readdirSync(humanGlobalSkills), ["human-owned"], "R03/R06: Update must not add its own skills to a human global catalogue");
   assert.equal(readFileSync(userSkillFile, "utf8"), "# User edit to validate_data.py preserved\n", "R03/R06: User edit preserved");
 
   for (const h of HARNESS_CHOICES.filter((c) => c !== "opencode")) {
@@ -392,7 +402,15 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
     for (const mdPath of fixture.mdFiles) {
       const md = readFileSync(mdPath, "utf8");
       assert.ok(md.includes(fixture.humanBefore) && md.includes(fixture.humanAfter), `Human notes lost in ${mdPath}`);
-      assert.ok(md.includes("NULLFORM WORKFLOW"), `Adapter missing in ${mdPath}`);
+      if (h === "omp") assert.ok(md.includes(hRoot.replace(/\\/g, "/")), `OMP law lost the portable root in ${mdPath}`);
+      else assert.ok(md.includes("NULLFORM WORKFLOW"), `Adapter missing in ${mdPath}`);
+    }
+    // Identity surfaces and seeded legacy assets stay byte-identical across an upgrade.
+    for (const identityPath of fixture.mdIdentity) {
+      assert.equal(readFileSync(identityPath, "utf8"), fixture.mdContent, `Identity surface altered by update: ${identityPath}`);
+    }
+    for (const legacyPath of fixture.legacyFiles) {
+      assert.equal(readFileSync(legacyPath, "utf8"), fixture.cfgContent, `Legacy asset altered by update: ${legacyPath}`);
     }
     for (const cfgPath of fixture.cfgFiles) {
       assert.ok(readFileSync(cfgPath, "utf8").includes(hSecret), `Secret lost in ${cfgPath}`);

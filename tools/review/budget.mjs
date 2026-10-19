@@ -1,5 +1,5 @@
 /**
- * tools/review-budget.mjs — single financial authority for controlled review.
+ * tools/review/budget.mjs — single financial authority for controlled review.
  *
  * One permanent ledger per PROJECT, never per worktree: the ledger lives beside the
  * verified Git common directory (or, only when non-Git status is established, in the
@@ -9,7 +9,7 @@ import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readF
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { validateRootPath } from './worktree-snapshot.mjs';
+import { validateRootPath } from '../worktree-snapshot.mjs';
 
 export const BUDGET_LEDGER_FILE = 'nullform-review-budget.json';
 // Non-Git fallback state lives under .workflow/ (structurally excluded from the source

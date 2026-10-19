@@ -21,7 +21,7 @@ import {
   countSourceChanges,
   isFlashOrFallback,
   EVIDENCE_FILE,
-} from "../review-evidence.mjs";
+} from "../review/evidence.mjs";
 import { nativeRunner, prepareEvidence } from "./fixtures/review-execution.mjs";
 
 function setupMockProject(root, changeId = "feat-test") {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, cpSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, cpSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { join, resolve, dirname, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync, spawn } from "node:child_process";
@@ -232,10 +232,12 @@ name: ${role.replace(".md", "")}
     if (omitTools.includes(tool)) continue;
     // Copy real tool or create minimal valid script
     const realToolPath = join(REPO_ROOT, "tools", tool);
+    const harnessToolPath = join(harness, "tools", tool);
+    mkdirSync(dirname(harnessToolPath), { recursive: true });
     try {
-      copyFileSync(realToolPath, join(harness, "tools", tool));
+      copyFileSync(realToolPath, harnessToolPath);
     } catch {
-      writeFileSync(join(harness, "tools", tool), "export const ok = true;\n", "utf8");
+      writeFileSync(harnessToolPath, "export const ok = true;\n", "utf8");
     }
   }
 
@@ -322,6 +324,48 @@ test("doctor fails when required sync engine and manifest are missing", () => {
     assert.equal(toolsSyntaxCheck.status, "fail");
     assert.match(toolsSyntaxCheck.detail, /sync\.mjs/);
     assert.match(toolsSyntaxCheck.detail, /sync-manifest\.json/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("doctor tools-syntax enumerates nested runtime modules and refuses to certify unreadable or linked entries", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-test-nested-syntax-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const nestedBroken = join(harness, "tools", "installation", "broken.mjs");
+    writeFileSync(nestedBroken, "export function broken( {\n", "utf8");
+
+    const res = spawnSync(
+      process.execPath,
+      [DOCTOR_PATH, "--harness", harness, "--json"],
+      { encoding: "utf8" }
+    );
+    assert.equal(res.status, 1, `Expected exit 1 for invalid nested module, got ${res.status}. ${res.stdout}`);
+
+    const json = JSON.parse(res.stdout);
+    const toolsSyntaxCheck = json.checks.find(c => c.id === "tools-syntax");
+    assert.ok(toolsSyntaxCheck, "tools-syntax check must be present");
+    assert.equal(toolsSyntaxCheck.status, "fail");
+    assert.match(toolsSyntaxCheck.detail, /installation\/broken\.mjs/, "Nested module must be syntax-checked, not silently skipped");
+
+    let linked = false;
+    try {
+      symlinkSync(nestedBroken, join(harness, "tools", "installation", "linked.mjs"), "file");
+      linked = true;
+    } catch {
+      linked = false; // Symlink creation is privileged on some hosts; the nested check above still applies.
+    }
+    if (linked) {
+      const linkedRes = spawnSync(
+        process.execPath,
+        [DOCTOR_PATH, "--harness", harness, "--json"],
+        { encoding: "utf8" }
+      );
+      const linkedJson = JSON.parse(linkedRes.stdout);
+      const linkedCheck = linkedJson.checks.find(c => c.id === "tools-syntax");
+      assert.match(linkedCheck.detail, /installation\/linked\.mjs/, "A linked entry must be reported, never silently certified");
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

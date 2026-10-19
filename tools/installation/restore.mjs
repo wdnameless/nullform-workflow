@@ -1,11 +1,11 @@
 /**
- * tools/deployment-restore.mjs — Per-entry restore from deployment backup.
+ * tools/installation/restore.mjs — Per-entry restore from deployment backup.
  */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, symlinkSync, lstatSync, readlinkSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { hashContent } from "./harness-config.mjs";
-import { normalizePath, validatePathWithinScope } from "./worktree-snapshot.mjs";
+import { hashContent } from "./config.mjs";
+import { normalizePath, validatePathWithinScope } from "../worktree-snapshot.mjs";
 
 export function restoreSingleEntry(entry, backupDir, allowedScopes, atomicWrite) {
   const normDest = normalizePath(entry.destPath);

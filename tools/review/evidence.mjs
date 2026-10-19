@@ -3,14 +3,14 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSy
 import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot, isPathInsideRoot, validateRootPath, validatePathWithinScope, cleanGitEnv } from './worktree-snapshot.mjs';
-import { sanitizeError } from './installation-state.mjs';
-import { admitSession, holdReservation, inspectAdmission, nanoUsdToUsd, PINNED_CONTEXT_TOKENS, settleReservation, validatePolicy, EXECUTOR, redactSecret } from './review-budget.mjs';
-import * as budgetModule from './review-budget.mjs';
+import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot, isPathInsideRoot, validateRootPath, validatePathWithinScope, cleanGitEnv } from '../worktree-snapshot.mjs';
+import { sanitizeError } from '../installation/state.mjs';
+import { admitSession, holdReservation, inspectAdmission, nanoUsdToUsd, PINNED_CONTEXT_TOKENS, settleReservation, validatePolicy, EXECUTOR, redactSecret } from './budget.mjs';
+import * as budgetModule from './budget.mjs';
 const inspectBudget = budgetModule.inspectBudget;
-import { projectHttpRecord, validateHttpRecord } from './review-http-evidence.mjs';
-import { isBrandedExecutor } from './review-http-runtime.mjs';
-import { assertProductExecutionInvariant } from './review-native-tools.mjs';
+import { projectHttpRecord, validateHttpRecord } from './http-evidence.mjs';
+import { isBrandedExecutor } from './http-runtime.mjs';
+import { assertProductExecutionInvariant } from './native-tools.mjs';
 
 export const EVIDENCE_FILE = 'review-evidence.json';
 export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
@@ -41,7 +41,7 @@ export function resolveRoleDefinition(root, role) {
     if (!existsSync(entry)) throw new Error(`Project defines its own role tree but '${role}' is missing: restore agent/agents/${role}.md or remove the tree to use the shipped default`);
     return safeFile(root, join('agent', 'agents', `${role}.md`));
   }
-  const shipped = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'agent', 'agents', `${role}.md`);
+  const shipped = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'agents', `${role}.md`);
   if (!existsSync(shipped)) throw new Error(`Shipped role definition '${role}' is missing from the installation`);
   return shipped;
 }
@@ -307,7 +307,7 @@ function projectRecord(text, provenance, role) {
   const nativeProjection = { role, ...parsed, requestedModel, sourceDigest: provenance.sourceDigest, manifestHash: provenance.manifestHash, rolePromptHash: provenance.rolePromptHash, testFilesHash: provenance.testFilesHash, baseRef: provenance.baseRef, exitCode: 0 };
   return { ...nativeProjection, nativeProjection, nativeEvents: retained, nativeEventsHash: computeEventProjectionHash(retained), eventProjectionHash: computeEventProjectionHash(nativeProjection) };
 }
-/** Controlled-HTTP projection lives in review-http-evidence.mjs (strong re-projection). */
+/** Controlled-HTTP projection lives in review/http-evidence.mjs (strong re-projection). */
 function completeRun(options, identity) {
   const { root, changeId, role, model, productCommand = null, ompRunner, httpExecutor = null, policy = null } = options;
   // Injected runners are parser/consumer fixtures, never an admitted transport.

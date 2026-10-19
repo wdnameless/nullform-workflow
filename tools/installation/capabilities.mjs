@@ -1,5 +1,5 @@
 /**
- * tools/harness-capabilities.mjs — Explicit capability boundaries, host presence detection,
+ * tools/installation/capabilities.mjs — Explicit capability boundaries, host presence detection,
  * doctor capability statuses, and automated review execution gates.
  */
 
@@ -8,13 +8,13 @@ import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { CONCRETE_HARNESSES, readInstallationState, compareSemVer } from "./installation-state.mjs";
-import { isCommandInPath } from "./harness-config.mjs";
-import { inspectHarness } from "./harness-profiles.mjs";
+import { CONCRETE_HARNESSES, readInstallationState, compareSemVer } from "./state.mjs";
+import { isCommandInPath } from "./config.mjs";
+import { inspectHarness } from "./profiles.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
-const REPO_ROOT = resolve(__dirname, "..");
+const REPO_ROOT = resolve(__dirname, "..", "..");
 
 export function getHostPresence() {
   return {

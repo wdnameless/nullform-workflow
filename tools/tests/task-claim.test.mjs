@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { claimTask, releaseTask, readClaim, contextPacket } from "../task-claim.mjs";
+import { claimTask, releaseTask, readClaim, contextPacket } from "../workflow/claims.mjs";
 
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "task-claim-"));

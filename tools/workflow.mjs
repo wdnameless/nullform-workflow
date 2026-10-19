@@ -49,12 +49,12 @@ import {
   runReviewRecord,
   recordStageB,
   isSupersededOracleArtifact,
-} from "./review-evidence.mjs";
+} from "./review/evidence.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
-import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } from "./harness-capabilities.mjs";
-import { runWorkspaceCommand } from "./workflow-workspaces.mjs";
-import { runClaimCommand } from "./task-claim.mjs";
-import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review-http-runtime.mjs";
+import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
+import { runWorkspaceCommand } from "./workflow/workspaces.mjs";
+import { runClaimCommand } from "./workflow/claims.mjs";
+import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review/http-runtime.mjs";
 function printWorkflowHelp() {
   printCoreWorkflowHelp();
   console.log("  review-run: --admission-policy PATH runs the controlled Node transport; --dry-run reads policy/ledger read-only; --resume-session DIR imports exact evidence.");

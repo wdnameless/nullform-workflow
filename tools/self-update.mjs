@@ -6,11 +6,11 @@
 import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join, dirname, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
-import { resolveNpmRunner, spawnAsync, spawnSafe } from './installation-state.mjs';
+import { resolveNpmRunner, spawnAsync, spawnSafe } from './installation/state.mjs';
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
 import { parseArgs, isDeepStrictEqual } from "node:util";
-import { resolveHostHome } from "./harness-profiles.mjs";
+import { resolveHostHome } from "./installation/profiles.mjs";
 
 import {
   PACKAGE_NAME,
@@ -27,7 +27,7 @@ import {
   detectEffectivePrefix,
   resolveInstalledBinPath,
   sanitizeError,
-} from "./installation-state.mjs";
+} from "./installation/state.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

@@ -1,15 +1,15 @@
 /**
- * tools/deployment-journal.mjs — Recoverable deployment journals, exclusive locking,
+ * tools/installation/journal.mjs — Recoverable deployment journals, exclusive locking,
  * atomic identity, and scoped backup/rollback.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync, lstatSync, readlinkSync, symlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { resolve, join, dirname, isAbsolute, basename } from "node:path";
-import { hashContent } from "./harness-config.mjs";
-import { writeInstallationState, readInstallationState } from "./installation-state.mjs";
-import { normalizePath, validatePathWithinScope } from "./worktree-snapshot.mjs";
-import { resolveHostHome } from "./harness-profiles.mjs";
-import { restoreSingleEntry } from "./deployment-restore.mjs";
+import { hashContent } from "./config.mjs";
+import { writeInstallationState, readInstallationState } from "./state.mjs";
+import { normalizePath, validatePathWithinScope } from "../worktree-snapshot.mjs";
+import { resolveHostHome } from "./profiles.mjs";
+import { restoreSingleEntry } from "./restore.mjs";
 
 function selectedHostScope(hostHome, userHome, harness = "custom") {
   if (hostHome === undefined || hostHome === null) return null;

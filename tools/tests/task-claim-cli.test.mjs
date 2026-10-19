@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
-import { readClaim } from "../task-claim.mjs";
+import { readClaim } from "../workflow/claims.mjs";
 
 const workflow = fileURLToPath(new URL("../workflow.mjs", import.meta.url));
 function fixture(t) {

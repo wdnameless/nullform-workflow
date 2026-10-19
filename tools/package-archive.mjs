@@ -37,13 +37,13 @@ export function buildHarnessFixture(harness, root, home, proj, secret) {
     codex: { md: [join(root, "AGENTS.md"), join(home, ".codex", "AGENTS.md")], skills: join(home, ".codex", "skills") },
     opencode: { md: [join(root, "AGENTS.md"), join(home, ".config", "opencode", "AGENTS.md")], cfg: [join(root, "opencode.json"), join(home, ".config", "opencode", "opencode.json")], cfgBody: opencodeJsonc, cfgKind: "jsonc", skills: join(home, ".config", "opencode", "skills") },
     cursor: { md: [join(proj, ".cursor", "rules", "00-workflow.mdc")], mdBody: cursorMdc, skills: join(root, "skills") },
-    omp: { md: [join(home, ".omp", "agent", "AGENTS.md")], cfg: [join(home, ".omp", "agent", "mcp.json")], cfgBody: ompMcp, cfgKind: "omp-json", skills: join(home, ".agents", "skills") },
-    openclaw: { md: [join(root, "AGENTS.md"), join(root, "SOUL.md"), join(root, "USER.md")], cfg: [join(root, "openclaw.json"), join(home, ".openclaw", "openclaw.json")], cfgBody: openclawJson5, cfgKind: "json5", skills: join(home, ".openclaw", "skills") },
+    omp: { md: [join(home, ".omp", "agent", "AGENTS.md")], cfg: [join(home, ".omp", "agent", "mcp.json")], cfgBody: ompMcp, cfgKind: "omp-json", skills: join(home, ".agents", "skills"), legacy: [join(home, ".omp", "agent", "mcp.json")] },
+    openclaw: { md: [join(root, "AGENTS.md")], identity: [join(root, "SOUL.md"), join(root, "USER.md")], cfg: [join(root, "openclaw.json"), join(home, ".openclaw", "openclaw.json")], cfgBody: openclawJson5, cfgKind: "json5", skills: join(home, ".openclaw", "skills") },
     hermes: { md: [join(root, "AGENTS.md")], mdSoul: join(home, ".hermes", "SOUL.md"), mdHomeAgents: join(home, ".hermes", "AGENTS.md"), cfg: [join(root, "config.yaml"), join(home, ".hermes", "config.yaml")], cfgBody: hermesYaml, cfgKind: "yaml", skills: join(home, ".hermes", "skills") },
     openhuman: { md: [join(root, "AGENTS.md"), join(home, ".openhuman", "AGENTS.md")], cfg: [join(home, ".openhuman", "config.toml")], cfgBody: openhumanToml, cfgKind: "toml", skills: join(home, ".openhuman", "skills"), noSymlink: true },
   };
   const e = map[harness];
-  return { mdFiles: e.md, mdSoul: e.mdSoul || null, mdHomeAgents: e.mdHomeAgents || null, mdContent: e.mdBody || stdMd, cfgFiles: e.cfg || [], cfgContent: e.cfgBody, cfgKind: e.cfgKind, skillsDir: e.skills, noSymlinkSkills: e.noSymlink, humanBefore: hb, humanAfter: ha };
+  return { mdFiles: e.md, mdIdentity: e.identity || [], mdSoul: e.mdSoul || null, mdHomeAgents: e.mdHomeAgents || null, legacyFiles: e.legacy || [], mdContent: e.mdBody || stdMd, cfgFiles: e.cfg || [], cfgContent: e.cfgBody, cfgKind: e.cfgKind, skillsDir: e.skills, noSymlinkSkills: e.noSymlink, humanBefore: hb, humanAfter: ha };
 }
 
 export function seedHarnessFiles(fixture, customRoot, secretToken) {
@@ -52,6 +52,12 @@ export function seedHarnessFiles(fixture, customRoot, secretToken) {
   for (const mdPath of fixture.mdFiles) {
     mkdirSync(dirname(mdPath), { recursive: true });
     writeFileSync(mdPath, fixture.mdContent, "utf8");
+  }
+  for (const identityPath of fixture.mdIdentity) {
+    // Identity surfaces (SOUL/USER) are never managed: seed the same bytes a managed file would
+    // carry, including an old block, and require them back untouched.
+    mkdirSync(dirname(identityPath), { recursive: true });
+    writeFileSync(identityPath, fixture.mdContent, "utf8");
   }
   if (fixture.mdSoul) {
     // SOUL is identity, never managed: seed human-only content, assert byte-preservation later.
@@ -246,9 +252,8 @@ export function inspectArchiveContents(tarballPath, tempBase = null, options = {
     }
     const requiredFiles = [
       "package.json", "VERSION", "LICENSE", "jev/LICENSE", "README.md", "CONTEXT.md",
-      ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/harness-config.mjs",
-      "tools/installation-state.mjs", "tools/doctor.mjs", "tools/self-update.mjs", "tools/workflow.mjs",
-      "tools/verify.mjs", "tools/sync-manifest.json", "verify.ps1", "verify.sh",
+      ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/installation/config.mjs",
+      "tools/installation/state.mjs", "tools/doctor.mjs", "tools/self-update.mjs", "tools/workflow.mjs",
     ];
     for (const req of requiredFiles) {
       assert.ok(packedFiles.includes(req), `Required asset missing from archive: ${req}`);

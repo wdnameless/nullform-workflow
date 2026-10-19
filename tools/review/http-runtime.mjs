@@ -1,10 +1,10 @@
 /**
- * tools/review-http-runtime.mjs — controlled text-only Chat Completions executor.
+ * tools/review/http-runtime.mjs — controlled text-only Chat Completions executor.
  *
  * Not an SDK wrapper: one bounded stdlib Node child, one exact verified route, one
  * exact verified model snapshot, integer nano-USD accounting, no hidden retries,
  * redirects, fallbacks or automatic service tiers. Money authority lives in
- * tools/review-budget.mjs and is consumed durably before every physical wire call.
+ * tools/review/budget.mjs and is consumed durably before every physical wire call.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, lstatSync, mkdirSync, openSync, closeSync, fsyncSync, realpathSync, statSync, writeFileSync } from 'node:fs';
@@ -13,9 +13,9 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
-import { EXECUTOR, PINNED_CONTEXT_TOKENS, PINNED_PROVIDER, recordRequest, redactSecret, validatePolicy, withoutProviderCredential } from './review-budget.mjs';
-import { inspectProduct, readProductPage } from './review-native-tools.mjs';
-import { isPathInsideRoot, validateRootPath, validatePathWithinScope } from './worktree-snapshot.mjs';
+import { EXECUTOR, PINNED_CONTEXT_TOKENS, PINNED_PROVIDER, recordRequest, redactSecret, validatePolicy, withoutProviderCredential } from './budget.mjs';
+import { inspectProduct, readProductPage } from './native-tools.mjs';
+import { isPathInsideRoot, validateRootPath, validatePathWithinScope } from '../worktree-snapshot.mjs';
 export { validatePolicy };
 
 export { EXECUTOR };
@@ -287,7 +287,7 @@ const BRANDED_EXECUTORS = new WeakSet();
 export function isBrandedExecutor(executor) { return Boolean(executor) && BRANDED_EXECUTORS.has(executor); }
 
 /** The fixed shipped child, resolved from THIS module, never from the consumer project. */
-export function shippedChildPath() { return fileURLToPath(new URL('./review-http-child.mjs', import.meta.url)); }
+export function shippedChildPath() { return fileURLToPath(new URL('./http-child.mjs', import.meta.url)); }
 
 /** Child environment with proxy/preload/TLS overrides removed before spawn. */
 export function sanitizedChildEnv(env = process.env) {

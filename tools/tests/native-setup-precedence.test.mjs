@@ -1,14 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createTempDir } from "./test-helpers.mjs";
 import { runInit } from "../../bin/nullform.mjs";
 import { discoverCandidates, detectHarness, installHarness } from "../install-harness.mjs";
-import { inspectHarness } from "../harness-profiles.mjs";
-import { writeInstallationState } from "../installation-state.mjs";
+import { inspectHarness } from "../installation/profiles.mjs";
+import { writeInstallationState } from "../installation/state.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../../bin/nullform.mjs", import.meta.url));
 
@@ -279,6 +279,48 @@ test("fresh minimal OMP init preserves human .harness-root and legacy extras wit
     assert.ok(plan.warnings.length > 0);
     assert.equal(existsSync(join(home, ".agents", "skills")), false);
     assert.equal(existsSync(join(root, "skills")), true);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("OpenClaw init/reapply preserves identity surfaces: human-only and legacy-block SOUL/USER bytes, and never follows an identity symlink", () => {
+  const temp = createTempDir("openclaw-identity-");
+  const home = join(temp, "home");
+  const hostHome = join(temp, "openclaw-home");
+  const root = join(temp, "workflow");
+  const env = controlledEnv(home);
+  const outsideIdentity = join(temp, "outside-identity.md");
+  const humanOnly = "# Human identity\nKeep these exact bytes.\n";
+  const legacyBlock = "# OpenClaw USER: Context & Operating Preferences\n\nTarget workspace: /legacy/root\n- Verification: verify all fixes before final response.\n";
+  mkdirSync(hostHome, { recursive: true });
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "SOUL.md"), humanOnly, "utf8");
+  writeFileSync(join(root, "USER.md"), legacyBlock, "utf8");
+  writeFileSync(join(hostHome, "SOUL.md"), humanOnly, "utf8");
+  writeFileSync(outsideIdentity, "# Outside identity\n", "utf8");
+  try {
+    const plan = installHarness({ harness: "openclaw", root, userHome: home, hostHome, dryRun: false, env });
+    assert.equal(readFileSync(join(root, "SOUL.md"), "utf8"), humanOnly, "R12: human-only SOUL.md must stay byte-identical");
+    assert.equal(readFileSync(join(root, "USER.md"), "utf8"), legacyBlock, "R12: legacy-block USER.md must stay byte-identical");
+    assert.equal(readFileSync(join(hostHome, "SOUL.md"), "utf8"), humanOnly, "R12: native-home SOUL.md must stay byte-identical");
+    assert.equal(existsSync(join(hostHome, "USER.md")), false, "R12: identity surfaces must never be created");
+    assert.ok(plan.warnings.some((w) => w.includes("legacy NULLFORM identity block")), "preserved legacy identity policy must be disclosed as possibly active");
+    assert.equal(readFileSync(join(root, "AGENTS.md"), "utf8").includes("NULLFORM WORKFLOW"), true, "AGENTS.md must still carry workflow policy");
+
+    let symlinked = false;
+    try {
+      rmSync(join(root, "USER.md"));
+      symlinkSync(outsideIdentity, join(root, "USER.md"), "file");
+      symlinked = true;
+    } catch {
+      symlinked = false; // Symlink creation is privileged on some hosts; skip that assertion only.
+    }
+    if (symlinked) {
+      installHarness({ harness: "openclaw", root, userHome: home, hostHome, dryRun: false, env });
+      assert.equal(lstatSync(join(root, "USER.md")).isSymbolicLink(), true, "R12: identity symlink must be preserved as a symlink");
+      assert.equal(readFileSync(outsideIdentity, "utf8"), "# Outside identity\n", "R12: identity symlink must never be followed or written through");
+    }
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }

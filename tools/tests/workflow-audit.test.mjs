@@ -4,13 +4,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { computeSourceDigest, computeManifestHash, computeRolePromptHash, computeTestFilesHash, isPositiveOracleVerdict, isNegativeOracleVerdict } from '../review-evidence.mjs';
-import { executeProduct } from '../review-native-tools.mjs';
+import { computeSourceDigest, computeManifestHash, computeRolePromptHash, computeTestFilesHash, isPositiveOracleVerdict, isNegativeOracleVerdict } from '../review/evidence.mjs';
+import { executeProduct } from '../review/native-tools.mjs';
 import { cmdCheckCi } from '../workflow.mjs';
 import { installHarness } from '../install-harness.mjs';
-import { applyManagedSection, getMarkdownAdapter } from '../harness-config.mjs';
+import { applyManagedSection, getMarkdownAdapter } from '../installation/config.mjs';
 import { validateRootPath, validatePathWithinScope } from '../worktree-snapshot.mjs';
-import { sanitizeError } from '../installation-state.mjs';
+import { sanitizeError } from '../installation/state.mjs';
 import { checkRelease } from '../self-update.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createTempDir } from './test-helpers.mjs';
@@ -198,7 +198,7 @@ test("consumer regression: preflight no-partial-writes on escaped junction desti
     assert.match(res.stderr, /Preflight failed: destination path .* escapes declared root/i);
 
     assert.equal(readFileSync(outsideWorkflow, "utf8"), "// ORIGINAL OUTSIDE CONTENT\n", "Outside workflow.mjs must not be overwritten");
-    assert.equal(existsSync(join(outsideDir, "harness-config.mjs")), false, "Outside harness-config.mjs must not be created");
+    assert.equal(existsSync(join(outsideDir, "installation", "config.mjs")), false, "Outside installation/config.mjs must not be created");
     assert.equal(existsSync(join(tempRoot, "CLAUDE.md")), false, "No adapter files written to target root on preflight failure");
   } finally {
     rmSync(temp, { recursive: true, force: true });

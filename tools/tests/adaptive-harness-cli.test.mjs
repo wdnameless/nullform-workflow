@@ -8,9 +8,9 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { promisify } from "node:util";
 import { createTempDir } from "./test-helpers.mjs";
-import { applyManagedSection, hashContent, loadYaml, MANAGED_START, MANAGED_END } from "../harness-config.mjs";
-import { prepareHermesActivation } from "../harness-adapters.mjs";
-import { inspectHarness } from "../harness-profiles.mjs";
+import { applyManagedSection, hashContent, loadYaml, MANAGED_START, MANAGED_END } from "../installation/config.mjs";
+import { prepareHermesActivation } from "../installation/adapters.mjs";
+import { inspectHarness } from "../installation/profiles.mjs";
 import { runDoctor } from "../doctor.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nullform.mjs", import.meta.url));
