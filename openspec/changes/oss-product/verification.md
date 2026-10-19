@@ -75,3 +75,19 @@ Parent `node --test tools/tests/review-boundaries.test.mjs` before source correc
 A faulty lock-release cleanup temporarily removed the transaction callback invocation; parent after-run caught1pass2fail/undefined reservationId, source wrapper restored. Parent boundary+financial run then passed28/28,0skip,5230.2222ms.
 
 Integrated final review6-suite command (`review-boundaries`, `oss-safety`, `review-budget`, `review-controlled-http`, `review-evidence`, `review-integrity`, concurrency2):131passed/131,0fail0skip,80594.9514ms (artifact://6982). Size PASS,193files1415functions,5unchanged exemptions. Independent actual CLI/accounting smoke again passed52500nanoUSD after2reserved requests; SAME zero-token loopback smoke now returns status1 after1request with an unknown-usage refusal. No provider inference occurred.
+
+## Installer/verifier reconciliation and actual text preview
+
+Parent reran only the3previously failed installation cases after bounded fixes:3passed0failed0skipped,47980.7594ms; then the full sync suite passed14/14,0skip,2050.4665ms. Discovery fixtures now isolate host PATH; unmarked human instructions are preserved rather than testing a copied current heading; optional absent native overlays no longer cause a read-only drift failure. An initial unconditional skip would have disabled explicit deploy creation; pre-integration review caught it and scope was restricted to check mode. Existing promote/deploy, three-copy divergence, managed human text, dangling link and junction refusals all passed.
+
+Independent actual public CLI `.tmp/cutover-preview-smoke.mjs`: text dry-run exited0, cancellation exited1, both displayed the owned obsolete module scheduled for removal; old module bytes and installation identity stayed exactly unchanged.20.78s. No mocked UI forwarding was used.
+
+Final specification `openspec validate oss-product --strict`: valid. Isolated repository-only prompt scan exited0 for81surfaces; skills structural check exited0 for71skills with0errors and113existing advisory warnings (artifact://6990). Footprint remeasured after relocation remained64565→58192canonicalUTF-8/LF bytes. Complete suite and exact-archive certification are separate final checks, not inferred from these results.
+
+## Complete local suite and obsolete implementation pin
+
+Parent executed `node --test --test-concurrency=2 tools/tests/*.test.mjs`:1030counted,1024passed,1failed,5skipped,0cancelled,964386.3872ms (full output artifact://6988). All8 real npm archive init/reapply/doctor/update cases passed. The sole failure was workflow-audit147: it copied the CURRENT getMarkdownAdapter output into a supposedly owned legacy fixture, supplied no ownership prefix, and asserted that old/root disappeared. This implementation-copy pin conflicts with preserving unproven human instructions; it was deleted rather than re-pinned to the new heading or making production erase unowned content. The fixed-literal unknown-ownership/human text and marker-idempotence tests remain.
+
+The remaining workflow-audit suite was executed in the identical-code isolated oss-internals worktree after the test-only deletion:12/12passed,0skip,26596.1955ms. No production matcher was changed for that failure. Do not relabel the earlier whole run as an all-green invocation; the forthcoming remote full-suite result and exact-archive certificate are the final current-tree evidence.
+
+After source freeze, certificate/CI results are stored in ignored `.tmp` artifacts and PR evidence so that reporting them does not mutate the certified source tree. This Markdown is a chronological record, not a release-acceptance receipt.

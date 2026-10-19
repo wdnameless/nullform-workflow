@@ -15,6 +15,14 @@ The correctness baseline is the previous Nullform source candidate29f7185, NOT a
 | Preview and CLI errors | Missing policy threw a schema error; stray positional input was ignored | Missing authority reports a non-dispatching preview; stray positional exits nonzero before state/authority | Independent public CLI smoke in disposable Git consumer: exits0/1, no review state |
 | First-run selection | Implicit fallback could pick OMP | Explicit choice > saved identity > unique candidate > menu; headless ambiguity/missing host refuses without writes | Real runInit/public CLI fixtures; final packed consumer verification still required |
 | Human assets | Existing ownership preservation is mandatory | Public multi-version installation preserves unowned/modified-owned scripts, binary assets and legacy home files | Parent integrated public asset tests passed; not an active native-session claim |
+| Refused financial admission | Refusals accumulated failed run directories and exhausted scan capacity | Only the freshly allocated unfunded run is removed; historical/paid work remains retained | New consumer regression,0/3before→3/3after with the next two boundaries |
+| Typed reviewer findings | HTTP accepted incomplete findings that native refused | One complete finding/report validator consumed by both paths | Public projection API regression with valid control |
+| Successful model usage | Nonempty terminal response with all0tokens could complete and price as0 | Shared live/retained raw usage normalization rejects0tokens, validates all counters; generic known-zero ledger settlement remains valid | Actual1-request loopback status0→1; final review/financial cohort131/131passed |
+| Upgrade cutover | Runtime modules were flat; removed paths could leave stale owned implementations |16 modules grouped by responsibility; exact unchanged owned obsolete files removed transactionally | Real prune/dry-run/failed-doctor rollback passed; no schema/baseline waiver |
+| Destructive preview | New removal plan needed human-visible disclosure | Text dry-run and confirmation list removals; cancellation leaves old files and state untouched | Independent actual CLI smoke: preview exit0, cancel exit1, exact bytes preserved |
+| Native minimal drift | Verifier required global overlay copies not installed by minimal init | Missing optional overlays/catalogue are n/a on checks; explicit deploy/promote and existing divergence still work | Corrected3consumer cases +14sync/confinement cases passed |
+
+These source-level outcomes are distinct from the final all-platform archive/CI acceptance. Full commands and intermediate failed implementation attempts are retained in verification.md; no failed run is relabeled as green.
 
 ## Measured instruction footprint
 

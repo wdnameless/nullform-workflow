@@ -6,7 +6,7 @@ Parent owns specs/manifest/interfaces, contained Git integration, actual before/
 
 ## SafetyOwner: six audited defects (R01)
 
-Owns tools/review-evidence.mjs, tools/review-http-evidence.mjs, tools/review-budget.mjs, tools/workflow.mjs and their focused existing review/budget/CLI tests; a focused new regression file is allowed if existing fixtures cannot express a transition. No packaging/installer/policy changes. First deliver TEST-ONLY failing regressions, stop for parent before-run, then source fixes after GO.
+Current implementation: tools/review/{evidence,http-evidence,budget,http-runtime,native-tools}.mjs, stable tools/workflow.mjs and focused review/budget/CLI tests. These replace the original root module paths from29f7185; no compatibility shim remains. Test-only failing regressions preceded source GO; additional discovered boundaries retained their own failing-before/passing-after proof.
 
 Preserve runReviewRecord, validateReviewEvidence, project/reproject/validateHttpRecord, admitSession/recordRequest/settleReservation/inspectBudget and public CLI commands. Minimal shared product-execution invariants may be extracted only when both native and HTTP consume them, with one-way dependency and no wrapper-only API. HTTP ACCEPT must require actual product execution with valid command/source/hash/time and exitCode0 just like native. Retained-run overflow or unknown scan state cannot authorize a fresh run. Ordinary retry refuses matching completed work, explicit resume imports without dispatch, explicit redo may start a fresh admitted cycle while preserving history; --redo and --resume-session remain mutually exclusive.
 
@@ -23,6 +23,15 @@ Native instruction placement and human preservation follow primary-source eviden
 One integration owner performs the cutover after semantic fixes: actual executable files remain bin/nullform.mjs and tools/workflow.mjs, doctor.mjs, install-harness.mjs, verify.mjs; internal review/installation/workspace modules group in feature directories only where the inventory justifies them. Move implementations, migrate all imports/generated paths/tests/docs/package/sync inventories and import.meta.url/REPO_ROOT assumptions, remove old implementations with no shims/re-exports. Doctor must syntax-check nested shipped modules with real Node. Package includes nested runtime but excludes tests/dev smoke; installation copies nested dependencies correctly. Source/test hashing and acceptance exclusions must retain their existing meaning; no stale-receipt exception or basename workaround. No baseline waiver or comment/blank-line size gaming. Preserve semantically valid regressions, remove source-text/default-pinning tests rather than repinning them.
 
 Generated policy and our shipped OMP instructions must also migrate stale OMP/Bun-only review claims. Keep always-on guidance concise: understand the request, reuse native capabilities, preserve human data, verify actual results and report limits. Long tier/OpenSpec/oracle procedures belong in on-demand opt-in coding guidance, not every general request. Do not copy third-party skill catalogues into native homes merely because they ship as package assets. Policy footprint is measured in bytes/lines only, never presented as token, cost or quality improvement.
+
+### Implemented module boundaries
+
+- `tools/review/`: retained evidence, raw HTTP execution/projection, shared typed reviewer verdicts and per-response usage normalization, shared product-execution invariant, durable financial authority. Generic known-zero ledger settlement remains distinct from impossible all-zero successful model usage.
+- `tools/installation/`: profiles/config/adapters/capabilities, state, Hermes policy, journal/restore. Stable root `self-update.mjs` remains a real executable, not a wrapper.
+- `tools/workflow/`: claims/workspaces. Shared canonical snapshot/confinement stays `tools/worktree-snapshot.mjs`.
+- Exact obsolete module allowlist removes only unchanged prior-owned plain files, with journalled rollback; unknown/modified/link entries are preserved. JSON and human-readable previews disclose removals. Native SOUL/USER bytes remain untouched.
+- Native-home overlay absence is n/a only for read-only drift checks; explicit promote/deploy semantics and existing divergence/confinement checks remain. No global skill catalogue is required by minimal setup.
+
 
 ## Evidence/docs owner (R02,R06-R08,R11-R12; parent reconciles)
 

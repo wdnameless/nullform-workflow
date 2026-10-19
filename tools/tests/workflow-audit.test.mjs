@@ -8,7 +8,7 @@ import { computeSourceDigest, computeManifestHash, computeRolePromptHash, comput
 import { executeProduct } from '../review/native-tools.mjs';
 import { cmdCheckCi } from '../workflow.mjs';
 import { installHarness } from '../install-harness.mjs';
-import { applyManagedSection, getMarkdownAdapter } from '../installation/config.mjs';
+import { applyManagedSection } from '../installation/config.mjs';
 import { validateRootPath, validatePathWithinScope } from '../worktree-snapshot.mjs';
 import { sanitizeError } from '../installation/state.mjs';
 import { checkRelease } from '../self-update.mjs';
@@ -142,18 +142,6 @@ test('error redaction covers quoted JSON secrets and malformed credential URLs',
   for (const error of [`Invalid JSON: {"password":"${canary}"}`, `Invalid registry: https://user:${canary} with spaces@registry.invalid/`]) {
     assert.equal(sanitizeError(error).includes(canary), false);
   }
-});
-
-test('legacy migration replaces exact owned adapters but preserves inserted human instructions', () => {
-  const legacy = getMarkdownAdapter('old/root', 'Claude Code NULLFORM WORKFLOW Adapter');
-  const migrated = applyManagedSection(legacy + 'KEEP tail\n', 'NEW MANAGED');
-  assert.equal(migrated.includes('old/root'), false);
-  assert.ok(migrated.includes('KEEP tail'));
-  const modified = legacy.replace('\n\n', '\n\nKEEP human policy\n');
-  const retained = applyManagedSection(modified + 'KEEP tail\n', 'NEW MANAGED');
-  assert.ok(retained.includes('KEEP human policy'));
-  assert.ok(retained.includes('KEEP tail'));
-  assert.ok(retained.includes('NEW MANAGED'));
 });
 
 test('native registry metadata has a hard deadline and never reports a killed process as success', { timeout: 10000 }, async () => {

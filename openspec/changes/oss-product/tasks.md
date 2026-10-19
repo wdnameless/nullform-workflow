@@ -12,8 +12,8 @@
 - [x] A2 Explicitly routed implementation owner preserves OpenClaw SOUL/USER, removes obsolete identity generators/stripping, parent actual installer smoke passes init/reapply and regression1/1. R09 R12. blocked-by: A1
 
 ## Structure and public evidence
-- [ ] M1 StructureOwner: after A2, move cohesive internals, migrate every caller/deployment inventory and nested doctor checks; preserve actual entrypoints and journal exact obsolete owned-module removals. A2 and M1 have one integration owner to avoid overlapping movers. R04 R05. blocked-by: S2 A1 A2 P1 E2
-- [ ] D1 Public docs/navigation/compatibility and evidence claims; no unmeasured superiority. R02 R06 R07 R08 R11 R12. blocked-by: E1 M1
+- [x] M1 Cohesive internal cutover integrated5383dcb; stable executable entrypoints, nested package/sync/doctor migration, journalled unchanged-owned module replacement and real failed-doctor rollback verified. R04 R05. blocked-by: S2 A1 A2 P1 E2
+- [x] D1 Public navigation, native compatibility/loading boundaries, measured footprint, monetary/attempt distinction and host-native delegation billing limitations reconciled; no universal/model-quality superiority claim. R02 R06 R07 R08 R11 R12. blocked-by: E1 M1
 - [ ] V1 Parent full deterministic regression and real exact-archive npm install/update smoke; size, confinement and packaging gates. R01 R03 R04 R05 R08 R10. blocked-by: M1 D1
-- [ ] V2 Independent implementation review, frozen-test simplification, blind manifest/runtime acceptance. R01-R12. blocked-by: V1
+- [ ] V2 Independent implementation advisory completed; extra3boundaries reproduced then corrected131review/financial cases green. Formal recorded source-bound reviewer/Stage-B/blind acceptance remains blocked by no-new-paid-call constraint; static advisory/loopback never substitutes. R01-R12. blocked-by: V1
 - [ ] R1 Prepare source/artifact/CI release evidence and explicitly report unreachable live-acceptance/registry prerequisites; never publish uncertified bytes. R03 R06 R07 R11. blocked-by: V2
