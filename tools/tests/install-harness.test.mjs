@@ -126,21 +126,26 @@ test("detectHarness and dry-run plans for openclaw, hermes, and openhuman", () =
   const tempRoot = createTempDir("harness-dry-spec-");
   const childHome = createTempDir("harness-dry-spec-home-");
   try {
+    // Discovery must be driven by the fixture home, never by the real machine PATH: the
+    // host may have OMP/Claude installed, which would (correctly) make detection ambiguous.
+    const containedEnv = { ...isolatedChildEnv(tempHome), PATH: "", Path: "" };
+    for (const key of ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "OPENCODE_CONFIG_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "OMP_CONFIG_DIR", "OPENCLAW_STATE_DIR"]) {
+      delete containedEnv[key];
+    }
     mkdirSync(join(tempHome, ".openclaw"), { recursive: true });
     writeFileSync(join(tempHome, ".openclaw", "openclaw.json"), "{}", "utf8");
-    assert.equal(detectHarness({ userHome: tempHome }), "openclaw");
+    assert.equal(detectHarness({ userHome: tempHome, projectRoot: tempRoot, env: containedEnv }), "openclaw");
     rmSync(join(tempHome, ".openclaw"), { recursive: true, force: true });
 
-    const env = isolatedChildEnv(tempHome);
+    const env = containedEnv;
     const selectedHermes = resolveHostHome({ harness: "hermes", userHome: tempHome, env }).path;
     mkdirSync(selectedHermes, { recursive: true });
     writeFileSync(join(selectedHermes, "config.yaml"), "skills:\n  auto_load: []\n", "utf8");
-    assert.equal(detectHarness({ userHome: tempHome, env }), "hermes");
+    assert.equal(detectHarness({ userHome: tempHome, projectRoot: tempRoot, env }), "hermes");
     rmSync(selectedHermes, { recursive: true, force: true });
 
     mkdirSync(join(tempHome, ".openhuman"), { recursive: true });
-    assert.equal(detectHarness({ userHome: tempHome }), "openhuman");
-
+    assert.equal(detectHarness({ userHome: tempHome, projectRoot: tempRoot, env: containedEnv }), "openhuman");
     for (const [h, adapterSuffix] of [["openclaw", "openclaw.json"], ["hermes", "config.yaml"], ["openhuman", "AGENTS.md"]]) {
       const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", h, "--root", tempRoot, "--dry-run", "--json"], { encoding: "utf8", env: isolatedChildEnv(childHome), windowsHide: true });
       assert.equal(res.status, 0, res.stderr);
@@ -587,15 +592,18 @@ test("consumer regression: appended legacy human note is preserved across adapte
     const ompAgentDir = join(tempHome, ".omp", "agent");
     mkdirSync(ompAgentDir, { recursive: true });
     const ompLawPath = join(ompAgentDir, "AGENTS.md");
-    const sourceLaw = readFileSync(join(REPO_ROOT, "agent", "AGENTS.md"), "utf8").split("<HARNESS>").join("/old/path");
-    writeFileSync(ompLawPath, `${sourceLaw.trimEnd()}\n\n## Custom OMP Operator Rule\nKeep local telemetry off.\n`, "utf8");
+    // Unmarked human-only law file: ownership is unproven, so the installer must preserve the
+    // human bytes and add its own managed block rather than rewriting or deleting them.
+    writeFileSync(ompLawPath, "# My Local OMP Notes\n\n## Custom OMP Operator Rule\nKeep local telemetry off.\n", "utf8");
 
     const ompRes = spawnSync(process.execPath, [
       SCRIPT_PATH, "--harness", "omp", "--root", tempRoot, "--user-home", tempHome, "--json",
     ], { encoding: "utf8" });
     assert.equal(ompRes.status, 0, `OMP install failed: ${ompRes.stderr}`);
     const migratedOmpLaw = readFileSync(ompLawPath, "utf8");
-    assert.equal(migratedOmpLaw.split("# ORCHESTRATOR LAW").length - 1, 1, "Legacy unmarked OMP law must be migrated in-place, not duplicated");
+    assert.equal(migratedOmpLaw.split("<!-- BEGIN NULLFORM WORKFLOW -->").length - 1, 1, "OMP law must carry exactly one managed block");
+    assert.equal(migratedOmpLaw.split("<!-- END NULLFORM WORKFLOW -->").length - 1, 1, "OMP law managed block must be complete");
+    assert.ok(migratedOmpLaw.includes("# My Local OMP Notes"), "Unmarked human law heading must be preserved");
     assert.ok(migratedOmpLaw.includes("Keep local telemetry off."), "Appended human OMP rule must be preserved");
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

@@ -427,6 +427,12 @@ function main() { // code-size:allow
     let live = readNormalized(livePath);
     let repo = readNormalized(repoPath);
 
+    // In read-only check mode, optional global overlay entries (@agentdir/@agents) are native-home
+    // copies a minimal install deliberately does not create; their absence is not drift. Explicit
+    // promote/deploy keep their original meaning and may still create a missing copy.
+    const isOptionalOverlay = entry.liveRoot === '@agentdir' || entry.liveRoot === '@agents';
+    if (opts.mode === 'check' && live === null && isOptionalOverlay) continue;
+
     const isPromptSurface = rel.startsWith('agent/') || rel.startsWith('rules/') || rel.startsWith('skills/');
     let repoResolved = repo;
     if (repo !== null && isPromptSurface) {
@@ -595,7 +601,12 @@ function main() { // code-size:allow
   let skillsParityStatus = 'NOT_CHECKED';
   let skillsDoctorOk = false;
 
-  if (skillsApplicable) {
+  if (skillsApplicable && !fs.existsSync(installedSkills)) {
+    // A minimal/adaptive install deliberately creates no global skill catalogue; its absence is
+    // not drift. An existing catalogue is still fully compared below.
+    skillsParityStatus = 'NOT_APPLICABLE';
+    skillsStatusText = `skills: n/a (no global catalogue at ${installedSkills})`;
+  } else if (skillsApplicable) {
     if (fs.existsSync(doctorScript)) {
       const docRes = spawnSync(
         process.execPath,
