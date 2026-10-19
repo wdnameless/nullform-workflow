@@ -168,7 +168,7 @@ export function readProductPage(state, { root, productCommand, provenance, offse
   const { buffer, meta } = state;
   if (offset > buffer.length) throw new Error(`Output offset ${offset} exceeds total bytes ${buffer.length}`);
   const { text, nextOffset } = sliceUtf8Page(buffer, offset, MAX_AGGREGATE_JSON_BYTES, meta);
-  return { page: { ...meta, offset, nextOffset, totalBytes: buffer.length, text }, meta, execution: state.execution };
+  return { page: { ...meta, offset, nextOffset, totalBytes: buffer.length, text }, meta };
 }
 /**
  * Shared native/HTTP product execution invariant.

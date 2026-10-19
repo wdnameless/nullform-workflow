@@ -307,8 +307,15 @@ function withLedgerLock(authority, run) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
   }
-  try { return run(); } finally { if (readFileSync(path, 'utf8') === payload) unlinkSync(path); }
+  try { return run(); }
+  finally {
+    // Releasing our own lock must never mask the run's real result. A lock that is already gone
+    // (externally removed, crash recovery) is expected; any other IO error still surfaces.
+    try { if (readFileSync(path, 'utf8') === payload) unlinkSync(path); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
 }
+
 
 function outstandingNanoUsd(ledger) {
   return ledger.reservations.filter(row => row.status !== 'settled').reduce((total, row) => total + row.reservedNanoUsd, 0);

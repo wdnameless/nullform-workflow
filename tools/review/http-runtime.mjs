@@ -7,13 +7,13 @@
  * tools/review/budget.mjs and is consumed durably before every physical wire call.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, openSync, closeSync, fsyncSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, lstatSync, openSync, closeSync, fsyncSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
-import { EXECUTOR, PINNED_CONTEXT_TOKENS, PINNED_PROVIDER, recordRequest, redactSecret, validatePolicy, withoutProviderCredential } from './budget.mjs';
+import { EXECUTOR, PINNED_CONTEXT_TOKENS, PINNED_PROVIDER, recordRequest, redactSecret, validatePolicy } from './budget.mjs';
 import { inspectProduct, readProductPage } from './native-tools.mjs';
 import { isPathInsideRoot, validateRootPath, validatePathWithinScope } from '../worktree-snapshot.mjs';
 export { validatePolicy };
@@ -72,8 +72,6 @@ export function sendOnce(endpoint, { body, headers, timeoutMs, maxResponseBytes 
   });
 }
 
-export { withoutProviderCredential };
-
 /**
  * Reject Bun and resolve a verified real Node. The child must be actual Node: Bun
  * executes `--check` and then diverges, so its presence is never accepted as Node.
@@ -131,7 +129,7 @@ function checkDetailBag(bag, allowed, label, priced = []) {
   }
 }
 
-function normalizeUsage(usage, maximumOutputTokens) {
+export function normalizeUsage(usage, maximumOutputTokens) {
   if (!usage || typeof usage !== 'object') throw new Error('Provider response omitted usage; unknown spend is not zero');
   const prompt = usage.prompt_tokens, completion = usage.completion_tokens, total = usage.total_tokens;
   const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
@@ -139,6 +137,12 @@ function normalizeUsage(usage, maximumOutputTokens) {
     if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Provider response has invalid ${name}`);
   }
   if (total !== prompt + completion) throw new Error('Provider response total_tokens disagrees with its counters');
+  // A successful response that accounts ZERO tokens for this call is unknown spend, not a
+  // free call: the billed call happened and its counters are unusable. Checked per response,
+  // before pricing, so one zero-usage response cannot hide inside a nonzero aggregate.
+  if (prompt === 0 && completion === 0 && total === 0) {
+    throw new Error('Provider response reported all-zero token usage for a successful call; unknown spend is not zero');
+  }
   if (completion > maximumOutputTokens) throw new Error(`Provider response exceeded the authorized output bound (${completion} > ${maximumOutputTokens})`);
   if (cached > prompt) throw new Error('Provider response cached tokens exceed prompt tokens');
   // The full verified window is the hard ceiling; exceeding it holds rather than settles.
@@ -317,20 +321,6 @@ export function createHttpExecutor({ root, policy, env = process.env, timeoutMs 
   });
   BRANDED_EXECUTORS.add(executor);
   return executor;
-}
-
-/** Release gate: only a privately-branded executor's direct-provider evidence qualifies. */
-export function isReleaseEligible(record, executor = null) {
-  return Boolean(record) && record.executor === EXECUTOR && isBrandedExecutor(executor)
-    && record.context?.evidenceClass === 'provider-direct';
-}
-
-export function ensureExecutionDirectory(root, sessionDir) {
-  const canonical = realpathSync(validateRootPath(root));
-  const full = resolve(canonical, sessionDir);
-  if (!isPathInsideRoot(canonical, full) || !validatePathWithinScope(full, canonical)) throw new Error('Retained HTTP execution escapes the workspace');
-  if (!existsSync(full)) mkdirSync(full, { recursive: true });
-  return executionDirectory(canonical, sessionDir);
 }
 
 const REVIEW_RUN_FLAGS = ['root', 'harness', 'user-home', 'change', 'role', 'model', 'base-ref', 'product-command',

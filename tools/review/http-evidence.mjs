@@ -10,8 +10,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isRealPathInsideRoot } from '../worktree-snapshot.mjs';
-import { EXECUTOR, PINNED_PROVIDER, EVIDENCE_CLASSES, nanoUsdToUsd, pinnedTariffsNanoPerToken, usageCostNanoUsd, redactSecret } from './budget.mjs';
+import { EXECUTOR, PINNED_PROVIDER, PINNED_MAX_OUTPUT_TOKENS, EVIDENCE_CLASSES, nanoUsdToUsd, pinnedTariffsNanoPerToken, usageCostNanoUsd, redactSecret } from './budget.mjs';
 import { assertProductExecutionInvariant } from './native-tools.mjs';
+import { normalizeUsage } from './http-runtime.mjs';
 
 const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
 const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)[ \t]*(?:(?:#+[ \t]*)?\*{0,2}Verdict:?\*{0,2}:?[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]|$|[.,])|\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]*[.,]?[ \t]*\r?$))|\|[ \t]*\*{0,2}Verdict:?\*{0,2}:?[ \t]*\|[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}\b/im;
@@ -27,8 +28,13 @@ function timestamp(value, label) {
   return time;
 }
 
-/** The reviewer's typed JSON report; re-derived from the verified report text. */
-function extractVerdict(role, text) {
+/**
+ * The reviewer's typed JSON report; re-derived from the verified report text.
+ * This is the SAME validator the native path uses, exported so a reviewer finding that is
+ * structurally invalid can never pass one transport and fail the other. Oracle verdict
+ * semantics are unchanged.
+ */
+export function extractVerdict(role, text) {
   if (role === 'reviewer') {
     let report;
     try { report = JSON.parse(String(text).replace(/^```json\s*\n([\s\S]*?)\n```\s*$/i, '$1')); } catch { throw new Error('Reviewer final report must be complete typed JSON'); }
@@ -36,6 +42,11 @@ function extractVerdict(role, text) {
       || typeof report.overall_explanation !== 'string' || !report.overall_explanation.trim()
       || !Number.isFinite(report.overall_confidence_score) || report.overall_confidence_score < 0 || report.overall_confidence_score > 1) {
       throw new Error('Reviewer final report has invalid findings/correctness schema');
+    }
+    if (report.findings.some(f => !f || typeof f.title !== 'string' || !f.title.trim() || typeof f.body !== 'string' || !f.body.trim()
+      || !Number.isInteger(f.priority) || f.priority < 0 || f.priority > 3 || !Number.isFinite(f.confidence) || f.confidence < 0 || f.confidence > 1
+      || typeof f.file_path !== 'string' || !f.file_path.trim() || !Number.isSafeInteger(f.line_start) || f.line_start < 1 || !Number.isSafeInteger(f.line_end) || f.line_end < f.line_start)) {
+      throw new Error('Reviewer final report has invalid typed findings');
     }
     return { verdict: report.overall_correctness === 'correct' ? 'ACCEPT' : 'REJECT', nativeVerdict: report.overall_correctness };
   }
@@ -111,8 +122,14 @@ export function reprojectHttpExecution({ envelope, provenance, role, executorBra
     if (body.model !== approvedModel) throw new Error('Provider response reported an unapproved model');
     if (body.id !== declared.responseId || body.id !== event.responseId) throw new Error('Provider response id does not match its retained bytes');
     if (event.status !== 200 || declared.status !== 200) throw new Error('Provider response is not a successful direct response');
-    if (body.usage?.prompt_tokens !== event.usage.input || body.usage?.completion_tokens !== event.usage.output) throw new Error('Provider response usage does not match its retained bytes');
-    for (const key of Object.keys(totals)) totals[key] += event.usage[key];
+    // Usage is RE-DERIVED from the raw retained bytes with the same validator the live transport
+    // uses, so a retained all-zero (or partially reported) response cannot pass here, and every
+    // counter — including cacheRead/totalTokens — is compared rather than a partial pair.
+    const normalized = normalizeUsage(body.usage, PINNED_MAX_OUTPUT_TOKENS);
+    for (const key of Object.keys(totals)) {
+      if (event.usage?.[key] !== normalized[key]) throw new Error(`Provider response ${key} usage does not match its retained bytes`);
+      totals[key] += normalized[key];
+    }
     const choice = body.choices?.[0];
     if (body.choices?.length !== 1 || !choice) throw new Error('Provider response did not contain exactly one choice');
     if (typeof choice.message?.content === 'string' && choice.finish_reason === 'stop') lastContent = choice.message.content;

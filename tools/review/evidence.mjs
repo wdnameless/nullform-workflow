@@ -7,8 +7,9 @@ import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, 
 import { sanitizeError } from '../installation/state.mjs';
 import { admitSession, holdReservation, inspectAdmission, nanoUsdToUsd, PINNED_CONTEXT_TOKENS, settleReservation, validatePolicy, EXECUTOR, redactSecret } from './budget.mjs';
 import * as budgetModule from './budget.mjs';
+import * as httpEvidence from './http-evidence.mjs';
 const inspectBudget = budgetModule.inspectBudget;
-import { projectHttpRecord, validateHttpRecord } from './http-evidence.mjs';
+const { projectHttpRecord, validateHttpRecord } = httpEvidence;
 import { isBrandedExecutor } from './http-runtime.mjs';
 import { assertProductExecutionInvariant } from './native-tools.mjs';
 
@@ -141,16 +142,13 @@ function nativeEvents(text) {
   }
   return retained;
 }
+/**
+ * The reviewer/oracle terminal verdict. The reviewer's typed findings schema is validated by
+ * the ONE shared validator in review/http-evidence.mjs (used by both transports), so the
+ * native and controlled-HTTP paths cannot diverge on what a valid report is.
+ */
 function extractVerdict(role, text) {
-  if (role === 'reviewer') {
-    let report;
-    try { report = JSON.parse(text.replace(/^```json\s*\n([\s\S]*?)\n```\s*$/i, '$1')); } catch { throw new Error('Reviewer final report must be complete typed JSON'); }
-    if (!report || !Array.isArray(report.findings) || !['correct', 'incorrect'].includes(report.overall_correctness) || typeof report.overall_explanation !== 'string' || !report.overall_explanation.trim() || !Number.isFinite(report.overall_confidence_score) || report.overall_confidence_score < 0 || report.overall_confidence_score > 1) throw new Error('Reviewer final report has invalid findings/correctness schema');
-    if (report.findings.some(f => !f || typeof f.title !== 'string' || !f.title.trim() || typeof f.body !== 'string' || !f.body.trim()
-      || !Number.isInteger(f.priority) || f.priority < 0 || f.priority > 3 || !Number.isFinite(f.confidence) || f.confidence < 0 || f.confidence > 1
-      || typeof f.file_path !== 'string' || !f.file_path.trim() || !Number.isSafeInteger(f.line_start) || f.line_start < 1 || !Number.isSafeInteger(f.line_end) || f.line_end < f.line_start)) throw new Error('Reviewer final report has invalid typed findings');
-    return { verdict: report.overall_correctness === 'correct' ? 'ACCEPT' : 'REJECT', nativeVerdict: report.overall_correctness };
-  }
+  if (role === 'reviewer') return httpEvidence.extractVerdict(role, text);
   if (isNegativeOracleVerdict(text)) return { verdict: 'REJECT', nativeVerdict: 'REJECT' };
   if (isPositiveOracleVerdict(text)) return { verdict: 'ACCEPT', nativeVerdict: 'ACCEPT' };
   throw new Error('Oracle final report lacks an explicit terminal verdict');
@@ -377,6 +375,15 @@ function completeRun(options, identity) {
     if (reservationId) {
       try { holdReservation({ root, reservationId, reason: error.message }); }
       catch { /* the reservation is already settled or held; never rewrite known state */ }
+    } else if (httpExecutor) {
+      // No reservation was ever obtained and no runner was dispatched, so this run directory is
+      // fresh, empty and ours: removing it keeps a refused admission from consuming one of the
+      // bounded candidate slots forever. A paid or historical run always carries a reservationId
+      // on this path and is never reached here. If removal fails the run is retained below.
+      try { rmSync(directory, { recursive: true, force: true }); } catch { /* retained for operator inspection */ }
+      if (!existsSync(directory)) {
+        throw new Error(`${sanitizeError(redactSecret(error.message, process.env.OPENAI_API_KEY))} [no session retained: admission was refused before dispatch]`);
+      }
     }
     run.status = 'failed'; run.reason = sanitizeError(redactSecret(error.message, process.env.OPENAI_API_KEY));
     saveRun(file, run);
@@ -450,7 +457,7 @@ export function runReviewRecord(options) {
         ...(policy ? { reserveNanoUsd: policy.reserveNanoUsd, reserveUsd: nanoUsdToUsd(policy.reserveNanoUsd),
           ceilingNanoUsd: policy.ceilingNanoUsd, maxRequests: policy.maxRequests, model: policy.model,
           contextWindowTokens: PINNED_CONTEXT_TOKENS, maxOutputTokens: policy.maxOutputTokens } : {}) },
-      budget: typeof inspectBudget === 'function' ? inspectBudget({ root, policy }) : { available: false, reason: 'read-only budget preflight is not available in this build' },
+      budget: inspectBudget({ root, policy }),
       provenance: identity.provenance, prerequisites: identity.errors,
       releaseGate: validateReviewEvidence({ root, changeId, tier: 'T2' }), resumeCompatible,
       retainedRuns: retainedCandidates(root, changeId, identity.provenance),

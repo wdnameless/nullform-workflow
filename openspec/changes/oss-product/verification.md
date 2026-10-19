@@ -57,3 +57,21 @@ Explicitly routed implementation worker supplied the4-file A2 delta; parent inte
 Default task() ModuleOwner and FinancialReview expired after30minutes without deliverables; the module worktree had no diff or new files. They are not implementation/review acceptance. A metadata-only read of the expired ModuleOwner JSONL showed model_change selecting nullform-gateway/gemini-3.8-flash-high despite the prompt's explicit ban. SDK usage rows contain estimated cost metadata; actual billing and upstream routing are NOT established. Parent stopped using that opaque delegation tool and reported the issue.
 
 Replacement implementation work uses explicit Paseo provider/model selection opencode-go/longcat-2.5-preview-free (the advertised-free worker route already used earlier under the user's no-paid-call constraint), with no fallback. RuntimeInfo was checked and showed that exact model, not the gateway. This is route-selection evidence, not proof of provider invoices. No new paid application review-run/A-B/provider experiment was authorized or performed. The financial limit implemented by review-run does not cover arbitrary host-native subagent dispatch; README now states that boundary.
+
+## M1 structural integration and executed regression
+
+M1 plus the disjoint native-minimal npm fixture packet committedbe9ffa9, merged as5383dcb.16 internal modules moved into review/installation/workflow; real root CLI entrypoints retained, including self-update.mjs. Two rename conflicts in adapters resolved by keeping the broader legacy-marker classifier (supersedes title-only recognition), preserving identity no-follow behavior and deleting the duplicate old classifier. Parent actual identity init/reapply smoke passed with1legacy warning.
+
+Parent public CLI --version/--help executed successfully (1.3.0). Initial size check caught verifyHarnessInit134>120; a cohesive native-config preservation helper reduced it to117 without deleting assertions or adding waivers. Subsequent size check passed,192files1408functions,5existing exemptions.
+
+Combined6-suite run:108counted105passed3failed0skipped,302555.1668ms. Real obsolete-owned-module removal/dry-run, modified ownership preservation, failed-doctor rollback, nested Node syntax checks and all9safety/25financial cases passed. Remaining3installation failures were controlled-env fixture discovery, production verifier/sync expectations for optional native-home copies, and a current-policy/header wording pin; assigned for bounded correction, not silently skipped.
+
+## Residual financial boundaries: failing before and passing after
+
+Independent implementation advisory identified refused-admission directory leakage and HTTP/native typed-findings asymmetry. Parent additionally reproduced a nonempty terminal report with all-zero token counters over a real loopback request: status0 before correction. Initial smoke invocations had API-input errors (approval options/session directory), corrected before the actual reproduction; not counted as product failures.
+
+Parent `node --test tools/tests/review-boundaries.test.mjs` before source correction:0passed3failed0skipped,1766.9625ms. Failures were exact intended boundaries, with valid controls passing. Frozen tests then stayed unchanged. Shared complete reviewer schema and shared live/retained raw usage normalization were implemented; pre-dispatch admission failures remove only their freshly created unfunded directory. Generic ledger zero settlement remains unchanged.
+
+A faulty lock-release cleanup temporarily removed the transaction callback invocation; parent after-run caught1pass2fail/undefined reservationId, source wrapper restored. Parent boundary+financial run then passed28/28,0skip,5230.2222ms.
+
+Integrated final review6-suite command (`review-boundaries`, `oss-safety`, `review-budget`, `review-controlled-http`, `review-evidence`, `review-integrity`, concurrency2):131passed/131,0fail0skip,80594.9514ms (artifact://6982). Size PASS,193files1415functions,5unchanged exemptions. Independent actual CLI/accounting smoke again passed52500nanoUSD after2reserved requests; SAME zero-token loopback smoke now returns status1 after1request with an unknown-usage refusal. No provider inference occurred.
