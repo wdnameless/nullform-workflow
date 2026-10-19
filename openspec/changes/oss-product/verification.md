@@ -47,3 +47,13 @@ Code-size before module cutover:PASS,192files1408functions,5existing exemptions;
 ## OpenClaw identity boundary before correction
 
 Independent actual-installer smoke `node .tmp/openclaw-identity-smoke.mjs` against the pre-A2 adapter exited1 in11.46s: both existing human SOUL.md and USER.md changed; no warning. One file contained only human identity and one contained a legacy managed-looking block without ownership proof. Disposable sandbox was removed. This newly confirmed R12 violation is assigned to the single A2/M1 integration owner before module moves; after-proof remains pending. The earlier SetupOwner runtime expired before an identity source change was produced; completed source/test deltas were recovered, not reported as lost or accepted unseen.
+
+## A2 executed after-proof
+
+Explicitly routed implementation worker supplied the4-file A2 delta; parent integrated it and reran the SAME real-installer smoke. IdentityFilesChanged became[]; init and reapply both preserved SOUL.md/USER.md bytes. The existing-suite OpenClaw identity regression passed1/1,0skipped,13012.2707ms. Combined command completed in25.50s. Generic managed-marker warning coverage is being reconciled in M1; byte preservation is already exercised.
+
+## Delegation routing incident and recovery
+
+Default task() ModuleOwner and FinancialReview expired after30minutes without deliverables; the module worktree had no diff or new files. They are not implementation/review acceptance. A metadata-only read of the expired ModuleOwner JSONL showed model_change selecting nullform-gateway/gemini-3.8-flash-high despite the prompt's explicit ban. SDK usage rows contain estimated cost metadata; actual billing and upstream routing are NOT established. Parent stopped using that opaque delegation tool and reported the issue.
+
+Replacement implementation work uses explicit Paseo provider/model selection opencode-go/longcat-2.5-preview-free (the advertised-free worker route already used earlier under the user's no-paid-call constraint), with no fallback. RuntimeInfo was checked and showed that exact model, not the gateway. This is route-selection evidence, not proof of provider invoices. No new paid application review-run/A-B/provider experiment was authorized or performed. The financial limit implemented by review-run does not cover arbitrary host-native subagent dispatch; README now states that boundary.

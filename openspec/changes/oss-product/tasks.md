@@ -9,7 +9,7 @@
 - [x] S2 SafetyOwner: six root fixes,9-regression cohort and25financial invariants pass; independent real CLI/accounting smoke passes. R01. blocked-by: G2 S1
 - [x] A1 SetupOwner: safe discovery/selection, minimal OMP/doctor and preservation; parent67case run65pass plus2test-only corrections verified2/2. Exact archive and all-client reconciliation remain V1. R03 R09 R10 R12. blocked-by: G2 E1
 - [x] P1 PolicyOwner: native-first bootstrap and canonical opt-in guide; parent81surface/71skill checks passed. R05 R09 R10 R12. blocked-by: G2 E1
-- [ ] A2 Integration owner: preserve existing OpenClaw SOUL/USER bytes, remove unused identity generators and migrate affected behavior regressions; parent actual installer smoke reproduced both files changing before correction. R09 R12. blocked-by: A1
+- [x] A2 Explicitly routed implementation owner preserves OpenClaw SOUL/USER, removes obsolete identity generators/stripping, parent actual installer smoke passes init/reapply and regression1/1. R09 R12. blocked-by: A1
 
 ## Structure and public evidence
 - [ ] M1 StructureOwner: after A2, move cohesive internals, migrate every caller/deployment inventory and nested doctor checks; preserve actual entrypoints and journal exact obsolete owned-module removals. A2 and M1 have one integration owner to avoid overlapping movers. R04 R05. blocked-by: S2 A1 A2 P1 E2

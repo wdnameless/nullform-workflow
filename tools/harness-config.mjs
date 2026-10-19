@@ -435,22 +435,6 @@ export function applyManagedSection(existingContent, newManagedContent, defaultP
         matchStart: s => (() => { const text = s.replace(/\r\n/g, '\n'), known = trimmedManaged.replace(/\r\n/g, '\n'); const pattern = /^Full protocol: `([^`\n]+)\/agent\/agents\/orchestrator\.md`/m; const oldRoot = pattern.exec(text)?.[1], newRoot = pattern.exec(known)?.[1]; return Boolean(oldRoot && newRoot && text.startsWith(known.split(newRoot).join(oldRoot))); })(),
         endMarker: 'before `skill://<name>` resolves (its rules may already be embedded in the agent files above).',
       },
-      {
-        matchStart: s => {
-          const text = s.replace(/\r\n/g, '\n');
-          const match = /^- Law reference: (.+)\/agent\/AGENTS\.md$/m.exec(text);
-          return Boolean(match && text.startsWith(getOpenclawSoul(match[1]).trimEnd()));
-        },
-        endMarker: '- Return contract: STATUS | FILES | TESTS было->стало | CONCERNS (<=25 lines).',
-      },
-      {
-        matchStart: s => {
-          const text = s.replace(/\r\n/g, '\n');
-          const match = /^Target workspace: (.+)$/m.exec(text);
-          return Boolean(match && text.startsWith(getOpenclawUser(match[1]).trimEnd()));
-        },
-        endMarker: '- Verification: verify all fixes before final response.',
-      },
     ];
 
   for (const rule of legacyBlockRules) {
@@ -605,33 +589,6 @@ export function getMarkdownAdapter(slashRoot, title = "NULLFORM WORKFLOW Adapter
     "",
   ].join("\n");
 }
-
-export function getOpenclawSoul(slashRoot) {
-  return [
-    "# OpenClaw SOUL: NULLFORM WORKFLOW",
-    "",
-    "Identity: Orchestrator agent operating under NULLFORM WORKFLOW protocols.",
-    `- Law reference: ${slashRoot}/agent/AGENTS.md`,
-    "- Core stance: Correctness first, then maintainability. Minimal diffs.",
-    "- Scientific diagnosis: Tight reproducible red test before inspecting code.",
-    "- Ladder: reuse -> stdlib -> platform -> installed dep -> 1 line -> minimum.",
-    "- Return contract: STATUS | FILES | TESTS было->стало | CONCERNS (<=25 lines).",
-    "",
-  ].join("\n");
-}
-
-export function getOpenclawUser(slashRoot) {
-  return [
-    "# OpenClaw USER: Context & Operating Preferences",
-    "",
-    `Target workspace: ${slashRoot}`,
-    "- Workflow execution: use `nullform workflow` (or `node tools/workflow.mjs`) for task gating.",
-    "- Observability: dashboard URL available in `.workflow/dashboard.json`.",
-    "- Verification: verify all fixes before final response.",
-    "",
-  ].join("\n");
-}
-
 
 /**
  * Calculates a SHA-256 hash of text content.

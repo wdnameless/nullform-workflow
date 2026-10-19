@@ -3,7 +3,7 @@
  * for the 8 supported target harnesses.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,8 +13,6 @@ import {
   updateOpencodeJson,
   updateOpenclawJson,
   getMarkdownAdapter,
-  getOpenclawSoul,
-  getOpenclawUser,
   loadYaml,
   hashContent,
   preflightJsoncConfig,
@@ -27,6 +25,13 @@ import { updateHermesConfigYaml } from "./hermes-policy.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
 const REPO_ROOT = resolve(__dirname, "..");
+
+// Identity surfaces are never written; these signatures exist only to disclose a legacy
+// Nullform-looking identity block that the installer preserves and therefore leaves active.
+const LEGACY_IDENTITY_SIGNATURES = [
+  ["SOUL.md", "# OpenClaw SOUL: NULLFORM WORKFLOW"],
+  ["USER.md", "# OpenClaw USER: Context & Operating Preferences"],
+];
 
 export function installOmpHomeAssets({
   targetRoot,
@@ -190,13 +195,20 @@ export function applyHarnessAdapter(h, ctx) {
     } else {
       if (shouldWriteHome) writeMd(join(hostHome, filename));
       if (h === "openclaw") {
-        // OpenClaw natively reads SOUL.md/USER.md: replace managed policy ONLY in existing files.
-        // Never create identity surfaces fresh (identity-clean install); never leave stale blocks.
-        for (const [name, gen] of [["SOUL.md", getOpenclawSoul], ["USER.md", getOpenclawUser]]) {
-          const path = join(targetRoot, name);
-          if (existsSync(path)) writeAdapter(path, applyManagedSection(readExisting(path), gen(slashRoot)));
-        }
+        // Identity surfaces (SOUL.md/USER.md) are NEVER created, augmented, replaced, deleted or
+        // adopted here; AGENTS.md and openclaw.json carry all workflow policy. A legacy
+        // Nullform-looking identity block is preserved byte-identical and disclosed as possibly
+        // active, and an identity symlink is never followed outside its declared root.
         for (const dir of new Set([targetRoot, ...(shouldWriteHome ? [hostHome] : [])])) {
+          for (const [name, signature] of LEGACY_IDENTITY_SIGNATURES) {
+            let entry = null;
+            try { entry = lstatSync(join(dir, name)); } catch { continue; }
+            if (entry.isSymbolicLink()) {
+              ctx.plan.warnings.push(`${name} in ${dir} is an identity symlink; preserved unread, so any legacy policy it resolves to may remain active.`);
+            } else if (entry.isFile() && readExisting(join(dir, name)).includes(signature)) {
+              ctx.plan.warnings.push(`${name} in ${dir} still contains a legacy NULLFORM identity block; identity bytes are preserved unchanged and that legacy policy may remain active.`);
+            }
+          }
           const path = join(dir, "openclaw.json");
           writeAdapter(path, updateOpenclawJson(path, preflightJson5Config(path), slashRoot));
         }
