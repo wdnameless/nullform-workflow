@@ -1,5 +1,5 @@
 /**
- * tools/review-http-evidence.mjs — controlled-HTTP evidence projection and integrity.
+ * tools/review/http-evidence.mjs — controlled-HTTP evidence projection and integrity.
  *
  * The HTTP executor must be as strong as the native path: nothing is taken from the
  * parent's outer claims. Everything is RE-PROJECTED from the child's retained execution
@@ -9,9 +9,9 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { isRealPathInsideRoot } from './worktree-snapshot.mjs';
-import { EXECUTOR, PINNED_PROVIDER, EVIDENCE_CLASSES, nanoUsdToUsd, pinnedTariffsNanoPerToken, usageCostNanoUsd, redactSecret } from './review-budget.mjs';
-import { assertProductExecutionInvariant } from './review-native-tools.mjs';
+import { isRealPathInsideRoot } from '../worktree-snapshot.mjs';
+import { EXECUTOR, PINNED_PROVIDER, EVIDENCE_CLASSES, nanoUsdToUsd, pinnedTariffsNanoPerToken, usageCostNanoUsd, redactSecret } from './budget.mjs';
+import { assertProductExecutionInvariant } from './native-tools.mjs';
 
 const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
 const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)[ \t]*(?:(?:#+[ \t]*)?\*{0,2}Verdict:?\*{0,2}:?[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]|$|[.,])|\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]*[.,]?[ \t]*\r?$))|\|[ \t]*\*{0,2}Verdict:?\*{0,2}:?[ \t]*\|[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}\b/im;

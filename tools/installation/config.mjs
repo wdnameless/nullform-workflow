@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * tools/harness-config.mjs — Preservation, preflighting, and managed block utilities
+ * tools/installation/config.mjs — Preservation, preflighting, and managed block utilities
  * for cross-harness adapter configuration.
  */
 
@@ -8,12 +8,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { resolveHostHome } from "./harness-profiles.mjs";
+import { resolveHostHome } from "./profiles.mjs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const REPO_ROOT = resolve(__dirname, "..");
+const REPO_ROOT = resolve(__dirname, "..", "..");
 
 export const MANAGED_START = "<!-- BEGIN NULLFORM WORKFLOW -->";
 export const MANAGED_END = "<!-- END NULLFORM WORKFLOW -->";
@@ -100,7 +100,7 @@ function loadRuntimeModule(name) {
     } catch {}
   }
   try {
-    const req = createRequire(join(REPO_ROOT, "tools", "harness-config.mjs"));
+    const req = createRequire(join(REPO_ROOT, "tools", "installation", "config.mjs"));
     const mod = req(name);
     loadedModules.set(name, mod);
     return mod;

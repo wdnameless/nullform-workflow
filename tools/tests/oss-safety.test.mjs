@@ -23,8 +23,8 @@ import {
   computeRolePromptHash,
   computeTestFilesHash,
   computeEventProjectionHash,
-} from '../review-evidence.mjs';
-import { reprojectHttpExecution } from '../review-http-evidence.mjs';
+} from '../review/evidence.mjs';
+import { reprojectHttpExecution } from '../review/http-evidence.mjs';
 import {
   admitSession,
   recordRequest,
@@ -33,8 +33,8 @@ import {
   resolveBudgetAuthority,
   PINNED_MAX_OUTPUT_TOKENS,
   PINNED_CONTEXT_TOKENS,
-} from '../review-budget.mjs';
-import { runHttpReview } from '../review-http-runtime.mjs';
+} from '../review/budget.mjs';
+import { runHttpReview } from '../review/http-runtime.mjs';
 import { runWorkflowCli } from '../workflow.mjs';
 import { nativeRunner, prepareEvidence } from './fixtures/review-execution.mjs';
 

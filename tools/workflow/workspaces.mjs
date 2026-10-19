@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { validateRootPath, validatePathWithinScope } from './worktree-snapshot.mjs';
+import { validateRootPath, validatePathWithinScope } from '../worktree-snapshot.mjs';
 
 const REGISTRATION = '.workflow/workspace.json';
 const ANCHOR = 'nullform-workspace.json';

@@ -4,8 +4,8 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { inspectHarness, resolveHostHome, validateHostManifest } from "../harness-profiles.mjs";
-import { getCapabilitiesInfo } from "../harness-capabilities.mjs";
+import { inspectHarness, resolveHostHome, validateHostManifest } from "../installation/profiles.mjs";
+import { getCapabilitiesInfo } from "../installation/capabilities.mjs";
 
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "nullform-profile-"));
@@ -145,7 +145,7 @@ test("overridden child HOME/USERPROFILE cannot authorize sibling ambient roots f
   const script = `
     import { homedir, userInfo } from "node:os";
     import { join } from "node:path";
-    import { resolveHostHome } from ${JSON.stringify(new URL("../harness-profiles.mjs", import.meta.url).href)};
+    import { resolveHostHome } from ${JSON.stringify(new URL("../installation/profiles.mjs", import.meta.url).href)};
     const roots = ${JSON.stringify(roots)};
     const home = process.env.HOME;
     const outside = process.env.HERMES_HOME;

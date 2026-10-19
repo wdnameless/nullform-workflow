@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { computeSourceDigest } from '../review-evidence.mjs';
+import { computeSourceDigest } from '../review/evidence.mjs';
 import { readFileSync, symlinkSync } from 'node:fs';
-import { runReviewRecord, recordStageB, validateReviewEvidence, loadReviewEvidence, saveReviewEvidence, computeEventProjectionHash, countSourceChanges, validateOracleArtifact } from '../review-evidence.mjs';
+import { runReviewRecord, recordStageB, validateReviewEvidence, loadReviewEvidence, saveReviewEvidence, computeEventProjectionHash, countSourceChanges, validateOracleArtifact } from '../review/evidence.mjs';
 import { nativeRunner, prepareEvidence, writeEvidence } from './fixtures/review-execution.mjs';
-import registerNativeTools, { inspectProduct, executeProduct } from '../review-native-tools.mjs';
+import registerNativeTools, { inspectProduct, executeProduct } from '../review/native-tools.mjs';
 import { cmdStart, cmdArtifact, cmdClose, cmdCheckCi } from '../workflow.mjs';
 
 // Parent-owned execution: node --test tools/tests/review-integrity.test.mjs

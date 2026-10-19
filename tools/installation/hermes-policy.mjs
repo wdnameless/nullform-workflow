@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * tools/hermes-policy.mjs — Hermes YAML policy updater with strict ownership,
+ * tools/installation/hermes-policy.mjs — Hermes YAML policy updater with strict ownership,
  * YAML 1.1 native field validation, and merge-key rejection.
  */
 
-import { MANAGED_START, MANAGED_END, hashContent, loadYaml, preflightManagedMarkers } from "./harness-config.mjs";
+import { MANAGED_START, MANAGED_END, hashContent, loadYaml, preflightManagedMarkers } from "./config.mjs";
 
 /**
  * Add the native prompt block without reserializing unrelated human YAML.

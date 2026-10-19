@@ -11,12 +11,12 @@ import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
 import { installHarness, SUPPORTED_HARNESSES, loadHostManifest, discoverCandidates } from "../tools/install-harness.mjs";
-import { getDefaultRoot } from '../tools/installation-state.mjs';
+import { getDefaultRoot } from '../tools/installation/state.mjs';
 import { runDoctor, printHumanReport } from "../tools/doctor.mjs";
 import { runWorkflowCli } from "../tools/workflow.mjs";
-import { acquireDeploymentLock, releaseDeploymentLock, DeploymentJournal } from "../tools/deployment-journal.mjs";
-import { getCapabilitiesInfo, checkVersionAlignment } from "../tools/harness-capabilities.mjs";
-import { inspectHarness, resolveHostHome } from "../tools/harness-profiles.mjs";
+import { acquireDeploymentLock, releaseDeploymentLock, DeploymentJournal } from "../tools/installation/journal.mjs";
+import { getCapabilitiesInfo, checkVersionAlignment } from "../tools/installation/capabilities.mjs";
+import { inspectHarness, resolveHostHome } from "../tools/installation/profiles.mjs";
 import {
   PACKAGE_NAME,
   HARNESS_CHOICES,
@@ -268,6 +268,9 @@ export async function promptConfirmPlan(plan, { session, output = process.stdout
       output.write(`  Core files:   ${plan.filesToCopy.length}\n`);
       output.write(`  Adapters:     ${plan.adapters.length}\n`);
       for (const a of plan.adapters) output.write(`    - ${a}\n`);
+      const removals = plan.replacedModules || [];
+      output.write(`  Removals:     ${removals.length}\n`);
+      for (const r of removals) output.write(`    - ${r}\n`);
     }
     const answer = await activeSession.ask("Proceed with installation? [y/N]: ");
     if (typeof answer !== "string") return false;
@@ -327,6 +330,7 @@ const compactInstallationPlan = (plan) => plan ? {
   filesCount: Array.isArray(plan.filesToCopy) ? plan.filesToCopy.length : 0,
   managedFilesCount: plan.managedFiles ? Object.keys(plan.managedFiles).length : 0,
   adapters: plan.adapters || [],
+  ...(plan.replacedModules?.length ? { replacedModules: plan.replacedModules } : {}),
   ...(plan.preservedAssets?.count ? { preservedAssets: plan.preservedAssets } : {}),
   ...(plan.baselineRecorded !== undefined ? { baselineRecorded: plan.baselineRecorded } : {}),
 } : null;
@@ -492,6 +496,8 @@ export async function runInit(options = {}, deps = {}) {
         `  User home:    ${previewPlan.userHome}`,
         `  Files:        ${previewPlan.filesToCopy.length}`,
         ...previewPlan.adapters.map((a) => `  Adapter:      ${a}`),
+        `  Removals:     ${(previewPlan.replacedModules || []).length}`,
+        ...(previewPlan.replacedModules || []).map((r) => `  Remove:       ${r}`),
         ...(previewPlan.preservedAssets?.count ? [`  [WARN] preserved-assets: ${previewPlan.preservedAssets.count} preserved. ${previewPlan.preservedAssets.detail}`] : []),
       ].join("\n") + "\n";
       emitJsonOrText(output, errOut, options.json, { ok: true, ...compactInstallationPlan(previewPlan) }, lines, false);

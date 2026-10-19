@@ -7,8 +7,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createTempDir } from "./test-helpers.mjs";
 import { installHarness } from "../install-harness.mjs";
-import { CORE_FILES, getStateFilePath, readInstallationState } from "../installation-state.mjs";
-import { hashContent, resolveRuntimePackageDir, RUNTIME_PARSER_DEPS } from "../harness-config.mjs";
+import { CORE_FILES, getStateFilePath, readInstallationState, writeInstallationState } from "../installation/state.mjs";
+import { hashContent, resolveRuntimePackageDir, RUNTIME_PARSER_DEPS } from "../installation/config.mjs";
 import { deriveHigherVersion } from "../package-archive.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -25,7 +25,9 @@ function copyPublicPackageFixture(dest) {
     if (entry.isFile() && entry.name.includes(".example")) entries.push(`agent/${entry.name}`);
   }
   for (const entry of readdirSync(join(REPO_ROOT, "tools"), { withFileTypes: true })) {
-    if (entry.isFile() && (/\.(mjs|cjs|ts|py|ps1|sh)$/.test(entry.name) || entry.name === "sync-manifest.json")) {
+    if (entry.isDirectory() && !["tests", "node_modules"].includes(entry.name)) {
+      entries.push(`tools/${entry.name}`);
+    } else if (entry.isFile() && (/\.(mjs|cjs|ts|py|ps1|sh)$/.test(entry.name) || entry.name === "sync-manifest.json")) {
       entries.push(`tools/${entry.name}`);
     }
   }
@@ -171,7 +173,7 @@ test("public OMP init preserves unowned and modified-owned assets while advancin
     const changed = new Map();
     const priorHashes = new Map();
     for (const path of [
-      join(root, "tools", "harness-capabilities.mjs"),
+      join(root, "tools", "installation", "capabilities.mjs"),
       join(root, "skills", "ui-ux-pro-max", "scripts", "validate_data.py"),
     ]) {
       assert.equal(state.managedFiles[path], hashContent(readFileSync(path)));
@@ -185,7 +187,7 @@ test("public OMP init preserves unowned and modified-owned assets while advancin
     writeFileSync(parser, parserBytes);
     changed.set(parser, parserBytes);
     const jev = join(root, "agent", "extensions", "nullform-jev.ts");
-    const unchangedCore = join(root, "tools", "installation-state.mjs");
+    const unchangedCore = join(root, "tools", "installation", "state.mjs");
     const fontRel = join("skills", "ui-styling", "canvas-fonts", "YoungSerif-Regular.ttf");
     const font = join(root, fontRel);
     const baseVersion = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version;
@@ -198,7 +200,7 @@ test("public OMP init preserves unowned and modified-owned assets while advancin
       const metadata = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8"));
       writeFileSync(join(pkg, "package.json"), JSON.stringify({ ...metadata, version }, null, 2) + "\n");
       writeFileSync(join(pkg, "VERSION"), version + "\n");
-      for (const rel of ["tools/workflow.mjs", "tools/harness-capabilities.mjs", "tools/installation-state.mjs", "agent/extensions/nullform-jev.ts", "agent/extensions/nullform-delete-guard.ts"]) {
+      for (const rel of ["tools/workflow.mjs", "tools/installation/capabilities.mjs", "tools/installation/state.mjs", "agent/extensions/nullform-jev.ts", "agent/extensions/nullform-delete-guard.ts"]) {
         appendFixtureBytes(join(pkg, rel), `\n// PACKAGE VERSION ${version}\n`);
       }
       const newFont = appendFixtureBytes(join(pkg, fontRel), Buffer.from([0, 255, step]));
@@ -214,7 +216,7 @@ test("public OMP init preserves unowned and modified-owned assets while advancin
         assert.deepEqual(readFileSync(path), bytes);
         assert.equal(state.managedFiles[path], priorHashes.get(path), "Modified owned bytes retain their prior ownership hash");
       }
-      const incomingCore = readFileSync(join(pkg, "tools", "installation-state.mjs"));
+      const incomingCore = readFileSync(join(pkg, "tools", "installation", "state.mjs"));
       assert.deepEqual(readFileSync(unchangedCore), incomingCore);
       assert.equal(state.managedFiles[unchangedCore], hashContent(incomingCore));
       assert.deepEqual(readFileSync(font), newFont);
@@ -247,6 +249,73 @@ test("public in-place init (root == package) never rewrites the live tree or ado
     const state = readInstallationState(home);
     assert.equal(state.managedFiles[core], undefined, "In-place root bytes must not be adopted as newly owned");
     assert.equal(state.managedFiles[join(pkg, "VERSION")], undefined);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("owned obsolete root modules are removed while unowned or modified ones are preserved with a warning", () => {
+  const sandbox = createTempDir("obsolete-modules-");
+  const root = join(sandbox, "root"), home = join(sandbox, "home");
+  const env = { ...process.env, HOME: home, USERPROFILE: home, NULLFORM_USER_HOME: home };
+  try {
+    mkdirSync(join(root, "tools"), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const ownedBytes = "// OLD OWNED MODULE\n";
+    const ownedPath = join(root, "tools", "harness-config.mjs");
+    const unownedPath = join(root, "tools", "harness-profiles.mjs");
+    writeFileSync(ownedPath, ownedBytes, "utf8");
+    writeFileSync(unownedPath, "// HUMAN MODULE\n", "utf8");
+    const managedFiles = { [ownedPath]: hashContent(ownedBytes) };
+
+    const preview = installHarness({ harness: "omp", root, userHome: home, managedFiles, dryRun: true, env });
+    assert.deepEqual(preview.replacedModules, [ownedPath], "Dry-run must preview the owned obsolete module only");
+    assert.equal(existsSync(ownedPath), true, "Dry-run must not remove the obsolete module");
+
+    const plan = installHarness({ harness: "omp", root, userHome: home, managedFiles, dryRun: false, env });
+    assert.equal(existsSync(ownedPath), false, "Owned obsolete module must be removed on apply");
+    assert.equal(readFileSync(unownedPath, "utf8"), "// HUMAN MODULE\n", "Unowned module bytes must be preserved");
+    assert.ok(plan.warnings.some((w) => w.includes("harness-profiles.mjs")), "Preserved unowned module must be disclosed");
+
+    const modified = "// HUMAN MODIFIED OWNED MODULE\n";
+    writeFileSync(ownedPath, modified, "utf8");
+    const preserved = installHarness({ harness: "omp", root, userHome: home, managedFiles, dryRun: false, env });
+    assert.equal(readFileSync(ownedPath, "utf8"), modified, "Modified owned module must not be removed");
+    assert.equal(preserved.managedFiles[ownedPath], managedFiles[ownedPath], "Modified-owned module must keep its prior ownership hash");
+    assert.equal(preserved.replacedModules.includes(ownedPath), false, "Modified-owned module must not be claimed as removed");
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("public init that fails doctor after pruning restores the removed old module and prior identity", () => {
+  const sandbox = createTempDir("obsolete-rollback-");
+  const pkg = join(sandbox, "package"), root = join(sandbox, "root"), home = join(sandbox, "home");
+  try {
+    mkdirSync(home);
+    copyPublicPackageFixture(pkg);
+    publicInit(pkg, "omp", root, home);
+
+    const oldBytes = "// OLD OWNED MODULE\n";
+    const oldPath = join(root, "tools", "harness-config.mjs");
+    writeFileSync(oldPath, oldBytes, "utf8");
+    const before = readInstallationState(home);
+    const seeded = { ...before, managedFiles: { ...before.managedFiles, [oldPath]: hashContent(oldBytes) } };
+    writeInstallationState(home, seeded);
+
+    // Package source stays valid; only the installed copy is human-modified into invalid JS,
+    // so the real doctor syntax check fails after the prune already removed the old module.
+    writeFileSync(join(root, "tools", "workflow.mjs"), "// HUMAN MODIFIED\nfunction broken( {\n", "utf8");
+
+    const { result, payload } = runPublicInit(pkg, "omp", root, home);
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.stage, "doctor");
+
+    assert.equal(readFileSync(oldPath, "utf8"), oldBytes, "Rollback must restore the removed old module bytes");
+    const after = readInstallationState(home);
+    assert.equal(after.managedFiles[oldPath], seeded.managedFiles[oldPath], "Rollback must restore the prior ownership identity");
+    assert.deepEqual(after, seeded, "Failed installation must not publish a new identity");
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }

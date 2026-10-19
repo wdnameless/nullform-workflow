@@ -1,5 +1,5 @@
 /**
- * tools/harness-adapters.mjs — Adapter configuration mutators and home assets installer
+ * tools/installation/adapters.mjs — Adapter configuration mutators and home assets installer
  * for the 8 supported target harnesses.
  */
 
@@ -19,19 +19,23 @@ import {
   preflightJson5Config,
   preflightYamlConfig,
   resolveOpencodeConfigPaths,
-} from "./harness-config.mjs";
+  MANAGED_START,
+} from "./config.mjs";
 import { updateHermesConfigYaml } from "./hermes-policy.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
-const REPO_ROOT = resolve(__dirname, "..");
+const REPO_ROOT = resolve(__dirname, "..", "..");
 
-// Identity surfaces are never written; these signatures exist only to disclose a legacy
-// Nullform-looking identity block that the installer preserves and therefore leaves active.
-const LEGACY_IDENTITY_SIGNATURES = [
-  ["SOUL.md", "# OpenClaw SOUL: NULLFORM WORKFLOW"],
-  ["USER.md", "# OpenClaw USER: Context & Operating Preferences"],
-];
+// Identity surfaces are never written; these markers exist only to disclose a legacy
+// Nullform block that the installer preserves and therefore leaves active.
+const LEGACY_IDENTITY_MARKERS = Object.freeze([
+  MANAGED_START,
+  "# OpenClaw SOUL: NULLFORM WORKFLOW",
+  "# OpenClaw USER: Context & Operating Preferences",
+]);
+const IDENTITY_SURFACES = Object.freeze(["SOUL.md", "USER.md"]);
+
 
 export function installOmpHomeAssets({
   targetRoot,
@@ -200,13 +204,16 @@ export function applyHarnessAdapter(h, ctx) {
         // Nullform-looking identity block is preserved byte-identical and disclosed as possibly
         // active, and an identity symlink is never followed outside its declared root.
         for (const dir of new Set([targetRoot, ...(shouldWriteHome ? [hostHome] : [])])) {
-          for (const [name, signature] of LEGACY_IDENTITY_SIGNATURES) {
+          for (const name of IDENTITY_SURFACES) {
             let entry = null;
             try { entry = lstatSync(join(dir, name)); } catch { continue; }
             if (entry.isSymbolicLink()) {
               ctx.plan.warnings.push(`${name} in ${dir} is an identity symlink; preserved unread, so any legacy policy it resolves to may remain active.`);
-            } else if (entry.isFile() && readExisting(join(dir, name)).includes(signature)) {
-              ctx.plan.warnings.push(`${name} in ${dir} still contains a legacy NULLFORM identity block; identity bytes are preserved unchanged and that legacy policy may remain active.`);
+            } else if (entry.isFile()) {
+              const text = readExisting(join(dir, name));
+              if (LEGACY_IDENTITY_MARKERS.some((marker) => text.includes(marker))) {
+                ctx.plan.warnings.push(`${name} in ${dir} still contains a legacy NULLFORM identity block; identity bytes are preserved unchanged and that legacy policy may remain active.`);
+              }
             }
           }
           const path = join(dir, "openclaw.json");

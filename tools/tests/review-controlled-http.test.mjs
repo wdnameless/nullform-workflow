@@ -19,10 +19,10 @@ const RESERVE_NANO_USD = 3 * (128000 * 150 + 256 * 600);
 // <git-common-dir>/nullform-review-budget.json (non-git: <canonical root>/...).
 // No policy field, CLI flag or environment variable relocates or resets it.
 const LEDGER_FILE = 'nullform-review-budget.json';
-const evidenceModule = new URL('../review-evidence.mjs', import.meta.url).href;
-const runtimeModule = new URL('../review-http-runtime.mjs', import.meta.url).href;
+const evidenceModule = new URL('../review/evidence.mjs', import.meta.url).href;
+const runtimeModule = new URL('../review/http-runtime.mjs', import.meta.url).href;
 // Budget authority is the financial owner; the runtime is the transport owner.
-const budgetModule = new URL('../review-budget.mjs', import.meta.url).href;
+const budgetModule = new URL('../review/budget.mjs', import.meta.url).href;
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
 const lines = path => existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
 const POLICY = { schemaVersion: 1, provider: 'openai', model: MODEL, transport: EXECUTOR, endpoint: ENDPOINT,

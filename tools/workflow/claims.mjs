@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import {
   validateRootPath, validatePathWithinScope, resolveRealPath, getCanonicalPath,
   isInsideOrEqual, isSecretOrCredentialPath,
-} from "./worktree-snapshot.mjs";
+} from "../worktree-snapshot.mjs";
 
 const TASK_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const CHANGE_ID = /^[A-Za-z0-9_-]{1,64}$/;

@@ -6,93 +6,136 @@
 
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, lstatSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, basename } from "node:path";
 import { createRequire } from "node:module";
 import { buildHarnessFixture, seedHarnessFiles } from "./package-archive.mjs";
 
 // Deployment includes asset copies, durable writes, native adapters, and doctor.
 export const DEPLOYMENT_TIMEOUT_MS = 180_000;
 
+/**
+ * Native config preservation: every seeded config file must still exist, keep the user's
+ * secret/comment/anchor/entry content, and receive no unrequested sections.
+ */
+function assertNativeConfigsPreserved(fixture, customRoot, secretToken, harness, pass) {
+  for (const cfgPath of fixture.cfgFiles) {
+    assert.equal(existsSync(cfgPath), true, `R03: Expected native config missing at ${cfgPath}`);
+    const text = readFileSync(cfgPath, "utf8");
+    assert.ok(text.includes(secretToken), `R04: Secret token lost in ${cfgPath} on pass ${pass}`);
+    if (fixture.cfgKind === "jsonc") assert.ok(text.includes("manual") && text.includes("// User JSONC comment"), "R04: OpenCode settings lost");
+    if (fixture.cfgKind === "json5" || harness === "openclaw") {
+      assert.ok(text.includes(customRoot.replace(/\\/g, "/")), "R03: OpenClaw workflow workspace missing");
+      assert.ok(text.includes("customAgent"), "R04: OpenClaw customAgent entry lost");
+    }
+    if (fixture.cfgKind === "yaml") {
+      assert.ok(text.includes("# hash inside quoted YAML string") && text.includes("first line # keep comment char"), "R04: YAML comments corrupted");
+      assert.ok(text.includes("*default_settings") && text.includes("mcp_servers:"), "R03/R04: Hermes anchor/mcp lost");
+      assert.equal(/(?:^|\n)profiles:\s*(?:\r?\n)/m.test(text), false, "R03: Hermes config must not inject fake profiles");
+    }
+    if (fixture.cfgKind === "toml") {
+      assert.equal(text.includes("[memory.agents.workflow]"), false, "R04: OpenHuman config unrequested section injected");
+    }
+  }
+}
+
 export async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome, projectDir, secretToken, pkgVersion) {
   const hermesHostHome = harness === "hermes" ? join(harnessHome, ".hermes") : null;
   const initArgs = [
     "init", "--harness", harness, "--root", customRoot, "--user-home", harnessHome,
     ...(hermesHostHome ? ["--host-home", hermesHostHome] : []),
-    ...(projectDir ? ["--project-root", projectDir] : []), "--yes",
+    ...(projectDir ? ["--project-root", projectDir] : []), "--yes", "--json",
   ];
 
   let firstPassMdSnapshots = {};
+  let firstPassUnmanagedSnapshots = {};
+  let firstPassWarnings = [];
   for (let pass = 1; pass <= 2; pass++) {
     const res = await ctx.runInstalledBin(initArgs, { timeoutMs: DEPLOYMENT_TIMEOUT_MS });
     assert.equal(res.status, 0, `R02/R04: init pass ${pass} for ${harness} failed: ${res.stderr || res.stdout}`);
+    if (pass === 1) firstPassWarnings = JSON.parse(res.stdout).plan?.warnings || [];
 
     for (const mdPath of fixture.mdFiles) {
       assert.equal(existsSync(mdPath), true, `R03: Expected native instruction file missing at ${mdPath}`);
       const mdAfter = readFileSync(mdPath, "utf8");
       assert.ok(mdAfter.includes(fixture.humanBefore) && mdAfter.includes(fixture.humanAfter), `R04: Human notes lost in ${mdPath}`);
       assert.equal(mdAfter.includes("Old workflow block to replace cleanly."), false, `R04: Old block not replaced in ${mdPath}`);
-      assert.equal(mdAfter.includes("NULLFORM WORKFLOW"), true, `R03: Workflow adapter missing in ${mdPath}`);
+      // OMP's native law is the orchestrator directive, not the generic adapter text.
+      if (harness === "omp") assert.ok(mdAfter.includes(customRoot.replace(/\\/g, "/")), "R03: OMP law must reference the portable root");
+      else assert.equal(mdAfter.includes("NULLFORM WORKFLOW"), true, `R03: Workflow adapter missing in ${mdPath}`);
       assert.equal(mdAfter.split("<!-- BEGIN NULLFORM WORKFLOW -->").length, 2, `R04: Duplicate managed block in ${mdPath}`);
       if (harness === "cursor") assert.ok(mdAfter.includes("alwaysApply: true"), "R03: Cursor .mdc must retain alwaysApply: true");
       if (pass === 1) firstPassMdSnapshots[mdPath] = mdAfter;
       else assert.equal(mdAfter, firstPassMdSnapshots[mdPath], `R04: Managed block not idempotent in ${mdPath}`);
     }
 
+    // Identity surfaces (SOUL/USER) and seeded legacy assets are never managed: exact bytes back
+    // on the first pass, on reapply, and across an upgrade.
+    for (const identityPath of fixture.mdIdentity) {
+      assert.equal(readFileSync(identityPath, "utf8"), fixture.mdContent, `R04: Identity surface must stay byte-identical: ${identityPath}`);
+    }
+    for (const legacyPath of fixture.legacyFiles) {
+      assert.equal(readFileSync(legacyPath, "utf8"), fixture.cfgContent, `R04: Pre-existing legacy asset altered: ${legacyPath}`);
+    }
+    for (const [label, unmanagedPath] of [["SOUL", fixture.mdSoul], ["home AGENTS", fixture.mdHomeAgents]]) {
+      if (!unmanagedPath) continue;
+      const bytes = readFileSync(unmanagedPath, "utf8");
+      assert.ok(bytes.includes(fixture.humanBefore) && bytes.includes(fixture.humanAfter), `R04: Human ${label} notes lost`);
+      assert.equal(bytes.includes("NULLFORM WORKFLOW"), false, `R04: Installer must not write managed policy into ${label}`);
+      if (pass === 1) firstPassUnmanagedSnapshots[unmanagedPath] = bytes;
+      else assert.equal(bytes, firstPassUnmanagedSnapshots[unmanagedPath], `R04: Human ${label} notes altered on reapply`);
+    }
+
+
     if (harness === "cursor") {
       assert.equal(existsSync(join(harnessHome, ".cursor", "rules")), false, "R03: Cursor must not create global ~/.cursor/rules");
     }
 
+    if (harness === "omp") {
+      // Native OMP surfaces: law in hostHome + portable root pointer. No home skill catalogue
+      // and no global rules/MCP copies are created by a fresh install.
+      const lawPath = join(harnessHome, ".omp", "agent", "AGENTS.md");
+      const law = readFileSync(lawPath, "utf8");
+      assert.ok(law.includes(customRoot.replace(/\\/g, "/")), "R03: OMP law must carry the portable root path");
+      assert.equal(law.includes("<HARNESS>"), false, "R03: OMP law placeholder must be substituted");
+      assert.equal(readFileSync(join(harnessHome, ".omp", "agent", ".harness-root"), "utf8").trim(), customRoot, "R03: .harness-root pointer must match the portable root");
+      assert.equal(existsSync(join(harnessHome, ".agents", "skills")), false, "R03: OMP install must not copy a global skill catalogue");
+      assert.equal(existsSync(join(harnessHome, ".agents", "rules")), false, "R03: OMP install must not copy global rules");
+      assert.equal(existsSync(join(harnessHome, ".omp", "agent", "rules")), false, "R03: OMP install must not copy agent-dir rules");
+      // The warning must reference the seeded legacy asset itself, not a phrasing.
+      for (const legacyPath of fixture.legacyFiles) {
+        assert.ok(
+          firstPassWarnings.some((w) => w.includes(basename(legacyPath))),
+          `R03: Plan warnings must reference the preserved legacy asset ${basename(legacyPath)}: ${JSON.stringify(firstPassWarnings)}`
+        );
+      }
+    }
+
+
     assert.equal(readFileSync(join(customRoot, "unrelated-notes.txt"), "utf8"), "Unrelated user file content.\n", "R04: Unrelated file altered");
-    if (fixture.mdSoul && pass === 1) {
-      // SOUL.md is identity: adaptive installer must leave human bytes untouched, no managed block.
-      const soul = readFileSync(fixture.mdSoul, "utf8");
-      assert.ok(soul.includes(fixture.humanBefore) && soul.includes(fixture.humanAfter), "R04: Human SOUL notes lost");
-      assert.equal(soul.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into SOUL.md");
-    }
-    if (fixture.mdHomeAgents && pass === 1) {
-      const home = readFileSync(fixture.mdHomeAgents, "utf8");
-      assert.ok(home.includes(fixture.humanBefore) && home.includes(fixture.humanAfter), "R04: Human home AGENTS notes lost");
-      assert.equal(home.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into home AGENTS.md");
-    }
     assert.equal(readFileSync(join(customRoot, ".env"), "utf8"), `USER_ENV_SECRET=${secretToken}\n`, "R04: User .env file altered");
 
-    for (const cfgPath of fixture.cfgFiles) {
-      assert.equal(existsSync(cfgPath), true, `R03: Expected native config missing at ${cfgPath}`);
-      const text = readFileSync(cfgPath, "utf8");
-      assert.ok(text.includes(secretToken), `R04: Secret token lost in ${cfgPath} on pass ${pass}`);
-      if (fixture.cfgKind === "jsonc") assert.ok(text.includes("manual") && text.includes("// User JSONC comment"), "R04: OpenCode settings lost");
-      if (fixture.cfgKind === "json5" || harness === "openclaw") {
-        assert.ok(text.includes(customRoot.replace(/\\/g, "/")), "R03: OpenClaw workflow workspace missing");
-        assert.ok(text.includes("customAgent"), "R04: OpenClaw customAgent entry lost");
-      }
-      if (fixture.cfgKind === "yaml") {
-        assert.ok(text.includes("# hash inside quoted YAML string") && text.includes("first line # keep comment char"), "R04: YAML comments corrupted");
-        assert.ok(text.includes("*default_settings") && text.includes("mcp_servers:"), "R03/R04: Hermes anchor/mcp lost");
-        assert.equal(/(?:^|\n)profiles:\s*(?:\r?\n)/m.test(text), false, "R03: Hermes config must not inject fake profiles");
-      }
-      if (fixture.cfgKind === "toml") {
-        assert.equal(text.includes("[memory.agents.workflow]"), false, "R04: OpenHuman config unrequested section injected");
-      }
-    }
+    assertNativeConfigsPreserved(fixture, customRoot, secretToken, harness, pass);
 
     if (harness === "omp") {
-          assert.equal(existsSync(fixture.skillsDir), true, `R03: Skills directory missing at ${fixture.skillsDir} for ${harness}`);
-          const skills = readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
-          assert.ok(skills.length > 0, `R03: No skills installed in ${fixture.skillsDir} for ${harness}`);
-        } else if (harness === "hermes") {
-          const nativePath = fixture.cfgFiles.at(-1);
-          const config = createRequire(import.meta.url)("yaml").parse(readFileSync(nativePath, "utf8"));
-          const prompt = config.agent.system_prompt;
-          assert.equal(prompt.split("<!-- BEGIN NULLFORM WORKFLOW -->").length - 1, 1, "R03: Native prompt needs exactly one owned block");
-          assert.equal(prompt.split("<!-- END NULLFORM WORKFLOW -->").length - 1, 1, "R03: Native prompt block must be complete");
-          assert.equal(existsSync(fixture.skillsDir), false, "R03: Native prompt activation must not copy a duplicate skill");
-        } else if (harness === "cursor") {
-          // Cursor is project-scoped: target-root skills/ is legitimate project context, not a home catalogue.
-          assert.equal(existsSync(fixture.skillsDir), true, `R03: Cursor project skills missing at ${fixture.skillsDir}`);
-        } else {
-          // Adaptive non-OMP: no bulk home-skill catalogue by design (doctor reports skills:skip).
-          assert.equal(existsSync(fixture.skillsDir), false, `R03: Unexpected bulk skills catalogue at ${fixture.skillsDir} for adaptive ${harness}`);
-        }
+      // Portable assets live under the installation root; the home keeps only native surfaces.
+      for (const rel of ["skills", "rules", "agent", "tools", join("tools", "installation")]) {
+        assert.equal(existsSync(join(customRoot, rel)), true, `R03: Portable ${rel} missing under installation root for omp`);
+      }
+      assert.equal(existsSync(fixture.skillsDir), false, `R03: Fresh OMP install must not populate ${fixture.skillsDir}`);
+    } else if (harness === "hermes") {
+      const nativePath = fixture.cfgFiles.at(-1);
+      const config = createRequire(import.meta.url)("yaml").parse(readFileSync(nativePath, "utf8"));
+      const prompt = config.agent.system_prompt;
+      assert.equal(prompt.split("<!-- BEGIN NULLFORM WORKFLOW -->").length - 1, 1, "R03: Native prompt needs exactly one owned block");
+      assert.equal(prompt.split("<!-- END NULLFORM WORKFLOW -->").length - 1, 1, "R03: Native prompt block must be complete");
+      assert.equal(existsSync(fixture.skillsDir), false, "R03: Native prompt activation must not copy a duplicate skill");
+    } else if (harness === "cursor") {
+      // Cursor is project-scoped: target-root skills/ is legitimate project context, not a home catalogue.
+      assert.equal(existsSync(fixture.skillsDir), true, `R03: Cursor project skills missing at ${fixture.skillsDir}`);
+    } else {
+      // Adaptive non-OMP: no bulk home-skill catalogue by design (doctor reports skills:skip).
+      assert.equal(existsSync(fixture.skillsDir), false, `R03: Unexpected bulk skills catalogue at ${fixture.skillsDir} for adaptive ${harness}`);
+    }
     if (fixture.noSymlinkSkills && existsSync(fixture.skillsDir)) {
       for (const entry of readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
         const fullSkillPath = join(fixture.skillsDir, entry.name);

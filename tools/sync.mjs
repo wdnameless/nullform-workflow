@@ -19,7 +19,7 @@ import {
   preflightManagedMarkers,
   applyManagedSection,
   extractManagedSection,
-} from './harness-config.mjs';
+} from './installation/config.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

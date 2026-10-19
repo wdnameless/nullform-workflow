@@ -4,7 +4,7 @@ import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { stripVTControlCharacters } from "node:util";
-import { isInsideOrEqual, validatePathWithinScope, validateRootPath } from "./worktree-snapshot.mjs";
+import { isInsideOrEqual, validatePathWithinScope, validateRootPath } from "../worktree-snapshot.mjs";
 
 const HOSTS = ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman"];
 const CAPABILITIES = ["taskState", "delegation", "worktree", "terminal", "browser", "skills", "verification", "mcp"];

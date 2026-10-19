@@ -7,8 +7,8 @@ import { spawnSync } from "node:child_process";
 import { createTempDir } from "./test-helpers.mjs";
 import { runInit } from "../../bin/nullform.mjs";
 import { discoverCandidates, detectHarness, installHarness } from "../install-harness.mjs";
-import { inspectHarness } from "../harness-profiles.mjs";
-import { writeInstallationState } from "../installation-state.mjs";
+import { inspectHarness } from "../installation/profiles.mjs";
+import { writeInstallationState } from "../installation/state.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../../bin/nullform.mjs", import.meta.url));
 

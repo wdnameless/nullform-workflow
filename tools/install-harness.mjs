@@ -8,7 +8,7 @@
  *   - opencode  (OpenCode -> AGENTS.md + opencode.json)
  *   - cursor    (Cursor -> .cursor/rules/00-workflow.mdc)
  *   - omp       (Oh My Pi -> ~/.omp/agent/AGENTS.md)
- *   - openclaw  (OpenClaw -> openclaw.json + AGENTS.md + SOUL.md + USER.md + skills)
+ *   - openclaw  (OpenClaw -> openclaw.json + AGENTS.md + skills; SOUL.md/USER.md are identity and never written)
  *   - hermes    (Hermes -> config.yaml + AGENTS.md)
  *   - openhuman (OpenHuman -> AGENTS.md + copied skills)
  *   - all       (All adapters)
@@ -24,17 +24,17 @@
  *   --help, -h            Show help
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, lstatSync, readlinkSync, symlinkSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, lstatSync, readlinkSync, symlinkSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, preflightAllConfigs, hashContent, isCommandInPath } from "./harness-config.mjs";
-import { applyHarnessAdapter, prepareHermesActivation } from "./harness-adapters.mjs";
-import { validateRootPath } from './worktree-snapshot.mjs';
-import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement, readInstallationState } from './installation-state.mjs';
-import { acquireDeploymentLock, DeploymentJournal, safeAtomicWrite, getDeploymentJournalPath } from './deployment-journal.mjs';
-import { resolveHostHome, validateHostManifest, inspectHarness } from "./harness-profiles.mjs";
+import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, preflightAllConfigs, hashContent, isCommandInPath } from "./installation/config.mjs";
+import { applyHarnessAdapter, prepareHermesActivation } from "./installation/adapters.mjs";
+import { validateRootPath, validatePathWithinScope } from './worktree-snapshot.mjs';
+import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement, readInstallationState } from './installation/state.mjs';
+import { acquireDeploymentLock, DeploymentJournal, safeAtomicWrite, getDeploymentJournalPath } from './installation/journal.mjs';
+import { resolveHostHome, validateHostManifest, inspectHarness } from "./installation/profiles.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -176,6 +176,52 @@ function copyDirRecursive(srcDir, destDir, slashRoot, assetContext) {
 
   walk(srcDir, destDir);
   return copied;
+}
+
+/**
+ * Old root module paths whose implementation moved into tools/<group>/. Removing an old copy
+ * requires three independent proofs: canonical confinement inside the selected root, recorded
+ * prior ownership, and byte equality with that owned hash. Anything else is human/unknown and
+ * is preserved with a bounded warning. Dry-run previews without mutating; the deployment
+ * journal restores a removed module when the installation fails.
+ */
+const REPLACED_MODULE_PATHS = Object.freeze([
+  "review-evidence.mjs", "review-native-tools.mjs", "review-budget.mjs",
+  "review-http-runtime.mjs", "review-http-child.mjs", "review-http-evidence.mjs",
+  "installation-state.mjs", "harness-profiles.mjs", "harness-adapters.mjs",
+  "harness-config.mjs", "harness-capabilities.mjs", "hermes-policy.mjs",
+  "deployment-journal.mjs", "deployment-restore.mjs",
+  "task-claim.mjs", "workflow-workspaces.mjs",
+]);
+
+function pruneReplacedModules({ targetRoot, priorManaged, plan, journal, dryRun }) {
+  for (const name of REPLACED_MODULE_PATHS) {
+    const dest = join(targetRoot, "tools", name);
+    let entry = null;
+    try { entry = lstatSync(dest); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
+    // A symlink or non-regular entry is never read through and never certified as ours.
+    if (!entry.isFile()) {
+      plan.warnings.push(`Legacy module tools/${name} is not a regular file; preserved unread (never followed) and may remain active.`);
+      preserveAsset(dest, priorManaged[dest], plan);
+      continue;
+    }
+    if (!validatePathWithinScope(dest, targetRoot)) {
+      plan.warnings.push(`Legacy module tools/${name} cannot be proven confined to the installation root; preserved unmodified and may remain active.`);
+      preserveAsset(dest, priorManaged[dest], plan);
+      continue;
+    }
+    const priorHash = priorManaged[dest];
+    if (!priorHash || hashContent(readFileSync(dest)) !== priorHash) {
+      plan.warnings.push(`Legacy module tools/${name} is not provably owned by this installation; preserved unmodified and may remain active.`);
+      preserveAsset(dest, priorHash, plan);
+      continue;
+    }
+    plan.replacedModules.push(dest);
+    if (dryRun) continue;
+    if (journal) journal.recordBeforeUnlink(dest);
+    unlinkSync(dest);
+    if (journal) journal.recordUnlinked(dest);
+  }
 }
 
 /**
@@ -379,6 +425,7 @@ function installHarness(options = {}) {
       dryRun: Boolean(options.dryRun),
       filesToCopy: [],
       adapters: [],
+      replacedModules: [],
       managedFiles: {},
       preservedAssets: {
         count: 0, modifiedOwned: 0, unowned: 0, examples: [],
@@ -388,8 +435,7 @@ function installHarness(options = {}) {
     const assetContext = { dryRun: Boolean(options.dryRun), priorManaged, plan, journal };
     const copyAsset = (src, dest) => copyAndSubstitute(src, dest, slashRoot, assetContext);
 
-    const isCursorActive = targetHarnesses.includes("cursor");
-    const coreDirs = getCoreDirs(isCursorActive);
+    const coreDirs = getCoreDirs();
 
     for (const dir of coreDirs) {
       const srcDir = join(REPO_ROOT, dir);
@@ -404,9 +450,8 @@ function installHarness(options = {}) {
       if (existsSync(srcFile) && copyAsset(srcFile, destFile)) plan.filesToCopy.push(destFile);
     }
 
-
     plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, assetContext));
-
+    pruneReplacedModules({ targetRoot, priorManaged, plan, journal, dryRun: Boolean(options.dryRun) });
     const writeAdapter = (filePath, content) => {
       plan.adapters.push(filePath);
       const hash = hashContent(content);
@@ -529,6 +574,10 @@ async function main() {
       console.log(`  Adapters:`);
       for (const adapter of plan.adapters) {
         console.log(`    - ${adapter}`);
+      }
+      console.log(`  Removals:     ${plan.replacedModules.length}`);
+      for (const removed of plan.replacedModules) {
+        console.log(`    - ${removed}`);
       }
       process.exitCode = 0;
       return;

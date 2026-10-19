@@ -1,19 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, symlinkSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
+import { join, resolve, dirname, basename } from "node:path";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
 const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 const SH_PATH = resolve(REPO_ROOT, "install.sh");
 import { createTempDir } from "./test-helpers.mjs";
 import { detectHarness } from "../install-harness.mjs";
-import { preflightJson5Config, preflightJsoncConfig, applyManagedSection, loadYaml } from "../harness-config.mjs";
-import { resolveHostHome } from "../harness-profiles.mjs";
+import { preflightJson5Config, preflightJsoncConfig, applyManagedSection, loadYaml } from "../installation/config.mjs";
+import { resolveHostHome } from "../installation/profiles.mjs";
 function getBashPath() {
   const candidates = process.platform === "win32"
     ? ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "bash.exe", "bash"]
@@ -210,14 +209,11 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
     }
     const statusOf = (label) =>
       report.results.find((result) => result.label.startsWith(label))?.status;
-
-    // Installation-owned checks: must pass with nothing but Node on the host.
+    // Installation-owned checks that do not depend on a native home catalogue: a fresh OMP
+    // install keeps skills/rules/agent under the portable root, so the verifier's home-catalogue
+    // checks are not part of this install's contract.
     for (const label of [
       "node present",
-      "agent definitions present",
-      "skills registry populated",
-      "rule installed and addressable",
-      "mandatory MCP servers present",
       "no unsubstituted placeholders",
       "prompt surfaces have no volatile literals",
       "prompt surfaces match baseline",
@@ -297,32 +293,42 @@ test("install.sh without node in PATH gives instruction without stack trace", (t
   }
 });
 
-test("isolated OMP install copies rules, size baseline, and platform-correct mcp.json", () => {
+test("isolated OMP install writes only native surfaces and preserves pre-existing legacy extras", () => {
   const temp = createTempDir("omp-rules-baseline-");
   const root = join(temp, "live");
   const userHome = join(temp, "home");
+  const homeAgent = join(userHome, ".omp", "agent");
+  const legacyMcp = join(homeAgent, "mcp.json");
+  const legacyRule = join(userHome, ".agents", "rules", "enterprise-directives.md");
+  mkdirSync(dirname(legacyMcp), { recursive: true });
+  mkdirSync(dirname(legacyRule), { recursive: true });
+  writeFileSync(legacyMcp, '{\n  "mcpServers": { "humanOwned": { "command": "node" } }\n}\n', "utf8");
+  writeFileSync(legacyRule, "# Human rule, never adopted\n", "utf8");
   try {
     const installed = spawnSync(process.execPath, [
       SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
     ], { encoding: "utf8" });
     assert.equal(installed.status, 0, installed.stderr);
+    const plan = JSON.parse(installed.stdout);
 
-    const agentEd = join(userHome, ".omp", "agent", "rules", "enterprise-directives.md");
-    const homeEd = join(userHome, ".agents", "rules", "enterprise-directives.md");
-    assert.ok(existsSync(agentEd) && existsSync(homeEd));
+    // Native surfaces only: law + pointer in the host home.
+    const law = readFileSync(join(homeAgent, "AGENTS.md"), "utf8");
+    assert.ok(law.includes(root.replace(/\\/g, "/")));
+    assert.equal(law.includes("<HARNESS>"), false);
+    assert.equal(readFileSync(join(homeAgent, ".harness-root"), "utf8").trim(), root);
+
+    // No global catalogue or home config copies are created by a fresh install.
+    assert.equal(existsSync(join(homeAgent, "rules")), false, "no agent-dir rules copy");
+    assert.equal(existsSync(join(userHome, ".agents", "skills")), false, "no global skill catalogue");
+
+    // Portable assets stay under the installation root.
     assert.ok(existsSync(join(root, ".code-size.baseline.json")));
-    assert.ok(!readFileSync(agentEd, "utf8").includes("<HARNESS>"));
-    assert.ok(!readFileSync(homeEd, "utf8").includes("<HARNESS>"));
+    assert.ok(existsSync(join(root, "rules", "enterprise-directives.md")));
+    assert.ok(existsSync(join(root, "skills")));
 
-    const mcpCfg = JSON.parse(readFileSync(join(userHome, ".omp", "agent", "mcp.json"), "utf8"));
-    const devtools = mcpCfg.mcpServers?.["chrome-devtools"];
-    assert.ok(devtools);
-    if (process.platform === "win32") {
-      assert.equal(devtools.command, "cmd.exe");
-      assert.equal(devtools.args[0], "/c");
-    } else {
-      assert.equal(devtools.command, "npx");
-    }
+    // Pre-existing human/legacy extras are preserved byte-identically and reported as preserved.
+    assert.equal(readFileSync(legacyMcp, "utf8"), '{\n  "mcpServers": { "humanOwned": { "command": "node" } }\n}\n');
+    assert.ok(plan.warnings.some((w) => w.includes(basename(legacyMcp))), `warning must reference the preserved asset: ${JSON.stringify(plan.warnings)}`);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -448,21 +454,23 @@ test("verifier with --user-home inspects sandbox .omp/agent and ignores external
   }
 });
 
-test("install-harness preserves OMP extensions and user markdown instructions idempotently", () => {
-  const temp = createTempDir("omp-install-jev-ext-");
+test("install-harness preserves pre-existing OMP legacy extras and user markdown instructions idempotently", () => {
+  const temp = createTempDir("omp-install-legacy-ext-");
   const root = join(temp, "harness");
   const userHome = join(temp, "home");
   const customExtDir = join(userHome, ".omp", "agent", "extensions");
   mkdirSync(customExtDir, { recursive: true });
   const unrelatedExtPath = join(customExtDir, "unrelated-custom.ts");
-  writeFileSync(unrelatedExtPath, "// custom extension\nexport default () => {};\n", "utf8");
+  const unrelatedExtBytes = "// custom extension\nexport default () => {};\n";
+  writeFileSync(unrelatedExtPath, unrelatedExtBytes, "utf8");
 
   try {
     for (let run = 1; run <= 2; run++) {
       const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json"], { encoding: "utf8" });
       assert.equal(res.status, 0, res.stderr);
-      assert.ok(existsSync(join(customExtDir, "nullform-jev.ts")));
-      assert.equal(readFileSync(unrelatedExtPath, "utf8"), "// custom extension\nexport default () => {};\n");
+      // Human extension is neither replaced nor extended by an auto-installed one.
+      assert.equal(readFileSync(unrelatedExtPath, "utf8"), unrelatedExtBytes);
+      assert.equal(existsSync(join(customExtDir, "nullform-jev.ts")), false, "installer must not auto-install JEV into a human extensions dir");
       assert.equal(readFileSync(join(userHome, ".omp", "agent", ".harness-root"), "utf8").trim(), root);
     }
 

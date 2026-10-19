@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import * as budget from '../review-budget.mjs';
+import * as budget from '../review/budget.mjs';
 
 const {
   BUDGET_LEDGER_DIR,

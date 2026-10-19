@@ -1,11 +1,11 @@
 /**
- * tools/review-http-child.mjs — stdlib Node child entry for the controlled executor.
+ * tools/review/http-child.mjs — stdlib Node child entry for the controlled executor.
  *
  * Reads one JSON invocation from stdin, runs the bounded Chat Completions loop, and
  * writes the JSON result envelope to stdout. Nothing else is accepted from argv.
  */
 import { readFileSync } from 'node:fs';
-import { runHttpReview } from './review-http-runtime.mjs';
+import { runHttpReview } from './http-runtime.mjs';
 
 async function main() {
   const input = readFileSync(0, 'utf8');

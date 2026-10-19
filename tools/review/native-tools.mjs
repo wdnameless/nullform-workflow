@@ -2,9 +2,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { resolveNpmRunner } from './installation-state.mjs';
-import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isSecretOrCredentialPath, isStructuralExcludedPath, isAcceptancePath, cleanGitEnv } from './worktree-snapshot.mjs';
-import { withoutProviderCredential } from './review-budget.mjs';
+import { resolveNpmRunner } from '../installation/state.mjs';
+import { scanWorktree, sourceDigest, isRealPathInsideRoot, isPathInsideRoot, isSecretOrCredentialPath, isStructuralExcludedPath, isAcceptancePath, cleanGitEnv } from '../worktree-snapshot.mjs';
+import { withoutProviderCredential } from './budget.mjs';
 
 function git(root, args) {
   return execFileSync('git', args, { cwd: root, env: cleanGitEnv(), encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });

@@ -51,18 +51,24 @@ import {
   MANAGED_START,
   MANAGED_END,
   getMarkdownAdapter,
-} from "./harness-config.mjs";
-import { updateHermesConfigYaml } from "./hermes-policy.mjs";
-import { checkVersionAlignment, checkHarnessCapabilities } from "./harness-capabilities.mjs";
-import { inspectHarness, resolveHostHome } from "./harness-profiles.mjs";
-import { readInstallationState } from "./installation-state.mjs";
+} from "./installation/config.mjs";
+import { updateHermesConfigYaml } from "./installation/hermes-policy.mjs";
+import { checkVersionAlignment, checkHarnessCapabilities } from "./installation/capabilities.mjs";
+import { inspectHarness, resolveHostHome } from "./installation/profiles.mjs";
+import { readInstallationState } from "./installation/state.mjs";
 import { loadHostManifest } from "./install-harness.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export const CORE_TOOLS = [
-  "workflow.mjs", "workflow-workspaces.mjs", "review-evidence.mjs", "review-native-tools.mjs", "worktree-snapshot.mjs",
+  "workflow.mjs", "worktree-snapshot.mjs",
+  "review/evidence.mjs", "review/native-tools.mjs", "review/budget.mjs",
+  "review/http-runtime.mjs", "review/http-child.mjs", "review/http-evidence.mjs",
+  "installation/state.mjs", "installation/profiles.mjs", "installation/adapters.mjs",
+  "installation/config.mjs", "installation/capabilities.mjs", "installation/hermes-policy.mjs",
+  "installation/journal.mjs", "installation/restore.mjs",
+  "workflow/claims.mjs", "workflow/workspaces.mjs",
   "prompt-lint.mjs", "skill-audit.mjs", "skills-doctor.mjs", "glossary.mjs",
   "replay.mjs", "codemap.mjs", "return-contract.mjs", "cache-policy.mjs",
   "cache-doctor.mjs", "context-inbox.mjs", "domain-context.mjs", "oracle-model.mjs",
@@ -733,12 +739,31 @@ export function runDoctor(options) {
     }
 
     if (existsSync(toolsDir)) {
-      let mjsFiles = [];
-      try {
-        mjsFiles = readdirSync(toolsDir).filter((f) => f.endsWith(".mjs"));
-      } catch {
-        mjsFiles = [];
-      }
+      const mjsFiles = [];
+      const walkTools = (dir, prefix) => {
+        let entries = [];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch (error) {
+          syntaxErrors.push(`${prefix || "tools/"} (directory could not be enumerated: ${error.code || error.message})`);
+          return;
+        }
+        for (const entry of entries) {
+          if (entry.name === "tests" || entry.name === "node_modules") continue;
+          const rel = `${prefix}${entry.name}`;
+          // Never follow an untrusted link to certify syntax outside the installation.
+          if (entry.isSymbolicLink()) {
+            syntaxErrors.push(`${rel} (symlink not inspected)`);
+            continue;
+          }
+          if (entry.isDirectory()) {
+            walkTools(join(dir, entry.name), `${rel}/`);
+          } else if (entry.isFile() && entry.name.endsWith(".mjs")) {
+            mjsFiles.push(rel);
+          }
+        }
+      };
+      walkTools(toolsDir, "");
 
       let syntaxChecker = null;
       try {
