@@ -67,8 +67,9 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Oracle** — the read-only acceptance role. See *Roles*.
 - **Double acceptance** — the Wave 4 rule when the resolved oracle model is flash-class (name matches `*flash*` or is the configured fallback): two independent oracle passes, reconciled. ACCEPT requires the two to agree; either `REJECT` forces a fix round, then a fresh pair.
 - **Oracle-lite** — a single-pass Wave 4 acceptance permitted only for a small slice (≤2 files, ≤~80 diff lines), under the same evidence protocol as a full oracle pass. Anything larger goes through double acceptance.
-- **Review budget** — at most one initial review plus two re-reviews per gate
-  (defined by `skill://deepwork`).
+- **Review attempt ceiling** — at most one initial implementation review plus two re-reviews per gate (`skill://deepwork`). A process limit, not permission to spend.
+- **Monetary review ceiling** — the explicitly authorized `ceilingUsd` for controlled `review-run`: settled cost plus every outstanding reservation plus the proposed full-session reserve must fit. Shared across Git worktrees through verified Git-common authority; non-Git fallback requires established non-Git status and canonical root. Not a cap on arbitrary native-client/subagent calls or an independently verified provider invoice.
+- **Review spend ledger** — `nullform-review-budget.json` beside verified Git metadata, or inside canonical non-Git root `.workflow/`. Integer nano-USD; `reserved` authorizes bounded requests, `settled` records known usage, `held` preserves unknown spend and blocks fresh admission even after a ceiling increase. Canonical serialized accounting must remain within1MiB through terminal settlement/hold; no silent reset, charge-history truncation or automatic lock eviction.
 
 ## Lean engineering
 
@@ -227,7 +228,6 @@ Terms with real but non-blocking ambiguity, recorded so they are not re-derived:
 - **"Wave"** — a fixed phase number in the T2 protocol, but `skill://deepwork`
   also speaks of free-form "phases". Waves are protocol-defined; phases are
   plan-defined. Both are used deliberately.
-- **"Budget"** — refers to either the internal `softRequestBudget` or the gateway
-  rate ceiling. Always say **soft budget** or **rate ceiling**; never bare "budget".
+- **"Budget"** — distinguish **soft request budget**, **rate ceiling**, **review attempt ceiling** and **monetary review ceiling**. The first two are not financial authority; an attempt allowance does not authorize a model dispatch.
 - **"Agent"** — can mean an OMP role definition (`agent/agents/*.md`) or a Paseo
   agent session. Say **role** or **Paseo agent** when the distinction matters.
