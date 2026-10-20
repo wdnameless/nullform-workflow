@@ -480,7 +480,7 @@ Use oklch to define a harmonious color system:
 
 > ⚠️ **These are experience-based suggestions, not hard rules.**
 > - Always prefer fonts already specified by the brand or design system; only refer to this table when the user hasn't provided any font scheme.
-> - The only hard rule: **Avoid Inter / Roboto / Arial / Fraunces / system-ui — fonts overused by AI-generated content** that instantly signal "this was assembled by AI."
+> - **Discouraged by default: Inter / Roboto / Arial / Fraunces / system-ui** — fonts overused by AI-generated content that instantly signal "this was assembled by AI." Not a ban: an existing project brand font, design-system token, or accessibility/performance need (e.g. system-ui for native feel) wins — name the conflict and follow the project.
 > - When choosing fonts, focus on "personality fit" rather than "what's trendy." The table below lists common high-quality choices, not an exhaustive list.
 
 | Use Case | Recommendation | Google Fonts Name |

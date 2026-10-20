@@ -162,7 +162,7 @@ Typography in a vacuum doesn't exist. Most "bad" interfaces look bad because of 
 
 ### Rules That Actually Work
 
-- **Never pure black** — Use `#0B0B0B` – `#111`, not `#000`
+- **Prefer near-black by default** — Use `#0B0B0B` – `#111` rather than `#000`. Conditional, not a ban: an existing project brand token or accessibility requirement wins over this default.
 - **Body text minimum** — Never below 60% opacity for readable text
 - **Fewer shades, stable usage** — 3-4 text colors max, used consistently
 - **Disabled is rare** — If you have lots of disabled text, redesign
