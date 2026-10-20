@@ -15,17 +15,58 @@ node tools/benchmark.mjs compare --baseline baseline-noskill --candidate candida
 `--dry-run` actually loads the installed SDK through its package exports, resolves the exact configured Model plus auth availability, verifies its catalog tariff/transport and creates/disposes a restricted native session. All HTTP is denied; it is setup evidence, not an inference result. Model lookup never defaults to another provider/model. `--task ID` selects one pair; the durable ceiling still spans invocations.
 
 The direct adapter surface is `bun tools/bench-session-runner.ts --root ROOT --task ID --arm baseline-noskill|candidate-skill --prompt-file FILE --run-dir DIR --model PROVIDER/MODEL --ceiling 1 [--skill NAME]`; `--setup-only --root ROOT --model PROVIDER/MODEL` does no inference.
+The **new `eval-product-quality-consumer` task is NOT part of the fixed-SDK skill-benefit adapter above.** It is a generic benchmark task: the harness runs the task's own `setup` and `checks` commands (a caller-provided native Node command), not `tools/bench-session-runner.ts`. It does not require the calc tool allowlist, an installed SDK, a provider/model selector, or a spend-ledger reservation, and it performs no inference.
 
 Installed harnesses deploy the runtime modules under `tools/`, including `bench-results.mjs`; they do not need a copied `bench/` tree to import the evaluator. Point `--root` at the committed source repository containing task fixtures/checks and keep its existing spend ledger. Sync manifest additions include the runtime helpers; never deploy generated runs.
 
 ## Cases and honest measurement
 
-Four constructed code examples represent repository consumer-routing and frozen-test patterns; they are **not a production dataset**:
+Four constructed code examples represent repository consumer-routing and frozen-test patterns; they are **not a production dataset**. These four are the historical **model-evaluation** cases, each run as a baseline/candidate pair with observed session evidence:
 
 - `eval-review-positive`: new `pause` event is dropped at the unchanged receiving dispatcher; the custom pad helper can be simplified (and has empty/multicharacter-pad hazards).
 - `eval-review-near-negative`: original hello/exit manifest plus a fixture execution captured by the adapter, for blind acceptance rather than patch review.
 - `eval-review-defect-outcome`: new `ExportReport` command silently falls through at an unchanged router; JSON cloning loses values and has a native replacement.
 - `eval-workflow-execution-outcome`: actual native file write implements multiply while preserving add and fixed tests; parent-owned checks execute those tests and independent edge cases, and validate the terminal return contract.
+
+Separately, one **unexecuted consumer task** is added for maintenance-behavior regression (no model dispatch, no baseline/candidate pair):
+- `eval-product-quality-consumer`: a **bounded maintenance consumer** — extend an already-working small `order-summary` module with refund handling while preserving its public positive-order behavior. The parent-owned checker imports the candidate module and validates actual behavior (baseline summary, refund total/recording, invalid-input boundaries) plus a declared finite workload with measured elapsed time, environment and explicit measurement limits. It never reads source strings, class names, transcripts or a `DONE` claim.
+- **Measurement constants** for the consumer's declared finite workload (50000-item single pass): subtotal `15575000`, tax `3115000`, total `18690000` cents; fixture-only smoke bound `5000ms` (exceeding it fails this check; NOT a universal performance claim).
+
+## Consumer controls: the checker discriminates behavior (no model dispatch)
+
+The consumer task ships **deterministic control implementations**, not model runs. A control rewrites `<consumer>/src/order-summary.mjs` and then runs the real checker:
+
+```bash
+node bench/fixtures/control-product-quality.mjs --dir .tmp/consumer-valid         --variant valid
+node bench/fixtures/control-product-quality.mjs --dir .tmp/consumer-baseline    --variant baseline
+node bench/fixtures/control-product-quality.mjs --dir .tmp/consumer-broken-total --variant broken-total
+node bench/fixtures/control-product-quality.mjs --dir .tmp/consumer-broken-bounds --variant broken-boundary
+```
+
+| Variant | Behavior | Expected checker verdict |
+|---|---|---|
+| `valid` | baseline summary + refunds + boundary rejection | accepts |
+| `baseline` | shipped module, no refund support | rejects (missing `applyRefund`) |
+| `broken-total` | refund recorded but total not reduced | rejects (wrong total) |
+| `broken-boundary` | boundary validation removed | rejects (accepts invalid input) |
+
+Each control exits `0` only when it observed a REAL checker result: the checker exited with the required code, emitted parseable JSON, and its designated failure id is present for that negative. A missing, crashing, or syntax-broken checker can never satisfy a control — the control exits `1` (discrimination failed), never a false green. **These controls are not evidence of improved model quality**: they exercise the checker, not a model.
+
+`--dir` is mandatory (a control never silently writes into the current directory's `src`). The control also clears any inherited `BENCH_RUN_DIR`, so it always receives the checker's direct JSON instead of writing an unrelated benchmark run score.
+
+The four controls plus the unavailable/broken-checker negative control are permanent regression tests in `tools/tests/product-quality-consumer.test.mjs`, so `node --test tools/tests/*.test.mjs` executes this mechanism. They use contained temp dirs and a mirrored `bench/fixtures` tree; the real checker is never mutated.
+
+## Follow-up change and UI assessment protocol (documented, unexecuted)
+
+A subsequent requirement change (for example "support partial refunds across multiple line items") would be assessed by the same protocol, recorded by a human rather than inferred from line counts:
+
+- **Affected behavior**: which public functions change, and which consumers call them.
+- **Regressions**: re-run the independent behavior + boundary checks against the new implementation; any previously passing case that now fails is a regression.
+- **Change footprint**: files and public signatures touched, plus observed workload timing/environment — recorded as *observed scope*, not as a maintainability score. Fewer lines is not better maintainability; a boundary that hides volatile detail or protects an invariant is load-bearing.
+- **Human explanation of boundaries**: a short written note on why each kept boundary exists and what it protects.
+- **UI outcomes**: when the change touches a UI, capture appearance (BEFORE/AFTER screenshots) **and** behavior (actual flow, keyboard/focus, responsive sizes, loading/empty/error/disabled states). A screenshot alone proves appearance, not behavior.
+
+**Unmeasured stays unverified**: maintainability judgments, visual quality and model-quality gains are **not** claimed by these deterministic controls or by any line-count proxy. A change that was never executed has no result.
 
 Baseline loads no skills. Candidate loads **only the exact selected SKILL body**, failing if unavailable. Model, sampling/effort, tools, task and full fixture input bytes are otherwise equal; hashes and distinct native session IDs bind each pair. Review input contains real fixture code, generated git patch, manifest where present, and observed product stdout/exit where applicable—not metadata claiming those files were loaded.
 

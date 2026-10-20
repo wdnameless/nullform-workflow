@@ -80,16 +80,6 @@ jobs:
             done
           fi
 
-      - name: Run unit & regression tests
-        # Unquoted glob: the shell expands it to explicit paths, accepted by
-        # every Node >= 18. A quoted glob needs >= 22.6; the bare directory
-        # form breaks on Node >= 22 ("Cannot find module").
-        # Includes review-integrity native-proof/security consumer regressions.
-        run: |
-          if [ -d "tools/tests" ]; then
-            node --test --test-concurrency=2 tools/tests/*.test.mjs
-          fi
-
       - name: Code size gate
         # Stops modules growing into god-objects. The baseline records
         # today's offenders; only GROWTH past a baselined size, or a NEW
@@ -98,9 +88,11 @@ jobs:
           node tools/code-size.mjs check --root .
 
       - name: Auto-review gate
-        id: auto_review
         run: |
-          node tools/auto-review.mjs --root .
+          node tools/auto-review.mjs --root . --json
+        # Consumer projects: configure package.json scripts
+        # or pass explicit --check for non-npm projects.
+        # Template auto-discovers; does not hardcode harness paths.
 
 
       - name: Prompt surfaces & cache safety checks

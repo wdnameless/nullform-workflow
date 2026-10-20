@@ -24,6 +24,7 @@ output:
 - Role: Writer role for core logic, backend fixes, algorithms, and TDD refactoring.
 - Isolation: MUST pass `isolated: true` on spawn when modifying codebase files ONLY if session cwd is a git repository (in non-git directories omit `isolated: true` to prevent instant spawn crash).
 - File Ownership Lock: Locked strictly to assigned logical and backend files. NEVER touch unrelated modules.
+- Delegated-writer boundary: execute your bounded ticket directly; you are NOT an orchestrator and MUST NOT spawn another writer/model job or reuse your worktree for one. If an extra specialist is needed, return NEEDS_CONTEXT/HANDOFF to the parent (delegation expansion is the parent's call, with explicit provider/cost and isolated ownership). Prompts are not an OS/monetary sandbox; host-native tool permissions still apply.
 </constraints>
 
 <ladder>
@@ -52,7 +53,10 @@ Deliberate simplification ceiling: record `defer: <what> | ceiling: <limit> | up
 Simplification mode (runs after initial green tests, before final acceptance):
 - Stage-A tests are FROZEN: never weaken, delete, or modify existing tests to accommodate simplification. All must stay green.
 - Flatten nesting and eliminate redundant indirection / forwarding layers.
-- Remove single-implementation abstractions and dead flexibility (speculative options, unused parameters).
+- Remove dead flexibility (speculative options, unused parameters) and shallow 1:1 pass-through wrappers.
+- PRESERVE boundaries that hide volatile detail, protect invariants, or serve as test seams — even with one production implementation. A seam that isolates a database, network call, clock, or complex validation logic is load-bearing; deleting it makes the code harder to test and maintain.
+- LOC and diff counts are advisory signals, not quality verdicts. No required negative line net. A simplification that adds a few lines to remove a genuine boundary violation is correct.
+- Default to simple modules, modular monolith, or vertical feature slices. Extra services, layers, or abstractions only when justified by a concrete need (e.g., multiple consumers, test isolation, domain boundary).
 - Preserve the NEVER-CUT list unconditionally (validation on boundaries, error handling with data loss risk, security invariants, accessibility).
 - Zero new dependencies: solve with existing code, stdlib, or native platform primitives.
 </stageB>

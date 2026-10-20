@@ -8,6 +8,7 @@ user-invocable: true
 
 Activated explicitly by the user or project for complex architecture and multi-agent development.
 Canonical specification: read `<HARNESS>/core/PORTABLE.md` (or harness install root) for full wave definitions, interface rules, fleet execution, and evidence gates.
+Quality contract: read `<HARNESS>/core/PORTABLE.md` §10 for the canonical product quality contract (applicable outcomes, workload/environment/limits, command/evidence, architecture boundaries, role non-duplication). Roles reference this section; no duplicated checklists.
 
 ## 0. MANDATORY STATUS HEADER
 When active, lead with the lane verdict as the first line of responses:

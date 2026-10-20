@@ -58,6 +58,8 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
   cancels a requirement.
 - **Interfaces contract** — `interfaces.md`. Module boundaries, public
   signatures, and ownership zones, seeded before any build spawn.
+- **Product quality contract** — applicable observable product outcomes recorded inside the existing manifest/interfaces: user action/result, workload/environment, resource/performance limits, required command, evidence and a reason for nonapplicability. Not a new mandatory file or a guarantee inferred from process artifacts.
+- **Product check** — an existing project script or explicitly supplied native argv executed by auto-review. Status is `pass`, `fail`, `not-applicable` or `unverified`; zero product evidence or missing required evidence cannot pass. A harness/debt check alone is not product verification.
 - **Gate** — a mandatory checkpoint (G1–G4). A failed gate sends the phase back.
 - **Blind acceptance** — Wave 4. The oracle judges the product against the
   manifest and the running artifact, never against our own spec.
@@ -178,7 +180,7 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Usage audit** — audit tool (`tools/usage-audit.mjs [--days 30] [--plugins]`) analyzing tool, MCP, plugin, and skill invocation frequency from local logs, surfacing unused plugins with disable recommendations.
 - **Install doctor** — `tools/doctor.mjs` validates the selected installation, canonical wiring and environment health; native global skill catalogues are independent of the packaged assets. Provider reachability is opt-in `--probe`, with unreachable providers WARN, never FAIL. Plugin catalogue/version auditing is separately opt-in `--require-plugins`; a minimal native installation does not require those overlays. `--skip-plugin-check` explicitly suppresses that optional audit.
 - **Plugin manifest** — `agent/plugins.json`. Pinned specifications for the optional legacy OMP bundle. `install.ps1` applies the bundle unless `-SkipPlugins` is supplied; this is distinct from minimal `nullform init`, which installs no plugins. The explicit doctor plugin audit checks presence and version; the manifest does not declare requirements for every native host.
-- **Auto-review** — `tools/auto-review.mjs`. Automated quality gate running TypeScript check, ESLint, test suite, and debt-ledger scan without mutating code; exits nonzero on any gate failure.
+- **Auto-review** — `tools/auto-review.mjs`. Native project quality gate: discovered build/typecheck/lint/test scripts, required scripts (`--require SCRIPT`), explicit native argv (`--check JSON_ARGV`) and debt-ledger. Uses installed project tooling, never automatically fetches checkers; failure or required/unavailable product evidence exits nonzero. JSON keeps the existing envelope and exposes per-check `checks` plus aggregate `status`; command success is not proof of unmeasured UX/performance or improved model quality.
 - **Cache doctor** — `tools/cache-doctor.mjs`. Explains observed neural prompt-cache misses by analyzing `.jsonl` session events and comparing prompt layer fingerprints without modifying models or prompts.
 - **Cache policy** — `tools/cache-policy.mjs`. Enforces prompt-cache observability gates (volatile literal scan, prompt fingerprint determinism, return-contract validation) while keeping model thresholds advisory.
 - **Context inbox** — `tools/context-inbox.mjs`. Manages the context intake pipeline (`context/REQUESTS.md`) across categories (`init`, `request`, `list`, `resolve`, `check`).

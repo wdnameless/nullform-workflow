@@ -206,7 +206,7 @@ jobs:
 
       - name: Auto-review gate
         run: |
-          node tools/auto-review.mjs --root .
+          node tools/auto-review.mjs --root . --json --check '["node","--test","tools/tests/nullform-cli.test.mjs"]'
 
       - name: Workflow gate validation
         env:

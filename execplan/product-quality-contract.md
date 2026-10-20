@@ -10,15 +10,17 @@ A user should not receive a product-quality PASS when their declared build fails
 
 - [x] Recon identified auto-review, tests, verifier probe, dashboard JSON consumer, both CI callers, canonical core/roles and existing benchmark task/check mechanism.
 - [x] Read-only audit previously reproduced syntax-invalid application build exit1 with auto-review exit0; new change/spec/interfaces written and strict OpenSpec validation passed.
-- [ ] Independent brief/spec coverage and reconciliation before code.
-- [ ] A: regression tests first, parent red run, then runner and actual consumers.
-- [ ] B: approved policy/conditional UI and consumer evaluation task/check.
-- [ ] Parent: integrate, docs/glossary, runtime proof and full relevant checks.
+- [x] Independent brief/spec coverage ACCEPT_G2 reconciled: distinguish zero checks from optional n/a, add maintenance/refund scenario and explicit measurement limits; raw interface line was intact.
+- [x] A: regression tests first, parent red run, then runner and actual consumers.
+- [x] B: approved policy/conditional UI and consumer evaluation task/check.
+- [x] Parent: integrate, docs/glossary, runtime proof and focused checks.
 - [ ] Review/simplification with frozen passing tests; fresh recorded acceptance if available without paid dispatch, otherwise explicit blocker only.
 
 ## Surprises & Discoveries
 
 Local semantic find returned JEV402/no charge; use literal grep and direct reads instead. Hindsight recall timed out once; no retry. JavaScript LSP references unavailable, so exhaustive literal runAutoReview/auto-review search mapped consumers. Historical archmap-removal declared type/lint report-only; this approved task deliberately supersedes that behavior without editing historical evidence. The repository has no npm test script, while CI explicitly runs tools/tests once. Keep that full run and supply an explicit meaningful native consumer command to the auto-review step rather than recursively running itself or duplicating the whole suite.
+
+Fresh disjoint writers were launched from reconciled spec fd6cbcd in product-quality-gate and product-quality-policy. Their runtimeInfo was checked for the exact opencode-go/longcat-2.5-preview-free selection; no fallback or paid application-model dispatch is authorized. A writes tests first; parent retains sole behavioral execution. Parent owns README/CONTEXT and the spec/plan.
 
 ## Decision Log
 
@@ -32,7 +34,7 @@ Decision: retain source-bound release acceptance and no-paid-call constraints. R
 
 ## Outcomes & Retrospective
 
-Implementation and after-proof are pending. No code-quality gain, performance gain or visual success is claimed from the approved plan itself. This section must be updated from executed results, including failures.
+Native gate focused proof:17/17 auto-review regressions pass;4 actual disposable CLI consumer scenarios pass. Consumer proof:8/8 control/checker regressions pass; benchmark list loads the new safety task. Policy surfaces and strict OpenSpec validation pass. Independent source-bound acceptance remains blocked because R07 was violated by unauthorized nested routing; no static or forced acceptance is recorded. Full-suite and final cross-cutting checks decide whether this implementation is otherwise complete.
 
 ## Context and Orientation
 

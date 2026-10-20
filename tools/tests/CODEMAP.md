@@ -33,11 +33,12 @@ Test harness and regression test suite for the `tools/` CLI toolchain, workflow 
   - `quality-evidence.test.mjs`: Quality evidence summary validation, observation hashes, and model calibration (`tools/quality-evidence.mjs`).
   - `review-evidence.test.mjs`: Review recording, Stage B validation, file hashing, and evidence envelopes (`tools/review/evidence.mjs`).
   - `review-integrity.test.mjs`: Dirty-status binding, EOL-agnostic hashing, and native tool execution integrity (`tools/review/evidence.mjs`, `tools/review/native-tools.mjs`).
-  - `auto-review.test.mjs`: Automated review orchestration and gate validation (`tools/auto-review.mjs`).
+  - `auto-review.test.mjs`: Native build/type/lint/test gating, missing-required evidence, non-npm argv checks and pre-dispatch/configuration boundaries (`tools/auto-review.mjs`).
   - `oracle-model.test.mjs`: Oracle prompt validation, acceptance verdict parsing, and model wrappers (`tools/oracle-model.mjs`).
   - `return-contract.test.mjs`: Structured completion contract and return header schema verification (`tools/return-contract.mjs`).
 - **Benchmark, Evaluation & Replay**:
   - `benchmark.test.mjs`: Core workflow benchmarking execution, metric collection, and report generation (`tools/benchmark.mjs`).
+  - `product-quality-consumer.test.mjs`: Real consumer controls, refund/invalid-input outcomes, exact workload totals and refusal of missing or broken checkers (`bench/fixtures/control-product-quality.mjs`, `bench/checks/check-product-quality.mjs`); no model dispatch or quality-uplift claim.
   - `bench-session-runner.test.ts`: Offline session runner execution and native tool spend reservation loop (`tools/bench-session-runner.ts`, `tools/bench-budget.mjs`).
   - `lm-replay.test.mjs`: LLM cassette recording, secret redaction, prompt normalization, and replay execution (`tools/lm-replay.mjs`).
   - `replay.test.mjs`: Session replay orchestration and step execution (`tools/replay.mjs`).

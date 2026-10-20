@@ -11,7 +11,7 @@ Core principle: Review early, review often with diff and consumer context.
 
 ## Role Separation: Reviewer vs Oracle
 
-- **`reviewer` (Implementation Review)**: Dispatched during development (Wave 3 / task completion) to inspect code patches, diffs, and consuming-side dispatch points. Evaluates concrete bugs, security issues, cross-boundary routing, and produces a tagged delete-list (`delete:`, `stdlib:`, `native:`, `yagni:`, `shrink:`) for Stage B simplification.
+- **`reviewer` (Implementation Review)**: Dispatched during development (Wave 3 / task completion) to inspect code patches, diffs, and consuming-side dispatch points. Evaluates concrete bugs, security issues, cross-boundary routing, and produces a tagged delete-list (`delete:`, `stdlib:`, `native:`, `yagni:`, `shrink:`) for Stage B simplification. `yagni:` flags an abstraction only when it adds no information-hiding, invariant protection, or test-seam value; a single-implementation boundary that isolates a database, network call, clock, or complex validation logic is load-bearing, not bloat. LOC/diff counts are advisory signals, not a quality verdict.
 - **`oracle` (Blind Acceptance)**: Reserved strictly for final acceptance (Wave 4). Operates blind to plans, proposals, and tickets; evaluates only the original requirements manifest (`manifest.md`) and the running product/runtime. Never dispatch `oracle` for patch code-review.
 
 ## When to Request Review
@@ -51,7 +51,7 @@ The reviewed base is explicit; do not guess `HEAD~1` for recorded provenance. Th
 3. Act on feedback:
 - **P0 (Blocker) / P1 (High)**: fix immediately
 - **P2 (Medium)**: fix before completing the slice
-- **Lean delete-list**: feed into Stage B simplification (`net: -N lines possible` or `Lean already.`)
+- **Lean delete-list**: feed into Stage B simplification (`net: -N lines possible` or `Lean already.` — line counts are advisory, not a target; do not cut a load-bearing boundary that hides volatile detail, protects an invariant, or serves as a test seam)
 - Push back if reviewer is factually wrong (with reproducible code/tests)
 
 ## Example
@@ -76,7 +76,7 @@ HEAD_SHA=$(git rev-parse HEAD)
     - [P2] src/index-verify.ts: magic number 100 in progress reporting loop
   Simplest solution (Lean lens):
     - stdlib: replace custom string pad in src/index-verify.ts:18 with String.prototype.padStart
-    - net: -8 lines possible
+    - net: -8 lines possible (advisory signal only)
   Verdict: incorrect (P1 blocks completion)
 
 You: [Fix dispatch routing for corrupt-header, replace pad helper, verify tests]

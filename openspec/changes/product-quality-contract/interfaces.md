@@ -24,3 +24,5 @@ A QualityGate owner: tools/auto-review.mjs, tools/tests/auto-review.test.mjs, to
 B QualityPolicy owner: core/PORTABLE.md, agent/agents/fixer.md, reviewer.md, oracle.md, designer.md, orchestrator.md; skills/nullform-workflow-full/SKILL.md; templates/design/DESIGN.md; bench/tasks.json, bench/README.md and bounded new consumer setup/check modules plus consumer-check regression if required. No auto-review/runtime/CI/README/CONTEXT edits.
 
 Parent: change spec/execplan, CONTEXT.md/README.md and integration, deterministic verification. No project implementation by parent. All writers skip tests/build/lint/formatters while writing; parent owns runs. One owner/file. Existing paid/native acceptance receipts are not edited. New code checker is not evidence of improved LLM output.
+
+B additionally owns `skills/requesting-code-review/SKILL.md` for the same advisory-LOC contract if its existing instructions need reconciliation. Optional taste skills remain presets: project requirements, existing brand/system and accessibility take precedence over conflicting prescriptions; no bulk rewrite of imported style skills.
