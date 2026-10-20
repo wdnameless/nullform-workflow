@@ -36,7 +36,7 @@ Ask exactly **one** clarifying question - never a multi-question dump - and only
 If you can confidently infer from context, **do not ask**. Just declare the design read and proceed.
 
 ### 0.D Anti-Default Discipline
-Do not default to: AI-purple gradients, centered hero over dark mesh, three equal feature cards, generic glassmorphism on everything, infinite-loop micro-animations everywhere, Inter + slate-900. These are the LLM defaults. Reach past them deliberately based on the design read.
+Do not default to: AI-purple gradients, centered hero over dark mesh, three equal feature cards, generic glassmorphism on everything, infinite-loop micro-animations everywhere, Inter + slate-900. These are the LLM defaults. Reach past them deliberately based on the design read - an existing brand system, a set of real product tokens, or an accessibility-first audience can legitimately justify some of them.
 
 ---
 
@@ -255,7 +255,7 @@ The brief and brand decide. This skill enforces only:
 * **Contrast** - WCAG AA minimum for body text, AAA target for hero copy.
 * **Hierarchy parity** - visual hierarchy that works in light must work in dark. If a CTA pops in light, it pops in dark.
 * **Brand fidelity** - primary brand color stays recognisable. Don't desaturate the brand into a dark mode.
-* **No pure `#000000` and no pure `#ffffff`** - use off-black (zinc-950, near-black warm gray) and off-white. Pure values kill depth.
+* **No pure `#000000` and no pure `#ffffff` by default** - use off-black (zinc-950, near-black warm gray) and off-white. Pure values kill depth. If the project's existing tokens, brand palette, or WCAG/contrast requirement needs a pure value, that project constraint wins: keep the value, verify the contrast, and record the reason.
 
 ### 8.C Default Mode
 Respect `prefers-color-scheme` unless the brand insists. Add a manual toggle if either mode would lose key brand expression.
@@ -269,13 +269,13 @@ Open the page in both modes during development. Do not ship a page you've only s
 Avoid these signatures unless the brief explicitly asks for them.
 
 For complete catalog of forbidden AI tells, see [references/directives-and-ai-tells.md#9-ai-tells-forbidden-patterns](references/directives-and-ai-tells.md#9-ai-tells-forbidden-patterns):
-- [9.A Visual & CSS](references/directives-and-ai-tells.md#9a-visual--css): No neon/outer glows, no pure black `#000000`, no oversaturated accents, no custom cursors.
-- [9.B Typography](references/directives-and-ai-tells.md#9b-typography): Avoid default Inter, no screaming oversized H1s, serif constraints.
+- [9.A Visual & CSS](references/directives-and-ai-tells.md#9a-visual--css): No neon/outer glows, no pure black `#000000` by default, no oversaturated accents, no custom cursors.
+- [9.B Typography](references/directives-and-ai-tells.md#9b-typography): Inter is discouraged as the default, no screaming oversized H1s, serif constraints.
 - [9.C Layout & Spacing](references/directives-and-ai-tells.md#9c-layout--spacing): No generic 3-column equal feature cards.
 - [9.D Content & Data](references/directives-and-ai-tells.md#9d-content--data-jane-doe-effect): No generic names ("Jane Doe"), no egg avatars, no filler verbs ("Elevate", "Revolutionize").
 - [9.E External Resources & Components](references/directives-and-ai-tells.md#9e-external-resources--components): No hand-rolled SVG icons/illustrations as defaults, no div-based fake screenshots.
 - [9.F Production-Test Tells](references/directives-and-ai-tells.md#9f-production-test-tells-banned-outright): No version labels in hero, no section-number eyebrows (`001 · Capabilities`), middle-dot rationed (max 1/line), no photo-credit captions as decoration.
-- [9.G Non-Negotiable Em-Dash Ban](references/directives-and-ai-tells.md#9g-em-dash-ban-the-single-most-violated-tell): Em-dash (`—`) is completely banned in headlines, body copy, eyebrows, quotes, and buttons. Use regular hyphen (`-`).
+- [9.G Em-Dash Discipline](references/directives-and-ai-tells.md#9g-em-dash-discipline-the-single-most-violated-tell): the em-dash is the signature AI tell, so it is kept out of headlines, eyebrows, pills, buttons and copy. A project whose existing brand/tokens or style guide already uses it deliberately may keep it, consistently and sparingly.
 
 ---
 
@@ -332,7 +332,7 @@ Run this matrix before outputting code. This is the last filter.
 - [ ] **Dial values** explicit and reasoned from the brief, not silently using baseline?
 - [ ] **Design system** chosen from Section 2 if applicable, or aesthetic labeled honestly?
 - [ ] **Redesign mode** detected and audit performed (if applicable, Section 11)?
-- [ ] **ZERO em-dashes (`—`) anywhere on the page.** Headlines, eyebrows, pills, body, quotes, attribution, captions, buttons, alt text. Zero. (Section 9.G - non-negotiable.)
+- [ ] **Em-dash discipline (Section 9.G).** No AI-flavoured em-dashes in headlines, eyebrows, pills, body copy, quotes, attribution, captions, buttons or alt text. If the project's existing brand/tokens or style guide uses the em-dash deliberately, keep it consistent and sparing instead of rewriting the brand.
 - [ ] **Page Theme Lock**: ONE theme (light, dark, or auto) for the whole page. No section flips to inverted mode mid-page (Section 4.11)?
 - [ ] **Color Consistency Lock**: one accent color used identically across all sections (Section 4.2)?
 - [ ] **Shape Consistency Lock**: one corner-radius system applied consistently (Section 4.4)?
@@ -374,7 +374,7 @@ Run this matrix before outputting code. This is the last filter.
 - [ ] **No decorative dots** (zero by default, only for real semantic state)?
 - [ ] **No `border-t` + `border-b` on every row** of long lists / spec tables?
 - [ ] **Content density** sane: no 20-row data tables, no fake-precise specs without justification, ≤ 25-word sub-paragraphs by default?
-- [ ] **Quotes ≤ 3 lines** of body, attribution clean (no em-dash)?
+- [ ] **Quotes ≤ 3 lines** of body, attribution clean (no AI-flourish em-dash)?
 - [ ] **Motion claimed = motion shown**: if `MOTION_INTENSITY > 4`, page actually animates, not just claimed?
 - [ ] **GSAP sticky-stack / horizontal-pan** implemented per Section 5.A / 5.B canonical skeleton (`start: "top top"`, `pin: true`, correct scrub)?
 - [ ] **No `window.addEventListener('scroll')`** - using Motion `useScroll()` / ScrollTrigger / IntersectionObserver / CSS scroll-driven animations only?

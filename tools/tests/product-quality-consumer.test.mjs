@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const controlRunner = join(repoRoot, "bench", "fixtures", "control-product-quality.mjs");
+const setupRunner = join(repoRoot, "bench", "fixtures", "setup-product-quality.mjs");
 const realChecksDir = join(repoRoot, "bench", "checks");
 
 // Isolated child env: own temp root, never an ambient benchmark run dir.
@@ -94,6 +95,34 @@ test("valid control: real checker accepts, exit 0, discrimination true", () => {
     assert.equal(typeof parsed.checkerMeasured.elapsedMs, "number");
     assert.ok(Number.isFinite(parsed.checkerMeasured.elapsedMs) && parsed.checkerMeasured.elapsedMs >= 0, `elapsedMs must be finite nonnegative: ${parsed.checkerMeasured.elapsedMs}`);
   });
+});
+
+test("shipped fixture emits a parseable module in a fresh git repo (fixture parse regression)", () => {
+  // The real setup-product-quality.mjs writes manifest.md + src/order-summary.mjs
+  // into a consumer repo. If its emitted module template is unbalanced, the
+  // benchmark task is broken for every candidate before any model runs. Guard the
+  // shipped fixture itself, in a real git root (the fixture refuses a non-repo cwd).
+  const root = mkdtempSync(join(tmpdir(), `pq-setup-`));
+  try {
+    const init = spawnSync("git", ["init", "-q", "-b", "main"], { cwd: root, encoding: "utf8" });
+    assert.equal(init.status, 0, `git init failed: ${init.stderr}`);
+
+    const setup = spawnSync(process.execPath, [setupRunner], { cwd: root, encoding: "utf8" });
+    assert.equal(setup.status, 0, `setup-product-quality.mjs failed: ${setup.stderr}`);
+
+    const modulePath = join(root, "src", "order-summary.mjs");
+    assert.ok(readFileSync(modulePath, "utf8").includes("export function summarizeOrder"), "fixture must emit the public summarizeOrder export");
+
+    const check = spawnSync(process.execPath, ["--check", modulePath], { encoding: "utf8" });
+    assert.equal(check.status, 0, `emitted fixture module must parse (node --check): ${check.stderr}`);
+
+    // The committed tree must be exactly the fixture's two files.
+    const committed = spawnSync("git", ["ls-files"], { cwd: root, encoding: "utf8" });
+    assert.equal(committed.status, 0, `git ls-files failed: ${committed.stderr}`);
+    assert.deepEqual(committed.stdout.trim().split("\n").sort(), ["manifest.md", "src/order-summary.mjs"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("baseline control: rejected via real checker exit 1 with designated failure id", () => {

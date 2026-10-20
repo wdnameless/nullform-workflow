@@ -77,6 +77,7 @@ function assertItem(item) {
   if (!item || typeof item !== "object") throw new Error("invalid item");
   if (!Number.isInteger(item.priceCents) || item.priceCents < 0) throw new Error("invalid item price");
   if (!Number.isInteger(item.quantity) || item.quantity <= 0) throw new Error("invalid item quantity");
+}
 `
 );
 

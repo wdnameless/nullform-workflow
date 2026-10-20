@@ -23,7 +23,7 @@ Detailed bias-correction directives and forbidden AI signatures for frontend int
   - [9.D Content & Data](#9d-content--data-jane-doe-effect)
   - [9.E External Resources & Components](#9e-external-resources--components)
   - [9.F Production-Test Tells](#9f-production-test-tells-banned-outright)
-  - [9.G Em-Dash Ban](#9g-em-dash-ban-the-single-most-violated-tell)
+  - [9.G Em-Dash Discipline](#9g-em-dash-discipline-the-single-most-violated-tell)
 - [Return to Main Skill](../SKILL.md)
 
 ---
@@ -37,7 +37,7 @@ LLMs default to clichés. Override these defaults proactively. Each rule has a c
 * **Body / Paragraphs:** Default `text-base text-gray-600 leading-relaxed max-w-[65ch]`.
 * **Sans font choice:**
   * **Discouraged as default:** `Inter`. Pick `Geist`, `Outfit`, `Cabinet Grotesk`, `Satoshi`, or a brand-appropriate serif first.
-  * **Override:** Inter is acceptable when the user explicitly asks for a neutral / standard / Linear-style feel, or when the brief is a public-sector / accessibility-first site.
+  * **Override:** Inter is acceptable when the user explicitly asks for a neutral / standard / Linear-style feel, when the brief is a public-sector / accessibility-first site, or when the project's existing design system already ships Inter.
 * **Pairings to know:** `Geist` + `Geist Mono`, `Satoshi` + `JetBrains Mono`, `Cabinet Grotesk` + `Inter Tight`, `GT America` + `IBM Plex Mono`.
 
 * **SERIF DISCIPLINE (VERY DISCOURAGED AS DEFAULT):**
@@ -204,7 +204,7 @@ Landing pages live on the **first impression**, not the full read. Cut ruthlessl
 
 * **Max 3 lines** of quote body. Never 6. If the original quote is longer → cut it. A landing-page quote is a snippet, not the full review.
 * For very small font sizes (e.g. footer-style testimonials), the line cap can stretch slightly. Spirit: "fits in a glance."
-* **No em-dashes inside the quote text** as design flourish (long pauses, kinetic em-dashes, em-dash-bullets). See Section 9.G - em-dash is completely banned.
+* **No em-dashes inside the quote text** as design flourish (long pauses, kinetic em-dashes, em-dash-bullets). See Section 9.G - em-dashes are the signature AI tell. Exception: a project whose existing brand/tokens or style guide already uses them deliberately keeps them, sparingly.
 * Attribution: name + role + (optionally) company. Never name only ("- Sarah").
 * Quote marks: use real typographic quotes ( " " ) or none at all. Not straight ASCII ( " ).
 
@@ -225,13 +225,13 @@ Avoid these signatures unless the brief explicitly asks for them.
 
 ### 9.A Visual & CSS
 * **NO neon / outer glows** by default. Use inner borders or subtle tinted shadows.
-* **NO pure black (`#000000`).** Off-black, zinc-950, or charcoal.
+* **NO pure black (`#000000`) by default.** Off-black, zinc-950, or charcoal. Exception: existing project tokens, brand palette, or a contrast requirement that only a pure value satisfies - then keep it and record why.
 * **NO oversaturated accents.** Desaturate to blend with neutrals.
 * **NO excessive gradient text** for large headers.
 * **NO custom mouse cursors.** Outdated, accessibility-hostile, perf-hostile.
 
 ### 9.B Typography
-* **AVOID Inter as default.** See Section 4.1. Override path exists.
+* **Inter is discouraged as default.** See Section 4.1. Override path exists, including projects whose existing design system already ships Inter.
 * **NO oversized H1s** that just scream. Control hierarchy with weight + color, not raw scale.
 * **Serif constraints:** Serif for editorial / luxury / publication. Not for dashboards.
 
@@ -273,7 +273,7 @@ These patterns came out of real LLM-generated landing-page tests. They are the s
 * **NO decorative colored status dots on every list/nav/badge.** A colored dot before "ONE Q4 SLOT OPEN" or before every nav link, or every task row - banned by default. Acceptable only when the dot conveys actual semantic state (a server status, an availability flag) and is used sparingly.
 
 **Em-dashes & typography flourishes**
-* **NO em-dash (`—`) as a design element OR anywhere else.** See Section 9.G below for the complete, non-negotiable ban. The em-dash character is forbidden in headlines, eyebrows, pills, body copy, quotes, attribution, captions, button text, and alt text. Use the regular hyphen (`-`).
+* **No AI-flavoured em-dash (`—`)** as a design element, or sprinkled through headlines, eyebrows, pills, body copy, quotes, attribution, captions, button text, and alt text. See Section 9.G below. Exception: a project with existing brand/tokens or a style guide that uses the em-dash deliberately keeps it, consistently and sparingly.
 * **NO `<br>`-broken-and-italicized headlines** as a default "design move." "for thirty<br>*years.*" type splits. Headlines should read naturally first, get clever only when the brief demands it.
 * **NO vertical rotated text** ("INDEX OF WORK, 2018 - 2026" rotated 90°). Agency-portfolio cliché. Use it only when the brief is explicitly agency / Awwwards / experimental AND it serves a real composition purpose.
 * **NO crosshair / hairline grid lines as decoration.** Vertical and horizontal lines drawn just to make the page "feel designed" - banned. Use them only when they organize real content.
@@ -309,20 +309,21 @@ These patterns came out of real LLM-generated landing-page tests. They are the s
 * **Scroll cues are banned.** `Scroll`, `↓ scroll`, `Scroll to explore`, `Scroll to walk through it`, animated mouse-wheel icons. If the user has not scrolled yet, they are looking at the hero. They know what scroll is. The bottom of the viewport does not need a label.
 * **ZERO decorative status dots by default.** A coloured dot before nav items, before list rows, before badges, before status labels is a Tell. Only acceptable when conveying real semantic state (a live indicator on actual server status, a live availability flag) and limited to one per page section.
 
-### 9.G EM-DASH BAN (the single most-violated Tell)
+### 9.G EM-DASH DISCIPLINE (the single most-violated Tell)
 
-**Em-dash (`—`) is COMPLETELY banned.** It is the LLM's signature stylistic crutch and it is the #1 visual Tell in production tests. There is no "limited use" allowance, no "natural language frequency" allowance, no "in body copy is fine" allowance. None.
+**Em-dash (`—`) is the LLM's signature stylistic crutch** and the #1 visual Tell in production tests, so it is kept out of the page by default. It is NOT a blanket character ban: a project whose existing brand/tokens, type system, or style guide already uses the em-dash deliberately may keep it - consistently, sparingly, and only where the brand does.
 
-* **Banned in headlines.** Use a period or a comma.
-* **Banned in eyebrows / labels / pills / button text / image captions / nav items.** Replace with line breaks, columns, or hairlines.
-* **Banned in body copy.** Restructure the sentence: two sentences with a period, OR a comma, OR parentheses, OR a colon.
-* **Banned in quote attribution.** Use a normal hyphen with spaces (` - `) or a line break + smaller-weight name.
-* **Banned in en-dash form too (`–`) when used as a separator.** Date ranges (`2018-2026`) use a hyphen. Number ranges (`€40-80k`) use a hyphen.
+* **Not by default in headlines.** Use a period or a comma.
+* **Not by default in eyebrows / labels / pills / button text / image captions / nav items.** Replace with line breaks, columns, or hairlines.
+* **Not scattered through body copy.** Restructure the sentence: two sentences with a period, OR a comma, OR parentheses, OR a colon.
+* **Not in quote attribution.** Use a normal hyphen with spaces (` - `) or a line break + smaller-weight name.
+* **Banned in en-dash form (`–`) when used as a separator.** Date ranges (`2018-2026`) use a hyphen. Number ranges (`€40-80k`) use a hyphen.
 
-The ONLY permitted dash characters on the page are:
+Default-permitted dash characters on the page:
 * Regular hyphen `-` (for compound words, ranges, line dividers in markup)
 * Minus sign in math (`-5°C`)
+* The em-dash (`—`) ONLY when the project's existing brand/tokens or style guide already uses it, applied consistently and sparingly.
 
-If your output contains a single `—` or `–` anywhere visible to the user, the output fails the Pre-Flight Check and must be rewritten.
+Default output: no `—` and no `–` anywhere visible to the user; the Pre-Flight Check flags them. A project that deliberately ships the em-dash overrides this with the brand rationale, and keeps it coherent across the page.
 
-This rule is non-negotiable. The agent has historically ignored em-dash limits when phrased as "use sparingly." The phrasing here is binary: zero em-dashes.
+Phrasing this as "use sparingly" is how the Tell survives, so the default stays zero-em-dash. The narrow, explicit override is an existing brand/tokens/style-guide commitment, not a matter of taste.

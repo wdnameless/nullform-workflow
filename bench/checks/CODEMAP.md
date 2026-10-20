@@ -10,7 +10,7 @@ Scoring and grading oracle layer for the benchmark evaluation harness. Evaluates
   - `check-defect-outcome.mjs` (`eval-review-defect-outcome`): Grades release review; requires detecting unhandled `ExportReport` commands in `src/router.ts` and `src/utils.ts` clone simplification.
   - `check-workflow-outcome.mjs` (`eval-workflow-execution-outcome`): Grades autonomous code implementation; enforces frozen test invariance, runtime arithmetic checks, and return contract compliance.
 - **Normalized Verdict Envelope**: Checkers persist a structured outcome (`requirementsSatisfied`, `scenario`, `activation`, `failures`, `findings`) to `score.json` via `writeScore` from `tools/bench-results.mjs` and set `process.exitCode` (0 = pass, 1 = fail).
-- **Multi-Vector Oracle Probe**: `check-workflow-outcome.mjs` combines SHA-256 test snapshot verification (`verifyFrozenTests`), TAP test execution, dynamic module import, return-contract parsing (`validateReturnContract`), and native session tool-call auditing.
+- **Product-Quality Consumer Check**: `check-product-quality.mjs` (`eval-product-quality-consumer`) grades the bounded maintenance consumer; it dynamically imports the candidate `src/order-summary.mjs` and asserts the public positive-order summary, refund recording/refusal, invalid-input boundaries, and a declared finite workload against exact independent totals, then records the exit code (0 = pass, 1 = fail).
 
 ## Data & Control Flow
 1. Harness runner (`tools/benchmark.mjs` or `tools/run-skill-benefit-eval.mjs`) exports `BENCH_RUN_DIR` (untracked run output directory) and invokes the checker command.
@@ -21,5 +21,5 @@ Scoring and grading oracle layer for the benchmark evaluation harness. Evaluates
 
 ## Integration Points
 - **Benchmark Tasks**: Wired to task IDs in `bench/tasks.json` via the `checks` command array.
-- **Fixture Counterparts**: Evaluates repositories initialized by `bench/fixtures/` (`setup-review-positive.mjs`, `setup-near-negative.mjs`, `setup-defect-outcome.mjs`, `setup-workflow-outcome.mjs`).
+- **Fixture Counterparts**: Evaluates repositories initialized by `bench/fixtures/` (`setup-review-positive.mjs`, `setup-near-negative.mjs`, `setup-defect-outcome.mjs`, `setup-workflow-outcome.mjs`, `setup-product-quality.mjs`).
 - **Harness & Shared Utilities**: Executed by `tools/benchmark.mjs` and `tools/run-skill-benefit-eval.mjs`; imports scoring primitives from `tools/bench-results.mjs` and contract parser from `tools/return-contract.mjs`.
