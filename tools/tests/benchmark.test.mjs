@@ -1099,10 +1099,10 @@ test("summarizeRuns: tier-фильтр считает pass@k и pass^k толь�
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
-test("R02: bench/tasks.json содержит 10 валидных задач и проходит validate-tasks", () => {
+test("R02: bench/tasks.json содержит 11 валидных задач и проходит validate-tasks", () => {
   const res = validateTasks(REPO_ROOT);
   assert.equal(res.valid, true, res.errors.join("; "));
-  assert.equal(res.count, 10);
+  assert.equal(res.count, 11);
 
   const cli = spawnSync(process.execPath, [CLI_PATH, "validate-tasks", "--root", REPO_ROOT, "--json"], {
     encoding: "utf8",
@@ -1110,7 +1110,7 @@ test("R02: bench/tasks.json содержит 10 валидных задач и �
   assert.equal(cli.status, 0, cli.stderr);
   const parsed = JSON.parse(cli.stdout);
   assert.equal(parsed.valid, true);
-  assert.equal(parsed.count, 10);
+  assert.equal(parsed.count, 11);
 });
 
 test("R02: validate-tasks отклоняет невалидную схему с exit 2 и списком причин", () => {
