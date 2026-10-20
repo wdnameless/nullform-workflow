@@ -1948,7 +1948,7 @@ export function generateDashboardHtml(data) {
             '<span class="pill ' + cls + '">' + lbl + '</span><span class="note">замечаний: ' + c.concerns + "</span></div>";
         }).join("");
     var ar = d.metrics.checks && d.metrics.checks.autoReview;
-    var line = ar ? '<div class="note" style="margin-top:10px">auto-review: ' + (ar.error ? esc(ar.error) : (ar.ok ? "пройдено, проблем " + (ar.total || 0) : "провалено, проблем " + (ar.total || 0))) + "</div>"
+    var line = ar ? '<div class="note" style="margin-top:10px">auto-review: ' + (ar.error ? esc(ar.error) : (ar.status === "unverified" ? "не подтверждено" : (ar.ok ? "пройдено, проблем " + (ar.total || 0) : "провалено, проблем " + (ar.total || 0)))) + "</div>"
       : '<div class="note" style="margin-top:10px">Автопроверки не запускались — <span class="mono">dashboard.mjs --checks</span></div>';
     document.getElementById("tab-critique").innerHTML = '<div class="card"><div class="label">Критика и ревью</div>' + rows + line + "</div>";
   }

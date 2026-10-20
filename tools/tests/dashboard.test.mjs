@@ -1235,3 +1235,30 @@ test("R07: /api/diff для мегабайтного неотслеживаем�
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("dashboard: auto-review unverified не выдаёт себя за провал (регресс на ar.ok)", () => {
+  const base = {
+    project: { name: "x" },
+    task: { title: "t", tier: "T1", status: "open" },
+    progress: { percent: 0, stagesDone: 0, stagesRequired: 1, stagesSkipped: 0, artifactsDone: 0, artifactsTotal: 1 },
+    stages: [], waves: [], currentStage: {}, timing: {},
+    metrics: { briefCoverage: 0, requirements: { total: 0, byStatus: {}, items: [] }, debt: { total: 0, items: [] }, memory: {} },
+    git: { isRepo: false, files: [] },
+    history: { recent: [], byTier: {} }, critique: [], fleet: [],
+  };
+  const render = (autoReview) => {
+    const html = generateDashboardHtml({ ...base, metrics: { ...base.metrics, checks: { autoReview } } });
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+    // Выдёргиваем тернарник строки критики и прогоняем его как выражение на реальных данных.
+    const m = script.match(/auto-review: ' \+ \(ar\.error \? esc\(ar\.error\) : ([^;]+)\) \+ "<\/div>"/);
+    assert.ok(m, "строка критики рендерится из ветвления по ar.status");
+    const branch = new Function("ar", "esc", "return (" + m[1] + ");");
+    const esc = (s) => String(s);
+    assert.equal(branch({ status: "unverified", ok: false, total: 0 }, esc), "не подтверждено");
+    assert.ok(!branch({ status: "unverified", ok: false, total: 0 }, esc).includes("провалено"), "unverified не называется провалом");
+    assert.equal(branch({ status: "pass", ok: true, total: 0 }, esc), "пройдено, проблем 0");
+    assert.equal(branch({ status: "fail", ok: false, total: 3 }, esc), "провалено, проблем 3");
+  };
+  render({ status: "unverified", ok: false, total: 0 });
+  render({ error: "exit 1" });
+});
