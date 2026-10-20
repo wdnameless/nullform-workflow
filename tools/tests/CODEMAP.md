@@ -72,6 +72,7 @@ Test harness and regression test suite for the `tools/` CLI toolchain, workflow 
   - `mutation-test.test.mjs`: Mutation testing harness and mutant survival checks (`tools/mutation-test.mjs`).
   - `gherkin-spec.test.mjs`: Gherkin feature specification validation and parser (`tools/gherkin-spec.mjs`).
   - `dashboard.test.mjs`: Status dashboard data aggregation and rendering (`tools/dashboard.mjs`).
+  - `dashboard-autoreview.test.mjs`: Auto-review status wording regression (`unverified` is not a failure) (`tools/dashboard.mjs`).
   - `test-lens.test.mjs`: Test output filtering, noise reduction, and structured parsing (`tools/test-lens.mjs`).
 - **JEV Subsystem & Extensions**:
   - `jev-evaluate.test.mjs`: Empirical evaluation and statistical comparison engine (`tools/jev-evaluate.mjs`).

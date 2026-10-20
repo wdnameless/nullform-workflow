@@ -76,7 +76,7 @@ Neutrals are 70–90% of your UI. This is where you win or lose.
 | 950 | Near-black | `#0a0a0a` |
 
 **Hard rules:**
-- Never use pure `#000` on white as body text
+- **Avoid pure `#000` on white as body text by default** — Prefer `#0a0a0a`–`#111`. Conditional, not a ban: an existing project brand token or accessibility requirement wins over this default.
 - Don't make text gray "for breathing room" — spacing creates breathing room, not faded text
 
 ### 2.2 Primary Accent
