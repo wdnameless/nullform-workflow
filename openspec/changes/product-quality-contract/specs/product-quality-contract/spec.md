@@ -51,3 +51,9 @@ The existing benchmark SHALL include a substantive independently checked consume
 #### Scenario: Deterministic checker controls
 - **WHEN** a deliberately broken and a valid consumer are exercised locally
 - **THEN** the check refuses the broken outcome and accepts valid boundary behavior, preserving actual measured outputs and the no-inference limit
+
+#### Scenario: Maintainability and measurement limits
+- **GIVEN** a working consumer with an existing public behavior and a subsequent refund-handling requirement
+- **WHEN** its changed implementation is assessed
+- **THEN** independent checks exercise both prior and added behavior plus invalid inputs, retain observed workload timing/environment and explicitly identify unmeasured readability/UI/model-quality outcomes
+- **AND** the documented follow-up protocol records change impact and human explanation without equating fewer lines with maintainability or claiming an unexecuted change succeeded
