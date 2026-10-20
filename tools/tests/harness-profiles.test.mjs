@@ -4,8 +4,8 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { inspectHarness, resolveHostHome, validateHostManifest } from "../harness-profiles.mjs";
-import { getCapabilitiesInfo } from "../harness-capabilities.mjs";
+import { inspectHarness, resolveHostHome, validateHostManifest } from "../installation/profiles.mjs";
+import { getCapabilitiesInfo } from "../installation/capabilities.mjs";
 
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "nullform-profile-"));
@@ -145,7 +145,7 @@ test("overridden child HOME/USERPROFILE cannot authorize sibling ambient roots f
   const script = `
     import { homedir, userInfo } from "node:os";
     import { join } from "node:path";
-    import { resolveHostHome } from ${JSON.stringify(new URL("../harness-profiles.mjs", import.meta.url).href)};
+    import { resolveHostHome } from ${JSON.stringify(new URL("../installation/profiles.mjs", import.meta.url).href)};
     const roots = ${JSON.stringify(roots)};
     const home = process.env.HOME;
     const outside = process.env.HERMES_HOME;
@@ -252,16 +252,6 @@ test("native reuse, explicit gaps and unknown evidence produce different actiona
   assert.deepEqual(unknown.probe.commands, []);
 });
 
-test("Hermes ignore-rules truthiness uses the native exact boolean vocabulary", (t) => {
-  const box = sandbox(t);
-  for (const value of ["1", " true ", "YES", "on", "0", "false", "no", "off", "anything", ""]) {
-    const report = inspectHarness({ harness: "hermes", userHome: box.home, hostHome: box.hostHome, hostManifest: manifest("hermes", { skills: "available" }), env: { ...box.env, HERMES_IGNORE_RULES: value } });
-    const disabled = ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
-    assert.equal(report.capabilities.skills.status, disabled ? "unavailable" : "available");
-    assert.equal(report.capabilities.skills.evidence, disabled ? "configured" : "declared");
-    assert.equal(report.modules.skills.decision, disabled ? "manual" : "reuse");
-  }
-});
 
 test("capability inventory keeps custom declaration separate from eight named adapters and native review", (t) => {
   const box = sandbox(t);
@@ -269,8 +259,10 @@ test("capability inventory keeps custom declaration separate from eight named ad
   assert.deepEqual(report.configurationAdapters, ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman"]);
   assert.equal(report.customHostContract.supported, true);
   assert.equal(report.customHostContract.executableCommands, false);
-  assert.deepEqual(report.automatedReview.supportedHarnesses, ["omp"]);
-  assert.equal(report.automatedReview.requiresBun, true);
+  assert.deepEqual(report.automatedReview.supportedHarnesses, ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman", "custom"]);
+  assert.equal(report.automatedReview.requiresBun, false);
+  assert.equal(report.automatedReview.requiresOmp, false);
+  assert.equal(report.automatedReview.status, "node_only");
   assert.equal(report.profile.hostHome, box.hostHome);
   assert.equal(report.profile.runtimeReady.status, "not-verified");
 });

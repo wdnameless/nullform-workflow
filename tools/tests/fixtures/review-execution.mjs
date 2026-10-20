@@ -1,8 +1,8 @@
 import { mkdirSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { runReviewRecord, recordStageB, loadReviewEvidence, saveReviewEvidence } from '../../review-evidence.mjs';
-import { executeProduct } from '../../review-native-tools.mjs';
+import { runReviewRecord, recordStageB, loadReviewEvidence, saveReviewEvidence } from '../../review/evidence.mjs';
+import { executeProduct } from '../../review/native-tools.mjs';
 
 // Synthetic model replies are parser fixtures, never production proof.
 // Context and product events follow the installed native JSONL session schema;

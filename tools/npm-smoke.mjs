@@ -5,7 +5,6 @@ import {
   closeSync,
   cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -31,13 +30,9 @@ import {
   safeExtractArchive,
   inspectArchiveContents,
   buildHarnessFixture,
-  seedHarnessFiles,
 } from "./package-archive.mjs";
+import { DEPLOYMENT_TIMEOUT_MS, seedAndVerifyHarness } from "./npm-smoke-harness.mjs";
 export { computeFileDigests, deriveHigherVersion, resolveNpmInvocation, safeExtractArchive, inspectArchiveContents };
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// Deployment includes asset copies, durable writes, native adapters, and doctor.
-const DEPLOYMENT_TIMEOUT_MS = 180_000;
 
 function terminateChildTree(child) {
   if (!child?.pid || child.exitCode !== null) return;
@@ -130,7 +125,7 @@ function createSmokeEnv(baseTemp) {
     NPM_CONFIG_PREFIX: tempPrefix, NPM_CONFIG_CACHE: tempCache,
     PATH: [tempPrefix, join(tempPrefix, "bin"), process.env.PATH || ""].join(delimiter),
   };
-  for (const k of ["OMP_CONFIG_DIR", "HERMES_HOME", "OPENHUMAN_WORKSPACE", "OPENCLAW_CONFIG_PATH", "NULLFORM_RELEASE_URL", "NULLFORM_REGISTRY"]) {
+  for (const k of [...Object.keys(isolatedEnv).filter(key => key.startsWith("HERMES_")), "OMP_CONFIG_DIR", "OPENHUMAN_WORKSPACE", "OPENCLAW_CONFIG_PATH", "NULLFORM_RELEASE_URL", "NULLFORM_REGISTRY"]) {
     delete isolatedEnv[k];
   }
 
@@ -245,7 +240,7 @@ async function verifyPackAndInventory(ctx, registry, candidateTarballPath = null
     for (const b of banned) assert.ok(f !== b && !f.startsWith(`${b}/`) && !f.includes("/node_modules/"), `Banned: ${f}`);
     assert.ok(!f.endsWith("CODEMAP.md") && !(/\.env(\.|$)/i.test(f) && !f.endsWith("secrets.example.env")));
   }
-  const reqs = ["package.json", "VERSION", "LICENSE", "jev/LICENSE", "README.md", "CONTEXT.md", ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/harness-config.mjs", "tools/installation-state.mjs", "tools/doctor.mjs", "tools/self-update.mjs", "tools/workflow.mjs", "tools/verify.mjs", "tools/sync-manifest.json", "verify.ps1", "verify.sh"];
+  const reqs = ["package.json", "VERSION", "LICENSE", "jev/LICENSE", "README.md", "CONTEXT.md", ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/installation/config.mjs", "tools/installation/state.mjs", "tools/doctor.mjs", "tools/self-update.mjs", "tools/workflow.mjs", "tools/verify.mjs", "tools/sync-manifest.json", "verify.ps1", "verify.sh"];
   for (const req of reqs) assert.ok(packedFiles.includes(req), `Missing asset: ${req}`);
 
   const digests = computeFileDigests(tarballPath);
@@ -284,142 +279,6 @@ async function verifyGlobalInstall(ctx, registry, pkgJson) {
 }
 
 
-async function verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome, projectDir, secretToken, pkgVersion) {
-  const hermesHostHome = harness === "hermes" ? join(harnessHome, ".hermes") : null;
-  const initArgs = [
-    "init", "--harness", harness, "--root", customRoot, "--user-home", harnessHome,
-    ...(hermesHostHome ? ["--host-home", hermesHostHome] : []),
-    ...(projectDir ? ["--project-root", projectDir] : []), "--yes",
-  ];
-
-  let firstPassMdSnapshots = {};
-  for (let pass = 1; pass <= 2; pass++) {
-    const res = await ctx.runInstalledBin(initArgs, { timeoutMs: DEPLOYMENT_TIMEOUT_MS });
-    assert.equal(res.status, 0, `R02/R04: init pass ${pass} for ${harness} failed: ${res.stderr || res.stdout}`);
-
-    for (const mdPath of fixture.mdFiles) {
-      assert.equal(existsSync(mdPath), true, `R03: Expected native instruction file missing at ${mdPath}`);
-      const mdAfter = readFileSync(mdPath, "utf8");
-      assert.ok(mdAfter.includes(fixture.humanBefore) && mdAfter.includes(fixture.humanAfter), `R04: Human notes lost in ${mdPath}`);
-      assert.equal(mdAfter.includes("Old workflow block to replace cleanly."), false, `R04: Old block not replaced in ${mdPath}`);
-      assert.equal(mdAfter.includes("NULLFORM WORKFLOW"), true, `R03: Workflow adapter missing in ${mdPath}`);
-      assert.equal(mdAfter.split("<!-- BEGIN NULLFORM WORKFLOW -->").length, 2, `R04: Duplicate managed block in ${mdPath}`);
-      if (harness === "cursor") assert.ok(mdAfter.includes("alwaysApply: true"), "R03: Cursor .mdc must retain alwaysApply: true");
-      if (pass === 1) firstPassMdSnapshots[mdPath] = mdAfter;
-      else assert.equal(mdAfter, firstPassMdSnapshots[mdPath], `R04: Managed block not idempotent in ${mdPath}`);
-    }
-
-    if (harness === "cursor") {
-      assert.equal(existsSync(join(harnessHome, ".cursor", "rules")), false, "R03: Cursor must not create global ~/.cursor/rules");
-    }
-
-    assert.equal(readFileSync(join(customRoot, "unrelated-notes.txt"), "utf8"), "Unrelated user file content.\n", "R04: Unrelated file altered");
-    if (fixture.mdSoul && pass === 1) {
-      // SOUL.md is identity: adaptive installer must leave human bytes untouched, no managed block.
-      const soul = readFileSync(fixture.mdSoul, "utf8");
-      assert.ok(soul.includes(fixture.humanBefore) && soul.includes(fixture.humanAfter), "R04: Human SOUL notes lost");
-      assert.equal(soul.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into SOUL.md");
-    }
-    if (fixture.mdHomeAgents && pass === 1) {
-      const home = readFileSync(fixture.mdHomeAgents, "utf8");
-      assert.ok(home.includes(fixture.humanBefore) && home.includes(fixture.humanAfter), "R04: Human home AGENTS notes lost");
-      assert.equal(home.includes("NULLFORM WORKFLOW"), false, "R04: Installer must not write managed policy into home AGENTS.md");
-    }
-    assert.equal(readFileSync(join(customRoot, ".env"), "utf8"), `USER_ENV_SECRET=${secretToken}\n`, "R04: User .env file altered");
-
-    for (const cfgPath of fixture.cfgFiles) {
-      assert.equal(existsSync(cfgPath), true, `R03: Expected native config missing at ${cfgPath}`);
-      const text = readFileSync(cfgPath, "utf8");
-      assert.ok(text.includes(secretToken), `R04: Secret token lost in ${cfgPath} on pass ${pass}`);
-      if (fixture.cfgKind === "jsonc") assert.ok(text.includes("manual") && text.includes("// User JSONC comment"), "R04: OpenCode settings lost");
-      if (fixture.cfgKind === "json5" || harness === "openclaw") {
-        assert.ok(text.includes(customRoot.replace(/\\/g, "/")), "R03: OpenClaw workflow workspace missing");
-        assert.ok(text.includes("customAgent"), "R04: OpenClaw customAgent entry lost");
-      }
-      if (fixture.cfgKind === "yaml") {
-        assert.ok(text.includes("# hash inside quoted YAML string") && text.includes("first line # keep comment char"), "R04: YAML comments corrupted");
-        assert.ok(text.includes("*default_settings") && text.includes("mcp_servers:"), "R03/R04: Hermes anchor/mcp lost");
-        assert.equal(/(?:^|\n)profiles:\s*(?:\r?\n)/m.test(text), false, "R03: Hermes config must not inject fake profiles");
-      }
-      if (fixture.cfgKind === "toml") {
-        assert.equal(text.includes("[memory.agents.workflow]"), false, "R04: OpenHuman config unrequested section injected");
-      }
-    }
-
-    if (harness === "omp") {
-      assert.equal(existsSync(fixture.skillsDir), true, `R03: Skills directory missing at ${fixture.skillsDir} for ${harness}`);
-      const skills = readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory());
-      assert.ok(skills.length > 0, `R03: No skills installed in ${fixture.skillsDir} for ${harness}`);
-    } else if (harness === "hermes") {
-      // Adaptive Hermes: exactly one native auto-load skill, no bulk catalogue, no SOUL write.
-      const skillFile = join(fixture.skillsDir, "nullform-workflow", "SKILL.md");
-      assert.equal(existsSync(skillFile), true, `R03: Hermes quality skill missing at ${skillFile}`);
-    } else if (harness === "cursor") {
-      // Cursor is project-scoped: target-root skills/ is legitimate project context, not a home catalogue.
-      assert.equal(existsSync(fixture.skillsDir), true, `R03: Cursor project skills missing at ${fixture.skillsDir}`);
-    } else {
-      // Adaptive non-OMP: no bulk home-skill catalogue by design (doctor reports skills:skip).
-      assert.equal(existsSync(fixture.skillsDir), false, `R03: Unexpected bulk skills catalogue at ${fixture.skillsDir} for adaptive ${harness}`);
-    }
-    if (fixture.noSymlinkSkills && existsSync(fixture.skillsDir)) {
-      for (const entry of readdirSync(fixture.skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
-        const fullSkillPath = join(fixture.skillsDir, entry.name);
-        assert.equal(lstatSync(fullSkillPath).isSymbolicLink(), false, `R03: Skill must not be symlink: ${fullSkillPath}`);
-      }
-    }
-  }
-
-  const statePath = join(harnessHome, ".nullform", "installation.json");
-  assert.equal(existsSync(statePath), true, `R05: State file missing at ${statePath}`);
-  const state = JSON.parse(readFileSync(statePath, "utf8"));
-  assert.equal(state.schemaVersion, 1, "R05: schemaVersion must be 1");
-  assert.equal(state.harness, harness, `R05: state.harness must be ${harness}`);
-  assert.equal(resolve(state.root), resolve(customRoot), "R05: state.root must match customRoot");
-  assert.equal(resolve(state.userHome), resolve(harnessHome), "R05: state.userHome must match harnessHome");
-  if (projectDir) assert.equal(resolve(state.projectRoot), resolve(projectDir), "R05: state.projectRoot must match projectDir");
-  assert.equal(state.version, pkgVersion, `R05: state.version must be ${pkgVersion}`);
-  assert.equal(JSON.stringify(state).includes(secretToken), false, "R04/R05: State file must not store user secrets");
-}
-
-async function verifyHarnessDoctor(ctx, harness, harnessHome) {
-  const docArgs = ["doctor", "--user-home", harnessHome, "--json", ...(harness === "omp" ? ["--skip-plugin-check"] : [])];
-  const docRes = await ctx.runInstalledBin(docArgs);
-  const docJson = JSON.parse(docRes.stdout);
-  assert.equal(docJson.targetHarness, harness, `R03/R05: doctor targetHarness must equal persisted ${harness}`);
-  const failedChecks = (docJson.checks || []).filter((c) => c.status === "fail");
-  assert.deepEqual(failedChecks, [], `R03: Doctor failed unexpectedly on ${harness}: ${JSON.stringify(failedChecks)}`);
-
-  const checkIds = (docJson.checks || []).map((c) => c.id);
-  if (harness !== "omp") {
-    for (const ompOnlyId of ["plugins", "agents-drift", "logs-hygiene", "configs", "agent-wiring"]) {
-      assert.equal(checkIds.includes(ompOnlyId), false, `R03: OMP-only check "${ompOnlyId}" must not run for ${harness}`);
-    }
-    const integrationCheck = (docJson.checks || []).find((c) => c.id === "harness-integration");
-    assert.equal(integrationCheck?.status, "pass", `R03: harness-integration check must pass for ${harness}`);
-    const skillsCheck = (docJson.checks || []).find((c) => c.id === "skills");
-    // Adaptive non-OMP reports skills:skip (no bulk catalogue by design); OMP still requires pass.
-    assert.equal(skillsCheck?.status, "skip", `R03: skills check must skip for adaptive ${harness}`);
-    const runtimeCheck = (docJson.checks || []).find((c) => c.id === "host-runtime");
-    assert.ok(runtimeCheck, `R03: host-runtime check must be present for ${harness}`);
-    assert.notEqual(runtimeCheck.status, "fail", `R03: Missing host runtime for ${harness} must be SETUP/warn, never FAIL`);
-  }
-}
-
-async function seedAndVerifyHarness(ctx, harness, pkgVersion) {
-  const customRoot = join(ctx.spaceBase, `root_${harness}`);
-  const harnessHome = join(ctx.spaceBase, `home_${harness}`);
-  const projectDir = harness === "cursor" ? join(ctx.spaceBase, `project_${harness}`) : null;
-  mkdirSync(customRoot, { recursive: true });
-  mkdirSync(harnessHome, { recursive: true });
-  if (projectDir) mkdirSync(projectDir, { recursive: true });
-
-  const secretToken = `sk-secret-${harness}-98765`;
-  const fixture = buildHarnessFixture(harness, customRoot, harnessHome, projectDir || customRoot, secretToken);
-
-  seedHarnessFiles(fixture, customRoot, secretToken);
-  await verifyHarnessInit(ctx, harness, fixture, customRoot, harnessHome, projectDir, secretToken, pkgVersion);
-  await verifyHarnessDoctor(ctx, harness, harnessHome);
-}
 
 async function verifyBoundaries(ctx) {
   const dryRoot = join(ctx.spaceBase, "dry_root");
@@ -487,12 +346,20 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   writeFileSync(join(vUpSource, "package.json"), JSON.stringify(vUpPkg, null, 2) + "\n", "utf8");
   writeFileSync(join(vUpSource, "VERSION"), `${upgradeVersion}\n`, "utf8");
 
-  const ompSkills = join(ctx.spaceBase, "home_omp", ".agents", "skills");
+  // Portable assets live under the installation root; OMP keeps no home skill catalogue.
+  const ompSkills = join(ctx.spaceBase, "root_omp", "skills");
   const ownedSkillFile = join(ompSkills, "ui-ux-pro-max", "scripts", "core.py");
   const userSkillFile = join(ompSkills, "ui-ux-pro-max", "scripts", "validate_data.py");
   writeFileSync(userSkillFile, "# User edit to validate_data.py preserved\n", "utf8");
   writeFileSync(join(vUpSource, "skills", "ui-ux-pro-max", "scripts", "core.py"), `# Upgraded core.py v${upgradeVersion}\n`, "utf8");
   writeFileSync(join(vUpSource, "skills", "ui-ux-pro-max", "scripts", "validate_data.py"), `# Upgraded validate_data.py v${upgradeVersion}\n`, "utf8");
+  assert.equal(existsSync(join(ctx.spaceBase, "home_omp", ".agents", "skills")), false, "R03/R06: OMP update must not create a home skill catalogue");
+  // A pre-existing human global skill catalogue is not ours: it must survive the update
+  // byte-identically and must not be joined by an installer-created catalogue.
+  const humanGlobalSkills = join(ctx.spaceBase, "home_omp", ".agents", "skills");
+  const humanGlobalSkill = join(humanGlobalSkills, "human-owned", "SKILL.md");
+  mkdirSync(dirname(humanGlobalSkill), { recursive: true });
+  writeFileSync(humanGlobalSkill, "# Human global skill\nNever adopt or rewrite.\n", "utf8");
   assert.equal((await ctx.runNpm(["pack", "--ignore-scripts", "--pack-destination", ctx.tempPackDir], vUpSource)).status, 0);
   const vUpTarballPath = join(ctx.tempPackDir, `nullform-workflow-${upgradeVersion}.tgz`);
 
@@ -512,6 +379,8 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
   assert.equal(updatedState.version, upgradeVersion);
   assert.equal(readFileSync(join(opencodeRoot, "VERSION"), "utf8").trim(), upgradeVersion);
   assert.equal(readFileSync(ownedSkillFile, "utf8"), `# Upgraded core.py v${upgradeVersion}\n`, "R03/R06: Owned asset updated");
+  assert.equal(readFileSync(humanGlobalSkill, "utf8"), "# Human global skill\nNever adopt or rewrite.\n", "R03/R06: Human global skill must stay byte-identical across update");
+  assert.deepEqual(readdirSync(humanGlobalSkills), ["human-owned"], "R03/R06: Update must not add its own skills to a human global catalogue");
   assert.equal(readFileSync(userSkillFile, "utf8"), "# User edit to validate_data.py preserved\n", "R03/R06: User edit preserved");
 
   for (const h of HARNESS_CHOICES.filter((c) => c !== "opencode")) {
@@ -533,7 +402,15 @@ async function verifyRegistryUpgrade(ctx, registry, candidateTarballPath, pkgJso
     for (const mdPath of fixture.mdFiles) {
       const md = readFileSync(mdPath, "utf8");
       assert.ok(md.includes(fixture.humanBefore) && md.includes(fixture.humanAfter), `Human notes lost in ${mdPath}`);
-      assert.ok(md.includes("NULLFORM WORKFLOW"), `Adapter missing in ${mdPath}`);
+      if (h === "omp") assert.ok(md.includes(hRoot.replace(/\\/g, "/")), `OMP law lost the portable root in ${mdPath}`);
+      else assert.ok(md.includes("NULLFORM WORKFLOW"), `Adapter missing in ${mdPath}`);
+    }
+    // Identity surfaces and seeded legacy assets stay byte-identical across an upgrade.
+    for (const identityPath of fixture.mdIdentity) {
+      assert.equal(readFileSync(identityPath, "utf8"), fixture.mdContent, `Identity surface altered by update: ${identityPath}`);
+    }
+    for (const legacyPath of fixture.legacyFiles) {
+      assert.equal(readFileSync(legacyPath, "utf8"), fixture.cfgContent, `Legacy asset altered by update: ${legacyPath}`);
     }
     for (const cfgPath of fixture.cfgFiles) {
       assert.ok(readFileSync(cfgPath, "utf8").includes(hSecret), `Secret lost in ${cfgPath}`);
@@ -644,7 +521,7 @@ export async function runSmoke(options = {}) {
       evidence: {
         R01: `Packed ${packInfo.tarballName} (${packInfo.packedFiles.length} files, private/node_modules excluded) with real json5@2.2.3, yaml@2.9.1, and jsonc-parser@3.3.1 dependency tarballs; installed globally via --ignore-scripts at ${binExecutable}`,
         R02: `Initialized all 8 harnesses (${HARNESS_CHOICES.join(", ")}); non-TTY missing selection, --harness auto, and cancelled prompt fail closed without writes`,
-        R03: `Source-verified native routes and skills validated for all 8 harnesses; doctor verified targetHarness and excluded OMP-only checks for non-OMP`,
+        R03: `Native configuration surfaces validated for all 8 harnesses; Hermes uses agent.system_prompt without skill copies; doctor configuration checks are not native-session execution evidence`,
         R04: `Mixed managed-block human notes, JSONC/JSON5/YAML/TOML secrets, YAML #/multiline/anchors, and unrelated files preserved across repeat init and update; dry-run, malformed config, and malformed marker preflight made zero writes`,
         R05: `Persisted schemaVersion 1 installation.json (including custom root and Cursor projectRoot) verified across all 8 harnesses and respected by doctor/update`,
         R06: `Upgraded global bin, installation.json, and target VERSION from ${packInfo.pkgJson.version} to ${deriveHigherVersion(packInfo.pkgJson.version, 1)} via loopback registry without Git; bounded unreachable registry exited nonzero`,

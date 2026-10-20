@@ -153,9 +153,9 @@ Every visual value must resolve through these rules instead of being invented ad
 
 **Use:** Geist, Manrope, Geist Mono, Poppins.
 
-**Never use:** Inter, Roboto, Arial, Open Sans, Helvetica.
+**Discouraged by default:** Inter, Roboto, Arial, Open Sans, Helvetica. Not a ban: an existing project brand token, design-system font, or accessibility/performance need wins over this default.
 
-**Never use italic fonts** anywhere in the interface.
+**Avoid italic fonts** in the interface by default. Conditional, not a ban: an existing project brand style, design-system token, or accessibility requirement wins over this default.
 
 **One typeface per site.** Do not pair two fonts unless the prompt explicitly asks for it. Geist Mono is allowed alongside a primary font only for code, data, or numeric UI where a monospace is functionally required.
 
@@ -163,7 +163,7 @@ Every visual value must resolve through these rules instead of being invented ad
 
 ### Copy rules
 
-**No hyphens in text.** Do not use `-` inside body copy, headings, or labels. Rewrite the phrase instead.
+**Avoid hyphens in text** by default. Do not put `-` inside body copy, headings, or labels; rewrite the phrase instead. Conditional, not a ban: an existing project style, brand voice, or functional need (hyphenation control) wins over this default.
 
 **No orphaned words.** A single word must never sit alone on the last line. Apply `text-wrap: balance` for headings and `text-wrap: pretty` for body copy.
 

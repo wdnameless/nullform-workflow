@@ -146,7 +146,7 @@ Parse markdown to extract:
 ### Don'ts
 - Use more than 2-3 colors in single component
 - Mix warm and cool tones without intent
-- Use pure black (#000) for text (use #111 or similar)
+- Use pure black (#000) for text by default — prefer #111 or similar; an existing project brand token or accessibility requirement wins over this default.
 - Rely solely on color for meaning (use icons/text too)
 
 ## Color Palette Examples

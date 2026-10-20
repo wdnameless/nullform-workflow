@@ -102,10 +102,10 @@ Mandatory lenses to evaluate on every review:
   - `delete:` dead code or unused flexibility (suggested replacement: "nothing")
   - `stdlib:` replace bespoke helper with standard library (MUST name stdlib function)
   - `native:` replace library/wrapper with platform feature (MUST name native feature)
-  - `yagni:` abstraction with single implementation or unused config option (suggest replacement)
+  - `yagni:` abstraction with single implementation that adds no information-hiding, invariant protection, or test seam value (suggest replacement). A single-implementation interface that isolates a database, network call, clock, or complex validation logic is NOT yagni — it is a load-bearing boundary. LOC/diff counts are advisory, not quality verdicts.
   - `shrink:` same logic shorter, without losing clarity or safety (MUST show shorter form)
   Every finding MUST name the replacement (or "nothing").
-  Conclude the explanation with `net: -N lines possible` or `Lean already.`. This tagged delete-list is the input to Stage B.
+  Conclude the explanation with `net: -N lines possible` or `Lean already.`; line counts are advisory, not a target — never cut a load-bearing boundary, invariant guard, or test seam to reach a number. This tagged delete-list is the input to Stage B.
   Minimal smoke/self-check test is the floor — NEVER flag as bloat.
   Correctness, security, and performance are evaluated outside this lens.
 - **PR body (evidence gate)**: when the patch is headed for merge, check the PR

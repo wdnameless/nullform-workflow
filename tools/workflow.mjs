@@ -20,7 +20,7 @@
  *   close  [--force --reason "..."]  finish the task
  *          [--auto] [--diff-lines N] finish guarded auto task
  *   review-run --change ID --role reviewer|oracle --model PROVIDER/MODEL --base-ref BASE
- *          [--product-command JSON_ARGV] [--redo]  retained native execution (no prompt bypass)
+ *          [--product-command JSON_ARGV] [--admission-policy PATH] [--dry-run|--resume-session DIR]
  *   stage-b --change ID --phase before|after --test-cmd COMMAND
  *          [--disposition simplified|lean-already]  freeze Stage-A tests and execute on A/B
  *
@@ -49,11 +49,16 @@ import {
   runReviewRecord,
   recordStageB,
   isSupersededOracleArtifact,
-} from "./review-evidence.mjs";
+} from "./review/evidence.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
-import { validateReviewCapability, printWorkflowHelp } from "./harness-capabilities.mjs";
-import { runWorkspaceCommand } from "./workflow-workspaces.mjs";
-import { runClaimCommand } from "./task-claim.mjs";
+import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
+import { runWorkspaceCommand } from "./workflow/workspaces.mjs";
+import { runClaimCommand } from "./workflow/claims.mjs";
+import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review/http-runtime.mjs";
+function printWorkflowHelp() {
+  printCoreWorkflowHelp();
+  console.log("  review-run: --admission-policy PATH runs the controlled Node transport; --dry-run reads policy/ledger read-only; --resume-session DIR imports exact evidence.");
+}
 const DIR = ".workflow";
 const FILE = "state.json";
 const BUDGETS_FILE = "budgets.json";
@@ -1852,34 +1857,27 @@ function cmdCheckCi(root, flags) {
   console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
   return 0;
 }
-function cmdReviewRun(root, flags) {
-  const gate = validateReviewCapability(flags.harness, {
-    dryRun: Boolean(flags["dry-run"] || flags.dryRun),
-    userHome: flags["user-home"],
-  });
-  if (!gate.ok) {
-    console.error(gate.error);
-    return 1;
-  }
-  const targetHarness = flags.harness ? String(flags.harness).trim().toLowerCase() : (gate.harness || null);
+function cmdReviewRun(root, flags, positionals = 0) {
   try {
-    const res = runReviewRecord({
-      root,
-      changeId: flags.change,
-      role: flags.role,
-      model: flags.model,
-      baseRef: flags["base-ref"],
-      prompt: flags.prompt,
-      redo: Boolean(flags.redo),
-      productCommand: flags["product-command"] ? JSON.parse(flags["product-command"]) : null,
-      dryRun: Boolean(flags["dry-run"] || flags.dryRun),
-      harness: targetHarness,
-    });
-    if (res.ok) {
-      console.log(res.dryRun ? `workflow review-run: dry-run plan verified for ${flags.role} on '${flags.change}'.` : `workflow review-run: successfully recorded ${flags.role} execution for '${flags.change}'.`);
-      return 0;
+    const { redo, dryRun } = assertReviewRunFlags(flags, positionals);
+    const gate = validateReviewCapability(flags.harness, { dryRun: true, userHome: flags["user-home"] });
+    if (!gate.ok) throw new Error(gate.error);
+    const productCommand = flags["product-command"] ? JSON.parse(flags["product-command"]) : null;
+    let policy = null, httpExecutor = null;
+    if (!dryRun && !flags["resume-session"]) {
+      if (!flags["admission-policy"]) throw new Error('No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON');
+      policy = validatePolicy(JSON.parse(readFileSync(resolve(root, flags["admission-policy"]), "utf8")));
+      resolveNodeRuntime({});
+      httpExecutor = createHttpExecutor({ root, policy });
     }
-    return 1;
+    const res = runReviewRecord({
+      root, changeId: flags.change, role: flags.role, model: flags.model,
+      baseRef: flags["base-ref"], prompt: flags.prompt, redo,
+      productCommand, admissionPolicy: flags["admission-policy"], resumeSessionDir: flags["resume-session"] ?? null,
+      dryRun, harness: gate.harness, httpExecutor, policy,
+    });
+    console.log(res.dryRun ? JSON.stringify(res, null, 2) : `workflow review-run: recorded ${flags.role} execution for '${flags.change}'.`);
+    return res.ok ? 0 : 1;
   } catch (err) {
     console.error(`workflow review-run error: ${err.message}`);
     return 1;
@@ -1901,7 +1899,7 @@ export function runWorkflowCli(argv = [], options = {}) {
   let code;
   switch (cmd) {
     case "workspace": case "integrate": code = runWorkspaceCommand(cmd, root, args.flags, args._.length); break;
-    case "claim": case "release": case "context": code = runClaimCommand(cmd, root, args.flags); break;
+    case "claim": case "release": case "context": code = runClaimCommand(cmd, root, args.flags, args._.length); break;
     case "start":
       code = cmdStart(root, args.flags);
       if (code === 0 && !options.noDashboard) autoOpenDashboard(root, args.flags);
@@ -1915,7 +1913,7 @@ export function runWorkflowCli(argv = [], options = {}) {
     case "escalate":     code = cmdEscalate(root, args.flags); break;
     case "metrics":      code = cmdMetrics(root); break;
     case "check-ci":     code = cmdCheckCi(root, args.flags); break;
-    case "review-run":   code = cmdReviewRun(root, args.flags); break;
+    case "review-run":   code = cmdReviewRun(root, args.flags, Math.max(0, args._.length - 1)); break;
     case "stage-b":      code = cmdStageB(root, args.flags); break;
     default:
       if (cmd !== undefined) console.error(`workflow: unknown command '${cmd}'\n`);

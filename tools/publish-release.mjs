@@ -6,8 +6,8 @@ import { resolve, join, dirname, basename } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { sourceDigest } from "./worktree-snapshot.mjs";
-import { validateReviewEvidence, loadReviewEvidence, isPositiveOracleVerdict, isNegativeOracleVerdict } from "./review-evidence.mjs";
-import { sanitizeError } from "./installation-state.mjs";
+import { validateReviewEvidence, loadReviewEvidence, isPositiveOracleVerdict, isNegativeOracleVerdict } from "./review/evidence.mjs";
+import { sanitizeError } from "./installation/state.mjs";
 import {
   REPO_ROOT,
   ALL_8_HARNESSES,

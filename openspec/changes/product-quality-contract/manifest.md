@@ -1,0 +1,18 @@
+# Product quality contract requirements
+
+User approval: «делай» accepts the preceding five recommendations (honest project gates, measurable existing-document contract, useful architecture seams, conditional UI path, consumer outcome measurement). Original request: «Проанализируй наш воркфлоу с точки зрения лучших практик систем дизайна и его паттернов.» Existing no-paid-call and human/global preservation constraints remain in force. No universal quality uplift is assumed.
+
+| ID | Verbatim user quote | Observable acceptance | Status |
+|---|---|---|---|
+| R01 | «Я хочу чтобы у юзеров нашего воркфлоу получался, производительноый, красивый, качественный код.»; «делай» | Existing auto-review executes available project build/typecheck/lint/test and explicit native commands. Failures block; missing required checks and zero product checks are unverified/nonzero. No automatic tool download. Structured per-check results and honest text/JSON. | in-spec |
+| R02 | «производительноый»; «делай» | Existing manifest/interfaces guidance records applicable workload, environment, limits and verification command; performance never inferred from agent cost/tool counts. No universal backend threshold or new mandatory document. | in-spec |
+| R03 | «В котором легко разобраться и лекго поддерживать.»; «делай» | Shipped simplification/review rules preserve useful information-hiding/test seams regardless of implementation count; LOC is not a quality verdict; domain ownership/dependency direction guide architecture without mandatory layers/services. | in-spec |
+| R04 | «красивый»; «делай» | UI guidance is conditional by task; existing brand/tokens and accessibility outrank taste presets. Remove contradictory font/color/punctuation bans and compulsory irrelevant motion/marketing phases. Real flow/states/keyboard/responsive evidence is distinct from screenshots. | in-spec |
+| R05 | «качественный код. В котором легко разобраться и лекго поддерживать.»; «делай» | Existing benchmark gains a substantive consumer task with independent behavioral/boundary checks and a documented follow-up-change/UI evaluation protocol. Valid and broken controls exercise checker, without model dispatch or invented quality gains. | in-spec |
+| R06 | «Так же проанализируй вот это https://microservices.io/patterns/microservice-chassis.html»; «делай» | Reuse versioned CLI/native project commands and thin existing templates. No runtime chassis, plugin framework, second agent loop, compulsory microservices/deps/UI kit. Update affected consumers/docs cleanly. | in-spec |
+| R07 | «Без платных вызовов сейчас» | No new paid model calls, including implementation workers and nested delegation; no provider probes or unauthorized review dispatch. Preserve historical receipts/global human configuration. Independent source-bound acceptance stays separate; unavailable proof is never forged. | open |
+
+## R07 incident — not passed
+
+The parent explicitly selected an advertised-free outer writer, but that writer started a nested `FixerAutoReview` without a model/isolation override or the no-paid constraint. Actual nested session metadata selected `nullform-gateway/gemini-3.8-flash-high`; SDK usage aggregate displayed estimated USD0.63141, not independently confirmed provider billing. The nested session records normal disposal; its late same-worktree overwrite caused source regressions after an initial failed-job result. Parent's separate tested worktree was preserved, nested dispatch prohibited/stopped and the tool incident reported. This cannot be undone or relabeled as a zero-cost task; R07 remains open with this explicit reason. See verification.md and local `.tmp/nested-writer-incident.json`; no transcript credentials or global model config were copied or edited.
+

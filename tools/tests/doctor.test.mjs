@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, cpSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, cpSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { join, resolve, dirname, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync, spawn } from "node:child_process";
@@ -232,10 +232,12 @@ name: ${role.replace(".md", "")}
     if (omitTools.includes(tool)) continue;
     // Copy real tool or create minimal valid script
     const realToolPath = join(REPO_ROOT, "tools", tool);
+    const harnessToolPath = join(harness, "tools", tool);
+    mkdirSync(dirname(harnessToolPath), { recursive: true });
     try {
-      copyFileSync(realToolPath, join(harness, "tools", tool));
+      copyFileSync(realToolPath, harnessToolPath);
     } catch {
-      writeFileSync(join(harness, "tools", tool), "export const ok = true;\n", "utf8");
+      writeFileSync(harnessToolPath, "export const ok = true;\n", "utf8");
     }
   }
 
@@ -327,6 +329,48 @@ test("doctor fails when required sync engine and manifest are missing", () => {
   }
 });
 
+test("doctor tools-syntax enumerates nested runtime modules and refuses to certify unreadable or linked entries", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-test-nested-syntax-"));
+  try {
+    const harness = createMockHarness(tmp);
+    const nestedBroken = join(harness, "tools", "installation", "broken.mjs");
+    writeFileSync(nestedBroken, "export function broken( {\n", "utf8");
+
+    const res = spawnSync(
+      process.execPath,
+      [DOCTOR_PATH, "--harness", harness, "--json"],
+      { encoding: "utf8" }
+    );
+    assert.equal(res.status, 1, `Expected exit 1 for invalid nested module, got ${res.status}. ${res.stdout}`);
+
+    const json = JSON.parse(res.stdout);
+    const toolsSyntaxCheck = json.checks.find(c => c.id === "tools-syntax");
+    assert.ok(toolsSyntaxCheck, "tools-syntax check must be present");
+    assert.equal(toolsSyntaxCheck.status, "fail");
+    assert.match(toolsSyntaxCheck.detail, /installation\/broken\.mjs/, "Nested module must be syntax-checked, not silently skipped");
+
+    let linked = false;
+    try {
+      symlinkSync(nestedBroken, join(harness, "tools", "installation", "linked.mjs"), "file");
+      linked = true;
+    } catch {
+      linked = false; // Symlink creation is privileged on some hosts; the nested check above still applies.
+    }
+    if (linked) {
+      const linkedRes = spawnSync(
+        process.execPath,
+        [DOCTOR_PATH, "--harness", harness, "--json"],
+        { encoding: "utf8" }
+      );
+      const linkedJson = JSON.parse(linkedRes.stdout);
+      const linkedCheck = linkedJson.checks.find(c => c.id === "tools-syntax");
+      assert.match(linkedCheck.detail, /installation\/linked\.mjs/, "A linked entry must be reported, never silently certified");
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 /**
  * Фикстура установки: харнесс + agent-dir, привязанный к нему через .harness-root.
  * `agentRoles` — определения ролей, реально положенные в <agent-dir>/agents.
@@ -411,101 +455,16 @@ test("doctor full pass fixture with mock harness in installed mode", () => {
   }
 });
 
-test("skills check fixture: parity drift produces warn and exit 0 (ok: true)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-parity-"));
+test("skills check fixture: unrelated human .agents/skills contents stay byte-identical and cannot make minimal doctor require our catalogue", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-skills-human-"));
   try {
     const harness = createMockHarness(tmp);
     const agentsHome = join(tmp, "agents-home");
-    mkdirSync(join(agentsHome, "skills/mock-skill"), { recursive: true });
-    writeFileSync(
-      join(agentsHome, "skills/mock-skill/SKILL.md"),
-      "---\nname: mock-skill\ndescription: Installed version\n---\nBody installed\n",
-      "utf8"
-    );
-
-    // Repo copy differs -> parity problem
-    mkdirSync(join(harness, "skills/mock-skill"), { recursive: true });
-    writeFileSync(
-      join(harness, "skills/mock-skill/SKILL.md"),
-      "---\nname: mock-skill\ndescription: Repo version\n---\nBody repo\n",
-      "utf8"
-    );
-
-    const res = spawnSync(
-      process.execPath,
-      [
-        DOCTOR_PATH,
-        "--harness", harness,
-        "--agent-dir", join(tmp, "agent-dir"),
-        "--agents-home", agentsHome,
-        "--mode", "repo",
-        "--json"
-      ],
-      { encoding: "utf8" }
-    );
-
-    const json = JSON.parse(res.stdout);
-    const skillsCheck = json.checks.find(c => c.id === "skills");
-    assert.ok(skillsCheck, "skills check exists");
-    assert.equal(skillsCheck.status, "warn");
-    assert.match(skillsCheck.detail, /parity/);
-    assert.equal(json.ok, true);
-    assert.equal(res.status, 0);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("skills check fixture: orphan in repo produces fail and exit 1 (ok: false)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-orphan-"));
-  try {
-    const harness = createMockHarness(tmp);
-    const agentsHome = join(tmp, "agents-home");
-    mkdirSync(join(agentsHome, "skills"), { recursive: true });
-
-    // Repo has a skill not in installed -> orphan
-    mkdirSync(join(harness, "skills/orphan-skill"), { recursive: true });
-    writeFileSync(
-      join(harness, "skills/orphan-skill/SKILL.md"),
-      "---\nname: orphan-skill\ndescription: Repo orphan\n---\nBody\n",
-      "utf8"
-    );
-
-    const res = spawnSync(
-      process.execPath,
-      [
-        DOCTOR_PATH,
-        "--harness", harness,
-        "--agent-dir", join(tmp, "agent-dir"),
-        "--agents-home", agentsHome,
-        "--mode", "repo",
-        "--json"
-      ],
-      { encoding: "utf8" }
-    );
-
-    const json = JSON.parse(res.stdout);
-    const skillsCheck = json.checks.find(c => c.id === "skills");
-    assert.ok(skillsCheck, "skills check exists");
-    assert.equal(skillsCheck.status, "fail");
-    assert.match(skillsCheck.detail, /orphan/);
-    assert.equal(json.ok, false);
-    assert.equal(res.status, 1);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("skills check fixture: installed mode without repo clone reports warn (parity не проверялась)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-skills-norepo-"));
-  try {
-    const harness = createMockHarness(tmp);
-    // Remove repo markers so harness is recognized as pure installed harness, not repo tree
-    rmSync(join(harness, "agent", "models.yml.example"), { force: true });
-    rmSync(join(harness, "skills"), { recursive: true, force: true });
-
-    const agentsHome = join(tmp, "agents-home");
-    mkdirSync(join(agentsHome, "skills"), { recursive: true });
+    const humanSkillDir = join(agentsHome, "skills", "custom-human-skill");
+    mkdirSync(humanSkillDir, { recursive: true });
+    const humanSkillContent = "---\nname: custom-human-skill\ndescription: Custom user skill\n---\nHuman implementation\n";
+    const skillFile = join(humanSkillDir, "SKILL.md");
+    writeFileSync(skillFile, humanSkillContent, "utf8");
 
     const res = spawnSync(
       process.execPath,
@@ -515,16 +474,18 @@ test("skills check fixture: installed mode without repo clone reports warn (pari
         "--agent-dir", join(tmp, "agent-dir"),
         "--agents-home", agentsHome,
         "--mode", "installed",
-        "--json"
+        "--json",
       ],
       { encoding: "utf8" }
     );
 
     const json = JSON.parse(res.stdout);
-    const skillsCheck = json.checks.find(c => c.id === "skills");
+    const skillsCheck = json.checks.find((c) => c.id === "skills");
     assert.ok(skillsCheck, "skills check exists");
-    assert.equal(skillsCheck.status, "warn");
-    assert.match(skillsCheck.detail, /parity не проверялась: нет копии репозитория/);
+    assert.equal(skillsCheck.status, "skip");
+    assert.match(skillsCheck.detail, /независимый каталог навыков/);
+    // Human skill contents remain completely byte-identical
+    assert.equal(readFileSync(skillFile, "utf8"), humanSkillContent);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -963,22 +924,21 @@ test("harness-files: отсутствует обязательная роль �
   }
 });
 
-test("agent-wiring: установка без обязательной роли → FAIL (счёт «>= 8» её пропускал)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-test-wiring-role-"));
+test("agent-wiring: несовпадающий .harness-root → FAIL", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-test-wiring-mismatch-"));
   try {
-    const { harness, agentDir, agentsHome } = createInstalledFixture(tmp, {
-      agentRoles: REQUIRED_ROLES.filter((r) => r !== "fixer").concat("sonic"),
-    });
+    const { harness, agentDir, agentsHome } = createInstalledFixture(tmp);
+    writeFileSync(join(agentDir, ".harness-root"), "/different/harness/path\n", "utf8");
 
     const { json } = runDoctorCli([
       "--harness", harness,
       "--agent-dir", agentDir,
       "--agents-home", agentsHome,
+      "--mode", "installed",
     ]);
-
     const check = checkOf(json, "agent-wiring");
     assert.equal(check.status, "fail");
-    assert.match(check.detail, /отсутствуют обязательные роли \(fixer\)/);
+    assert.match(check.detail, /\.harness-root/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1106,44 +1066,28 @@ function runDoctorWithOmp(tmp, { runOmp, requirePlugins = false, skipPluginCheck
 }
 
 
-test("plugins: только опциональные плагины отсутствуют → WARN с именами и командой установки (ok: true)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-missing-"));
+test("plugins: default runOmp invocation count is 0 on fresh minimal install; explicit opt-in detects missing plugin", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-minimal-"));
   try {
     const harness = createMockHarness(tmp);
     writePluginsManifest(harness, [
-      { name: "pi-qq", spec: "pi-qq@0.1.17" },
-      { name: "pi-prompt-shelf", spec: "pi-prompt-shelf@1.1.2" },
-    ]);
-
-    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [] }) });
-    const check = checkOf(result, "plugins");
-
-    assert.equal(check.status, "warn");
-    assert.match(check.detail, /Не установлены опциональные плагины \(2 из 2\): pi-qq, pi-prompt-shelf/);
-    assert.match(check.detail, /omp plugin install pi-qq@0\.1\.17/);
-    assert.equal(result.summary.fail, 0);
-    assert.equal(result.ok, true, "без обязательных плагинов отсутствие опциональных не валит doctor");
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("plugins: обязательный плагин отсутствует → FAIL по умолчанию (ok: false)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-req-fail-"));
-  try {
-    const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [
-      { name: "pi-qq", spec: "pi-qq@0.1.17" },
       { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
     ]);
+    let ompCalls = 0;
+    const trackingOmp = () => {
+      ompCalls++;
+      return { status: 0, stdout: JSON.stringify({ npm: [] }), stderr: "", error: null };
+    };
 
-    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq"] }) });
-    const check = checkOf(result, "plugins");
+    // 1. Default (no requirePlugins): runOmp is NEVER invoked, check is SKIP
+    const defaultRes = runDoctorWithOmp(tmp, { runOmp: trackingOmp, requirePlugins: false });
+    assert.equal(ompCalls, 0, "default doctor must not invoke runOmp");
+    assert.equal(checkOf(defaultRes, "plugins").status, "skip");
 
-    assert.equal(check.status, "fail");
-    assert.match(check.detail, /Не установлены обязательные плагины \(1\): pi-lens/);
-    assert.equal(result.summary.fail, 1);
-    assert.equal(result.ok, false, "отсутствие обязательного плагина дает FAIL по умолчанию");
+    // 2. Explicit opt-in (--require-plugins): runOmp IS invoked and detects missing plugin
+    const optInRes = runDoctorWithOmp(tmp, { runOmp: trackingOmp, requirePlugins: true });
+    assert.ok(ompCalls > 0, "explicit opt-in must invoke runOmp");
+    assert.equal(checkOf(optInRes, "plugins").status, "fail");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1178,6 +1122,7 @@ test("plugins: без манифеста проверка дает FAIL (fail-cl
     rmSync(join(harness, "agent", "plugins.json"), { force: true });
     let calls = 0;
     const result = runDoctorWithOmp(tmp, {
+      requirePlugins: true,
       runOmp: () => {
         calls++;
         return { status: 0, stdout: '{"npm":[]}', stderr: "", error: null };
@@ -1225,7 +1170,7 @@ test("plugins: всё установлено, лишние перечислен�
     const harness = createMockHarness(tmp);
     writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@0.1.17", required: false }]);
 
-    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq@0.1.17", "pi-extra"] }) });
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: ["pi-qq@0.1.17", "pi-extra"] }), requirePlugins: true });
     const check = checkOf(result, "plugins");
 
     assert.equal(check.status, "pass");
@@ -1250,7 +1195,7 @@ test("plugins: omp недоступен или вывод не разобран 
     assert.match(absentCheck.detail, /(?:omp не запущен|omp не найден в PATH)/);
     assert.equal(absent.ok, false);
 
-    const garbage = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ listStdout: "not json at all" }) });
+    const garbage = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ listStdout: "not json at all" }), requirePlugins: true });
     const garbageCheck = checkOf(garbage, "plugins");
     assert.equal(garbageCheck.status, "fail");
     assert.match(garbageCheck.detail, /вывод omp plugin list не разобран/);
@@ -1272,7 +1217,7 @@ test("doctor CLI: absent omp on PATH fails closed for required plugins", () => {
     };
     const res = spawnSync(
       process.execPath,
-      [DOCTOR_PATH, "--harness", harness, "--json"],
+      [DOCTOR_PATH, "--harness", harness, "--require-plugins", "--json"],
       { encoding: "utf8", env: isolatedEnv }
     );
     const json = JSON.parse(res.stdout);
@@ -1293,7 +1238,7 @@ test("plugins: манифест с синтаксической ошибкой �
     const harness = createMockHarness(tmp);
     writeFileSync(join(harness, "agent", "plugins.json"), "{ invalid json", "utf8");
 
-    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [] }) });
+    const result = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [] }), requirePlugins: true });
     const check = checkOf(result, "plugins");
 
     assert.equal(check.status, "fail");
@@ -1311,6 +1256,7 @@ test("plugins: ненулевой код omp plugin doctor → WARN с хвос�
     writePluginsManifest(harness, [{ name: "pi-qq", spec: "pi-qq@0.1.17" }]);
 
     const result = runDoctorWithOmp(tmp, {
+      requirePlugins: true,
       runOmp: fakeOmp({ installed: ["pi-qq@0.1.17"], doctorStatus: 1, doctorStderr: "boom: broken plugin\nsecond line" }),
     });
     const check = checkOf(result, "plugins");
@@ -1330,12 +1276,12 @@ test("plugins: несоответствие или отсутствие верс
     const harness = createMockHarness(tmp);
     writePluginsManifest(harness, [{ name: "pi-lens", spec: "pi-lens@4.2.1", required: true }]);
 
-    const mismatch = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.0" }] }) });
+    const mismatch = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.0" }] }), requirePlugins: true });
     assert.equal(checkOf(mismatch, "plugins").status, "fail");
     assert.match(checkOf(mismatch, "plugins").detail, /4\.2\.0 != 4\.2\.1/);
     assert.equal(mismatch.ok, false);
 
-    const noVer = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: null }] }) });
+    const noVer = runDoctorWithOmp(tmp, { runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: null }] }), requirePlugins: true });
     assert.equal(checkOf(noVer, "plugins").status, "fail");
     assert.match(checkOf(noVer, "plugins").detail, /Несоответствие версии обязательных плагинов/);
     assert.equal(noVer.ok, false);
@@ -1344,32 +1290,6 @@ test("plugins: несоответствие или отсутствие верс
   }
 });
 
-test("plugins: несоответствие или отсутствие версии опционального плагина → WARN (ok: true)", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-opt-ver-"));
-  try {
-    const harness = createMockHarness(tmp);
-    writePluginsManifest(harness, [
-      { name: "pi-lens", spec: "pi-lens@4.2.1", required: true },
-      { name: "pi-qq", spec: "pi-qq@0.1.17", required: false },
-    ]);
-
-    const mismatch = runDoctorWithOmp(tmp, {
-      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.1" }, { name: "pi-qq", version: "0.1.10" }] }),
-    });
-    assert.equal(checkOf(mismatch, "plugins").status, "warn");
-    assert.match(checkOf(mismatch, "plugins").detail, /0\.1\.10 != 0\.1\.17/);
-    assert.equal(mismatch.ok, true);
-
-    const noVer = runDoctorWithOmp(tmp, {
-      runOmp: fakeOmp({ installed: [{ name: "pi-lens", version: "4.2.1" }, { name: "pi-qq", version: null }] }),
-    });
-    assert.equal(checkOf(noVer, "plugins").status, "warn");
-    assert.match(checkOf(noVer, "plugins").detail, /Несоответствие версии опциональных плагинов/);
-    assert.equal(noVer.ok, true);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
 
 test("plugins: --require-plugins виден в CLI и в JSON-отчёте", () => {
   const tmp = mkdtempSync(join(tmpdir(), "doctor-plugins-cli-"));
@@ -1401,6 +1321,7 @@ test("plugins: валидный JSON при ненулевом коде omp plug
     ]);
 
     const result = runDoctorWithOmp(tmp, {
+      requirePlugins: true,
       runOmp: fakeOmp({
         installed: [{ name: "pi-lens", version: "4.2.1" }],
         listStatus: 1,
@@ -1428,6 +1349,7 @@ test("plugins: неразбираемый вывод при ненулевом �
     ]);
 
     const result = runDoctorWithOmp(tmp, {
+      requirePlugins: true,
       runOmp: fakeOmp({ listStdout: "not json at all", listStatus: 1 }),
     });
     const check = checkOf(result, "plugins");
@@ -1543,11 +1465,36 @@ test("doctor with targetHarness: cursor projectRoot, openclaw JSON5, release-dri
       builtinAgentsDir: join(tmp, "no-builtin"),
       runOmp: fakeOmp({ installed: [] }),
     });
-    assert.equal(ompExplicit.ok, true, "Explicit targetHarness omp treats missing host plugins/models as SETUP warn");
-    assert.equal(checkOf(ompExplicit, "plugins").status, "warn");
-    assert.match(checkOf(ompExplicit, "plugins").detail, /\[SETUP\]/);
+    assert.equal(ompExplicit.ok, true, "Explicit targetHarness omp treats missing models as SETUP warn, plugins skipped without requirePlugins");
+    assert.equal(checkOf(ompExplicit, "plugins").status, "skip");
     assert.equal(checkOf(ompExplicit, "configs").status, "warn");
     assert.match(checkOf(ompExplicit, "configs").detail, /\[SETUP\]/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Under Bun, `process.execPath` IS Bun and `bun --check <file>` executes the file.
+// The tools-syntax check must run a real Node for `--check` instead, or fail closed.
+test("doctor tools-syntax never executes tools under a Bun caller", (t) => {
+  const probe = spawnSync("bun", ["--version"], { encoding: "utf8", windowsHide: true });
+  if (probe.error || probe.status !== 0) return t.skip("bun not in PATH");
+
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-bun-syntax-"));
+  try {
+    const sentinel = join(tmp, "executed.txt");
+    const harness = createMockHarness(tmp);
+    // A syntactically valid tool that writes a sentinel only if it is executed, not parsed.
+    writeFileSync(
+      join(harness, "tools", "zz-sentinel.mjs"),
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(sentinel)}, "executed");\n`,
+      "utf8"
+    );
+
+    const res = spawnSync("bun", [DOCTOR_PATH, "--harness", harness, "--json"], { encoding: "utf8", windowsHide: true });
+    assert.equal(existsSync(sentinel), false, "bun --check must never execute a tool");
+    const json = JSON.parse(res.stdout);
+    assert.equal(checkOf(json, "tools-syntax").status, "pass", checkOf(json, "tools-syntax").detail);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

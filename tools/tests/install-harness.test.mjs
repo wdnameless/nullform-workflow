@@ -1,19 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, symlinkSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
+import { join, resolve, dirname, basename } from "node:path";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
 const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 const SH_PATH = resolve(REPO_ROOT, "install.sh");
 import { createTempDir } from "./test-helpers.mjs";
 import { detectHarness } from "../install-harness.mjs";
-import { preflightJson5Config, preflightJsoncConfig, applyManagedSection, loadYaml } from "../harness-config.mjs";
-import { resolveHostHome } from "../harness-profiles.mjs";
+import { preflightJson5Config, preflightJsoncConfig, applyManagedSection, loadYaml } from "../installation/config.mjs";
+import { resolveHostHome } from "../installation/profiles.mjs";
 function getBashPath() {
   const candidates = process.platform === "win32"
     ? ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "bash.exe", "bash"]
@@ -39,7 +38,9 @@ function getBashPath() {
  * mode is preserved by NOT passing `--user-home` (which would enable home-adapter writes).
  */
 function isolatedChildEnv(home) {
-  return { ...process.env, HOME: home, USERPROFILE: home, NULLFORM_USER_HOME: home, LOCALAPPDATA: join(home, "AppData", "Local"), HERMES_HOME: join(home, "hermes"), HERMES_IGNORE_RULES: "" };
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("HERMES_")) delete env[key];
+  return { ...env, HOME: home, USERPROFILE: home, NULLFORM_USER_HOME: home, LOCALAPPDATA: join(home, "AppData", "Local"), HERMES_HOME: join(home, "hermes"), HERMES_IGNORE_RULES: "" };
 }
 
 test("dry-run does not write files or directories to root", () => {
@@ -89,7 +90,7 @@ test("installation creates Claude, Codex, OpenCode, and Cursor adapters with sub
     }
   }
 });
-test("non-OMP installation keeps identity surfaces clean and Hermes uses one native auto-load skill", () => {
+test("non-OMP installation keeps identity surfaces clean without native-home skill copies", () => {
   for (const harness of ["openclaw", "hermes", "openhuman"]) {
     const temp = createTempDir(`minimal-${harness}-`);
     const root = join(temp, "workflow");
@@ -105,18 +106,12 @@ test("non-OMP installation keeps identity surfaces clean and Hermes uses one nat
       assert.equal(existsSync(join(root, "SOUL.md")), false);
       assert.equal(existsSync(join(root, "USER.md")), false);
       assert.equal(existsSync(join(hostHome, "SOUL.md")), false);
+      assert.equal(existsSync(join(hostHome, "skills")), false);
       if (harness === "hermes") {
         const settings = loadYaml().parse(readFileSync(join(hostHome, "config.yaml"), "utf8"));
-        assert.deepEqual(settings.skills.auto_load, ["nullform-workflow"]);
         assert.equal(settings.mcp_servers, undefined);
-        assert.deepEqual(readdirSync(join(hostHome, "skills")), ["nullform-workflow"]);
-        const text = readFileSync(join(hostHome, "skills", "nullform-workflow", "SKILL.md"), "utf8");
-        const metadata = loadYaml().parse(/^---\n([\s\S]*?)\n---/.exec(text)[1]);
-        assert.equal(metadata.name, "nullform-workflow");
-        assert.equal(typeof metadata.description, "string");
         assert.equal(plan.activation.status, "configured");
       } else {
-        assert.equal(existsSync(join(hostHome, "skills")), false);
         if (harness === "openclaw") {
           const config = preflightJson5Config(join(hostHome, "openclaw.json"));
           assert.equal(config.agents.entries.workflow.workspace, root.replace(/\\/g, "/"));
@@ -131,21 +126,26 @@ test("detectHarness and dry-run plans for openclaw, hermes, and openhuman", () =
   const tempRoot = createTempDir("harness-dry-spec-");
   const childHome = createTempDir("harness-dry-spec-home-");
   try {
+    // Discovery must be driven by the fixture home, never by the real machine PATH: the
+    // host may have OMP/Claude installed, which would (correctly) make detection ambiguous.
+    const containedEnv = { ...isolatedChildEnv(tempHome), PATH: "", Path: "" };
+    for (const key of ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "OPENCODE_CONFIG_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "OMP_CONFIG_DIR", "OPENCLAW_STATE_DIR"]) {
+      delete containedEnv[key];
+    }
     mkdirSync(join(tempHome, ".openclaw"), { recursive: true });
     writeFileSync(join(tempHome, ".openclaw", "openclaw.json"), "{}", "utf8");
-    assert.equal(detectHarness({ userHome: tempHome }), "openclaw");
+    assert.equal(detectHarness({ userHome: tempHome, projectRoot: tempRoot, env: containedEnv }), "openclaw");
     rmSync(join(tempHome, ".openclaw"), { recursive: true, force: true });
 
-    const env = isolatedChildEnv(tempHome);
+    const env = containedEnv;
     const selectedHermes = resolveHostHome({ harness: "hermes", userHome: tempHome, env }).path;
     mkdirSync(selectedHermes, { recursive: true });
     writeFileSync(join(selectedHermes, "config.yaml"), "skills:\n  auto_load: []\n", "utf8");
-    assert.equal(detectHarness({ userHome: tempHome, env }), "hermes");
+    assert.equal(detectHarness({ userHome: tempHome, projectRoot: tempRoot, env }), "hermes");
     rmSync(selectedHermes, { recursive: true, force: true });
 
     mkdirSync(join(tempHome, ".openhuman"), { recursive: true });
-    assert.equal(detectHarness({ userHome: tempHome }), "openhuman");
-
+    assert.equal(detectHarness({ userHome: tempHome, projectRoot: tempRoot, env: containedEnv }), "openhuman");
     for (const [h, adapterSuffix] of [["openclaw", "openclaw.json"], ["hermes", "config.yaml"], ["openhuman", "AGENTS.md"]]) {
       const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", h, "--root", tempRoot, "--dry-run", "--json"], { encoding: "utf8", env: isolatedChildEnv(childHome), windowsHide: true });
       assert.equal(res.status, 0, res.stderr);
@@ -214,19 +214,18 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
     }
     const statusOf = (label) =>
       report.results.find((result) => result.label.startsWith(label))?.status;
-
-    // Installation-owned checks: must pass with nothing but Node on the host.
+    // Installation-owned checks that do not depend on a native home catalogue or a host
+    // `omp` binary: a fresh OMP install keeps skills/rules/agent under the portable root, and
+    // the verifier's install-doctor check runs the shipped doctor, whose plugin probe is
+    // opt-in (`--require-plugins`) and therefore not part of this install's contract.
     for (const label of [
       "node present",
-      "agent definitions present",
-      "skills registry populated",
-      "rule installed and addressable",
-      "mandatory MCP servers present",
       "no unsubstituted placeholders",
       "prompt surfaces have no volatile literals",
       "prompt surfaces match baseline",
       "tier gate enforces artifacts",
       "portable core specification",
+      "install doctor",
     ]) {
       assert.equal(statusOf(label), "PASS", `${label}: ${JSON.stringify(report.results)}`);
     }
@@ -236,11 +235,6 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
       statusOf("openspec present"),
       hasCommand("openspec") ? "PASS" : "FAIL",
       "openspec presence must be reported honestly"
-    );
-    assert.equal(
-      statusOf("install doctor"),
-      hasCommand("omp") ? "PASS" : "FAIL",
-      "omp-dependent doctor must be reported honestly"
     );
 
     // Exit code must agree with the reported failures — no silent green.
@@ -301,32 +295,42 @@ test("install.sh without node in PATH gives instruction without stack trace", (t
   }
 });
 
-test("isolated OMP install copies rules, size baseline, and platform-correct mcp.json", () => {
+test("isolated OMP install writes only native surfaces and preserves pre-existing legacy extras", () => {
   const temp = createTempDir("omp-rules-baseline-");
   const root = join(temp, "live");
   const userHome = join(temp, "home");
+  const homeAgent = join(userHome, ".omp", "agent");
+  const legacyMcp = join(homeAgent, "mcp.json");
+  const legacyRule = join(userHome, ".agents", "rules", "enterprise-directives.md");
+  mkdirSync(dirname(legacyMcp), { recursive: true });
+  mkdirSync(dirname(legacyRule), { recursive: true });
+  writeFileSync(legacyMcp, '{\n  "mcpServers": { "humanOwned": { "command": "node" } }\n}\n', "utf8");
+  writeFileSync(legacyRule, "# Human rule, never adopted\n", "utf8");
   try {
     const installed = spawnSync(process.execPath, [
       SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
     ], { encoding: "utf8" });
     assert.equal(installed.status, 0, installed.stderr);
+    const plan = JSON.parse(installed.stdout);
 
-    const agentEd = join(userHome, ".omp", "agent", "rules", "enterprise-directives.md");
-    const homeEd = join(userHome, ".agents", "rules", "enterprise-directives.md");
-    assert.ok(existsSync(agentEd) && existsSync(homeEd));
+    // Native surfaces only: law + pointer in the host home.
+    const law = readFileSync(join(homeAgent, "AGENTS.md"), "utf8");
+    assert.ok(law.includes(root.replace(/\\/g, "/")));
+    assert.equal(law.includes("<HARNESS>"), false);
+    assert.equal(readFileSync(join(homeAgent, ".harness-root"), "utf8").trim(), root);
+
+    // No global catalogue or home config copies are created by a fresh install.
+    assert.equal(existsSync(join(homeAgent, "rules")), false, "no agent-dir rules copy");
+    assert.equal(existsSync(join(userHome, ".agents", "skills")), false, "no global skill catalogue");
+
+    // Portable assets stay under the installation root.
     assert.ok(existsSync(join(root, ".code-size.baseline.json")));
-    assert.ok(!readFileSync(agentEd, "utf8").includes("<HARNESS>"));
-    assert.ok(!readFileSync(homeEd, "utf8").includes("<HARNESS>"));
+    assert.ok(existsSync(join(root, "rules", "enterprise-directives.md")));
+    assert.ok(existsSync(join(root, "skills")));
 
-    const mcpCfg = JSON.parse(readFileSync(join(userHome, ".omp", "agent", "mcp.json"), "utf8"));
-    const devtools = mcpCfg.mcpServers?.["chrome-devtools"];
-    assert.ok(devtools);
-    if (process.platform === "win32") {
-      assert.equal(devtools.command, "cmd.exe");
-      assert.equal(devtools.args[0], "/c");
-    } else {
-      assert.equal(devtools.command, "npx");
-    }
+    // Pre-existing human/legacy extras are preserved byte-identically and reported as preserved.
+    assert.equal(readFileSync(legacyMcp, "utf8"), '{\n  "mcpServers": { "humanOwned": { "command": "node" } }\n}\n');
+    assert.ok(plan.warnings.some((w) => w.includes(basename(legacyMcp))), `warning must reference the preserved asset: ${JSON.stringify(plan.warnings)}`);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -452,21 +456,23 @@ test("verifier with --user-home inspects sandbox .omp/agent and ignores external
   }
 });
 
-test("install-harness preserves OMP extensions and user markdown instructions idempotently", () => {
-  const temp = createTempDir("omp-install-jev-ext-");
+test("install-harness preserves pre-existing OMP legacy extras and user markdown instructions idempotently", () => {
+  const temp = createTempDir("omp-install-legacy-ext-");
   const root = join(temp, "harness");
   const userHome = join(temp, "home");
   const customExtDir = join(userHome, ".omp", "agent", "extensions");
   mkdirSync(customExtDir, { recursive: true });
   const unrelatedExtPath = join(customExtDir, "unrelated-custom.ts");
-  writeFileSync(unrelatedExtPath, "// custom extension\nexport default () => {};\n", "utf8");
+  const unrelatedExtBytes = "// custom extension\nexport default () => {};\n";
+  writeFileSync(unrelatedExtPath, unrelatedExtBytes, "utf8");
 
   try {
     for (let run = 1; run <= 2; run++) {
       const res = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json"], { encoding: "utf8" });
       assert.equal(res.status, 0, res.stderr);
-      assert.ok(existsSync(join(customExtDir, "nullform-jev.ts")));
-      assert.equal(readFileSync(unrelatedExtPath, "utf8"), "// custom extension\nexport default () => {};\n");
+      // Human extension is neither replaced nor extended by an auto-installed one.
+      assert.equal(readFileSync(unrelatedExtPath, "utf8"), unrelatedExtBytes);
+      assert.equal(existsSync(join(customExtDir, "nullform-jev.ts")), false, "installer must not auto-install JEV into a human extensions dir");
       assert.equal(readFileSync(join(userHome, ".omp", "agent", ".harness-root"), "utf8").trim(), root);
     }
 
@@ -539,7 +545,6 @@ test("reinstallation preserves JSONC comments/trailing commas, respects opencode
     const savedHermes = readFileSync(hermesConfig, "utf8");
     assert.ok(savedHermes.includes("api_key: sk-user-hermes-secret"), "Hermes API key must be preserved");
     assert.ok(savedHermes.includes("model: custom-model-v1"), "Hermes model setting must be preserved");
-    assert.deepEqual(loadYaml().parse(savedHermes).skills.auto_load, ["nullform-workflow"]);
     assert.equal(loadYaml().parse(savedHermes).mcp_servers, undefined);
 
     const secretCanary = "sk-canary-never-echo-777";
@@ -584,15 +589,18 @@ test("consumer regression: appended legacy human note is preserved across adapte
     const ompAgentDir = join(tempHome, ".omp", "agent");
     mkdirSync(ompAgentDir, { recursive: true });
     const ompLawPath = join(ompAgentDir, "AGENTS.md");
-    const sourceLaw = readFileSync(join(REPO_ROOT, "agent", "AGENTS.md"), "utf8").split("<HARNESS>").join("/old/path");
-    writeFileSync(ompLawPath, `${sourceLaw.trimEnd()}\n\n## Custom OMP Operator Rule\nKeep local telemetry off.\n`, "utf8");
+    // Unmarked human-only law file: ownership is unproven, so the installer must preserve the
+    // human bytes and add its own managed block rather than rewriting or deleting them.
+    writeFileSync(ompLawPath, "# My Local OMP Notes\n\n## Custom OMP Operator Rule\nKeep local telemetry off.\n", "utf8");
 
     const ompRes = spawnSync(process.execPath, [
       SCRIPT_PATH, "--harness", "omp", "--root", tempRoot, "--user-home", tempHome, "--json",
     ], { encoding: "utf8" });
     assert.equal(ompRes.status, 0, `OMP install failed: ${ompRes.stderr}`);
     const migratedOmpLaw = readFileSync(ompLawPath, "utf8");
-    assert.equal(migratedOmpLaw.split("# ORCHESTRATOR LAW").length - 1, 1, "Legacy unmarked OMP law must be migrated in-place, not duplicated");
+    assert.equal(migratedOmpLaw.split("<!-- BEGIN NULLFORM WORKFLOW -->").length - 1, 1, "OMP law must carry exactly one managed block");
+    assert.equal(migratedOmpLaw.split("<!-- END NULLFORM WORKFLOW -->").length - 1, 1, "OMP law managed block must be complete");
+    assert.ok(migratedOmpLaw.includes("# My Local OMP Notes"), "Unmarked human law heading must be preserved");
     assert.ok(migratedOmpLaw.includes("Keep local telemetry off."), "Appended human OMP rule must be preserved");
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
@@ -642,7 +650,6 @@ test("consumer regression: malformed markers, malformed YAML, and complex YAML a
     const afterYaml = readFileSync(hermesConfig, "utf8");
     assert.ok(afterYaml.includes("default_endpoint: &default_ep") && afterYaml.includes("backup_endpoint: *default_ep"));
     assert.ok(afterYaml.includes("Line one with # not a comment") && afterYaml.includes("custom_user_setting: 12345"));
-    assert.deepEqual(loadYaml().parse(afterYaml).skills.auto_load, ["nullform-workflow"]);
     assert.equal(loadYaml().parse(afterYaml).mcp_servers, undefined);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

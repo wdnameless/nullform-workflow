@@ -98,9 +98,11 @@ jobs:
           node tools/code-size.mjs check --root .
 
       - name: Auto-review gate
-        id: auto_review
         run: |
-          node tools/auto-review.mjs --root .
+          node tools/auto-review.mjs --root . --json
+        # Consumer projects: configure package.json scripts
+        # or pass explicit --check for non-npm projects.
+        # Template auto-discovers; does not hardcode harness paths.
 
 
       - name: Prompt surfaces & cache safety checks

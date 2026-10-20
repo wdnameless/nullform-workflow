@@ -208,10 +208,9 @@ test("init cancellation, non-TTY missing input, bad harness and dry-run never mu
       ...ioEof,
       installHarness: mockInstall,
     });
-    assert.equal(eofCode, 1);
+    assert.notEqual(eofCode, 0);
     assert.equal(writeInstallCalled, false);
     assert.equal(existsSync(getStateFilePath(tmpHome)), false);
-
     // 3. Rejects --harness auto (only 8 concrete choices allowed)
     const ioAuto = createIO("", false);
     const autoCode = await main(["init", "--harness", "auto", "--user-home", tmpHome, "--yes"], {

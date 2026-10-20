@@ -11,14 +11,14 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { acquireDeploymentLock, recoverAbandonedJournal, DeploymentJournal, getDeploymentLockPath, getDeploymentJournalPath } from "../deployment-journal.mjs";
-import { readInstallationState, writeInstallationState, sanitizeError } from "../installation-state.mjs";
+import { acquireDeploymentLock, recoverAbandonedJournal, DeploymentJournal, getDeploymentLockPath, getDeploymentJournalPath } from "../installation/journal.mjs";
+import { readInstallationState, writeInstallationState, sanitizeError } from "../installation/state.mjs";
 import { installHarness } from "../install-harness.mjs";
 import { runWorkflowCli } from "../workflow.mjs";
 import { getCapabilitiesInfo } from "../../bin/nullform.mjs";
 import { runDoctor } from "../doctor.mjs";
-import { checkVersionAlignment } from "../harness-capabilities.mjs";
-import { recordStageB } from "../review-evidence.mjs";
+import { checkVersionAlignment } from "../installation/capabilities.mjs";
+import { recordStageB } from "../review/evidence.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -343,15 +343,17 @@ test("11. unsupportedreview: automated review execution for unsupported harness 
   }
 });
 
-test("12. capabilities: returns honest distinction between 8 config adapters, Node-native core gates, and OMP+Bun review only", () => {
+test("12. capabilities: returns honest distinction between 8 config adapters, Node-native core gates, and Node-only review transport", () => {
   const caps = getCapabilitiesInfo();
   assert.equal(caps.ok, true);
   assert.equal(caps.configurationAdapters.length, 8);
   assert.equal(caps.coreWorkflowGates.supported, true);
   assert.equal(caps.coreWorkflowGates.requiresOmp, false);
   assert.equal(caps.coreWorkflowGates.requiresBun, false);
-  assert.deepEqual(caps.automatedReview.supportedHarnesses, ["omp"]);
-  assert.equal(caps.automatedReview.requiresBun, true);
+  assert.deepEqual(caps.automatedReview.supportedHarnesses, ["claude", "codex", "opencode", "cursor", "omp", "openclaw", "hermes", "openhuman", "custom"]);
+  assert.equal(caps.automatedReview.requiresBun, false);
+  assert.equal(caps.automatedReview.requiresOmp, false);
+  assert.equal(caps.automatedReview.status, "node_only");
 });
 test("13. human edit after failure: recovery detects unknown hash, fails closed with ECONFLICT, preserves human bytes and keeps journal", () => {
   const userHome = createTempDir("human-edit-home-");

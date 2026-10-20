@@ -50,17 +50,25 @@ import {
   loadYaml,
   MANAGED_START,
   MANAGED_END,
-} from "./harness-config.mjs";
-import { checkVersionAlignment, checkHarnessCapabilities } from "./harness-capabilities.mjs";
-import { inspectHarness, resolveHostHome } from "./harness-profiles.mjs";
-import { readInstallationState } from "./installation-state.mjs";
+  getMarkdownAdapter,
+} from "./installation/config.mjs";
+import { updateHermesConfigYaml } from "./installation/hermes-policy.mjs";
+import { checkVersionAlignment, checkHarnessCapabilities } from "./installation/capabilities.mjs";
+import { inspectHarness, resolveHostHome } from "./installation/profiles.mjs";
+import { readInstallationState } from "./installation/state.mjs";
 import { loadHostManifest } from "./install-harness.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export const CORE_TOOLS = [
-  "workflow.mjs", "workflow-workspaces.mjs", "review-evidence.mjs", "review-native-tools.mjs", "worktree-snapshot.mjs",
+  "workflow.mjs", "worktree-snapshot.mjs",
+  "review/evidence.mjs", "review/native-tools.mjs", "review/budget.mjs",
+  "review/http-runtime.mjs", "review/http-child.mjs", "review/http-evidence.mjs",
+  "installation/state.mjs", "installation/profiles.mjs", "installation/adapters.mjs",
+  "installation/config.mjs", "installation/capabilities.mjs", "installation/hermes-policy.mjs",
+  "installation/journal.mjs", "installation/restore.mjs",
+  "workflow/claims.mjs", "workflow/workspaces.mjs",
   "prompt-lint.mjs", "skill-audit.mjs", "skills-doctor.mjs", "glossary.mjs",
   "replay.mjs", "codemap.mjs", "return-contract.mjs", "cache-policy.mjs",
   "cache-doctor.mjs", "context-inbox.mjs", "domain-context.mjs", "oracle-model.mjs",
@@ -86,6 +94,22 @@ export function normalizePath(p) {
 export function stripBom(text) {
   if (typeof text !== "string") return text;
   return text.replace(/^\uFEFF/, "");
+}
+
+/**
+ * Real Node executable for `--check`. Under Bun, `process.execPath` IS Bun, and
+ * `bun --check <file>` executes the file instead of only parsing it. Probe once for
+ * a real Node; if none exists, fail rather than silently executing tools under Bun.
+ */
+function resolveSyntaxChecker() {
+  if (!process.versions.bun) return process.execPath;
+  const probe = spawnSync("node", ["-p", "process.versions.bun?'':process.execPath"], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  const resolved = probe.status === 0 ? probe.stdout.trim() : "";
+  if (!resolved) throw new Error("A real Node executable is required to check tool syntax under Bun; install Node or run doctor with Node.");
+  return resolved;
 }
 
 /** Маркеры, отличающие репозиторий от живого харнесса (см. sync.ps1 Resolve-RepoRoot). */
@@ -568,25 +592,19 @@ function checkNonOmpHarness({ harness, targetHarness, projectRoot, profile, env 
     try {
       const path = join(profile.hostHome, "config.yaml");
       const settings = loadYaml().parse(preflightYamlConfig(path) || "{}") || {};
-      const manual = /^(1|true|yes|on)$/i.test(env.HERMES_IGNORE_RULES || "") || settings.skills?.enabled === false || profile.capabilities.skills?.status === "unavailable";
-      const auto = settings.skills?.auto_load;
-      if (!manual && (!Array.isArray(auto) || auto.some(name => typeof name !== "string") || auto.filter(name => name === "nullform-workflow").length !== 1)) {
-        errors.push("Hermes skills.auto_load must register nullform-workflow exactly once");
+      const manual = Object.hasOwn(env, "HERMES_EPHEMERAL_SYSTEM_PROMPT") || /^(1|true|yes|on)$/i.test(String(env.HERMES_IGNORE_RULES || "").trim());
+      if (!manual) {
+        const original = existsSync(path) ? readFileSync(path, "utf8") : null;
+        const policy = getMarkdownAdapter(harness.replace(/\\/g, "/"), "Hermes Agent NULLFORM WORKFLOW Adapter", profile);
+        if (updateHermesConfigYaml(path, original, policy, { validateOnly: true }) !== original) errors.push("Hermes agent.system_prompt managed policy is missing; legacy skills.auto_load is not a native loader.");
       }
-      const skill = join(profile.hostHome, "skills", "nullform-workflow", "SKILL.md");
-      if (!manual && !existsSync(skill)) errors.push("Hermes quality skill missing in selected profile");
-      else if (!manual) {
-        const text = readFileSync(skill, "utf8");
-        const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
-        const metadata = match ? loadYaml().parse(match[1]) : null;
-        if (metadata?.name !== "nullform-workflow" || typeof metadata?.description !== "string") errors.push("Invalid Hermes quality skill frontmatter");
-      }
-      if (manual) {
-        checks.push({ id: "policy-loading", status: "warn", detail: "Native skill loading disabled/unavailable: manual project instructions required; registration is not activation." });
-      } else checks.push({
+      checks.push({
         id: "policy-loading", status: "warn",
-        detail: "skills.auto_load configured, not runtime-proven; skills tools and HERMES_IGNORE_RULES permit loading. Delegated children may skip skills; parent must pass scoped requirements and checks.",
+        detail: manual
+          ? "HERMES_EPHEMERAL_SYSTEM_PROMPT is present or HERMES_IGNORE_RULES is selected: manual project instructions required; existing configuration preserved."
+          : "Native agent.system_prompt checked as configuration only; active-session/model execution and delegated-child inheritance remain unverified.",
       });
+      if (Object.hasOwn(settings, "skills") || existsSync(join(profile.hostHome, "skills"))) checks.push({ id: "legacy-skills", status: "warn", detail: "Existing skills/skills.auto_load preserved; auto_load is not consumed by this native client. Resolve legacy loading manually." });
       if (settings.mcp_servers && Object.keys(settings.mcp_servers).length) checks.push({ id: "legacy-extras", status: "warn", detail: "Existing MCP registrations preserved; legacy servers may remain active." });
     } catch (error) { errors.push(error.message); }
   }
@@ -721,16 +739,41 @@ export function runDoctor(options) {
     }
 
     if (existsSync(toolsDir)) {
-      let mjsFiles = [];
-      try {
-        mjsFiles = readdirSync(toolsDir).filter((f) => f.endsWith(".mjs"));
-      } catch {
-        mjsFiles = [];
-      }
+      const mjsFiles = [];
+      const walkTools = (dir, prefix) => {
+        let entries = [];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch (error) {
+          syntaxErrors.push(`${prefix || "tools/"} (directory could not be enumerated: ${error.code || error.message})`);
+          return;
+        }
+        for (const entry of entries) {
+          if (entry.name === "tests" || entry.name === "node_modules") continue;
+          const rel = `${prefix}${entry.name}`;
+          // Never follow an untrusted link to certify syntax outside the installation.
+          if (entry.isSymbolicLink()) {
+            syntaxErrors.push(`${rel} (symlink not inspected)`);
+            continue;
+          }
+          if (entry.isDirectory()) {
+            walkTools(join(dir, entry.name), `${rel}/`);
+          } else if (entry.isFile() && entry.name.endsWith(".mjs")) {
+            mjsFiles.push(rel);
+          }
+        }
+      };
+      walkTools(toolsDir, "");
 
-      for (const mjs of mjsFiles) {
+      let syntaxChecker = null;
+      try {
+        syntaxChecker = resolveSyntaxChecker();
+      } catch (error) {
+        syntaxErrors.push(`real Node unavailable (${error.message})`);
+      }
+      for (const mjs of syntaxChecker ? mjsFiles : []) {
         const fullPath = join(toolsDir, mjs);
-        const res = spawnSync(process.execPath, ["--check", fullPath], {
+        const res = spawnSync(syntaxChecker, ["--check", fullPath], {
           encoding: "utf8",
           windowsHide: true,
         });
@@ -837,31 +880,12 @@ export function runDoctor(options) {
         wiringErrors.push(`.harness-root (${harnessRootTarget}) не совпадает с харнессом (${harness})`);
       }
 
-      const agentsSub = join(agentDir, "agents");
-      const installedRoles = roleNamesIn(agentsSub);
-      const missingRoles = missingRequiredRoles(installedRoles);
-      if (missingRoles.length > 0) {
-        wiringErrors.push(
-          `${agentDir}/agents: отсутствуют обязательные роли (${summarizeList(missingRoles)})`
-        );
-      }
-
-      const agentEd = join(agentDir, "rules", "enterprise-directives.md");
-      if (!existsSync(agentEd)) {
-        wiringErrors.push(`${agentDir}/rules/enterprise-directives.md отсутствует`);
-      }
-
-      const homeEd = join(agentsHome, "rules", "enterprise-directives.md");
-      if (!existsSync(homeEd)) {
-        wiringErrors.push(`${agentsHome}/rules/enterprise-directives.md отсутствует`);
-      }
-
       checks.push({
         id,
         status: wiringErrors.length > 0 ? "fail" : "pass",
         detail: wiringErrors.length > 0
           ? wiringErrors.join("; ")
-          : `Проводка агента корректна (${installedRoles.length} определений ролей, обязательный набор полон; правила и AGENTS.md проверены)`,
+          : "Проводка агента корректна (.harness-root и AGENTS.md проверены)",
       });
     }
   }
@@ -900,78 +924,19 @@ export function runDoctor(options) {
     }
   }
 
-  // 6. check 'skills' (spawn skills-doctor.mjs)
+  // 6. check 'skills': независимый глобальный каталог не проверяется по умолчанию
   {
     const id = "skills";
     const skillsDoctorPath = join(harness, "tools", "skills-doctor.mjs");
     const installedSkills = join(agentsHome, "skills");
-    let repoSkills = null;
-    const repoClone = discoverRepoClone(harness);
-    if (repoClone) {
-      if (existsSync(join(repoClone, "skills"))) {
-        repoSkills = join(repoClone, "skills");
-      }
-    } else if ((mode === "repo" || isRepoTree(harness)) && existsSync(join(harness, "skills"))) {
-      repoSkills = join(harness, "skills");
-    }
 
     if (!existsSync(skillsDoctorPath)) {
       checks.push({ id, status: "fail", detail: "tools/skills-doctor.mjs не найден" });
-    } else if (!existsSync(installedSkills)) {
-      checks.push({
-        id,
-        status: mode === "repo" ? "warn" : "fail",
-        detail: mode === "repo"
-          ? `Режим repo: установленная папка навыков не найдена (${installedSkills})`
-          : `Установленная папка навыков не найдена (${installedSkills})`,
-      });
-    } else if (!repoSkills) {
-      checks.push({ id, status: "warn", detail: "parity не проверялась: нет копии репозитория" });
     } else {
-      const res = spawnSync(
-        process.execPath,
-        [skillsDoctorPath, "--installed", installedSkills, "--repo", repoSkills],
-        { encoding: "utf8", windowsHide: true }
-      );
-      const out = (res.stdout || "") + (res.stderr || "");
-      const match = /(\d+)\s+installed,\s+(\d+)\s+in repo/i.exec(out);
-      const countsNote = match ? ` (${match[1]} установлено, ${match[2]} в репозитории)` : "";
-
-      if (res.status === 0) {
-        checks.push({ id, status: "pass", detail: `Все проверки навыков пройдены${countsNote}` });
-      } else {
-        // Parse individual problem lines: format from skills-doctor:
-        //   <skill_name>  <kind>  <detail>
-        // e.g. "    banner-design                parity  installed copy differs from repo..."
-        const lines = out.split("\n");
-        const parsedProblems = [];
-        const problemRegex = /^\s{2,}(\S+)\s+(parity|truncation|frontmatter|orphan|duplicate-name|encoding)\s+(.*)$/;
-        for (const line of lines) {
-          const pMatch = problemRegex.exec(line);
-          if (pMatch) {
-            parsedProblems.push({
-              skill: pMatch[1],
-              kind: pMatch[2],
-              detail: pMatch[3].trim(),
-            });
-          }
-        }
-
-        if (parsedProblems.length === 0) {
-          // No structured problems parsed -> fail with tail of output
-          const tail = out.trim().split("\n").slice(-3).join(" ").trim() || `код ${res.status}`;
-          checks.push({ id, status: "fail", detail: `skills-doctor завершился с кодом ${res.status}${countsNote}: ${tail}` });
-        } else {
-          const parityProblems = parsedProblems.filter((p) => p.kind === "parity");
-          const failProblems = parsedProblems.filter((p) => p.kind !== "parity");
-          if (failProblems.length > 0) {
-            const failSummary = failProblems.map((p) => `${p.skill} (${p.kind}: ${p.detail})`).join("; ");
-            checks.push({ id, status: "fail", detail: `Обнаружены дефекты навыков${countsNote}: ${failSummary}` });
-          } else {
-            checks.push({ id, status: "warn", detail: `${parityProblems.length} parity (marketplace-managed drift is expected)${countsNote}` });
-          }
-        }
-      }
+      const detail = existsSync(installedSkills)
+        ? `Обнаружен независимый каталог навыков (${installedSkills}): портативные навыки доступны в ${harness}/skills (аудит: tools/skills-doctor.mjs)`
+        : `Каталог глобальных навыков отсутствует (${installedSkills}): портативные навыки доступны в ${harness}/skills`;
+      checks.push({ id, status: "skip", detail });
     }
   }
 
@@ -1051,8 +1016,7 @@ export function runDoctor(options) {
   }
 
   // 9. check 'plugins': манифест `agent/plugins.json` против `omp plugin list --json`.
-  // Обязательные плагины (pi-lens, oh-my-pi-plugin-morph) по умолчанию дают FAIL.
-  // Опциональные плагины по умолчанию дают WARN, и только `--require-plugins` делает их FAIL.
+  // Аудит плагинов выполняется только при явном опт-ине `--require-plugins`.
   {
     const id = "plugins";
     const skippedMarker = join(harness, "agent", "plugins.skipped");
@@ -1060,6 +1024,8 @@ export function runDoctor(options) {
       checks.push({ id, status: "skip", detail: "Проверка плагинов пропущена (--skip-plugin-check)" });
     } else if (existsSync(skippedMarker)) {
       checks.push({ id, status: "skip", detail: "плагины пропущены при установке (-SkipPlugins); установите и повторите" });
+    } else if (!options.requirePlugins) {
+      checks.push({ id, status: "skip", detail: "Проверка плагинов пропущена (включить строгий аудит: --require-plugins)" });
     } else {
       const manifestPath = join(harness, "agent", "plugins.json");
       const omp = options.runOmp || runOmp;
@@ -1076,11 +1042,10 @@ export function runDoctor(options) {
           const listed = omp(["plugin", "list", "--json"]);
           const { installed, listError } = resolvePluginList(listed);
           if (listError) {
-            const setupWarn = explicitTargetHarness && !options.requirePlugins;
             checks.push({
               id,
-              status: setupWarn ? "warn" : "fail",
-              detail: `${setupWarn ? "[SETUP] " : ""}Не удалось проверить установку плагинов: ${listError}. Проверьте вручную: omp plugin list --json`,
+              status: "fail",
+              detail: `Не удалось проверить установку плагинов: ${listError}. Проверьте вручную: omp plugin list --json`,
             });
           } else {
           const missing = declared.filter((p) => !installed.has(p.name));
@@ -1134,12 +1099,8 @@ export function runDoctor(options) {
             parts.push(`Несоответствие версии опциональных плагинов (${mismatchedOptional.length}): ${optVHints}. Обновить: ${installHints}`);
           }
 
-          if (missingRequired.length > 0 || mismatchedRequired.length > 0) {
-            const setupWarn = explicitTargetHarness && !options.requirePlugins;
-            status = setupWarn ? "warn" : "fail";
-            detail = `${setupWarn ? "[SETUP] " : ""}${parts.join(". ")}`;
-          } else if (missingOptional.length > 0 || mismatchedOptional.length > 0) {
-            status = options.requirePlugins ? "fail" : "warn";
+          if (missingRequired.length > 0 || mismatchedRequired.length > 0 || missingOptional.length > 0 || mismatchedOptional.length > 0) {
+            status = "fail";
             detail = parts.join(". ");
           }
           if (extra.length > 0) {
@@ -1204,15 +1165,17 @@ export function runDoctor(options) {
   // сужающие встроенную роль), а сам `omp` может отсутствовать.
   {
     const id = "agents-drift";
-    const agentsDir = join(harness, "agent", "agents");
-    const roleNames = roleNamesIn(agentsDir);
+    const agentsDir = mode === "installed" ? (agentDir ? join(agentDir, "agents") : null) : join(harness, "agent", "agents");
+    const roleNames = agentsDir ? roleNamesIn(agentsDir) : [];
 
     let builtinDir = null;
     let tempDir = null;
     let skipReason = null;
 
     if (roleNames.length === 0) {
-      skipReason = `сравнивать нечего: каталог ${agentsDir} пуст или отсутствует`;
+      skipReason = mode === "installed"
+        ? "в агентской директории нет установленных ролей: проверка дрейфа пропущена"
+        : `сравнивать нечего: каталог ${agentsDir} пуст или отсутствует`;
     } else if (options.builtinAgentsDir) {
       if (existsSync(options.builtinAgentsDir)) {
         builtinDir = options.builtinAgentsDir;

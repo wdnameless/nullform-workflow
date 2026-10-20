@@ -187,6 +187,31 @@ function runOpenspec(args = [], options = {}) {
   });
 }
 
+/** Exercise auto-review's debt gate: `clean` passes a native node:test product
+ *  check; `gate` adds an untriggered defer marker so the debt gate must fail. */
+const AR_FIXTURE_SRC = 'export function add(a, b) { return a + b; }\n';
+const AR_FIXTURE_TEST = 'import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { add } from "./fixture.mjs";\ntest("add", () => assert.equal(add(2, 3), 5));\n';
+
+function runAutoReviewFixtureCheck(harnessRoot) {
+  const tool = join(harnessRoot, "tools", "auto-review.mjs");
+  if (!existsSync(tool)) throw new Error("tools/auto-review.mjs not found");
+  const cases = [
+    { dir: mkdtempSync(join(tmpdir(), "ar-clean-")), marker: "", expect: 0 },
+    { dir: mkdtempSync(join(tmpdir(), "ar-gate-")), marker: "\n// defer: no trigger", expect: 1 },
+  ];
+  try {
+    for (const { dir, marker, expect } of cases) {
+      writeFileSync(join(dir, "fixture.mjs"), `${AR_FIXTURE_SRC}${marker}\n`, "utf8");
+      writeFileSync(join(dir, "fixture.test.mjs"), AR_FIXTURE_TEST, "utf8");
+      const res = runProc(process.execPath, [tool, "--root", dir, "--check", JSON.stringify(["node", "--test", join(dir, "fixture.test.mjs")])]);
+      if (res.status !== expect) throw new Error(`fixture ${dir} exit ${res.status}, expected ${expect}`);
+    }
+    return "clean=0 gate=1";
+  } finally {
+    for (const { dir } of cases) try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 function readModelsYaml(agentDir) {
   const p = join(agentDir, "models.yml");
   if (!existsSync(p)) {
@@ -800,27 +825,7 @@ async function runVerifyProfile(ctx) {
 
   // 26 auto-review CLI runs and respects problem gate
   results.push(
-    await executeCheck(26, "auto-review CLI runs and respects problem gate", () => {
-      const tmpClean = mkdtempSync(join(tmpdir(), "ar-clean-"));
-      const tmpGate = mkdtempSync(join(tmpdir(), "ar-gate-"));
-      try {
-        writeFileSync(join(tmpGate, "fixture.js"), "// defer: test without upgrade\n", "utf8");
-        const tool = join(harnessRoot, "tools", "auto-review.mjs");
-        if (!existsSync(tool)) throw new Error("tools/auto-review.mjs not found");
-        const resClean = runProc(process.execPath, [tool, "--root", tmpClean]);
-        if (resClean.status !== 0) {
-          throw new Error(`clean fixture failed: ${(resClean.stdout || "").trim()}`);
-        }
-        const resGate = runProc(process.execPath, [tool, "--root", tmpGate]);
-        if (resGate.status === 0) {
-          throw new Error("gate fixture unexpectedly succeeded");
-        }
-        return "clean=0 gate=1";
-      } finally {
-        try { rmSync(tmpClean, { recursive: true, force: true }); } catch {}
-        try { rmSync(tmpGate, { recursive: true, force: true }); } catch {}
-      }
-    })
+    await executeCheck(26, "auto-review CLI runs and respects problem gate", () => runAutoReviewFixtureCheck(harnessRoot))
   );
 
   // 27 debt ledger gate works

@@ -10,9 +10,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { acquireDeploymentLock, recoverAbandonedJournal, getDeploymentJournalPath } from "../deployment-journal.mjs";
-import { readInstallationState, writeInstallationState, getStateFilePath } from "../installation-state.mjs";
-import { hashContent } from "../harness-config.mjs";
+import { acquireDeploymentLock, recoverAbandonedJournal, getDeploymentJournalPath } from "../installation/journal.mjs";
+import { readInstallationState, writeInstallationState, getStateFilePath } from "../installation/state.mjs";
+import { hashContent } from "../installation/config.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -122,9 +122,9 @@ function transactionFixture({ identity = true, nativeProfile = false } = {}) {
 function transactionArgs(fixture, options) {
   return ["--input-type=module", "-e", transactionChild, JSON.stringify({
     userHome: fixture.userHome, targetRoot: fixture.targetRoot, hostHome: fixture.hostHome, prior: fixture.prior, ...options,
-    journalModule: new URL("../deployment-journal.mjs", import.meta.url).href,
-    stateModule: new URL("../installation-state.mjs", import.meta.url).href,
-    configModule: new URL("../harness-config.mjs", import.meta.url).href,
+    journalModule: new URL("../installation/journal.mjs", import.meta.url).href,
+    stateModule: new URL("../installation/state.mjs", import.meta.url).href,
+    configModule: new URL("../installation/config.mjs", import.meta.url).href,
   })];
 }
 
@@ -312,7 +312,7 @@ test("journal-declared and ambient host homes never authorize an external recove
     journal.extraScopes = [fixture.hostHome];
     journal.hostHome = fixture.hostHome;
     writeFileSync(journalPath, JSON.stringify(journal));
-    const script = `import { recoverAbandonedJournal } from ${JSON.stringify(new URL("../deployment-journal.mjs", import.meta.url).href)}; try { recoverAbandonedJournal(process.argv[1], {targetRoot:process.argv[2]}); process.exitCode=2; } catch(error) { console.log(error.code); }`;
+    const script = `import { recoverAbandonedJournal } from ${JSON.stringify(new URL("../installation/journal.mjs", import.meta.url).href)}; try { recoverAbandonedJournal(process.argv[1], {targetRoot:process.argv[2]}); process.exitCode=2; } catch(error) { console.log(error.code); }`;
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script, fixture.userHome, fixture.targetRoot], {
       cwd: REPO_ROOT, encoding: "utf8",
       env: { ...process.env, HOME: fixture.userHome, USERPROFILE: fixture.userHome, NULLFORM_USER_HOME: fixture.userHome, LOCALAPPDATA: join(fixture.userHome, "AppData", "Local"), HERMES_HOME: fixture.hostHome },

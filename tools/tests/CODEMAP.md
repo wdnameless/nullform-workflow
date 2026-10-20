@@ -26,18 +26,19 @@ Test harness and regression test suite for the `tools/` CLI toolchain, workflow 
   - `install-skills-assets.test.mjs`: Skill script, binary asset preservation, and ownership migrations (`tools/install-harness.mjs`).
   - `install-guard.test.mjs`: Harness installation safeguards and pre-condition checks (`tools/install-guard.mjs`).
   - `paseo-install.test.mjs`: Paseo-specific harness deployment and configuration (`tools/install-harness.mjs`).
-  - `portable-runtime.test.mjs`: Fault tolerance, abandoned deployment journal recovery, locks, and cross-harness compatibility (`tools/deployment-journal.mjs`, `tools/installation-state.mjs`).
+  - `portable-runtime.test.mjs`: Fault tolerance, abandoned deployment journal recovery, locks, and cross-harness compatibility (`tools/installation/journal.mjs`, `tools/installation/state.mjs`).
   - `fix-plugin-windows.test.mjs`: Windows-specific plugin symlink and junction corrections (`tools/fix-plugin-windows.mjs`).
   - `symlink-entry.test.mjs`: Symlink traversal and junction entry point resolution (`tools/symlink-entry.mjs`).
 - **Evidence, Review & Verification**:
   - `quality-evidence.test.mjs`: Quality evidence summary validation, observation hashes, and model calibration (`tools/quality-evidence.mjs`).
-  - `review-evidence.test.mjs`: Review recording, Stage B validation, file hashing, and evidence envelopes (`tools/review-evidence.mjs`).
-  - `review-integrity.test.mjs`: Dirty-status binding, EOL-agnostic hashing, and native tool execution integrity (`tools/review-evidence.mjs`, `tools/review-native-tools.mjs`).
-  - `auto-review.test.mjs`: Automated review orchestration and gate validation (`tools/auto-review.mjs`).
+  - `review-evidence.test.mjs`: Review recording, Stage B validation, file hashing, and evidence envelopes (`tools/review/evidence.mjs`).
+  - `review-integrity.test.mjs`: Dirty-status binding, EOL-agnostic hashing, and native tool execution integrity (`tools/review/evidence.mjs`, `tools/review/native-tools.mjs`).
+  - `auto-review.test.mjs`: Native build/type/lint/test gating, missing-required evidence, non-npm argv checks and pre-dispatch/configuration boundaries (`tools/auto-review.mjs`).
   - `oracle-model.test.mjs`: Oracle prompt validation, acceptance verdict parsing, and model wrappers (`tools/oracle-model.mjs`).
   - `return-contract.test.mjs`: Structured completion contract and return header schema verification (`tools/return-contract.mjs`).
 - **Benchmark, Evaluation & Replay**:
   - `benchmark.test.mjs`: Core workflow benchmarking execution, metric collection, and report generation (`tools/benchmark.mjs`).
+  - `product-quality-consumer.test.mjs`: Real consumer controls, refund/invalid-input outcomes, exact workload totals and refusal of missing or broken checkers (`bench/fixtures/control-product-quality.mjs`, `bench/checks/check-product-quality.mjs`); no model dispatch or quality-uplift claim.
   - `bench-session-runner.test.ts`: Offline session runner execution and native tool spend reservation loop (`tools/bench-session-runner.ts`, `tools/bench-budget.mjs`).
   - `lm-replay.test.mjs`: LLM cassette recording, secret redaction, prompt normalization, and replay execution (`tools/lm-replay.mjs`).
   - `replay.test.mjs`: Session replay orchestration and step execution (`tools/replay.mjs`).
@@ -71,6 +72,7 @@ Test harness and regression test suite for the `tools/` CLI toolchain, workflow 
   - `mutation-test.test.mjs`: Mutation testing harness and mutant survival checks (`tools/mutation-test.mjs`).
   - `gherkin-spec.test.mjs`: Gherkin feature specification validation and parser (`tools/gherkin-spec.mjs`).
   - `dashboard.test.mjs`: Status dashboard data aggregation and rendering (`tools/dashboard.mjs`).
+  - `dashboard-autoreview.test.mjs`: Auto-review status wording regression (`unverified` is not a failure) (`tools/dashboard.mjs`).
   - `test-lens.test.mjs`: Test output filtering, noise reduction, and structured parsing (`tools/test-lens.mjs`).
 - **JEV Subsystem & Extensions**:
   - `jev-evaluate.test.mjs`: Empirical evaluation and statistical comparison engine (`tools/jev-evaluate.mjs`).

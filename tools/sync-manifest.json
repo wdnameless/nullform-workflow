@@ -87,7 +87,7 @@
     "rel": "tools/workflow.mjs"
   },
   {
-    "rel": "tools/workflow-workspaces.mjs"
+    "rel": "tools/workflow/workspaces.mjs"
   },
   {
     "rel": "tools/code-size.mjs"
@@ -195,13 +195,16 @@
     "rel": "tools/sync-manifest.json"
   },
   {
-    "rel": "tools/harness-config.mjs"
+    "rel": "tools/installation/config.mjs"
+  },
+  {
+    "rel": "tools/installation/hermes-policy.mjs"
   },
   {
     "rel": "tools/install-harness.mjs"
   },
   {
-    "rel": "tools/installation-state.mjs"
+    "rel": "tools/installation/state.mjs"
   },
   {
     "rel": "tools/verify.mjs"
@@ -255,10 +258,40 @@
     "rel": ".code-size.baseline.json"
   },
   {
-    "rel": "tools/review-evidence.mjs"
+    "rel": "tools/review/evidence.mjs"
   },
   {
-    "rel": "tools/review-native-tools.mjs"
+    "rel": "tools/review/native-tools.mjs"
+  },
+  {
+    "rel": "tools/review/budget.mjs"
+  },
+  {
+    "rel": "tools/review/http-runtime.mjs"
+  },
+  {
+    "rel": "tools/review/http-child.mjs"
+  },
+  {
+    "rel": "tools/review/http-evidence.mjs"
+  },
+  {
+    "rel": "tools/installation/adapters.mjs"
+  },
+  {
+    "rel": "tools/installation/capabilities.mjs"
+  },
+  {
+    "rel": "tools/installation/journal.mjs"
+  },
+  {
+    "rel": "tools/installation/restore.mjs"
+  },
+  {
+    "rel": "tools/installation/profiles.mjs"
+  },
+  {
+    "rel": "tools/workflow/claims.mjs"
   },
   {
     "rel": "tools/worktree-snapshot.mjs"

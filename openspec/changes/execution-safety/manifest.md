@@ -1,0 +1,16 @@
+# Execution safety requirements
+
+Original sources are the user's messages in this conversation. The latest approval applies to the immediately preceding audit and its five ordered corrective steps; it is not approval to spend on OpenRouter or to bypass release gates.
+
+| ID | Verbatim user quote | Approved outcome | Status |
+| --- | --- | --- | --- |
+| R01 | «Приступайц» | Implement the preceding audit's concrete owner-token and canonical-path defects, defined task ownership transitions and scoped context packets. Preserve unrelated human work. | in-spec |
+| R02 | «Опенроутер не надо использовать» | Reject OpenRouter and unverified gateway routes before native review dispatch; no automatic fallback or live paid verification during this implementation. | in-spec |
+| R03 | «чтобы можно было в одном репозитории, в одной ветке делать много фич разными агентами, и оно не конфликтовало.» | Preserve private writer worktrees and one final integration branch. Bind task execution to its actual workspace/contract and protect owner transitions; do not claim a shared checkout is a sandbox. | in-spec |
+| R04 | «Сделай все что нужно я хочу стабильную, крутую систему которую можно легко везде развернть без костылей и она реально доказательно улучшало качество разработки» | Add fail-closed model admission, bounded financial authority and explicit resumable settlement without repeating completed provider work. Known zero cost is permitted; unknown price is not zero. | in-spec |
+| R05 | «И он везде будет корректно работать и адаптироваться под каждой харнес.» | Exercise real locally available client/configuration paths; report unavailable live clients and distinguish historical OMP-only execution from any actually implemented portable controlled executor. Do not reinstall the removed Codex client or modify real personal configuration. | in-spec |
+| R06 | «доказательно будет генерировать качественный код и решать проблемы, которые есть у каждого агентик девелопера.» | Deterministic failing-before/passing-after regressions and public CLI/runtime smoke prove the implemented safety behavior. Retain historical negative evidence; no universal quality claim or new paid A/B. | in-spec |
+| R07 | «Делай релиз чтобы можно было обновиться через npm и все проавалидировалось» | Prepare a reproducible fixed candidate and retain source-bound gates. Do not publish or announce acceptance until the original release prerequisites actually pass. | in-spec |
+| R08 | «Настоящий жёсткий лимит» | User selected a genuinely controlled physical-request executor rather than native review without a money cap or permanent disablement. Enforce conservative pre-dispatch reservation and request/output/route bounds; no live paid model call is authorized merely by this implementation choice. | in-spec |
+
+Scope: the preceding audit's safety defects and bounded execution contracts, not a Paperclip server, a second task board, a new database, automatic stale-lock eviction, universal native-client support, or a dependency-graph hash redesign. Existing receipts remain historical. Runtime-candidate freezing and exact reusable local execution receipts must not retag old model results or weaken any source-bound acceptance gate.

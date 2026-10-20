@@ -13,8 +13,8 @@ const REPO_ROOT = resolve(__dirname, "../..");
 
 const REQUIRED_FILES = [
   "package.json", "VERSION", "LICENSE", "jev/LICENSE", "README.md", "CONTEXT.md",
-  ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/harness-config.mjs",
-  "tools/installation-state.mjs", "tools/doctor.mjs", "tools/self-update.mjs",
+  ".code-size.baseline.json", "bin/nullform.mjs", "tools/install-harness.mjs", "tools/installation/config.mjs",
+  "tools/installation/state.mjs", "tools/doctor.mjs", "tools/self-update.mjs",
   "tools/workflow.mjs", "tools/verify.mjs", "tools/sync-manifest.json",
   "verify.ps1", "verify.sh",
 ];
