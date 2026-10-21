@@ -20,6 +20,11 @@ export { validatePolicy };
 
 export { EXECUTOR };
 export const PROVIDER_CREDENTIAL_ENV = 'OPENAI_API_KEY';
+export const GATEWAY_CREDENTIAL_ENV = 'NULLFORM_GATEWAY_API_KEY';
+export function credentialEnvForProvider(provider) {
+  if (provider === 'nullform-gateway') return GATEWAY_CREDENTIAL_ENV;
+  return PROVIDER_CREDENTIAL_ENV;
+}
 export const EXECUTION_FILE = 'execution.jsonl';
 const USER_AGENT = 'nullform-controlled-review/1';
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -119,24 +124,24 @@ function openAiTools() {
 const NONBILLABLE_PROMPT_DETAILS = ['audio_tokens'];
 const NONBILLABLE_COMPLETION_DETAILS = ['reasoning_tokens', 'audio_tokens', 'accepted_prediction_tokens', 'rejected_prediction_tokens'];
 
-function checkDetailBag(bag, allowed, label, priced = []) {
+function checkDetailBag(bag, allowed, label, priced = [], zeroPriced = []) {
   if (bag === undefined) return;
   if (!bag || typeof bag !== 'object' || Array.isArray(bag)) throw new Error(`Provider response has an invalid ${label}`);
   for (const [key, value] of Object.entries(bag)) {
     if (!allowed.includes(key)) throw new Error(`Provider response reported unknown ${label} field '${key}'; unknown billing is not zero`);
     if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Provider response has invalid ${label}.${key}`);
-    if (!priced.includes(key) && value !== 0) throw new Error(`Provider response reported nonzero unbilled ${label}.${key}; refusing to price it as zero`);
+    if (!priced.includes(key) && !zeroPriced.includes(key) && value !== 0) throw new Error(`Provider response reported nonzero unbilled ${label}.${key}; refusing to price it as zero`);
   }
 }
 
-export function normalizeUsage(usage, maximumOutputTokens) {
+export function normalizeUsage(usage, maximumOutputTokens, contextWindowTokens = PINNED_CONTEXT_TOKENS, zeroPricedCompletion = []) {
   if (!usage || typeof usage !== 'object') throw new Error('Provider response omitted usage; unknown spend is not zero');
   const prompt = usage.prompt_tokens, completion = usage.completion_tokens, total = usage.total_tokens;
   const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
   for (const [value, name] of [[prompt, 'prompt_tokens'], [completion, 'completion_tokens'], [total, 'total_tokens'], [cached, 'cached_tokens']]) {
     if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Provider response has invalid ${name}`);
   }
-  if (total !== prompt + completion) throw new Error('Provider response total_tokens disagrees with its counters');
+  if (total !== prompt + completion && !(total > prompt + completion && Number.isSafeInteger(usage.completion_tokens_details?.reasoning_tokens))) throw new Error('Provider response total_tokens disagrees with its counters');
   // A successful response that accounts ZERO tokens for this call is unknown spend, not a
   // free call: the billed call happened and its counters are unusable. Checked per response,
   // before pricing, so one zero-usage response cannot hide inside a nonzero aggregate.
@@ -146,9 +151,9 @@ export function normalizeUsage(usage, maximumOutputTokens) {
   if (completion > maximumOutputTokens) throw new Error(`Provider response exceeded the authorized output bound (${completion} > ${maximumOutputTokens})`);
   if (cached > prompt) throw new Error('Provider response cached tokens exceed prompt tokens');
   // The full verified window is the hard ceiling; exceeding it holds rather than settles.
-  if (prompt > PINNED_CONTEXT_TOKENS) throw new Error(`Provider response reported ${prompt} prompt tokens beyond the verified ${PINNED_CONTEXT_TOKENS} window; refusing to settle an over-reserve charge`);
+  if (prompt > contextWindowTokens) throw new Error(`Provider response reported ${prompt} prompt tokens beyond the verified ${contextWindowTokens} window; refusing to settle an over-reserve charge`);
   checkDetailBag(usage.prompt_tokens_details, ['cached_tokens', ...NONBILLABLE_PROMPT_DETAILS], 'prompt_tokens_details', ['cached_tokens']);
-  checkDetailBag(usage.completion_tokens_details, NONBILLABLE_COMPLETION_DETAILS, 'completion_tokens_details');
+  checkDetailBag(usage.completion_tokens_details, NONBILLABLE_COMPLETION_DETAILS, 'completion_tokens_details', [], zeroPricedCompletion);
   const allowedTop = ['prompt_tokens', 'completion_tokens', 'total_tokens', 'prompt_tokens_details', 'completion_tokens_details'];
   if (Object.keys(usage).some(key => !allowedTop.includes(key))) throw new Error('Provider response reported unpriced/unknown usage counters');
   return { input: prompt, output: completion, cacheRead: cached, cacheWrite: 0, totalTokens: total };
@@ -183,8 +188,9 @@ export async function runHttpReview(invocation, { approveEndpoint, expectedProve
   if (expectedProvenanceHash !== null && expectedProvenanceHash !== provenanceHash) throw new Error('Execution provenance differs from the parent-authorized contract; refusing to dispatch');
   // One explicit stdlib sender per call; there is no injectable HTTP client to bypass.
   const directory = executionDirectory(root, sessionDir);
-  const credential = process.env[PROVIDER_CREDENTIAL_ENV];
-  if (typeof credential !== 'string' || !credential) throw new Error(`${PROVIDER_CREDENTIAL_ENV} is required at the dispatch boundary; no credential means no dispatch`);
+  const credentialEnv = credentialEnvForProvider(policy.provider);
+  const credential = process.env[credentialEnv];
+  if (typeof credential !== 'string' || !credential) throw new Error(`${credentialEnv} is required at the dispatch boundary; no credential means no dispatch`);
 
   const startedAt = new Date().toISOString();
   const executionId = randomUUID();
@@ -240,7 +246,7 @@ export async function runHttpReview(invocation, { approveEndpoint, expectedProve
       if (parsed?.model !== policy.model) throw new Error(`Provider reported an unapproved model '${parsed?.model}'; refusing the response`);
       if (!Array.isArray(parsed.choices) || parsed.choices.length !== 1) throw new Error('Provider response did not contain exactly one choice');
       const choice = parsed.choices[0];
-      const usage = normalizeUsage(parsed.usage, policy.maxOutputTokens);
+      const usage = normalizeUsage(parsed.usage, policy.maxOutputTokens, policy.maxInputTokens ?? PINNED_CONTEXT_TOKENS, policy.tariffsUsdPerMillion.output === 0 ? ['reasoning_tokens'] : []);
       for (const key of Object.keys(totals)) totals[key] += usage[key];
       const requestId = response.headers['x-request-id'] || null;
       const retained = retain(`provider-response-${attempt}.json`, rawText);
@@ -269,7 +275,7 @@ export async function runHttpReview(invocation, { approveEndpoint, expectedProve
       writeFileSync(join(directory, EXECUTION_FILE), text, { flag: 'wx', mode: 0o600 });
       const fd = openSync(join(directory, EXECUTION_FILE), 'r+');
       try { fsyncSync(fd); } finally { closeSync(fd); }
-      return { status: 0, executionId, executor: EXECUTOR, model: parsed.model, provider: PINNED_PROVIDER, evidenceClass,
+      return { status: 0, executionId, executor: EXECUTOR, model: parsed.model, provider: policy.provider, evidenceClass,
         startedAt, completedAt, report: content, stopReason: choice.finish_reason, usage: { ...totals, costUsd: 0 }, providerResponses, executionHash: createHash('sha256').update(text, 'utf8').digest('hex'), events };
     }
     throw new Error(`Request limit reached: ${policy.maxRequests} physical request attempt(s) consumed without a terminal report`);

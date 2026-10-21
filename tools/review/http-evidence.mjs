@@ -177,7 +177,7 @@ export function projectHttpRecord({ text, provenance, role, executorBranded, roo
   const envelope = parseEnvelope(text);
   const parts = reprojectHttpExecution({ envelope, provenance, role, executorBranded, root });
   if (envelope.usage?.costUsd !== 0) throw new Error('Controlled execution reported an unexpected cost field');
-  const nativeProjection = { role, provider: PINNED_PROVIDER, model: envelope.model, requestedModel: provenance.requestedModel,
+  const nativeProjection = { role, provider: String(provenance.requestedModel || '').includes('/') ? String(provenance.requestedModel).slice(0, String(provenance.requestedModel).indexOf('/')) : PINNED_PROVIDER, model: envelope.model, requestedModel: provenance.requestedModel,
     sourceDigest: provenance.sourceDigest, manifestHash: provenance.manifestHash, rolePromptHash: provenance.rolePromptHash,
     testFilesHash: provenance.testFilesHash, baseRef: provenance.baseRef, exitCode: 0 };
   const context = { role, executor: EXECUTOR, evidenceClass: parts.evidenceClass, executionId: parts.executionId, endpoint,

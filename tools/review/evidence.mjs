@@ -88,8 +88,8 @@ function readAdmissionPolicy(root, policyPath) {
   if (!stat.isFile() || stat.size > 16384) throw new Error('Admission policy must be a JSON file of at most 16 KiB');
   let parsed;
   try { parsed = JSON.parse(readFileSync(file, 'utf8')); } catch { throw new Error('Admission policy is not valid JSON'); }
-  if (parsed && typeof parsed === 'object' && typeof parsed.provider === 'string' && /openrouter|nullform-gateway/i.test(parsed.provider)) {
-    throw new Error('OpenRouter and opaque nullform-gateway providers are forbidden providers');
+  if (parsed && typeof parsed === 'object' && typeof parsed.provider === 'string' && /openrouter/i.test(parsed.provider)) {
+    throw new Error('OpenRouter and opaque providers are forbidden providers');
   }
   return validatePolicy(parsed);
 }
@@ -440,7 +440,7 @@ export function runReviewRecord(options) {
       // actually go and approves its own effective route (a loopback seam is explicit).
       if (typeof httpExecutor.approveEndpoint !== 'function' || !httpExecutor.approveEndpoint(httpExecutor.endpoint)) throw new Error('Effective transport route is not approved by the supplied executor');
       if (model !== `${policy.provider}/${policy.model}`) throw new Error(`Requested model '${model}' is not the admitted pinned snapshot '${policy.provider}/${policy.model}'`);
-      if (!resumeSessionDir && typeof process.env.OPENAI_API_KEY !== 'string') throw new Error('OPENAI_API_KEY is required at the dispatch boundary; no credential means no dispatch');
+      if (!resumeSessionDir && typeof process.env[policy.provider === 'nullform-gateway' ? 'NULLFORM_GATEWAY_API_KEY' : 'OPENAI_API_KEY'] !== 'string') throw new Error(`${policy.provider === 'nullform-gateway' ? 'NULLFORM_GATEWAY_API_KEY' : 'OPENAI_API_KEY'} is required at the dispatch boundary; no credential means no dispatch`);
     }
   }
   const normalized = { ...options, root, productCommand, resumeSessionDir, httpExecutor, policy };
@@ -456,7 +456,7 @@ export function runReviewRecord(options) {
       admission: { ...inspectAdmission({ policy, policyPath: options.admissionPolicy, root }),
         ...(policy ? { reserveNanoUsd: policy.reserveNanoUsd, reserveUsd: nanoUsdToUsd(policy.reserveNanoUsd),
           ceilingNanoUsd: policy.ceilingNanoUsd, maxRequests: policy.maxRequests, model: policy.model,
-          contextWindowTokens: PINNED_CONTEXT_TOKENS, maxOutputTokens: policy.maxOutputTokens } : {}) },
+          contextWindowTokens: policy.maxInputTokens ?? PINNED_CONTEXT_TOKENS, maxOutputTokens: policy.maxOutputTokens } : {}) },
       budget: inspectBudget({ root, policy }),
       provenance: identity.provenance, prerequisites: identity.errors,
       releaseGate: validateReviewEvidence({ root, changeId, tier: 'T2' }), resumeCompatible,
