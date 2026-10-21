@@ -22,6 +22,11 @@ export const PINNED_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
 export const PINNED_CONTEXT_TOKENS = 128000;
 export const PINNED_MAX_OUTPUT_TOKENS = 16384;
 export const PINNED_TARIFFS_USD_PER_MILLION = Object.freeze({ input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 });
+export const GATEWAY_PROVIDER = 'nullform-gateway';
+export const GATEWAY_MODEL = 'gemini-3.8-flash-high';
+export const GATEWAY_ENDPOINT = 'https://ai-gateway.nullform.cv/v1/chat/completions';
+export const GATEWAY_CONTEXT_TOKENS = 1048576;
+export const GATEWAY_TARIFFS_USD_PER_MILLION = Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 export const EVIDENCE_CLASSES = Object.freeze(['provider-direct', 'transport-fixture']);
 
 const LOCK_FILE = 'nullform-review-budget.lock';
@@ -53,14 +58,14 @@ export function redactSecret(text, secret) {
 export function inspectAdmission({ policy = null, policyPath = null } = {}) {
   if (policy) return { dispatchAllowed: false, supported: true, transport: policy.transport, effectiveRoute: policy.endpoint };
   if (!policyPath) return { dispatchAllowed: false, supported: false, effectiveRoute: 'unverified', reason: 'No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON' };
-  if (/openrouter|nullform-gateway/i.test(String(policyPath))) return { dispatchAllowed: false, supported: false, effectiveRoute: 'unverified', reason: 'OpenRouter and opaque nullform-gateway providers are forbidden providers' };
+  if (/openrouter/i.test(String(policyPath))) return { dispatchAllowed: false, supported: false, effectiveRoute: 'unverified', reason: 'OpenRouter and opaque providers are forbidden providers' };
   return { dispatchAllowed: false, supported: false, effectiveRoute: 'unverified', reason: 'Unsupported execution boundary: a validated admission policy plus the controlled HTTP executor is required' };
 }
 
-/** The provider credential is never inherited by an operator-authorized product command. */
+/** The provider credentials are never inherited by an operator-authorized product command. */
 export function withoutProviderCredential(env, key = 'OPENAI_API_KEY') {
-  const upper = key.toUpperCase();
-  return Object.fromEntries(Object.entries(env || {}).filter(([name]) => name.toUpperCase() !== upper));
+  const keys = new Set([String(key).toUpperCase(), 'OPENAI_API_KEY', 'NULLFORM_GATEWAY_API_KEY']);
+  return Object.fromEntries(Object.entries(env || {}).filter(([name]) => !keys.has(name.toUpperCase())));
 }
 
 /** Nano-USD to USD for human-facing receipt fields. */
@@ -78,13 +83,18 @@ function boundedInteger(value, name, minimum = 1) {
 export function validatePolicy(policy) {
   if (!policy || Array.isArray(policy) || typeof policy !== 'object' || policy.schemaVersion !== 1) throw new Error('Invalid bounded admission policy schema');
   if (Object.keys(policy).some(key => !POLICY_FIELDS.includes(key) && !DERIVED_FIELDS.includes(key))) throw new Error('Invalid bounded admission policy schema: unknown field');
-  if (policy.provider !== PINNED_PROVIDER) {
-    if (/openrouter|nullform-gateway/i.test(String(policy.provider))) throw new Error(`Forbidden provider '${policy.provider}': OpenRouter and opaque gateways are never admitted`);
-    throw new Error(`Unsupported execution boundary: provider '${policy.provider}' is not the verified direct provider, so its routing, retries and output limits cannot be enforced`);
+  const PINNED_ROUTES = {
+    [PINNED_PROVIDER]: { model: PINNED_MODEL, endpoint: PINNED_ENDPOINT, contextTokens: PINNED_CONTEXT_TOKENS, tariffs: PINNED_TARIFFS_USD_PER_MILLION },
+    [GATEWAY_PROVIDER]: { model: GATEWAY_MODEL, endpoint: GATEWAY_ENDPOINT, contextTokens: GATEWAY_CONTEXT_TOKENS, tariffs: GATEWAY_TARIFFS_USD_PER_MILLION },
+  };
+  const route = PINNED_ROUTES[policy.provider];
+  if (!route) {
+    if (/openrouter/i.test(String(policy.provider))) throw new Error(`Forbidden provider '${policy.provider}': OpenRouter and opaque gateways are never admitted`);
+    throw new Error(`Unsupported execution boundary: provider '${policy.provider}' is not a verified admitted route, so its routing, retries and output limits cannot be enforced`);
   }
   if (policy.transport !== EXECUTOR) throw new Error(`Unsupported execution boundary: transport must be exactly '${EXECUTOR}'`);
-  if (policy.endpoint !== PINNED_ENDPOINT) throw new Error('Unverified endpoint/gateway route refused; only the official HTTPS Chat Completions route is admitted');
-  if (policy.model !== PINNED_MODEL) throw new Error(`Admission policy model must be the verified exact snapshot '${PINNED_MODEL}'`);
+  if (policy.endpoint !== route.endpoint) throw new Error(`Unverified endpoint/gateway route refused; only the pinned route endpoint is admitted`);
+  if (policy.model !== route.model) throw new Error(`Admission policy model must be the verified exact snapshot '${route.model}'`);
   if (typeof policy.ceilingUsd !== 'number' || !Number.isFinite(policy.ceilingUsd) || policy.ceilingUsd <= 0) throw new Error('Invalid admission policy ceiling');
   const ceilingNanoUsd = Math.floor(policy.ceilingUsd * NANO_PER_USD);
   if (!Number.isSafeInteger(ceilingNanoUsd) || ceilingNanoUsd < 1) throw new Error('Invalid admission policy ceiling');
@@ -94,17 +104,19 @@ export function validatePolicy(policy) {
   const maxOutputTokens = boundedInteger(policy.maxOutputTokens, 'maxOutputTokens');
   const timeoutMs = boundedInteger(policy.timeoutMs, 'timeoutMs');
   if (maxOutputTokens > PINNED_MAX_OUTPUT_TOKENS) throw new Error(`Admission policy maxOutputTokens exceeds the published descriptor limit ${PINNED_MAX_OUTPUT_TOKENS}`);
-  if (policy.maxInputTokens !== undefined && policy.maxInputTokens !== PINNED_CONTEXT_TOKENS) throw new Error(`Admission policy maxInputTokens cannot lower the verified window; it must be absent or exactly ${PINNED_CONTEXT_TOKENS}`);
+  if (policy.maxInputTokens !== undefined && policy.maxInputTokens !== route.contextTokens) throw new Error(`Admission policy maxInputTokens cannot lower the verified window; it must be absent or exactly ${route.contextTokens}`);
   const rates = policy.tariffsUsdPerMillion;
   if (!rates || typeof rates !== 'object' || Array.isArray(rates) || Object.keys(rates).length !== COUNTERS.length
-    || COUNTERS.some(key => rates[key] !== PINNED_TARIFFS_USD_PER_MILLION[key])) throw new Error('Unknown or invalid fixed admission tariff; unknown cost is not zero');
+    || COUNTERS.some(key => rates[key] !== route.tariffs[key])) throw new Error('Unknown or invalid fixed admission tariff; unknown cost is not zero');
   const tariffsNanoPerToken = Object.fromEntries(COUNTERS.map(key => [key, rateNanoPerToken(rates[key])]));
   // Full authorized session at the verified window and highest input tariff plus capped output.
-  const reserveNanoUsd = maxRequests * (PINNED_CONTEXT_TOKENS * tariffsNanoPerToken.input + maxOutputTokens * tariffsNanoPerToken.output);
+  // A zero-tariff subscription route still reserves a nonzero floor so the ledger stays meaningful.
+  const pricedReserve = maxRequests * (route.contextTokens * tariffsNanoPerToken.input + maxOutputTokens * tariffsNanoPerToken.output);
+  const reserveNanoUsd = pricedReserve > 0 ? pricedReserve : maxRequests;
   if (!Number.isSafeInteger(reserveNanoUsd) || reserveNanoUsd < 1) throw new Error('Invalid admission policy reserve');
-  return Object.freeze({ schemaVersion: 1, provider: PINNED_PROVIDER, model: PINNED_MODEL, transport: EXECUTOR, endpoint: PINNED_ENDPOINT,
+  return Object.freeze({ schemaVersion: 1, provider: policy.provider, model: route.model, transport: EXECUTOR, endpoint: route.endpoint,
     ceilingUsd: policy.ceilingUsd, ceilingNanoUsd, maxRequests, maxContextBytes, maxResponseBytes, maxOutputTokens, timeoutMs,
-    tariffsUsdPerMillion: { ...PINNED_TARIFFS_USD_PER_MILLION }, tariffsNanoPerToken, reserveNanoUsd });
+    tariffsUsdPerMillion: { ...route.tariffs }, tariffsNanoPerToken, reserveNanoUsd });
 }
 
 /** Observed provider usage priced at the ORIGINAL captured tariff. Never assumes zero. */

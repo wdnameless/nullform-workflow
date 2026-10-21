@@ -483,3 +483,47 @@ test('near-cap lifecycle: admits with ~5KiB headroom, records requests, holds wi
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function makeGatewayPolicy(overrides = {}) {
+  return {
+    schemaVersion: 1, provider: 'nullform-gateway', model: 'gemini-3.8-flash-high',
+    transport: 'nullform-http-v1', endpoint: 'https://ai-gateway.nullform.cv/v1/chat/completions',
+    ceilingUsd: SUFFICIENT_CEILING_USD, maxRequests: 3, maxContextBytes: 100000, maxResponseBytes: 10000,
+    maxOutputTokens: 16384, timeoutMs: 30000, maxInputTokens: 1048576,
+    tariffsUsdPerMillion: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...overrides,
+  };
+}
+
+test('gateway route: subscription policy validates with zero tariff', () => {
+  const policy = validatePolicy(makeGatewayPolicy());
+  assert.equal(policy.provider, 'nullform-gateway');
+  assert.equal(policy.model, 'gemini-3.8-flash-high');
+  assert.deepEqual(policy.tariffsUsdPerMillion, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+});
+
+test('gateway route: wrong endpoint refused', () => {
+  assert.throws(() => validatePolicy(makeGatewayPolicy({ endpoint: 'https://evil.example/v1/chat/completions' })), /endpoint|route|refused/i);
+});
+
+test('gateway route: wrong model refused', () => {
+  assert.throws(() => validatePolicy(makeGatewayPolicy({ model: 'gemini-9.9-ultra' })), /model/i);
+});
+
+test('gateway route: nonzero tariff refused (subscription is zero by contract)', () => {
+  assert.throws(() => validatePolicy(makeGatewayPolicy({ tariffsUsdPerMillion: { input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 } })), /tariff/i);
+});
+
+test('gateway route: settle prices usage at zero without throwing', () => {
+  const dir = makeTempDir();
+  try {
+    nonGitDir(dir);
+    const policy = makeGatewayPolicy({ maxRequests: 1 });
+    const res = admitSession({ root: dir, policy });
+    recordRequest({ root: dir, reservationId: res.reservationId });
+    const settled = settleReservation({ root: dir, reservationId: res.reservationId, usage: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0 } });
+    assert.equal(settled.settledNanoUsd, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
