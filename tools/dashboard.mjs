@@ -2745,6 +2745,114 @@ export async function ensureDashboard(root, { open = true, port = null, session 
 }
 
 
+/**
+ * R12: Встраивание снимка состояния между маркерами /*STATE-BEGIN* / и /*STATE-END* /
+ * для автономного просмотра через file:// (pure function, no file IO).
+ * Экранирует </ как <\/.
+ */
+export function embedSnapshot(html, state) {
+  if (typeof html !== 'string') {
+    throw new TypeError('html must be a string');
+  }
+  const jsonStr = JSON.stringify(state ?? {}).replace(/<\//g, '<\\/');
+  const payload = `\nwindow.STATE = ${jsonStr};\n`;
+
+  const markerRegex = /(\/\*STATE-BEGIN\*\/)[\s\S]*?(\/\*STATE-END\*\/)/;
+  if (markerRegex.test(html)) {
+    return html.replace(markerRegex, `$1${payload}$2`);
+  }
+  return `${html}\n<script>/*STATE-BEGIN*/${payload}/*STATE-END*/</script>`;
+}
+
+/**
+ * R12: Проверка принадлежности процесса серверу Nullform Harness по сигнатуре аргументов.
+ * Чистый предикат (no process killing in this slice).
+ */
+export function isOwnServer(procCmd, dir = null) {
+  if (!procCmd) return false;
+  const cmd = Array.isArray(procCmd) ? procCmd.join(' ') : String(procCmd);
+  const cmdNorm = cmd.replace(/\\/g, '/').toLowerCase();
+
+  const isHarness = (cmdNorm.includes('dashboard.mjs') || cmdNorm.includes('dashboard')) &&
+    (cmdNorm.includes('--serve') || cmdNorm.includes('-serve'));
+
+  if (!isHarness) return false;
+  if (!dir) return true;
+
+  const dirNorm = resolve(dir).replace(/\\/g, '/').toLowerCase();
+  const dirRelNorm = String(dir).replace(/\\/g, '/').toLowerCase();
+  return cmdNorm.includes(dirNorm) || cmdNorm.includes(dirRelNorm);
+}
+
+/**
+ * R12: Обнаружение параллельных живых сессий (коллизий):
+ * возвращает true, если state.json не завершён И serve.pid свежий (<5 мин).
+ */
+export function detectCollision(dir) {
+  const dirAbs = resolve(dir);
+  const stateCandidates = [
+    join(dirAbs, "state.json"),
+    join(dirAbs, ".workflow", "state.json"),
+  ];
+  let statePath = null;
+  for (const c of stateCandidates) {
+    if (existsSync(c)) {
+      statePath = c;
+      break;
+    }
+  }
+  if (!statePath) return false;
+
+  let state = null;
+  try {
+    state = JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {
+    return false;
+  }
+  if (!state || typeof state !== "object") return false;
+
+  const isFinished = state.status === "closed" || state.status === "done" || Boolean(state.closedAt) || Boolean(state.finishedAt);
+  if (isFinished) return false;
+
+  const pidCandidates = [
+    join(dirAbs, "serve.pid"),
+    join(dirAbs, ".workflow", "serve.pid"),
+  ];
+  let pidPath = null;
+  for (const c of pidCandidates) {
+    if (existsSync(c)) {
+      pidPath = c;
+      break;
+    }
+  }
+  if (!pidPath) return false;
+
+  try {
+    const stat = statSync(pidPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    const FIVE_MIN_MS = 5 * 60 * 1000;
+    if (ageMs < FIVE_MIN_MS && ageMs >= -60000) {
+      return true;
+    }
+
+    const content = readFileSync(pidPath, "utf8").trim();
+    try {
+      const parsed = JSON.parse(content);
+      const ts = parsed.timestamp || parsed.startedAt || parsed.time;
+      if (ts) {
+        const parsedAge = Date.now() - new Date(ts).getTime();
+        if (parsedAge < FIVE_MIN_MS && parsedAge >= -60000) {
+          return true;
+        }
+      }
+    } catch {}
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
 export function parseArgs(argv = []) {
   const options = {
     root: ".",
