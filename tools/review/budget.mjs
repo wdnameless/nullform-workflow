@@ -452,3 +452,167 @@ export function inspectBudget({ root, policy = null }) {
     ...(normalized ? {} : { available: false, reason: 'No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON' }),
   };
 }
+
+export const SPEND_LEDGER_FILE = 'nullform-spend-ledger.json';
+
+export const DEFAULT_TIER_CEILINGS_NANO_USD = Object.freeze({
+  T1: 10_000_000_000,
+  T2: 50_000_000_000,
+  T3: 100_000_000_000,
+});
+export const DEFAULT_TIER_CEILINGS = DEFAULT_TIER_CEILINGS_NANO_USD;
+export const DEFAULT_CEILINGS_NANO = DEFAULT_TIER_CEILINGS_NANO_USD;
+
+function resolveSpendLedgerPath(dir) {
+  if (typeof dir !== 'string' || !dir) throw new Error('Invalid directory path for spend ledger');
+  if (dir.endsWith('.json')) return resolve(dir);
+
+  const directSpend = join(dir, SPEND_LEDGER_FILE);
+  if (existsSync(directSpend)) return resolve(directSpend);
+
+  const altSpend = join(dir, 'spend-ledger.json');
+  if (existsSync(altSpend)) return resolve(altSpend);
+
+  const wfSpend = join(dir, BUDGET_LEDGER_DIR, SPEND_LEDGER_FILE);
+  if (existsSync(wfSpend)) return resolve(wfSpend);
+
+  const wfAltSpend = join(dir, BUDGET_LEDGER_DIR, 'spend-ledger.json');
+  if (existsSync(wfAltSpend)) return resolve(wfAltSpend);
+
+  if (existsSync(join(dir, BUDGET_LEDGER_DIR))) {
+    return resolve(join(dir, BUDGET_LEDGER_DIR, SPEND_LEDGER_FILE));
+  }
+
+  return resolve(directSpend);
+}
+
+export function loadSpendLedger(dir) {
+  if (typeof dir !== 'string' || !dir) throw new Error('Invalid directory path for loadSpendLedger');
+  const ledgerPath = resolveSpendLedgerPath(dir);
+  if (!existsSync(ledgerPath)) {
+    return {
+      ceilings: { ...DEFAULT_TIER_CEILINGS_NANO_USD },
+      used: { T1: 0, T2: 0, T3: 0 },
+      receipts: [],
+    };
+  }
+
+  return withLedgerLock({ ledgerPath }, () => {
+    const fileSize = statSync(ledgerPath).size;
+    if (fileSize > MAX_LEDGER_BYTES) {
+      throw new Error(`Spend ledger '${ledgerPath}' is ${fileSize} bytes, exceeding the ${MAX_LEDGER_BYTES}-byte bound; refusing to parse`);
+    }
+    const raw = readFileSync(ledgerPath, 'utf8');
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`Corrupted spend ledger '${ledgerPath}'; refusing to spend against unknown state`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`Corrupted spend ledger '${ledgerPath}'; invalid root object`);
+    }
+    return {
+      ...parsed,
+      ceilings: {
+        ...DEFAULT_TIER_CEILINGS_NANO_USD,
+        ...(parsed.ceilings && typeof parsed.ceilings === 'object' ? parsed.ceilings : {}),
+      },
+      used: {
+        T1: 0,
+        T2: 0,
+        T3: 0,
+        ...(parsed.used && typeof parsed.used === 'object' ? parsed.used : {}),
+      },
+      receipts: Array.isArray(parsed.receipts) ? parsed.receipts : [],
+    };
+  });
+}
+
+export function saveSpendLedger(dir, ledger) {
+  if (typeof dir !== 'string' || !dir) throw new Error('Invalid directory path for saveSpendLedger');
+  if (!ledger || typeof ledger !== 'object') throw new Error('Invalid ledger for saveSpendLedger');
+
+  const normalized = {
+    ...ledger,
+    ceilings: {
+      ...DEFAULT_TIER_CEILINGS_NANO_USD,
+      ...(ledger.ceilings && typeof ledger.ceilings === 'object' ? ledger.ceilings : {}),
+    },
+    used: {
+      T1: 0,
+      T2: 0,
+      T3: 0,
+      ...(ledger.used && typeof ledger.used === 'object' ? ledger.used : {}),
+    },
+    receipts: Array.isArray(ledger.receipts) ? ledger.receipts : [],
+  };
+
+  const ledgerPath = resolveSpendLedgerPath(dir);
+  const targetDir = dirname(ledgerPath);
+  if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
+
+  withLedgerLock({ ledgerPath }, () => {
+    writeLedger(ledgerPath, normalized);
+  });
+
+  return normalized;
+}
+
+export function recordReceipt(ledger, receipt) {
+  if (!ledger || typeof ledger !== 'object') throw new Error('Invalid ledger');
+  if (!receipt || typeof receipt !== 'object') throw new Error('Invalid receipt');
+  if (typeof receipt.id !== 'string' || !receipt.id.trim()) {
+    throw new Error('Receipt must have a non-empty string id');
+  }
+  const tier = receipt.tier;
+  if (!['T1', 'T2', 'T3'].includes(tier)) {
+    throw new Error(`Invalid receipt tier '${tier}'; must be T1, T2, or T3`);
+  }
+  if (!Number.isSafeInteger(receipt.costNano) || receipt.costNano < 0) {
+    throw new Error(`Invalid receipt costNano '${receipt.costNano}'; must be a non-negative safe integer`);
+  }
+
+  if (!Array.isArray(ledger.receipts)) {
+    ledger.receipts = [];
+  }
+  if (!ledger.used || typeof ledger.used !== 'object') {
+    ledger.used = { T1: 0, T2: 0, T3: 0 };
+  }
+
+  const existing = ledger.receipts.find(r => r && r.id === receipt.id);
+  if (existing) {
+    return ledger;
+  }
+
+  const newUsed = (ledger.used[tier] || 0) + receipt.costNano;
+  if (!Number.isSafeInteger(newUsed)) {
+    throw new Error(`Recording receipt would exceed safe integer range for tier ${tier}`);
+  }
+
+  ledger.receipts.push({
+    ...receipt,
+  });
+  ledger.used[tier] = newUsed;
+
+  return ledger;
+}
+
+ export function admit(ledger, tier, costNano = 0) {
+  if (!ledger || typeof ledger !== 'object') throw new Error('Invalid ledger');
+  if (!['T1', 'T2', 'T3'].includes(tier)) throw new Error(`Invalid tier '${tier}'; must be T1, T2, or T3`);
+  if (!Number.isSafeInteger(costNano) || costNano < 0) {
+    throw new Error(`Invalid costNano '${costNano}'; must be a non-negative safe integer`);
+  }
+
+  const used = (ledger.used && Number.isSafeInteger(ledger.used[tier])) ? ledger.used[tier] : 0;
+  const ceiling = (ledger.ceilings && Number.isSafeInteger(ledger.ceilings[tier]))
+    ? ledger.ceilings[tier]
+    : (DEFAULT_TIER_CEILINGS_NANO_USD[tier] ?? 0);
+
+  if (used + costNano > ceiling) {
+    throw new Error(`Spend ceiling exceeded for tier ${tier}: used ${used} + requested ${costNano} = ${used + costNano} exceeds ceiling ${ceiling} nanoUSD`);
+  }
+
+  return true;
+}
