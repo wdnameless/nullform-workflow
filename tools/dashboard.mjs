@@ -23,6 +23,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { scanRepo } from "./debt-ledger.mjs";
+import { redactSecrets } from "./brief.mjs";
 
 export function projectToken(absPath) {
   return createHash("sha256").update(resolve(absPath)).digest("hex").slice(0, 16);
@@ -352,6 +353,497 @@ export function collectRequirements(absRoot) {
   }
 
   return { total: items.length, byStatus, items: items.slice(0, 40), change: best.change };
+}
+
+/**
+ * Парсинг R## строк манифеста (3- или 4-колоночные таблицы).
+ * Возвращает массив [{ id, text, status }], где text verbatim до 200 символов,
+ * а status выводится из coverage / закрытия / явного столбца.
+ */
+export function parseManifestRequirements(file, state = null) {
+  if (!file) return [];
+  let content = "";
+  if (typeof file === "string") {
+    if (file.includes("|") && file.includes("\n")) {
+      content = file;
+    } else if (existsSync(file)) {
+      try {
+        content = readFileSync(file, "utf8");
+      } catch {
+        return [];
+      }
+    } else {
+      return [];
+    }
+  } else {
+    return [];
+  }
+
+  const items = [];
+  const lines = content.split("\n");
+  const isClosed = state && (state.status === "closed" || Boolean(state.artifacts?.oracle));
+
+  for (const line of lines) {
+    const m = line.match(/^\s*\|\s*(R\d+[a-z]?)\s*\|\s*([^|]+)\s*\|(.*)$/i);
+    if (!m) continue;
+
+    const id = m[1].trim();
+    let text = m[2].trim();
+    text = text.replace(/^["«](.*)["»]$/, "$1").trim();
+    if (text.length > 200) {
+      text = text.slice(0, 200);
+    }
+
+    const rest = m[3];
+    const restCols = rest.split("|").map((c) => c.trim()).filter(Boolean);
+
+    let status = null;
+    for (let i = restCols.length - 1; i >= 0; i--) {
+      const col = restCols[i].toLowerCase().replace(/[*_`]/g, "");
+      if (["done", "verified", "proven", "closed", "pass", "accepted"].includes(col)) {
+        status = "done";
+        break;
+      }
+      if (["open", "in-spec", "in-ticket", "pending", "in_progress"].includes(col)) {
+        status = "open";
+        break;
+      }
+      if (["deferred", "dropped", "placeholder"].includes(col)) {
+        status = col;
+        break;
+      }
+    }
+
+    if (!status) {
+      status = isClosed ? "done" : "open";
+    }
+
+    items.push({ id, text, status });
+  }
+
+  return items;
+}
+
+/**
+ * Рекомендация нарезки задач (~3000 строк/тикет).
+ * merge если <1500, split если >4500, иначе ok.
+ * @param {number} lines
+ * @returns {"merge" | "split" | "ok"}
+ */
+export function calibrationHint(lines) {
+  const n = Number(lines) || 0;
+  if (n < 1500) return "merge";
+  if (n > 4500) return "split";
+  return "ok";
+}
+
+/**
+ * Собирает волны тикетов из plan-check артефактов (tickets с wave/zone).
+ * @param {string|object|Array} root Путь к корню репозитория или объекту/массиву с тикетами
+ * @returns {Array<{ n: number, tickets: Array<{ id: string, title: string, status: string, lines: number }> }>}
+ */
+function readTicketsFile(p) {
+  if (!p || !existsSync(p)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(p, "utf8"));
+    if (Array.isArray(raw)) return raw;
+    if (raw && Array.isArray(raw.tickets)) return raw.tickets;
+  } catch {}
+  return null;
+}
+
+export function collectWaves(root = ".") {
+  let tickets = [];
+  if (Array.isArray(root)) {
+    tickets = root;
+  } else if (root && typeof root === "object" && Array.isArray(root.tickets)) {
+    tickets = root.tickets;
+  } else {
+    const absRoot = resolve(typeof root === "string" ? root : ".");
+    tickets = readTicketsFile(absRoot) || [];
+
+    if (tickets.length === 0) {
+      const candidates = [
+        join(absRoot, "tickets.json"),
+        join(absRoot, "plan.json"),
+        join(absRoot, ".workflow", "tickets.json"),
+        join(absRoot, ".workflow", "plan.json"),
+        join(absRoot, ".workflow", "plan-check.json"),
+      ];
+      for (const p of candidates) {
+        const loaded = readTicketsFile(p);
+        if (loaded) { tickets = loaded; break; }
+      }
+    }
+
+    if (tickets.length === 0) {
+      const statePath = join(absRoot, ".workflow", "state.json");
+      if (existsSync(statePath)) {
+        try {
+          const st = JSON.parse(readFileSync(statePath, "utf8"));
+          if (Array.isArray(st.tickets)) tickets = st.tickets;
+          else if (st.plan && Array.isArray(st.plan.tickets)) tickets = st.plan.tickets;
+        } catch {}
+      }
+    }
+
+    if (tickets.length === 0) {
+      const changesDir = join(absRoot, "openspec", "changes");
+      if (existsSync(changesDir)) {
+        try {
+          for (const d of readdirSync(changesDir)) {
+            const found = readTicketsFile(join(changesDir, d, "tickets.json")) ||
+                          readTicketsFile(join(changesDir, d, "plan.json"));
+            if (found) { tickets = found; break; }
+          }
+        } catch {}
+      }
+    }
+  }
+
+  if (!Array.isArray(tickets) || tickets.length === 0) {
+    return [];
+  }
+
+  const waveMap = new Map();
+  for (const t of tickets) {
+    if (!t || typeof t !== "object") continue;
+    const waveNum = typeof t.wave === "number" && Number.isInteger(t.wave) ? t.wave : (Number(t.n) || 1);
+    if (!waveMap.has(waveNum)) {
+      waveMap.set(waveNum, []);
+    }
+
+    let lines = 0;
+    if (typeof t.lines === "number" && !Number.isNaN(t.lines)) {
+      lines = t.lines;
+    }
+
+    waveMap.get(waveNum).push({
+      id: String(t.id || ""),
+      title: String(t.title || t.name || t.id || ""),
+      status: String(t.status || (t.done ? "done" : "pending")),
+      lines,
+      ...(t.zone ? { zone: t.zone } : {}),
+      ...(t.requirements ? { requirements: t.requirements } : {}),
+    });
+  }
+
+  return Array.from(waveMap.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([n, tList]) => ({
+      n,
+      tickets: tList,
+    }));
+}
+
+/**
+ * Гейты качества G1–G4:
+ * G1: manifest записан
+ * G2: openspec валиден (proposal + tasks + specs)
+ * G3: interfaces записан
+ * G4: oracle ACCEPT
+ */
+export function computeGates(run) {
+  const artifacts = run?.artifacts || {};
+  const root = run?.root || "";
+  let change = run?.change;
+  if (!change && artifacts.manifest?.path) {
+    const m = artifacts.manifest.path.match(/openspec\/changes\/([^/\\]+)/);
+    if (m) change = m[1];
+  }
+  const changeDir = change ? join(root, "openspec", "changes", change) : null;
+
+  // G1: manifest записан
+  const g1Artifact = artifacts.manifest;
+  let g1Ok = null;
+  if (g1Artifact) {
+    const p = g1Artifact.path ? join(root, g1Artifact.path) : (changeDir ? join(changeDir, "manifest.md") : null);
+    if (p && existsSync(p)) {
+      g1Ok = true;
+    } else if (p) {
+      g1Ok = false;
+    } else {
+      g1Ok = true;
+    }
+  }
+  const G1 = {
+    ok: g1Ok,
+    status: g1Ok === true ? "pass" : g1Ok === false ? "fail" : "open",
+    label: "Manifest recorded",
+  };
+
+  // G2: openspec валиден (proposal + tasks + specs есть)
+  const g2Artifact = artifacts.openspec;
+  let g2Ok = null;
+  if (g2Artifact) {
+    const dir = g2Artifact.path ? join(root, g2Artifact.path) : changeDir;
+    if (dir && existsSync(dir)) {
+      const hasProp = existsSync(join(dir, "proposal.md"));
+      const hasTasks = existsSync(join(dir, "tasks.md"));
+      const specsDir = join(dir, "specs");
+      let hasSpecs = existsSync(join(dir, "spec.md"));
+      if (!hasSpecs && existsSync(specsDir)) {
+        try {
+          hasSpecs = readdirSync(specsDir).length > 0;
+        } catch {}
+      }
+      g2Ok = Boolean(hasProp && hasTasks && hasSpecs);
+    } else {
+      g2Ok = false;
+    }
+  }
+  const G2 = {
+    ok: g2Ok,
+    status: g2Ok === true ? "pass" : g2Ok === false ? "fail" : "open",
+    label: "OpenSpec valid",
+  };
+
+  // G3: interfaces записан
+  const g3Artifact = artifacts.interfaces;
+  let g3Ok = null;
+  if (g3Artifact) {
+    const p = g3Artifact.path ? join(root, g3Artifact.path) : (changeDir ? join(changeDir, "interfaces.md") : null);
+    if (p && existsSync(p)) {
+      g3Ok = true;
+    } else if (p) {
+      g3Ok = false;
+    } else {
+      g3Ok = true;
+    }
+  }
+  const G3 = {
+    ok: g3Ok,
+    status: g3Ok === true ? "pass" : g3Ok === false ? "fail" : "open",
+    label: "Interfaces recorded",
+  };
+
+  // G4: oracle ACCEPT
+  const g4Artifact = artifacts.oracle;
+  let g4Ok = null;
+  if (g4Artifact) {
+    const detail = String(g4Artifact.detail || "");
+    if (/ACCEPT/i.test(detail) && !/REJECT/i.test(detail)) {
+      g4Ok = true;
+    } else if (/REJECT/i.test(detail)) {
+      g4Ok = false;
+    } else if (g4Artifact.path && existsSync(join(root, g4Artifact.path))) {
+      try {
+        const txt = readFileSync(join(root, g4Artifact.path), "utf8");
+        if (/Verdict:\s*ACCEPT|ACCEPT:/i.test(txt)) g4Ok = true;
+        else if (/Verdict:\s*REJECT|REJECT:/i.test(txt)) g4Ok = false;
+      } catch {}
+    } else if (changeDir && existsSync(join(changeDir, "oracle-verdict.md"))) {
+      try {
+        const txt = readFileSync(join(changeDir, "oracle-verdict.md"), "utf8");
+        if (/Verdict:\s*ACCEPT|ACCEPT:/i.test(txt)) g4Ok = true;
+        else if (/Verdict:\s*REJECT|REJECT:/i.test(txt)) g4Ok = false;
+      } catch {}
+    }
+    if (g4Ok === null) {
+      g4Ok = false;
+    }
+  }
+  const G4 = {
+    ok: g4Ok,
+    status: g4Ok === true ? "pass" : g4Ok === false ? "fail" : "open",
+    label: "Oracle ACCEPT",
+  };
+
+  return { G1, G2, G3, G4 };
+}
+
+/**
+ * Сборка состояния активного/закрытого прогона (OpenSpec autopilot parity).
+ * Читает .workflow/state.json, парсит R## из manifest.md, читает events.jsonl.
+ * Возвращает null при отсутствии state.json.
+ */
+export function collectRunState(root = ".", _session = null) {
+  const absRoot = resolve(root);
+  const statePath = join(absRoot, ".workflow", "state.json");
+  if (!existsSync(statePath)) return null;
+
+  let state = null;
+  try {
+    state = JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!state || typeof state !== "object") return null;
+
+  const artifacts = state.artifacts || {};
+
+  let change = null;
+  let manifestPath = null;
+  if (artifacts.manifest?.path) {
+    manifestPath = join(absRoot, artifacts.manifest.path);
+    const m = artifacts.manifest.path.match(/openspec\/changes\/([^/\\]+)/);
+    if (m) change = m[1];
+  }
+  if (!manifestPath || !existsSync(manifestPath)) {
+    const changesDir = join(absRoot, "openspec", "changes");
+    if (existsSync(changesDir)) {
+      try {
+        const dirs = readdirSync(changesDir).filter((d) => d !== "archive" && statSync(join(changesDir, d)).isDirectory());
+        for (const d of dirs) {
+          const p = join(changesDir, d, "manifest.md");
+          if (existsSync(p)) {
+            manifestPath = p;
+            change = d;
+            break;
+          }
+        }
+      } catch {}
+    }
+  }
+
+  const requirements = manifestPath ? parseManifestRequirements(manifestPath, state) : [];
+
+  const eventsPath = join(absRoot, ".workflow", "events.jsonl");
+  const rawEvents = [];
+  if (existsSync(eventsPath)) {
+    try {
+      const lines = readFileSync(eventsPath, "utf8").split("\n");
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          rawEvents.push(JSON.parse(line));
+        } catch {}
+      }
+    } catch {}
+  }
+  const feed = rawEvents.slice(-50).map((e) => ({
+    t: e.at || e.t || new Date().toISOString(),
+    kind: e.kind || "event",
+    text: redactSecrets(String(e.text || "")).replace(/[A-Za-z0-9_-]*SECRET[A-Za-z0-9_-]*/gi, "[REDACTED]").slice(0, 200),
+  }));
+
+  const now = Date.now();
+  const startedAt = state.startedAt ? new Date(state.startedAt).getTime() : now;
+  const closedAt = state.closedAt ? new Date(state.closedAt).getTime() : null;
+
+  const waits = [];
+  if (Array.isArray(state.waits)) {
+    for (const w of state.waits) {
+      if (w) waits.push(w);
+    }
+  } else if (Array.isArray(state.journal?.waits)) {
+    for (const w of state.journal.waits) {
+      if (w) waits.push(w);
+    }
+  }
+
+  const historyList = Array.isArray(state.history) ? state.history : rawEvents;
+  let lastClose = null;
+  for (const ev of historyList) {
+    const k = ev?.kind || "";
+    const at = ev?.at || ev?.t;
+    if (k === "close" && at) {
+      const msAt = new Date(at).getTime();
+      if (!Number.isNaN(msAt) && msAt >= startedAt - 5000) {
+        lastClose = at;
+      }
+    } else if ((k === "open" || k === "start") && lastClose && at) {
+      const ms = new Date(at).getTime() - new Date(lastClose).getTime();
+      if (ms > 0) {
+        waits.push({ kind: "close/open", from: lastClose, to: at, durationMs: ms });
+      }
+      lastClose = null;
+    }
+  }
+
+  if (state.waiting?.from) {
+    const ms = Math.max(0, now - new Date(state.waiting.from).getTime());
+    waits.push({ kind: state.waiting.kind || "waiting", from: state.waiting.from, to: new Date().toISOString(), durationMs: ms });
+  }
+
+  let waitMs = 0;
+  for (const w of waits) {
+    const dur = typeof w.durationMs === "number" ? w.durationMs : (new Date(w.to).getTime() - new Date(w.from).getTime());
+    if (!Number.isNaN(dur) && dur > 0) {
+      waitMs += dur;
+    }
+  }
+
+  const totalElapsed = Math.max(0, (closedAt || now) - startedAt);
+  const activeMs = Math.max(0, totalElapsed - waitMs);
+
+  const RUN_STAGE_IDS = ["lane", "recon", "manifest", "openspec", "interfaces", "oracle"];
+  let foundCurrent = false;
+  const stages = RUN_STAGE_IDS.map((id) => {
+    let status = "pending";
+    let durationMs = 0;
+    if (artifacts[id]) {
+      status = "done";
+    } else if (state.status === "closed") {
+      status = "missed";
+    } else if (!foundCurrent) {
+      status = "in_progress";
+      foundCurrent = true;
+    }
+    return { id, status, durationMs };
+  });
+
+  const waves = collectWaves(absRoot);
+  let totalLines = 0;
+  let totalTickets = 0;
+  for (const w of waves) {
+    for (const t of (w.tickets || [])) {
+      totalLines += Number(t.lines) || 0;
+      totalTickets++;
+    }
+  }
+  const avgLines = totalTickets > 0 ? Math.round(totalLines / totalTickets) : 0;
+  const calibration = {
+    targetLines: 3000,
+    linesPerTicket: 3000,
+    minLines: 1500,
+    maxLines: 4500,
+    totalLines,
+    totalTickets,
+    avgLinesPerTicket: avgLines,
+    hint: calibrationHint(avgLines),
+  };
+
+  const gates = computeGates({ root: absRoot, change, artifacts, state, stages, requirements, waits });
+
+  const rev = createHash("sha256")
+    .update(
+      JSON.stringify({
+        status: state.status,
+        tier: state.tier,
+        artifacts: state.artifacts,
+        reqs: requirements,
+        gates,
+        waitsCount: waits.length,
+        wavesCount: waves.length,
+        totalLines,
+        eventsCount: feed.length,
+        closedAt: state.closedAt,
+      })
+    )
+    .digest("hex")
+    .slice(0, 12);
+
+  return {
+    open: state.status === "open",
+    status: state.status || "open",
+    tier: state.tier || "T1",
+    task: state.task ? redactSecrets(state.task).replace(/[A-Za-z0-9_-]*SECRET[A-Za-z0-9_-]*/gi, "[REDACTED]") : "",
+    change,
+    startedAt: state.startedAt || null,
+    closedAt: state.closedAt || null,
+    stages,
+    requirements,
+    waves,
+    calibration,
+    gates,
+    waits,
+    beats: Array.isArray(state.beats) ? state.beats : (Array.isArray(state.journal?.beats) ? state.journal.beats : []),
+    activeMs,
+    waitMs,
+    feed,
+    rev,
+  };
 }
 
 /** Критика: вердикты оракула из openspec/changes/*\/oracle*.md + кэш автопроверок. */
@@ -723,6 +1215,7 @@ export function collectDashboardData(root = ".", options = {}) {
     critique: critique.verdicts,
     history,
     fleet,
+    run: cached(`run:${absRoot}`, 1000, () => collectRunState(absRoot, options.session)),
   };
 }
 
@@ -1237,7 +1730,8 @@ export function collectDependencyGraph(absRoot, modules) {
  * Вкладки: Обзор · Архитектура (майндкарта) · Логи сессии · Диффы · Критика · Долг · История.
  * Данные приходят из `/api/state` каждые 3 с и перерисовываются на месте.
  */
-export function generateDashboardHtml(data) {
+export function generateDashboardHtml(data, options = {}) {
+  const isFrozen = Boolean(options.frozen);
   const payload = JSON.stringify(data).replace(/</g, "\\u003c");
 
   return `<!DOCTYPE html>
@@ -1423,6 +1917,69 @@ export function generateDashboardHtml(data) {
   .d-add { color: var(--lime); } .d-del { color: var(--red); } .d-hunk { color: var(--blue); }
   .flash { animation: flash 1.2s ease; }
   @keyframes flash { 0% { box-shadow: inset 0 0 0 1px var(--lime); } 100% { box-shadow: none; } }
+  /* ---------- run view (autopilot parity) ---------- */
+  .run-hero { border-radius: var(--r); padding: 20px 24px; color: #ffffff; margin-bottom: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.25); }
+  .run-hero.run-working { background: #2F45E0; }
+  .run-hero.run-waiting { background: #FF6B35; }
+  .run-hero.run-closed { background: #17864A; }
+  .run-hero.run-failed { background: #C81E1E; }
+  .run-hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  .run-hero-badge { font-family: var(--mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,0.22); }
+  .run-hero-title { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+  .run-hero-sentence { font-size: 13.5px; opacity: 0.95; line-height: 1.4; margin-top: 6px; }
+  .run-track { display: flex; align-items: center; gap: 4px; margin-bottom: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; overflow-x: auto; }
+  .run-step { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 130px; position: relative; }
+  .run-step-circle { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 700; background: var(--panel-2); border: 1px solid var(--line); color: var(--dim); flex: 0 0 auto; }
+  .run-step.done .run-step-circle { background: color-mix(in srgb, var(--lime) 20%, transparent); border-color: var(--lime); color: var(--lime); }
+  .run-step.in_progress .run-step-circle { background: #2F45E0; border-color: #6ea8fe; color: #fff; box-shadow: 0 0 0 3px rgba(47,69,224,0.3); }
+  .run-step.missed .run-step-circle { background: color-mix(in srgb, var(--red) 20%, transparent); border-color: var(--red); color: var(--red); }
+  .run-step-info { display: flex; flex-direction: column; overflow: hidden; }
+  .run-step-name { font-size: 12px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  .run-step-status { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+  .run-step-arrow { color: var(--dim-2); font-size: 12px; margin-left: auto; padding-right: 4px; }
+  .run-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .run-tiles { grid-template-columns: 1fr; } }
+  .run-tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; }
+  .run-clock-duo { display: flex; gap: 16px; align-items: baseline; }
+  .run-clock-item { display: flex; flex-direction: column; }
+  .run-clock-label { font-size: 10px; font-family: var(--mono); color: var(--dim-2); text-transform: uppercase; }
+  .run-clock-val { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--text); }
+  .run-gates-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .run-gates-grid { grid-template-columns: repeat(2, 1fr); } }
+  .run-gate { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .run-gate-label { font-size: 12px; font-weight: 600; }
+  .run-gate-pill { font-family: var(--mono); font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; }
+  .run-gate.pass .run-gate-pill { background: color-mix(in srgb, var(--lime) 20%, transparent); color: var(--lime); border: 1px solid color-mix(in srgb, var(--lime) 40%, transparent); }
+  .run-gate.open .run-gate-pill { background: var(--panel-2); color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); }
+  .run-gate.fail .run-gate-pill { background: color-mix(in srgb, var(--red) 20%, transparent); color: var(--red); border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); }
+  .run-words-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; margin-bottom: 16px; }
+  .run-words-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .run-filter-group { display: flex; gap: 6px; }
+  .run-filter-btn { font-family: var(--mono); font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: var(--dim); cursor: pointer; }
+  .run-filter-btn:hover { color: var(--text); }
+  .run-filter-btn.active { background: var(--lime); color: #0b0e14; font-weight: 700; border-color: var(--lime); }
+  .run-req-row { display: grid; grid-template-columns: 50px 75px 1fr; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .run-req-row:last-child { border-bottom: 0; }
+  .run-req-id { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text); }
+  .run-req-status { font-family: var(--mono); font-size: 10px; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; text-align: center; }
+  .run-req-status.done { background: color-mix(in srgb, var(--lime) 20%, transparent); color: var(--lime); }
+  .run-req-status.open { background: color-mix(in srgb, var(--blue) 20%, transparent); color: var(--blue); }
+  .run-req-status.deferred { background: var(--panel-2); color: var(--dim-2); }
+  .run-req-text { font-style: italic; color: var(--text); line-height: 1.4; word-break: break-word; }
+  .run-feed-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; }
+  .run-feed-list { font-family: var(--mono); font-size: 11.5px; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
+  .run-feed-item { display: grid; grid-template-columns: 66px 85px 1fr; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line-soft); }
+  .run-feed-item:last-child { border-bottom: 0; }
+  /* ---------- run waves (universal-1) ---------- */
+  .run-waves-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; margin-bottom: 16px; }
+  .run-wave-card { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: var(--r); padding: 12px 14px; margin-bottom: 12px; }
+  .run-wave-card:last-child { margin-bottom: 0; }
+  .run-wave-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
+  .run-wave-bar { height: 6px; border-radius: 3px; background: var(--line); display: flex; overflow: hidden; margin-bottom: 10px; }
+  .run-wave-bar .bar-done { background: var(--lime); }
+  .run-wave-bar .bar-prog { background: var(--blue); }
+  .run-wave-bar .bar-wait { background: var(--amber); }
+  .badge-offline { font-family: var(--mono); font-size: 11px; padding: 4px 10px; border-radius: 999px; background: #C81E1E; color: #fff; font-weight: 700; display: inline-flex; align-items: center; gap: 5px; }
 </style>
 </head>
 <body>
@@ -1433,7 +1990,8 @@ export function generateDashboardHtml(data) {
   <span class="chip">модель <b id="h-model">…</b></span>
   <span class="chip" id="h-branch">…</span>
   <div class="spacer"></div>
-  <span class="live" id="live"><span class="dot"></span><span id="live-text">снимок</span></span>
+  <span class="badge-offline" id="offline-badge" style="display:${isFrozen ? 'inline-flex' : 'none'}"><span id="offline-text">${isFrozen ? 'OFFLINE' : ''}</span></span>
+  <span class="live" id="live" style="display:${isFrozen ? 'none' : 'inline-flex'}"><span class="dot"></span><span id="live-text">снимок</span></span>
   <button class="ibtn" onclick="refreshNow()" title="Обновить">⟳</button>
   <button class="ibtn" onclick="setTheme('dark')" title="Тёмная">◐</button>
   <button class="ibtn" onclick="setTheme('light')" title="Светлая">◑</button>
@@ -1443,7 +2001,8 @@ export function generateDashboardHtml(data) {
 <div class="shell">
   <nav class="rail" id="rail"></nav>
   <main class="content">
-    <section class="tab active" id="tab-overview"></section>
+    <section class="tab" id="tab-run"></section>
+    <section class="tab" id="tab-overview"></section>
     <section class="tab" id="tab-arch"></section>
     <section class="tab" id="tab-logs"></section>
     <section class="tab" id="tab-diffs"></section>
@@ -1458,9 +2017,13 @@ export function generateDashboardHtml(data) {
 </div>
 
 <script>
-  var DATA = ${payload};
+  window.NF_SNAPSHOT = ${payload};
+  var DATA = window.NF_SNAPSHOT;
+  var IS_FROZEN = ${isFrozen};
   var POLL_MS = 3000;
-  var TAB = localStorage.getItem("nf-tab") || "overview";
+  var savedTab = localStorage.getItem("nf-tab");
+  var TAB = savedTab || ((DATA.run && DATA.run.open) ? "run" : "overview");
+  if (!DATA.run && TAB === "run") TAB = "overview";
   var lang = localStorage.getItem("nf-lang") || "ru";
   var collapsed = null;         // свёрнутые узлы майндкарты (null = ещё не инициализировано)
   var fingerprint = null;
@@ -1514,6 +2077,24 @@ export function generateDashboardHtml(data) {
       // история
       historyTitle: "История работы", closedCount: "Закрыто задач", byTier: "по ярусам", empty: "пусто",
       howItWorks: "Как это работает", help: "Справка", close: "Закрыть",
+      // run (D01)
+      run: "Прогон",
+      runHeroWorking: "В работе", runHeroWaiting: "Ожидание оператора", runHeroClosed: "Завершён", runHeroFailed: "Провал",
+      runActiveTime: "Время работы", runWaitTime: "Время ожидания",
+      runSentenceOpen: "Пройдено стадий: {s}/6 · Выполнено требований: {r}/{t} ({pct}%)",
+      runSentenceClosed: "Прогон закрыт · Вердикт оракула: {v} · Техдолг: {d}",
+      runRequirements: "Требования (слова пользователя)", runGates: "Гейты качества", runFeed: "Лента событий",
+      runFilterAll: "Все", runFilterDone: "Выполнены", runFilterOpen: "В работе",
+      gateG1: "G1: Манифест записан", gateG2: "G2: OpenSpec валиден", gateG3: "G3: Интерфейсы записаны", gateG4: "G4: Приёмка Оракула",
+      gatePass: "ПРОЙДЕН", gateOpen: "ОТКРЫТ", gateFail: "ПРОВАЛ",
+      runWaves: "Волны выполнения (SDD)",
+      calibrationTarget: "Калибровка ~3000 строк/тикет",
+      calibMerge: "слить (<1500)",
+      calibSplit: "разбить (>4500)",
+      calibOk: "в норме (~3K)",
+      tickets: "задач",
+      linesCount: "строк",
+      offline: "OFFLINE", offlineBadge: "автономный снимок", noRun: "Нет активного прогона воркфлоу",
     },
     en: {
       project: "project", session: "session", model: "model", live: "LIVE", snapshot: "snapshot",
@@ -1553,9 +2134,26 @@ export function generateDashboardHtml(data) {
       ceiling: "ceiling", upgrade: "upgrade",
       historyTitle: "Work history", closedCount: "Closed tasks", byTier: "by tier", empty: "empty",
       howItWorks: "How it works", help: "Help", close: "Close",
+      // run (D01)
+      run: "Run",
+      runHeroWorking: "Working", runHeroWaiting: "Waiting for input", runHeroClosed: "Closed", runHeroFailed: "Failed",
+      runActiveTime: "Active time", runWaitTime: "Wait time",
+      runSentenceOpen: "Stages completed: {s}/6 · Requirements completed: {r}/{t} ({pct}%)",
+      runSentenceClosed: "Run closed · Oracle verdict: {v} · Tech debt: {d}",
+      runRequirements: "Requirements (user words)", runGates: "Quality gates", runFeed: "Activity feed",
+      runFilterAll: "All", runFilterDone: "Done", runFilterOpen: "Open",
+      gateG1: "G1: Manifest recorded", gateG2: "G2: OpenSpec valid", gateG3: "G3: Interfaces recorded", gateG4: "G4: Oracle acceptance",
+      gatePass: "PASS", gateOpen: "OPEN", gateFail: "FAIL",
+      offline: "OFFLINE", offlineBadge: "offline snapshot", noRun: "No active workflow run",
+      runWaves: "Execution waves (SDD)",
+      calibrationTarget: "Calibration ~3000 lines/ticket",
+      calibMerge: "merge (<1500)",
+      calibSplit: "split (>4500)",
+      calibOk: "optimal (~3K)",
+      tickets: "tickets",
+      linesCount: "lines",
     }
   };
-  var lang = localStorage.getItem("nf-lang") || "ru";
   function t(k) { return (I18N[lang] && I18N[lang][k]) || (I18N.ru[k] || k); }
 
   function esc(s) { return String(s === null || s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
@@ -1587,18 +2185,276 @@ export function generateDashboardHtml(data) {
 
   /* ============================ rail ============================ */
   var TABS = [
+    { id: "run", ico: "◉" },
     { id: "overview", ico: "◎" }, { id: "arch", ico: "⑃" }, { id: "logs", ico: "≡" },
     { id: "diffs", ico: "±" }, { id: "critique", ico: "✓" }, { id: "debt", ico: "⏚" }, { id: "history", ico: "⏱" },
   ];
   function renderRail(d) {
     var counts = { diffs: d.git.files.length, critique: d.critique.length, debt: d.metrics.debt.total, logs: d.log.entries.length + (d.events || []).length, history: d.history.total };
-    document.getElementById("rail").innerHTML = TABS.map(function (x) {
+    if (d.run) counts.run = (d.run.requirements || []).length;
+    var availableTabs = TABS.filter(function (x) {
+      if (x.id === "run") return Boolean(d.run);
+      return true;
+    });
+    document.getElementById("rail").innerHTML = availableTabs.map(function (x) {
       return '<button data-tab="' + x.id + '" class="' + (TAB === x.id ? "active" : "") + '" title="' + t(x.id) + '">' +
         '<span class="ico">' + x.ico + "</span><span>" + t(x.id) + "</span>" +
         (counts[x.id] ? '<span class="badge-n">' + counts[x.id] + "</span>" : "") + "</button>";
     }).join("");
     document.querySelectorAll("#rail button").forEach(function (b) {
       b.addEventListener("click", function () { showTab(b.getAttribute("data-tab")); });
+    });
+  }
+
+  /* ============================ run ============================ */
+  var currentRunRev = null;
+  var runReqFilter = "all";
+
+  function tickRun() {
+    if (!DATA || !DATA.run || DATA.run.status === "closed") return;
+    if (DATA.run.status === "waiting") {
+      DATA.run.waitMs = (DATA.run.waitMs || 0) + 1000;
+    } else {
+      DATA.run.activeMs = (DATA.run.activeMs || 0) + 1000;
+    }
+    var elActive = document.getElementById("run-clock-active");
+    if (elActive) elActive.textContent = fmtDur(DATA.run.activeMs);
+    var elWait = document.getElementById("run-clock-wait");
+    if (elWait) elWait.textContent = fmtDur(DATA.run.waitMs);
+  }
+
+  function setRunFilter(flt) {
+    runReqFilter = flt;
+    currentRunRev = null;
+    if (DATA && DATA.run) renderRun(DATA);
+  }
+
+  function renderRun(d) {
+    var host = document.getElementById("tab-run");
+    if (!host) return;
+    if (!d || !d.run) {
+      host.innerHTML = '<div class="empty">' + esc(t("noRun")) + "</div>";
+      return;
+    }
+    var r = d.run;
+    if (currentRunRev && currentRunRev === r.rev) {
+      var elA = document.getElementById("run-clock-active");
+      if (elA) elA.textContent = fmtDur(r.activeMs);
+      var elW = document.getElementById("run-clock-wait");
+      if (elW) elW.textContent = fmtDur(r.waitMs);
+      return;
+    }
+    currentRunRev = r.rev;
+
+    var heroCls = "run-working";
+    if (r.status === "closed") heroCls = "run-closed";
+    else if (r.status === "failed") heroCls = "run-failed";
+    else if (r.status === "waiting") heroCls = "run-waiting";
+
+    var heroBadgeText = r.status === "closed" ? t("runHeroClosed") : r.status === "failed" ? t("runHeroFailed") : r.status === "waiting" ? t("runHeroWaiting") : t("runHeroWorking");
+
+    var doneStages = (r.stages || []).filter(function (s) { return s.status === "done"; }).length;
+    var totalReqs = (r.requirements || []).length;
+    var doneReqs = (r.requirements || []).filter(function (req) { return req.status === "done"; }).length;
+    var reqPct = totalReqs > 0 ? Math.round((doneReqs / totalReqs) * 100) : (r.status === "closed" ? 100 : 0);
+
+    var sentence = "";
+    if (r.status === "closed") {
+      var oracleVerdict = (r.gates && r.gates.G4 && r.gates.G4.ok) ? "ACCEPT" : (r.gates && r.gates.G4 && r.gates.G4.ok === false ? "REJECT" : "—");
+      var debtCount = d.metrics && d.metrics.debt ? d.metrics.debt.total : 0;
+      sentence = t("runSentenceClosed").replace("{v}", oracleVerdict).replace("{d}", debtCount);
+    } else {
+      sentence = t("runSentenceOpen").replace("{s}", doneStages).replace("{r}", doneReqs).replace("{t}", totalReqs).replace("{pct}", reqPct);
+    }
+
+    var heroHtml = '<div class="run-hero ' + heroCls + '">' +
+      '<div class="run-hero-top">' +
+        '<span class="run-hero-badge">' + esc(heroBadgeText) + '</span>' +
+        '<span class="chip" style="background:rgba(255,255,255,0.2);color:#fff;border-color:transparent">' + esc(r.tier || "T1") + '</span>' +
+      '</div>' +
+      '<div class="run-hero-title">' + esc(r.task || ("Задача " + (r.tier || "T1"))) + '</div>' +
+      '<div class="run-hero-sentence">' + esc(sentence) + '</div>' +
+    '</div>';
+
+    var stageOrder = ["lane", "recon", "manifest", "openspec", "interfaces", "oracle"];
+    var trackSteps = stageOrder.map(function (sid, idx) {
+      var stageObj = (r.stages || []).find(function (s) { return s.id === sid; }) || { id: sid, status: "pending" };
+      var sclsName = scls(stageObj.status);
+      var isLast = idx === stageOrder.length - 1;
+      return '<div class="run-step ' + sclsName + '">' +
+        '<div class="run-step-circle">' + (stageObj.status === "done" ? "✓" : String(idx + 1)) + '</div>' +
+        '<div class="run-step-info">' +
+          '<div class="run-step-name">' + esc(stageName(stageObj)) + '</div>' +
+          '<div class="run-step-status">' + esc(t("st_" + stageObj.status) || stageObj.status) + '</div>' +
+        '</div>' +
+        (!isLast ? '<span class="run-step-arrow">→</span>' : '') +
+      '</div>';
+    }).join("");
+    var trackHtml = '<div class="run-track">' + trackSteps + '</div>';
+
+    var gatesObj = r.gates || {};
+    var passGatesCount = 0;
+    ["G1", "G2", "G3", "G4"].forEach(function (gk) { if (gatesObj[gk] && gatesObj[gk].ok) passGatesCount++; });
+
+    var tilesHtml = '<div class="run-tiles">' +
+      '<div class="run-tile">' +
+        '<div class="label">' + esc(t("runRequirements")) + '</div>' +
+        '<div class="v">' + doneReqs + ' / ' + totalReqs + '</div>' +
+        '<div class="bar mini"><i style="width:' + reqPct + '%"></i></div>' +
+        '<div class="note">' + reqPct + '% ' + esc(t("coverage")) + '</div>' +
+      '</div>' +
+      '<div class="run-tile">' +
+        '<div class="label">' + esc(t("runGates")) + '</div>' +
+        '<div class="v">' + passGatesCount + ' / 4</div>' +
+        '<div class="bar mini"><i style="width:' + Math.round((passGatesCount / 4) * 100) + '%"></i></div>' +
+        '<div class="note">G1–G4 ' + esc(t("gatePass")) + '</div>' +
+      '</div>' +
+      '<div class="run-tile">' +
+        '<div class="label">' + esc(t("timing")) + '</div>' +
+        '<div class="run-clock-duo">' +
+          '<div class="run-clock-item">' +
+            '<span class="run-clock-label">' + esc(t("runActiveTime")) + '</span>' +
+            '<span class="run-clock-val" id="run-clock-active">' + fmtDur(r.activeMs) + '</span>' +
+          '</div>' +
+          '<div class="run-clock-item">' +
+            '<span class="run-clock-label">' + esc(t("runWaitTime")) + '</span>' +
+            '<span class="run-clock-val" id="run-clock-wait" style="color:var(--amber)">' + fmtDur(r.waitMs) + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="note">' + esc(t("elapsed")) + ': ' + fmtDur((r.activeMs || 0) + (r.waitMs || 0)) + '</div>' +
+      '</div>' +
+    '</div>';
+
+    var gateKeys = ["G1", "G2", "G3", "G4"];
+    var gatesHtml = '<div class="run-gates-grid">' + gateKeys.map(function (gk) {
+      var g = gatesObj[gk] || { ok: null, status: "open", label: gk };
+      var gCls = g.ok === true ? "pass" : g.ok === false ? "fail" : "open";
+      var gText = g.ok === true ? t("gatePass") : g.ok === false ? t("gateFail") : t("gateOpen");
+      var gLabel = t("gate" + gk) || g.label || gk;
+      return '<div class="run-gate ' + gCls + '">' +
+        '<span class="run-gate-label">' + esc(gLabel) + '</span>' +
+        '<span class="run-gate-pill">' + esc(gText) + '</span>' +
+      '</div>';
+    }).join("") + '</div>';
+
+    var filteredReqs = (r.requirements || []).filter(function (req) {
+      if (runReqFilter === "all") return true;
+      if (runReqFilter === "done") return req.status === "done";
+      if (runReqFilter === "open") return req.status === "open" || req.status === "in-spec";
+      return true;
+    });
+
+    var reqRows = filteredReqs.length ? filteredReqs.map(function (req) {
+      var stCls = req.status === "done" ? "done" : req.status === "deferred" ? "deferred" : "open";
+      var stLabel = req.status === "done" ? t("st_done") : req.status === "deferred" ? t("st_skipped") : t("st_in_progress");
+      return '<div class="run-req-row">' +
+        '<span class="run-req-id">' + esc(req.id) + '</span>' +
+        '<span class="run-req-status ' + stCls + '">' + esc(stLabel) + '</span>' +
+        '<span class="run-req-text">“' + esc(req.text) + '”</span>' +
+      '</div>';
+    }).join("") : '<div class="empty">' + esc(t("noData")) + '</div>';
+
+    var wordsHtml = '<div class="run-words-section">' +
+      '<div class="run-words-header">' +
+        '<div class="label" style="margin-bottom:0">' + esc(t("runRequirements")) + ' (' + (r.requirements || []).length + ')</div>' +
+        '<div class="run-filter-group">' +
+          '<button class="run-filter-btn ' + (runReqFilter === "all" ? "active" : "") + '" data-filter="all">' + esc(t("runFilterAll")) + '</button>' +
+          '<button class="run-filter-btn ' + (runReqFilter === "done" ? "active" : "") + '" data-filter="done">' + esc(t("runFilterDone")) + '</button>' +
+          '<button class="run-filter-btn ' + (runReqFilter === "open" ? "active" : "") + '" data-filter="open">' + esc(t("runFilterOpen")) + '</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="run-words-list">' + reqRows + '</div>' +
+    '</div>';
+    var wavesList = r.waves || [];
+    var wavesCards = "";
+    if (wavesList.length > 0) {
+      wavesCards = wavesList.map(function (w) {
+        var tList = w.tickets || [];
+        var doneCount = tList.filter(function (t) { return t.status === "done" || t.status === "closed" || t.status === "verified"; }).length;
+        var inProgCount = tList.filter(function (t) { return t.status === "in_progress" || t.status === "running" || t.status === "active"; }).length;
+        var pendingCount = Math.max(0, tList.length - doneCount - inProgCount);
+        var donePct = tList.length ? Math.round((doneCount / tList.length) * 100) : 0;
+        var inProgPct = tList.length ? Math.round((inProgCount / tList.length) * 100) : 0;
+        var pendingPct = Math.max(0, 100 - donePct - inProgPct);
+        var waveLines = tList.reduce(function (sum, t) { return sum + (Number(t.lines) || 0); }, 0);
+
+        var tRows = tList.map(function (t) {
+          var tLines = Number(t.lines) || 0;
+          var tHint = tLines < 1500 ? "merge" : (tLines > 4500 ? "split" : "ok");
+          var hintBadge = "";
+          if (tHint === "merge") {
+            hintBadge = '<span class="pill" style="color:var(--amber);border-color:color-mix(in srgb, var(--amber) 40%, transparent)">' + esc(t("calibMerge")) + '</span>';
+          } else if (tHint === "split") {
+            hintBadge = '<span class="pill" style="color:var(--red);border-color:color-mix(in srgb, var(--red) 40%, transparent)">' + esc(t("calibSplit")) + '</span>';
+          } else if (tLines > 0) {
+            hintBadge = '<span class="pill" style="color:var(--dim)">' + esc(t("calibOk")) + '</span>';
+          }
+          var isDone = t.status === "done" || t.status === "closed" || t.status === "verified";
+          var isProg = t.status === "in_progress" || t.status === "running" || t.status === "active";
+          var stCls = isDone ? "done" : (isProg ? "open" : "deferred");
+          var stLabel = isDone ? t("st_done") : (isProg ? t("st_in_progress") : t("st_pending"));
+
+          return '<div class="run-req-row">' +
+            '<span class="run-req-id">' + esc(t.id) + '</span>' +
+            '<span class="run-req-status ' + stCls + '">' + esc(stLabel) + '</span>' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;overflow:hidden;flex:1">' +
+              '<span style="color:var(--text);font-weight:600;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">' + esc(t.title || t.id) + '</span>' +
+              '<div style="display:flex;align-items:center;gap:6px;flex:0 0 auto">' +
+                (tLines ? '<span class="mono" style="font-size:11px;color:var(--dim)">' + tLines + ' ' + esc(t("linesCount")) + '</span>' : '') +
+                hintBadge +
+              '</div>' +
+            '</div>' +
+          '</div>';
+        }).join("");
+
+        return '<div class="run-wave-card">' +
+          '<div class="run-wave-header">' +
+            '<div style="display:flex;align-items:center;gap:8px">' +
+              '<span class="mono" style="font-weight:700;font-size:12px">' + esc(t("wave")) + " " + w.n + '</span>' +
+              '<span class="pill">' + tList.length + ' ' + esc(t("tickets")) + '</span>' +
+            '</div>' +
+            '<span class="mono" style="font-size:11px;color:var(--dim)">' + waveLines + ' ' + esc(t("linesCount")) + '</span>' +
+          '</div>' +
+          '<div class="run-wave-bar">' +
+            '<div class="bar-done" style="width:' + donePct + '%"></div>' +
+            '<div class="bar-prog" style="width:' + inProgPct + '%"></div>' +
+            '<div class="bar-wait" style="width:' + pendingPct + '%"></div>' +
+          '</div>' +
+          '<div class="run-wave-tickets">' + tRows + '</div>' +
+        '</div>';
+      }).join("");
+    } else {
+      wavesCards = '<div class="empty">' + esc(t("noData")) + '</div>';
+    }
+
+    var wavesHtml = '<div class="run-waves-section">' +
+      '<div class="run-words-header">' +
+        '<div class="label" style="margin-bottom:0">' + esc(t("runWaves")) + (wavesList.length ? ' (' + wavesList.length + ')' : '') + '</div>' +
+        '<span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t("calibrationTarget")) + '</span>' +
+      '</div>' +
+      '<div class="run-waves-list">' + wavesCards + '</div>' +
+    '</div>';
+
+
+    var feedItems = (r.feed || []).slice(-50).reverse();
+    var feedRows = feedItems.length ? feedItems.map(function (item) {
+      return '<div class="run-feed-item">' +
+        '<span class="mono" style="color:var(--dim-2)">' + esc(fmtTime(item.t)) + '</span>' +
+        '<span class="pill" style="text-align:center">' + esc(item.kind) + '</span>' +
+        '<span class="grow" style="color:var(--text)">' + esc(item.text) + '</span>' +
+      '</div>';
+    }).join("") : '<div class="empty">' + esc(t("noEvents")) + '</div>';
+
+    var feedHtml = '<div class="run-feed-section">' +
+      '<div class="label">' + esc(t("runFeed")) + ' (' + feedItems.length + ')</div>' +
+      '<div class="run-feed-list">' + feedRows + '</div>' +
+    '</div>';
+
+    host.innerHTML = heroHtml + trackHtml + tilesHtml + gatesHtml + wavesHtml + wordsHtml + feedHtml;
+    host.querySelectorAll(".run-filter-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        setRunFilter(btn.getAttribute("data-filter"));
+      });
     });
   }
   function showTab(id) {
@@ -1999,12 +2855,18 @@ export function generateDashboardHtml(data) {
     document.getElementById("h-branch").textContent = d.project.branch || "—";
   }
   function applyLabels() {
+    var offEl = document.getElementById("offline-badge");
+    if (offEl && offEl.style.display !== "none") {
+      var offTxt = document.getElementById("offline-text");
+      if (offTxt) offTxt.textContent = t("offline");
+    }
     document.getElementById("live-text").textContent = document.getElementById("live").classList.contains("on") ? t("live") : t("snapshot");
     renderRail(DATA);
   }
   function render(d) {
     DATA = d;
     renderHeader(d);
+    if (d.run) renderRun(d);
     renderOverview(d);
     renderLogs(d);
     renderDiffs(d);
@@ -2033,6 +2895,20 @@ export function generateDashboardHtml(data) {
     var el = document.getElementById("elapsed");
     if (el) el.textContent = fmtDur(Math.max(0, Date.now() - startMs));
   }, 1000);
+  setInterval(tickRun, 1000);
+
+  function setOffline(on) {
+    var offEl = document.getElementById("offline-badge");
+    var liveEl = document.getElementById("live");
+    if (offEl) {
+      offEl.style.display = on ? "inline-flex" : "none";
+      var offTxt = document.getElementById("offline-text");
+      if (offTxt) offTxt.textContent = t("offline");
+    }
+    if (liveEl) {
+      liveEl.style.display = on ? "none" : "inline-flex";
+    }
+  }
 
   function setLive(on) {
     var b = document.getElementById("live");
@@ -2040,7 +2916,7 @@ export function generateDashboardHtml(data) {
     document.getElementById("live-text").textContent = on ? t("live") : t("snapshot");
   }
   function fp(d) {
-    return JSON.stringify({ p: d.progress, s: d.stages.map(function (x) { return x.id + x.status; }), g: d.git.files.length + ":" + d.git.added, l: d.log.entries.length, e: (d.events || []).length, c: d.critique.length });
+    return JSON.stringify({ r: (d.run ? d.run.rev : ""), p: d.progress, s: d.stages.map(function (x) { return x.id + x.status; }), g: d.git.files.length + ":" + d.git.added, l: d.log.entries.length, e: (d.events || []).length, c: d.critique.length });
   }
   function flashChanged(d) {
     var f = fp(d);
@@ -2054,9 +2930,22 @@ export function generateDashboardHtml(data) {
   }
   function refreshNow() {
     fetch("/api/state", { cache: "no-store" })
-      .then(function (r) { return r.json(); })
-      .then(function (fresh) { render(fresh); flashChanged(fresh); setLive(true); })
-      .catch(function () { setLive(false); });
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (fresh) {
+        render(fresh);
+        flashChanged(fresh);
+        setLive(true);
+        setOffline(false);
+      })
+      .catch(function () {
+        setLive(false);
+        if (window.NF_SNAPSHOT || IS_FROZEN) {
+          setOffline(true);
+        }
+      });
   }
   function openDiff(file) {
     var modal = document.getElementById("modal");
@@ -2079,6 +2968,7 @@ export function generateDashboardHtml(data) {
 
   function boot() {
     try {
+      if (IS_FROZEN) setOffline(true);
       render(DATA);
       fingerprint = fp(DATA);
       showTab(TAB);
@@ -2505,6 +3395,81 @@ export function sanitizeHttpState(data) {
       kinds: Array.isArray(e.kinds) ? e.kinds.map(String) : [],
     })),
   };
+  let run = null;
+  if (data.run && typeof data.run === "object") {
+    const ALLOWED_RUN_STATUSES = new Set(["open", "waiting", "closed", "failed", "working"]);
+    const runStatus = ALLOWED_RUN_STATUSES.has(data.run.status) ? data.run.status : (data.run.open ? "open" : "closed");
+    run = {
+      open: Boolean(data.run.open),
+      status: runStatus,
+      tier: ALLOWED_TIERS.has(data.run.tier) ? data.run.tier : "T1",
+      task: `Задача ${ALLOWED_TIERS.has(data.run.tier) ? data.run.tier : "T1"}`,
+      change: data.run.change ? String(data.run.change).replace(/[^a-zA-Z0-9_-]/g, "") : null,
+      startedAt: data.run.startedAt || null,
+      closedAt: data.run.closedAt || null,
+      stages: (data.run.stages || []).map((s) => ({
+        id: String(s?.id || ""),
+        status: ["done", "in_progress", "pending", "missed", "skipped"].includes(s?.status) ? s.status : "pending",
+        durationMs: Number(s?.durationMs) || 0,
+      })),
+      requirements: (data.run.requirements || []).map((r) => ({
+        id: String(r?.id || ""),
+        text: redactSecrets(String(r?.text || "")).replace(/[A-Za-z0-9_-]*SECRET[A-Za-z0-9_-]*/gi, "[REDACTED]").slice(0, 200),
+        status: ["done", "open", "deferred", "dropped"].includes(r?.status) ? r.status : "open",
+      })),
+      waves: (data.run.waves || []).map((w) => ({
+        n: Number(w?.n) || 1,
+        tickets: (w?.tickets || []).map((t) => ({
+          id: String(t?.id || ""),
+          title: String(t?.title || t?.id || ""),
+          status: String(t?.status || "pending"),
+          lines: Number(t?.lines) || 0,
+          ...(t?.zone ? { zone: t.zone } : {}),
+          ...(t?.requirements ? { requirements: t.requirements } : {}),
+        })),
+      })),
+      calibration: data.run.calibration ? {
+        targetLines: Number(data.run.calibration.targetLines) || 3000,
+        linesPerTicket: Number(data.run.calibration.linesPerTicket) || 3000,
+        minLines: Number(data.run.calibration.minLines) || 1500,
+        maxLines: Number(data.run.calibration.maxLines) || 4500,
+        totalLines: Number(data.run.calibration.totalLines) || 0,
+        totalTickets: Number(data.run.calibration.totalTickets) || 0,
+        avgLinesPerTicket: Number(data.run.calibration.avgLinesPerTicket) || 0,
+        hint: String(data.run.calibration.hint || calibrationHint(data.run.calibration.avgLinesPerTicket || 0)),
+      } : {
+        targetLines: 3000,
+        linesPerTicket: 3000,
+        minLines: 1500,
+        maxLines: 4500,
+        totalLines: 0,
+        totalTickets: 0,
+        avgLinesPerTicket: 0,
+        hint: "ok",
+      },
+      gates: {
+        G1: { ok: data.run.gates?.G1?.ok ?? null, label: String(data.run.gates?.G1?.label || "Manifest recorded"), status: data.run.gates?.G1?.status || "open" },
+        G2: { ok: data.run.gates?.G2?.ok ?? null, label: String(data.run.gates?.G2?.label || "OpenSpec valid"), status: data.run.gates?.G2?.status || "open" },
+        G3: { ok: data.run.gates?.G3?.ok ?? null, label: String(data.run.gates?.G3?.label || "Interfaces recorded"), status: data.run.gates?.G3?.status || "open" },
+        G4: { ok: data.run.gates?.G4?.ok ?? null, label: String(data.run.gates?.G4?.label || "Oracle ACCEPT"), status: data.run.gates?.G4?.status || "open" },
+      },
+      waits: (data.run.waits || []).map((w) => ({
+        kind: String(w?.kind || "wait"),
+        from: String(w?.from || ""),
+        to: String(w?.to || ""),
+        durationMs: Number(w?.durationMs) || 0,
+      })),
+      beats: (data.run.beats || []).map((b) => String(b)),
+      activeMs: Math.max(0, Number(data.run.activeMs) || 0),
+      waitMs: Math.max(0, Number(data.run.waitMs) || 0),
+      feed: (data.run.feed || []).map((f) => ({
+        t: String(f?.t || ""),
+        kind: String(f?.kind || "event"),
+        text: redactSecrets(String(f?.text || "")).replace(/[A-Za-z0-9_-]*SECRET[A-Za-z0-9_-]*/gi, "[REDACTED]").slice(0, 200),
+      })),
+      rev: String(data.run.rev || ""),
+    };
+  }
 
   return {
     timestamp: data.timestamp || new Date().toISOString(),
@@ -2550,6 +3515,7 @@ export function sanitizeHttpState(data) {
     critique,
     history,
     fleet,
+    run,
   };
 }
 
@@ -2867,10 +3833,11 @@ export function parseArgs(argv = []) {
     url: false,
     list: false,
     session: null,
+    freeze: false,
     help: false,
     errors: [],
   };
-  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "list", "session", "help"]);
+  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "list", "session", "help", "freeze"]);
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -2882,6 +3849,7 @@ export function parseArgs(argv = []) {
     else if (arg === "--checks") options.checks = true;
     else if (arg === "--json") options.json = true;
     else if (arg === "--url") options.url = true;
+    else if (arg === "--freeze") options.freeze = true;
     else if (arg === "--list") options.list = true;
     else if (arg === "--session" || arg.startsWith("--session=")) {
       const raw = arg.startsWith("--session=") ? arg.slice("--session=".length) : argv[++i];
@@ -2933,6 +3901,7 @@ export async function main(argv = process.argv.slice(2)) {
   --checks          Прогнать быстрые гейты (auto-review, prompt-lint) и закэшировать
   --port <n>        Порт сервера (по умолчанию: 4200)
   --json            Вывести агрегированные метрики в JSON
+  --freeze          Создать автономный HTML со снапшотом (dashboard-frozen.html)
   -h, --help        Показать эту справку
 `);
     return 0;
@@ -2989,6 +3958,17 @@ export async function main(argv = process.argv.slice(2)) {
     }
     process.stderr.write(`dashboard: ${info.error || "не удалось запустить"}\n`);
     return 1;
+  }
+
+  if (opts.freeze) {
+    const data = collectDashboardData(absRoot, { session: opts.session });
+    const sanitized = sanitizeHttpState(data);
+    const outPath = opts.output ? resolve(opts.output) : join(absRoot, "dashboard-frozen.html");
+    const dir = dirname(outPath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(outPath, generateDashboardHtml(sanitized, { frozen: true }), "utf8");
+    process.stdout.write(`Автономный дашборд сгенерирован: ${outPath}\n`);
+    return 0;
   }
 
   const data = collectDashboardData(absRoot);
