@@ -386,12 +386,42 @@ export async function collectAvailableModels(modelsYamlPath, probe = false) {
 }
 
 /**
- * Match priority entries against available models.
- * Case-insensitive substring match.
- * Resolution = first priority entry matching an available <provider>/<model>.
- * If no priority match succeeds among available models, use the neutral fallback marker.
+ * Deterministically derive the model family from a model id string.
+ * Rule: Extract the model identifier (stripping provider prefix before '/' if present),
+ * then take the prefix before the first '-' or ':' delimiter, lowercased.
+ * If no delimiter is present, the whole trimmed identifier is the family.
  */
-export function resolveOracleModel(priorityEntries, availableModels) {
+export function deriveModelFamily(modelId) {
+  if (typeof modelId !== "string" || !modelId.trim()) return "";
+  const raw = modelId.trim();
+  const name = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+  const match = name.toLowerCase().match(/^([^:-]+)/);
+  return match ? match[1] : name.toLowerCase();
+}
+
+/**
+ * Resolve oracle model:
+ * 1. resolveOracleModel({ builderFamily, candidates })
+ *    Derives family deterministically from the model id string.
+ *    Returns the first candidate of a different family.
+ *    Throws naming the conflicting family when none qualifies.
+ * 2. resolveOracleModel(priorityEntries, availableModels) [legacy]
+ *    Match priority entries against available models.
+ */
+export function resolveOracleModel(arg1, arg2) {
+  if (arg1 && typeof arg1 === "object" && !Array.isArray(arg1) && ("builderFamily" in arg1 || "candidates" in arg1)) {
+    const { builderFamily, candidates = [] } = arg1;
+    const bFamily = deriveModelFamily(builderFamily) || (typeof builderFamily === "string" ? builderFamily.toLowerCase().trim() : "");
+    for (const cand of candidates) {
+      const cFamily = deriveModelFamily(cand);
+      if (cFamily !== bFamily) {
+        return cand;
+      }
+    }
+    throw new Error(`No oracle candidate available outside conflicting family '${builderFamily}'`);
+  }
+  const priorityEntries = Array.isArray(arg1) ? arg1 : [];
+  const availableModels = Array.isArray(arg2) ? arg2 : [];
   for (const entry of priorityEntries) {
     const target = entry.match.toLowerCase();
     for (const avail of availableModels) {
