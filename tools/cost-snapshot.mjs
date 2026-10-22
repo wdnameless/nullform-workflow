@@ -44,3 +44,24 @@ export function checkAlerts(state, costs, options = {}) {
 
   return alerts;
 }
+
+export function normalizedCost(usage = {}, role = null) {
+  const out = Number(usage?.output ?? usage?.out ?? 0);
+  const write = Number(usage?.cacheWrite ?? usage?.write ?? 0);
+  const read = Number(usage?.cacheRead ?? usage?.read ?? 0);
+
+  const units = out * 5 + write * 1.25 + read * 0.1;
+
+  let cacheChurn = false;
+  if (read > 0) {
+    cacheChurn = (write / read) > 0.10;
+  } else if (write > 0) {
+    cacheChurn = true;
+  }
+
+  return {
+    units,
+    role: role !== undefined ? role : null,
+    cacheChurn,
+  };
+}
