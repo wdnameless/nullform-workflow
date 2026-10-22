@@ -30,8 +30,8 @@
       "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; quote args explicitly so shell-based omp.cmd spawns stop emitting DEP0190 on stderr install.ps1 treats as fatal; accept a complete plugin list when OMP 18.3.3+ exits 1 after printing it"
     },
     "tools/oracle-model.mjs": {
-      "lines": 780,
-      "reason": "Cross-family oracle selection (R01): deriveModelFamily + resolveOracleModel overload"
+      "lines": 796,
+      "reason": "Round1 cross-family selection + round2 assignChecker diversity gate"
     },
     "tools/tests/benchmark.test.mjs": {
       "lines": 889,
