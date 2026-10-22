@@ -393,6 +393,49 @@ function isUnfamiliarDir(file) {
   return /(?:^|\/)(?:experimental|legacy|vendor|unfamiliar|new-module|external)\//i.test(normalized);
 }
 
+function getTopLevelDir(file) {
+  const normalized = String(file || "").replace(/\\/g, "/").replace(/^\.?\//, "");
+  const slashIdx = normalized.indexOf("/");
+  if (slashIdx > 0) {
+    return normalized.slice(0, slashIdx);
+  }
+  return normalized ? "." : "";
+}
+
+function extractSignalKeywords(taskStr) {
+  if (!taskStr) return [];
+  const matched = new Set();
+  const lower = taskStr.toLowerCase();
+
+  const t3Literals = [
+    "multi-feature", "несколько фич", "множество задач",
+    "параллельн", "мульти-фич", "программа",
+  ];
+  for (const token of t3Literals) {
+    if (lower.includes(token)) {
+      matched.add(token);
+    }
+  }
+  if (VERB_PAIR_T3.test(taskStr)) {
+    matched.add("verb-pair-t3");
+  }
+
+  const t2Regexes = [
+    /\b(?:schema|migration|database|db|architectur\w*|redesign|refactor-all)\b/gi,
+    /(?:схем\w*|миграц\w*|архитектур\w*|баз[аы]\s+данных|редизайн\w*)/gi,
+  ];
+  for (const re of t2Regexes) {
+    const hits = taskStr.match(re);
+    if (hits) {
+      for (const h of hits) {
+        matched.add(h.toLowerCase());
+      }
+    }
+  }
+
+  return [...matched];
+}
+
 function suggestTier({ files = [], task = "" }) {
   const fileList = Array.isArray(files)
     ? files.filter(Boolean)
@@ -467,8 +510,16 @@ function suggestTier({ files = [], task = "" }) {
     reasons.push("базовое локальное изменение");
   }
 
+  const dirSpread = [...new Set(fileList.map(getTopLevelDir).filter(Boolean))];
+  const matchedKeywords = extractSignalKeywords(taskStr);
+  const rationale = {
+    fileCount: count,
+    dirSpread,
+    keywords: matchedKeywords,
+  };
+
   const confidence = Number((Math.min(matchedRules, totalRules) / totalRules).toFixed(2));
-  return { tier, confidence, reasons };
+  return { tier, confidence, reasons, rationale };
 }
 
 function cmdSuggest(flags) {
