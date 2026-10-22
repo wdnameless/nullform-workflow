@@ -187,3 +187,21 @@ export function authorize(tool, args) {
   recordDecision(tool, decision, args);
   return decision;
 }
+
+/**
+ * assertFactForcing — requires prior reads of callers/consumers before an edit.
+ * Throws an error naming any missing required read paths.
+ *
+ * @param {string} target - The path or identifier being edited.
+ * @param {{ reads?: string[], required?: string[] }} evidence - Read paths and required caller/consumer paths.
+ */
+export function assertFactForcing(target, evidence = {}) {
+  const reads = new Set(Array.isArray(evidence?.reads) ? evidence.reads : []);
+  const required = Array.isArray(evidence?.required) ? evidence.required : [];
+  const missing = required.filter((path) => !reads.has(path));
+  if (missing.length > 0) {
+    throw new Error(
+      `Fact-forcing check failed for "${target}": missing required reads: ${missing.join(', ')}`
+    );
+  }
+}
