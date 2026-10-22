@@ -6,7 +6,7 @@ delete process.env.OMP_SESSION_ID;
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs, { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import fs, { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -38,6 +38,10 @@ import {
   isAllowedHost,
   isCompatibleDashboard,
   probeDashboard,
+  collectRunState,
+  parseManifestRequirements,
+  computeGates,
+  sanitizeHttpState,
 } from "../dashboard.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../dashboard.mjs", import.meta.url)));
@@ -1232,6 +1236,267 @@ test("R07: /api/diff для мегабайтного неотслеживаем�
     if (bound) {
       await new Promise((r) => bound.server.close(r));
     }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ---------------------------------------------- D01, D02: Run View and --freeze */
+
+test("D01: parseManifestRequirements парсит 3-колоночные и 4-колоночные манифесты с verbatim до 200 символов", () => {
+  const mf3 = `# Manifest\n\n| ID | Requirement (user words) | Interpretation |\n|----|--------------------------|----------------|\n| R01 | "проанализруй детально autopilot" | Детальный разбор |\n| R02 | "длинное требование ${"a".repeat(250)}" | Описание |\n`;
+  const reqs3 = parseManifestRequirements(mf3);
+  assert.equal(reqs3.length, 2);
+  assert.equal(reqs3[0].id, "R01");
+  assert.equal(reqs3[0].text, "проанализруй детально autopilot");
+  assert.equal(reqs3[0].status, "open");
+  assert.equal(reqs3[1].text.length, 200, "текст обрезается ровно до 200 символов");
+
+  // При закрытом state все открытые требования закрываются
+  const closedReqs = parseManifestRequirements(mf3, { status: "closed" });
+  assert.equal(closedReqs[0].status, "done");
+
+  // 4-колоночный манифест с явным статусом
+  const mf4 = `| ID | Req | Detail | Status |\n|---|---|---|---|\n| R01 | "первое" | det | done |\n| R02 | "второе" | det | in-spec |\n`;
+  const reqs4 = parseManifestRequirements(mf4);
+  assert.equal(reqs4[0].status, "done");
+  assert.equal(reqs4[1].status, "open");
+});
+
+test("D01: computeGates вычисляет G1-G4 из артефактов и файлов", () => {
+  const tmp = createTempDir();
+  try {
+    // 1. Пустой прогон: все гейты open
+    const gEmpty = computeGates({ root: tmp, artifacts: {} });
+    assert.equal(gEmpty.G1.ok, null);
+    assert.equal(gEmpty.G1.status, "open");
+    assert.equal(gEmpty.G2.ok, null);
+    assert.equal(gEmpty.G3.ok, null);
+    assert.equal(gEmpty.G4.ok, null);
+
+    // 2. Только манифест записан
+    const mfPath = join(tmp, "manifest.md");
+    writeFileSync(mfPath, "| R01 | test | test | done |\n");
+    const gManifest = computeGates({
+      root: tmp,
+      artifacts: { manifest: { path: "manifest.md" } },
+    });
+    assert.equal(gManifest.G1.ok, true);
+    assert.equal(gManifest.G1.status, "pass");
+    assert.equal(gManifest.G2.ok, null);
+    assert.equal(gManifest.G2.status, "open");
+
+    // 3. OpenSpec валиден: proposal + tasks + specs
+    const chDir = join(tmp, "openspec", "changes", "test-change");
+    mkdirSync(join(chDir, "specs"), { recursive: true });
+    writeFileSync(join(chDir, "proposal.md"), "# Proposal\n");
+    writeFileSync(join(chDir, "tasks.md"), "# Tasks\n");
+    writeFileSync(join(chDir, "specs", "spec.md"), "# Spec\n");
+    const gOpenSpec = computeGates({
+      root: tmp,
+      change: "test-change",
+      artifacts: {
+        manifest: { path: "manifest.md" },
+        openspec: { path: "openspec/changes/test-change" },
+      },
+    });
+    assert.equal(gOpenSpec.G2.ok, true);
+    assert.equal(gOpenSpec.G2.status, "pass");
+
+    // 4. Interfaces записан
+    writeFileSync(join(chDir, "interfaces.md"), "# Interfaces\n");
+    const gInterfaces = computeGates({
+      root: tmp,
+      change: "test-change",
+      artifacts: {
+        manifest: { path: "manifest.md" },
+        openspec: { path: "openspec/changes/test-change" },
+        interfaces: { path: "openspec/changes/test-change/interfaces.md" },
+      },
+    });
+    assert.equal(gInterfaces.G3.ok, true);
+    assert.equal(gInterfaces.G3.status, "pass");
+
+    // 5. Oracle ACCEPT
+    const gOracleAccept = computeGates({
+      root: tmp,
+      change: "test-change",
+      artifacts: {
+        oracle: { detail: "ACCEPT: blind oracle proven" },
+      },
+    });
+    assert.equal(gOracleAccept.G4.ok, true);
+    assert.equal(gOracleAccept.G4.status, "pass");
+
+    // 6. Oracle REJECT
+    const gOracleReject = computeGates({
+      root: tmp,
+      change: "test-change",
+      artifacts: {
+        oracle: { detail: "REJECT: 3 failures" },
+      },
+    });
+    assert.equal(gOracleReject.G4.ok, false);
+    assert.equal(gOracleReject.G4.status, "fail");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("D01: collectRunState собирает состояние прогона, исключая waits из activeMs", () => {
+  const tmp = createTempDir();
+  try {
+    // Нет state.json -> null
+    assert.equal(collectRunState(tmp), null);
+
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+
+    const t0 = new Date(Date.now() - 60000).toISOString();
+    const state = {
+      tier: "T2",
+      task: "Test Run",
+      status: "open",
+      startedAt: t0,
+      artifacts: {
+        lane: { at: t0 },
+        recon: { at: t0 },
+      },
+      waits: [
+        { kind: "ask", from: new Date(Date.now() - 40000).toISOString(), to: new Date(Date.now() - 20000).toISOString(), durationMs: 20000 },
+      ],
+    };
+    writeFileSync(join(wfDir, "state.json"), JSON.stringify(state));
+    writeFileSync(join(wfDir, "events.jsonl"), JSON.stringify({ at: t0, kind: "start", text: "start test" }) + "\n");
+
+    const run = collectRunState(tmp);
+    assert.ok(run);
+    assert.equal(run.open, true);
+    assert.equal(run.tier, "T2");
+    assert.equal(run.stages.length, 6);
+    assert.equal(run.stages[0].status, "done");
+    assert.equal(run.stages[1].status, "done");
+    assert.equal(run.stages[2].status, "in_progress");
+    assert.equal(run.waits.length, 1);
+    assert.equal(run.waitMs, 20000);
+    assert.ok(run.activeMs >= 35000 && run.activeMs <= 45000, `activeMs (${run.activeMs}) должен быть около 40000 (60s - 20s)`);
+    assert.ok(run.rev, "rev присутствует");
+    assert.equal(run.feed.length, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("D01: /api/state и sanitizeHttpState включают run со всеми полями", () => {
+  const raw = {
+    project: { name: "test", branch: "main" },
+    task: { tier: "T2", status: "open" },
+    run: {
+      open: true,
+      status: "open",
+      tier: "T2",
+      task: "Задача T2",
+      stages: [{ id: "lane", status: "done" }],
+      requirements: [{ id: "R01", text: "требование", status: "open" }],
+      gates: {
+        G1: { ok: true, status: "pass", label: "Manifest recorded" },
+        G2: { ok: null, status: "open", label: "OpenSpec valid" },
+        G3: { ok: null, status: "open", label: "Interfaces recorded" },
+        G4: { ok: null, status: "open", label: "Oracle ACCEPT" },
+      },
+      waits: [],
+      beats: [],
+      activeMs: 5000,
+      waitMs: 0,
+      rev: "abc123",
+      feed: [{ t: new Date().toISOString(), kind: "start", text: "старт" }],
+    },
+  };
+  const s = sanitizeHttpState(raw);
+  assert.ok(s.run, "run сохранён в санитизированном состоянии");
+  assert.equal(s.run.tier, "T2");
+  assert.equal(s.run.activeMs, 5000);
+  assert.equal(s.run.rev, "abc123");
+  assert.equal(s.run.gates.G1.ok, true);
+  assert.equal(s.run.requirements[0].id, "R01");
+});
+
+test("D01 + D02: generateDashboardHtml содержит run секции и offline-бейдж", () => {
+  const data = {
+    project: { name: "test-proj", branch: "main", commit: { hash: "123", when: "" } },
+    task: { tier: "T2", status: "open", title: "Задача T2", elapsedMs: 0, budget: 25 },
+    progress: { percent: 10, stagesDone: 1, stagesRequired: 6, stagesSkipped: 0, artifactsDone: 1, artifactsTotal: 6 },
+    stages: [{ id: "lane", name: "Ярус", wave: 0, status: "done" }],
+    currentStage: { id: "recon", name: "Разведка", wave: 1, detail: "" },
+    timing: { elapsedMs: 0, remainingMin: null, remainingMax: null, medianTaskMs: 0 },
+    metrics: { briefCoverage: 20, requirements: { total: 1, byStatus: {}, items: [], change: null }, debt: { total: 0, noTrigger: 0, items: [] }, memory: { status: "fresh", daysSince: null }, checks: null },
+    git: { isRepo: false, branch: "main", commit: { hash: "", when: "" }, files: [], added: 0, deleted: 0, staged: 0, unstaged: 0, untracked: 0 },
+    arch: { name: "root", kind: "dir", lines: 0, files: 0, children: [] },
+    archGraph: { nodes: [], edges: [] },
+    modules: [],
+    critique: [],
+    history: { total: 0, medianMs: 0, byTier: {}, recent: [] },
+    fleet: [],
+    events: [],
+    log: { file: null, entries: [] },
+    session: { key: "local", name: null },
+    waves: [],
+    run: {
+      open: true,
+      status: "open",
+      tier: "T2",
+      task: "Тестовая задача",
+      stages: [{ id: "lane", status: "done" }, { id: "recon", status: "in_progress" }],
+      requirements: [{ id: "R01", text: "Сделать вкладку run", status: "open" }],
+      gates: {
+        G1: { ok: true, status: "pass", label: "Manifest recorded" },
+        G2: { ok: null, status: "open", label: "OpenSpec valid" },
+        G3: { ok: null, status: "open", label: "Interfaces recorded" },
+        G4: { ok: null, status: "open", label: "Oracle ACCEPT" },
+      },
+      waits: [],
+      beats: [],
+      activeMs: 12000,
+      waitMs: 3000,
+      rev: "rev-12345",
+      feed: [{ t: new Date().toISOString(), kind: "start", text: "запуск" }],
+    },
+  };
+
+  const html = generateDashboardHtml(data);
+  assert.ok(html.includes("run-hero"), "HTML содержит hero-блок");
+  assert.ok(html.includes("run-track"), "HTML содержит stage track");
+  assert.ok(html.includes("run-words"), "HTML содержит words (R##)");
+  assert.ok(html.includes("run-gates"), "HTML содержит gates (G1-G4)");
+  assert.ok(html.includes("run-feed"), "HTML содержит feed");
+  assert.ok(html.includes("badge-offline"), "HTML содержит freeze-бейдж");
+  assert.ok(html.includes("window.NF_SNAPSHOT"), "HTML содержит window.NF_SNAPSHOT");
+  assert.ok(html.includes("renderRun"), "HTML содержит функцию renderRun");
+  assert.ok(html.includes("tickRun"), "HTML содержит функцию tickRun");
+});
+
+test("D02: parseArgs распознаёт --freeze", () => {
+  const opts = parseArgs(["--freeze"]);
+  assert.equal(opts.freeze, true);
+});
+
+test("D02: main --freeze создаёт dashboard-frozen.html со снапшотом", async () => {
+  const tmp = createTempDir();
+  try {
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(join(wfDir, "state.json"), JSON.stringify({ tier: "T1", status: "open", startedAt: new Date().toISOString() }));
+
+    const res = spawnSync(process.execPath, [CLI_PATH, "--root", tmp, "--freeze"], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    assert.equal(res.status, 0, `вызов завершился успешно: ${res.stderr}`);
+    const frozenFile = join(tmp, "dashboard-frozen.html");
+    assert.ok(existsSync(frozenFile), "dashboard-frozen.html создан");
+    const content = readFileSync(frozenFile, "utf8");
+    assert.ok(content.includes("window.NF_SNAPSHOT"), "снапшот записан в window.NF_SNAPSHOT");
+    assert.ok(content.includes("badge-offline"), "бейдж offline присутствует");
+  } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });

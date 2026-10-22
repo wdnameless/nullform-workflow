@@ -24,6 +24,11 @@
 - [ ] Snapshot dashboard, graceful server, collision detect.
 - [ ] Tests: journal, carry/cost/lock, snapshot/server.
 
+## Slice E — Run view (R13)
+- [ ] collectRunState + gates + /api/state.run + вкладка run + тик 1с + i18n.
+- [ ] --freeze offline-снапшот.
+- [ ] Tests: dashboard run-view + live /api/state smoke.
+
 ## Integration (parent)
 - [ ] Merge slices from isolated worktrees, resolve conflicts.
 - [ ] Run deterministic gates (tests/lint/size) and blind oracle acceptance.

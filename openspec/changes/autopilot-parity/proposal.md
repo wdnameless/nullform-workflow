@@ -6,7 +6,7 @@ Deep analysis (`.tmp/autopilot-gap-registry.md`) mapped every autopilot
 mechanism against our harness. The user demands full parity plus superiority:
 «весь их фунцкионал и мы были лучше этого фреймворка по все параметрам».
 
-## What changes (12 requirements, 4 slices)
+## What changes (13 requirements, 5 slices)
 
 1. **Run control** (R01/R02/R05): mode/depth dials, frozen brief + redaction,
    requirement types/statuses with mechanical recount.
@@ -16,6 +16,7 @@ mechanism against our harness. The user demands full parity plus superiority:
    adversarial checklists, three-axis review with F1 and repair limits.
 4. **Ops journal** (R10/R11/R12): beats/honest time, waits, commits check,
    trailers, carried debts, normalized cost, skills-lock, snapshot server.
+5. **Run view** (R13): dashboard run tab — hero-статус, трек стадий, «твои слова», G1–G4, лента, часы active/wait, --freeze.
 
 ## Non-goals
 
