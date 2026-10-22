@@ -22,8 +22,8 @@
       "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
     "tools/dashboard.mjs": {
-      "lines": 2949,
-      "reason": "realpathSync entry guard and flushed JSON; bounded untracked diff reads and sanitized static snapshots (R06-R07)"
+      "lines": 3057,
+      "reason": "Autopilot parity (R12): embedSnapshot + detectCollision + isOwnServer helpers"
     },
     "tools/doctor.mjs": {
       "lines": 1513,
@@ -54,8 +54,8 @@
       "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated on macOS"
     },
     "tools/workflow.mjs": {
-      "lines": 1986,
-      "reason": "Blast-radius triage rationale (R06): fileCount/dirSpread/keywords in suggestTier"
+      "lines": 2013,
+      "reason": "Autopilot parity (R01): mode/depth dials in cmdStart + state"
     }
   },
   "functions": {
@@ -186,11 +186,11 @@
       "reason": ""
     },
     "tools/workflow.mjs:cmdStart": {
-      "lines": 125,
+      "lines": 144,
       "file": "tools/workflow.mjs",
       "name": "cmdStart",
-      "line": 512,
-      "reason": ""
+      "line": 599,
+      "reason": "Autopilot parity (R01): mode/depth validation + persistence"
     },
     "tools/workflow.mjs:cmdCheckCi": {
       "lines": 187,

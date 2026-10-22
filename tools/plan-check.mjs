@@ -5,6 +5,17 @@
  * @param {Array<{ id: string, requirements: string[], wave: number, zone: string[] | string, blockedBy: string[] }>} tickets
  * @returns {{ ok: boolean, problems: string[] }}
  */
+function normalizePath(p) {
+  return String(p).replace(/\\/g, "/").replace(/^\.?\//, "").replace(/\/+$/, "");
+}
+
+function pathsCollide(p1, p2) {
+  const n1 = normalizePath(p1);
+  const n2 = normalizePath(p2);
+  if (!n1 || !n2) return false;
+  return n1 === n2 || n2.startsWith(n1 + "/") || n1.startsWith(n2 + "/");
+}
+
 export function checkPlan(manifestRows = [], tickets = []) {
   const problems = [];
   const rows = Array.isArray(manifestRows) ? manifestRows : [];
@@ -81,16 +92,6 @@ export function checkPlan(manifestRows = [], tickets = []) {
   }
 
   // 5. Disjoint zones per wave via path-prefix check
-  function normalizePath(p) {
-    return p.replace(/\\/g, "/").replace(/^\.?\//, "").replace(/\/+$/, "");
-  }
-
-  function pathsCollide(p1, p2) {
-    const n1 = normalizePath(p1);
-    const n2 = normalizePath(p2);
-    if (!n1 || !n2) return false;
-    return n1 === n2 || n2.startsWith(n1 + "/") || n1.startsWith(n2 + "/");
-  }
 
   const waveMap = new Map();
   for (const t of tList) {
