@@ -18,15 +18,15 @@ briefing=только CLI, skills=полный SKILL.md, bench=синтетич�
 
 | ID | Verbatim user quote | Observable acceptance | Status |
 |---|---|---|---|
-| R01 | «умная установка, детектила есть установлены ли уже воркфлоу наш на этом компе, какая его версия» | `nullform install` детектит существующую установку (harness-root, VERSION) и печатает версию. Тест: детект v1.2.0 vs v1.3.0. | open |
-| R02 | «если установлена старая версия, он бы обновлялся» | Старая версия → предложение/авто-update с journal + rollback. Тест: upgrade-путь с restore. | open |
-| R03 | «если установлен другой workflow, с которым конфликтует наш, мы бы об этом предупреждали и советовали удалять» | Детект чужих маркеров (.autopilot/, чужие skills, чужие CLAUDE-маршруты) → WARN со списком и командой удаления, ничего не трогаем. Тест: фикстура с .autopilot/. | open |
-| R04 | «постоянно во время тасков бы себя проверяли правильно ли все работает корректно, ничего ли мы не упускаем» + «проверь работу доктора» | `workflow start/check` дергают doctor-lite (node, harness-files, tools-syntax, skills-lock) ≤2с; провал = WARN, не блок. Доктор: OK (9 pass/4 warn/0 fail на 2026-10-22). Тест: lite-прогон. | open |
-| R05 | «интерактивный брифинг с раундами» (CLI-only) | `workflow brief --rounds N` задаёт раунды вопросов в CLI, пишет ответы в manifest addenda, рекомендованные ответы по умолчанию. Тест: сид-вопросы → addenda. | open |
-| R06 | «джборд такой же, как у них» — волны/бары | Run-view: волны тикетов из plan-check (wave/zone), бары статусов, калибровка ~3K строк/тикет как рекомендация нарезки. Тест: волны в /api/state.run. | open |
-| R07 | «benchmark с цифрами» (синтетический T2) | `tools/benchmark-run.mjs` на контрольном брифе: normalizedCost по ролям, время, тесты; цифры в docs/benchmark.md. Тест: детерминированный прогон на фикстуре. | open |
-| R08 | «npx skills add» (полный SKILL.md) | skills/nullform/SKILL.md: Briefing→Build→Review, установка через skills.sh-совместимый пакет. Тест: skills-doctor валидирует пакет. | open |
-| R09 | «улучшение по всем параметрам: качество кода, экономия, результат, поддерживаемость, очищение мусора» | Quality gates: code-size, lint, debt-ledger, logs-hygiene в check-ci; мусор (orphan-files, .tmp) чистится/репортится. Тест: гейты краснеют на фикстуре-мусоре. | open |
+| R01 | «умная установка, детектила есть установлены ли уже воркфлоу наш на этом компе, какая его версия» | `nullform install` детектит существующую установку (harness-root, VERSION) и печатает версию. Тест: детект v1.2.0 vs v1.3.0. | verified |
+| R02 | «если установлена старая версия, он бы обновлялся» | Старая версия → предложение/авто-update с journal + rollback. Тест: upgrade-путь с restore. | verified |
+| R03 | «если установлен другой workflow, с которым конфликтует наш, мы бы об этом предупреждали и советовали удалять» | Детект чужих маркеров (.autopilot/, чужие skills, чужие CLAUDE-маршруты) → WARN со списком и командой удаления, ничего не трогаем. Тест: фикстура с .autopilot/. | verified |
+| R04 | «постоянно во время тасков бы себя проверяли правильно ли все работает корректно, ничего ли мы не упускаем» + «проверь работу доктора» | `workflow start/check` дергают doctor-lite (node, harness-files, tools-syntax, skills-lock) ≤2с; провал = WARN, не блок. Доктор: OK (9 pass/4 warn/0 fail на 2026-10-22). Тест: lite-прогон. | verified |
+| R05 | «интерактивный брифинг с раундами» (CLI-only) | `workflow brief --rounds N` задаёт раунды вопросов в CLI, пишет ответы в manifest addenda, рекомендованные ответы по умолчанию. Тест: сид-вопросы → addenda. | verified |
+| R06 | «джборд такой же, как у них» — волны/бары | Run-view: волны тикетов из plan-check (wave/zone), бары статусов, калибровка ~3K строк/тикет как рекомендация нарезки. Тест: волны в /api/state.run. | verified |
+| R07 | «benchmark с цифрами» (синтетический T2) | `tools/benchmark-run.mjs` на контрольном брифе: normalizedCost по ролям, время, тесты; цифры в docs/benchmark.md. Тест: детерминированный прогон на фикстуре. | verified |
+| R08 | «npx skills add» (полный SKILL.md) | skills/nullform/SKILL.md: Briefing→Build→Review, установка через skills.sh-совместимый пакет. Тест: skills-doctor валидирует пакет. | verified |
+| R09 | «улучшение по всем параметрам: качество кода, экономия, результат, поддерживаемость, очищение мусора» | Quality gates: code-size, lint, debt-ledger, logs-hygiene в check-ci; мусор (orphan-files, .tmp) чистится/репортится. Тест: гейты краснеют на фикстуре-мусоре. | verified |
 
 Scope: 4 слайса (A smart-install R01–R04, B briefing R05, C waves+bench R06–R07, D skills+quality R08–R09).
 Out of scope: авто-карантин чужих файлов, дашборд-блок вопросов, сравнение с живым autopilot-прогоном.

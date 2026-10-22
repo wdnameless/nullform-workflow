@@ -8,10 +8,9 @@ delete process.env.OMP_SESSION_ID;
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs, { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import fs, { rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer, request as httpRequest } from "node:http";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -1099,7 +1098,7 @@ test("R07: CLI --ensure и --url учитывают --session, создавая 
 test("R07: две разные сессии получают разные серверы и не усыновляют друг друга, а та же сессия переиспользуется", async () => {
   const tmp = createTempDir();
   const portA = await getFreePort();
-  const portB = await getFreePort();
+  await getFreePort();
   let pidA = null;
   let pidB = null;
   try {
