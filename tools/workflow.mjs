@@ -55,6 +55,7 @@ import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } 
 import { runWorkspaceCommand } from "./workflow/workspaces.mjs";
 import { runClaimCommand } from "./workflow/claims.mjs";
 import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review/http-runtime.mjs";
+import { doctorLite } from "./doctor-lite.mjs";
 function printWorkflowHelp() {
   printCoreWorkflowHelp();
   console.log("  review-run: --admission-policy PATH runs the controlled Node transport; --dry-run reads policy/ledger read-only; --resume-session DIR imports exact evidence.");
@@ -597,6 +598,10 @@ const ALLOWED_MODES = ["full", "semi", "interview", "manual"];
 const ALLOWED_DEPTHS = ["strict", "normal", "deep"];
 
 function cmdStart(root, flags) {
+  const doc = doctorLite(root);
+  if (!doc.ok) {
+    console.error(`workflow doctor-lite WARN: ${doc.warns.join("; ")}`);
+  }
   return withStateLock(root, () => {
     reconcileMetrics(root, { lockHeld: true });
     const tier = String(flags.tier || "").toUpperCase();
@@ -1029,6 +1034,10 @@ function cmdEscalate(root, flags) {
 }
 
 function cmdCheck(root) {
+  const doc = doctorLite(root);
+  if (!doc.ok) {
+    console.error(`workflow doctor-lite WARN: ${doc.warns.join("; ")}`);
+  }
   const st = load(root);
   if (!st) { console.error("workflow: no task state. Run `start --tier <T> --task \"...\"`."); return 1; }
   const { reqs, missing, invalid, ok } = validateArtifacts(root, st);

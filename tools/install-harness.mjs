@@ -32,9 +32,10 @@ import { fileURLToPath } from "node:url";
 import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, preflightAllConfigs, hashContent, isCommandInPath } from "./installation/config.mjs";
 import { applyHarnessAdapter, prepareHermesActivation } from "./installation/adapters.mjs";
 import { validateRootPath, validatePathWithinScope } from './worktree-snapshot.mjs';
-import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement, readInstallationState } from './installation/state.mjs';
+import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement, readInstallationState, readLocalVersion } from './installation/state.mjs';
 import { acquireDeploymentLock, DeploymentJournal, safeAtomicWrite, getDeploymentJournalPath } from './installation/journal.mjs';
 import { resolveHostHome, validateHostManifest, inspectHarness } from "./installation/profiles.mjs";
+import { detectInstall, suggestUpgrade, detectConflicts } from "./install-detect.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -432,6 +433,17 @@ function installHarness(options = {}) {
         detail: "Preserved assets may differ from packaged behavior and security policy; review local changes.",
       },
     };
+    const detected = detectInstall(userHome);
+    const currentVersion = readLocalVersion(REPO_ROOT);
+    const upgradeHint = suggestUpgrade(detected?.version, currentVersion);
+    plan.detection = detected;
+    plan.upgrade = upgradeHint;
+    plan.conflicts = detected?.conflicts || [];
+    if (detected?.conflicts?.length > 0) {
+      for (const c of detected.conflicts) {
+        plan.warnings.push(`Conflict with ${c.marker} at ${c.path}: ${c.advice}`);
+      }
+    }
     const assetContext = { dryRun: Boolean(options.dryRun), priorManaged, plan, journal };
     const copyAsset = (src, dest) => copyAndSubstitute(src, dest, slashRoot, assetContext);
 
@@ -570,6 +582,17 @@ async function main() {
       console.log(`[dry-run] Plan for NULLFORM WORKFLOW harness installation:`);
       console.log(`  Harness:      ${plan.harness}`);
       console.log(`  Install root: ${plan.root}`);
+      if (plan.detection?.present) {
+        console.log(`  Existing ver: v${plan.detection.version || "unknown"} (${plan.detection.root || "unknown"})`);
+      }
+      if (plan.upgrade?.needed) {
+        console.log(`  [UPGRADE]     ${plan.upgrade.message}`);
+      }
+      if (plan.conflicts?.length > 0) {
+        for (const c of plan.conflicts) {
+          process.stderr.write(`[WARN] Conflict with ${c.marker} at ${c.path}: ${c.advice}\n`);
+        }
+      }
       console.log(`  Files count:  ${plan.filesToCopy.length}`);
       console.log(`  Adapters:`);
       for (const adapter of plan.adapters) {
@@ -586,6 +609,17 @@ async function main() {
     console.log(`\n=== NULLFORM WORKFLOW Installer ===`);
     console.log(`  Harness:      ${plan.harness}`);
     console.log(`  Install root: ${plan.root}`);
+    if (plan.detection?.present) {
+      console.log(`  Existing ver: v${plan.detection.version || "unknown"} (${plan.detection.root || "unknown"})`);
+    }
+    if (plan.upgrade?.needed) {
+      console.log(`  [UPGRADE]     ${plan.upgrade.message}`);
+    }
+    if (plan.conflicts?.length > 0) {
+      for (const c of plan.conflicts) {
+        process.stderr.write(`[WARN] Conflict with ${c.marker} at ${c.path}: ${c.advice}\n`);
+      }
+    }
     console.log(`  Files copied: ${plan.filesToCopy.length}`);
     console.log(`  Adapters:`);
     for (const adapter of plan.adapters) {
@@ -605,4 +639,4 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
   main();
 }
 
-export { installHarness, detectHarness, discoverCandidates, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath };
+export { installHarness, detectHarness, discoverCandidates, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath, detectInstall, suggestUpgrade, detectConflicts };
