@@ -400,6 +400,22 @@ export function deriveModelFamily(modelId) {
 }
 
 /**
+ * Assign a checker (reviewer/oracle) enforcing model diversity.
+ * Returns the first candidate whose derived family differs from writerFamily.
+ * Throws naming the conflicting family when none qualifies.
+ */
+export function assignChecker({ writerFamily, candidates = [] } = {}) {
+  const wFamily = deriveModelFamily(writerFamily) || (typeof writerFamily === "string" ? writerFamily.toLowerCase().trim() : "");
+  for (const cand of candidates) {
+    const cFamily = deriveModelFamily(cand);
+    if (cFamily !== wFamily) {
+      return cand;
+    }
+  }
+  throw new Error(`No checker candidate available outside conflicting family '${writerFamily}'`);
+}
+
+/**
  * Resolve oracle model:
  * 1. resolveOracleModel({ builderFamily, candidates })
  *    Derives family deterministically from the model id string.
