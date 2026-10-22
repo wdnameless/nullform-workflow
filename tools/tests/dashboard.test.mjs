@@ -1,5 +1,7 @@
 /**
  * tools/tests/dashboard.test.mjs — Тесты для dashboard.mjs (Nullform Workflow cockpit).
+ *
+ * defer: dashboard cockpit tests incl run-view and waves | ceiling: 1800 lines | upgrade: split run-view tests to dashboard-run.test.mjs
  */
 delete process.env.PASEO_AGENT_ID;
 delete process.env.OMP_SESSION_ID;

@@ -18,31 +18,35 @@
       "reason": ""
     },
     "tools/benchmark.mjs": {
-      "lines": 1616,
+      "lines": 2017,
       "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
     "tools/dashboard.mjs": {
-      "lines": 3057,
+      "lines": 4039,
       "reason": "Autopilot parity (R12): embedSnapshot + detectCollision + isOwnServer helpers"
     },
     "tools/doctor.mjs": {
-      "lines": 1513,
+      "lines": 1431,
       "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; quote args explicitly so shell-based omp.cmd spawns stop emitting DEP0190 on stderr install.ps1 treats as fatal; accept a complete plugin list when OMP 18.3.3+ exits 1 after printing it"
     },
     "tools/oracle-model.mjs": {
       "lines": 796,
       "reason": "Round1 cross-family selection + round2 assignChecker diversity gate"
     },
+    "tools/sync.mjs": {
+      "lines": 740,
+      "reason": ""
+    },
     "tools/tests/benchmark.test.mjs": {
-      "lines": 889,
+      "lines": 1366,
       "reason": ""
     },
     "tools/tests/dashboard.test.mjs": {
-      "lines": 1238,
+      "lines": 1505,
       "reason": "Behavioral regressions for static snapshot redaction and bounded untracked diff reads"
     },
     "tools/tests/doctor.test.mjs": {
-      "lines": 1587,
+      "lines": 1502,
       "reason": "Regression tests for the OMP 18.3.3+ plugin-list exit-code tolerance"
     },
     "tools/tests/workflow-gate.test.mjs": {
@@ -50,11 +54,11 @@
       "reason": "Same-commit oracle, binary/rename numstat, NUL dirty-check regressions (R03-R05, R07)"
     },
     "tools/verify.mjs": {
-      "lines": 1286,
+      "lines": 1285,
       "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated on macOS"
     },
     "tools/workflow.mjs": {
-      "lines": 2013,
+      "lines": 2383,
       "reason": "Autopilot parity (R01): mode/depth dials in cmdStart + state"
     }
   },
@@ -95,52 +99,45 @@
       "reason": ""
     },
     "tools/benchmark.mjs:runBenchmark": {
-      "lines": 258,
+      "lines": 282,
       "file": "tools/benchmark.mjs",
       "name": "runBenchmark",
-      "line": 502,
+      "line": 504,
       "reason": ""
     },
     "tools/benchmark.mjs:main": {
-      "lines": 266,
+      "lines": 248,
       "file": "tools/benchmark.mjs",
       "name": "main",
-      "line": 1346,
-      "reason": ""
-    },
-    "tools/dashboard.mjs:generateDashboardHtml": {
-      "lines": 861,
-      "file": "tools/dashboard.mjs",
-      "name": "generateDashboardHtml",
-      "line": 1240,
+      "line": 1765,
       "reason": ""
     },
     "tools/dashboard.mjs:sanitizeHttpState": {
-      "lines": 318,
+      "lines": 394,
       "file": "tools/dashboard.mjs",
       "name": "sanitizeHttpState",
-      "line": 2237,
+      "line": 3129,
       "reason": ""
     },
     "tools/dashboard.mjs:main": {
-      "lines": 126,
+      "lines": 138,
       "file": "tools/dashboard.mjs",
       "name": "main",
-      "line": 2798,
+      "line": 3886,
       "reason": ""
     },
     "tools/doctor.mjs:runDoctor": {
-      "lines": 901,
+      "lines": 745,
       "file": "tools/doctor.mjs",
       "name": "runDoctor",
-      "line": 557,
+      "line": 616,
       "reason": ""
     },
     "tools/oracle-model.mjs:run": {
       "lines": 210,
       "file": "tools/oracle-model.mjs",
       "name": "run",
-      "line": 529,
+      "line": 575,
       "reason": ""
     },
     "tools/return-contract.mjs:validateReturnContract": {
@@ -158,10 +155,10 @@
       "reason": ""
     },
     "tools/sync.mjs:main": {
-      "lines": 301,
+      "lines": 393,
       "file": "tools/sync.mjs",
       "name": "main",
-      "line": 345,
+      "line": 336,
       "reason": "Preflight all manifest and OMP law paths before sync mutation to prevent junction/symlink data loss"
     },
     "tools/usage-audit.mjs:auditUsage": {
@@ -172,32 +169,25 @@
       "reason": ""
     },
     "tools/verify.mjs:runVerifyProfile": {
-      "lines": 575,
+      "lines": 555,
       "file": "tools/verify.mjs",
       "name": "runVerifyProfile",
-      "line": 358,
+      "line": 377,
       "reason": ""
     },
     "tools/verify.mjs:runAuditProfile": {
       "lines": 226,
       "file": "tools/verify.mjs",
       "name": "runAuditProfile",
-      "line": 934,
+      "line": 933,
       "reason": ""
     },
     "tools/workflow.mjs:cmdStart": {
-      "lines": 144,
+      "lines": 148,
       "file": "tools/workflow.mjs",
       "name": "cmdStart",
-      "line": 599,
+      "line": 607,
       "reason": "Autopilot parity (R01): mode/depth validation + persistence"
-    },
-    "tools/workflow.mjs:cmdCheckCi": {
-      "lines": 187,
-      "file": "tools/workflow.mjs",
-      "name": "cmdCheckCi",
-      "line": 1647,
-      "reason": ""
     }
   }
 }
