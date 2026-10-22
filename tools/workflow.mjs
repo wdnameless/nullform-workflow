@@ -33,11 +33,15 @@
  * State: .workflow/state.json (gitignored). Exit 0 ok, 1 unmet, 2 cannot run.
  * Budgets: .workflow/budgets.json (optional, defaults {T0:10, T1:25, T2:45, T3:45}).
  * Zero dependencies. Node 18+ / Bun.
+ *
+ * defer: workflow monolithic cli with ci gates | ceiling: 2500 lines | upgrade: split into workflow-ci and workflow-core modules
  */
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join, dirname, resolve, basename } from "node:path";
+import { join, dirname, resolve, basename, relative } from "node:path";
+import { checkCodeSize, loadConfig as loadCodeSizeConfig } from "./code-size.mjs";
+import { scanRepo } from "./debt-ledger.mjs";
 import {
   NEGATIVE_VERDICT_RE,
   isPositiveOracleVerdict,
@@ -1777,8 +1781,294 @@ function checkPushEvidence(root, flags) {
   return cmdCheckCi(root, { tier, recon, 'base-ref': baseRef });
 }
 
-function cmdCheckCi(root, flags) {
+function checkQualityGates(root = ".", options = {}) {
+  const absRoot = resolve(root);
+  const gates = [];
+  const allViolators = [];
+
+  // Gate 1: code-size
+  try {
+    const baseConfig = loadCodeSizeConfig(absRoot);
+    const sizeConfig = {
+      maxLines: options["max-lines"] ? Number(options["max-lines"]) : (options.maxLines ?? baseConfig.maxLines),
+      maxFunctionLines: options["max-function-lines"] ? Number(options["max-function-lines"]) : (options.maxFunctionLines ?? baseConfig.maxFunctionLines),
+      scope: options.scope || (existsSync(join(absRoot, "tools")) ? baseConfig.scope : ["**/*.js", "**/*.mjs", "**/*.cjs", "**/*.ts", ...baseConfig.scope]),
+    };
+    const sizeRes = checkCodeSize(absRoot, { config: sizeConfig });
+    if (!sizeRes.ok && sizeRes.failures.length > 0) {
+      const violators = sizeRes.failures.map((f) => `${f.file} (${f.message})`);
+      gates.push({
+        name: "code-size",
+        status: "fail",
+        path: [...new Set(sizeRes.failures.map((f) => f.file))].join(", "),
+        violators,
+        detail: `${sizeRes.failures.length} threshold violations`,
+      });
+      allViolators.push(...violators);
+    } else if (sizeRes.stats.fileOffenders > 0 || sizeRes.stats.functionOffenders > 0) {
+      gates.push({
+        name: "code-size",
+        status: "warn",
+        path: sizeRes.files[0]?.file || ".",
+        violators: [],
+        detail: `${sizeRes.stats.exempt} exempt, ${sizeRes.stats.baselined} baselined`,
+      });
+    } else {
+      gates.push({
+        name: "code-size",
+        status: "pass",
+        path: ".",
+        violators: [],
+        detail: `all ${sizeRes.stats.scannedFiles} files within limits`,
+      });
+    }
+  } catch (err) {
+    gates.push({
+      name: "code-size",
+      status: "warn",
+      path: ".",
+      violators: [],
+      detail: `code-size scan skipped: ${err.message}`,
+    });
+  }
+
+  // Gate 2: debt-ledger
+  try {
+    const debtRes = scanRepo(absRoot, { marker: options.marker || "defer" });
+    const maxUntriggered = options["max-untriggered-debt"] !== undefined
+      ? Number(options["max-untriggered-debt"])
+      : (options.maxUntriggeredDebt ?? 0);
+    const maxTotalDebt = options["max-debt"] !== undefined
+      ? Number(options["max-debt"])
+      : (options.maxDebt ?? Infinity);
+    const strictDebt = Boolean(options["strict-debt"] || options.strictDebt);
+
+    const untriggeredMarkers = debtRes.markers.filter((m) => m.noTrigger);
+    const hasViolations = untriggeredMarkers.length > maxUntriggered ||
+      debtRes.total > maxTotalDebt ||
+      (strictDebt && debtRes.total > 0);
+
+    if (hasViolations) {
+      const offending = (strictDebt || debtRes.total > maxTotalDebt)
+        ? debtRes.markers
+        : untriggeredMarkers;
+      const violators = offending.map((m) => `${m.file}:${m.line} (defer: ${m.what || "untriggered debt"})`);
+      gates.push({
+        name: "debt-ledger",
+        status: "fail",
+        path: [...new Set(offending.map((m) => m.file))].join(", "),
+        violators,
+        detail: `${offending.length} unmanaged/untriggered debt marker(s)`,
+      });
+      allViolators.push(...violators);
+    } else if (debtRes.total > 0) {
+      gates.push({
+        name: "debt-ledger",
+        status: "warn",
+        path: Object.keys(debtRes.byFile).join(", "),
+        violators: [],
+        detail: `${debtRes.total} tracked defer markers with upgrade triggers`,
+      });
+    } else {
+      gates.push({
+        name: "debt-ledger",
+        status: "pass",
+        path: ".",
+        violators: [],
+        detail: "0 defer markers",
+      });
+    }
+  } catch (err) {
+    gates.push({
+      name: "debt-ledger",
+      status: "warn",
+      path: ".",
+      violators: [],
+      detail: `debt scan skipped: ${err.message}`,
+    });
+  }
+
+  // Gate 3: logs-hygiene
+  try {
+    const candidateLogDirs = [
+      options["logs-dir"] ? join(absRoot, options["logs-dir"]) : null,
+      join(absRoot, "logs"),
+      join(absRoot, ".logs"),
+      join(absRoot, ".omp", "logs"),
+    ].filter(Boolean).filter((d) => existsSync(d));
+
+    let totalLogFiles = 0;
+    let totalLogBytes = 0;
+    let staleFilesCount = 0;
+    const maxAgeMs = (options["max-log-days"] ? Number(options["max-log-days"]) : (options.maxLogDays ?? 14)) * 24 * 60 * 60 * 1000;
+    const maxFiles = options["max-log-files"] ? Number(options["max-log-files"]) : (options.maxLogFiles ?? 1000);
+    const maxBytes = options["max-log-bytes"] ? Number(options["max-log-bytes"]) : (options.maxLogBytes ?? 50 * 1024 * 1024);
+    const now = Date.now();
+
+    for (const d of candidateLogDirs) {
+      try {
+        const files = readdirSync(d);
+        for (const f of files) {
+          try {
+            const st = statSync(join(d, f));
+            if (st.isFile()) {
+              totalLogFiles++;
+              totalLogBytes += st.size;
+              if (now - st.mtimeMs > maxAgeMs) staleFilesCount++;
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    const logPath = candidateLogDirs[0] ? relative(absRoot, candidateLogDirs[0]) || "logs" : "logs";
+    if (totalLogFiles > maxFiles || totalLogBytes > maxBytes) {
+      const violator = `${logPath} (${totalLogFiles} files, ${(totalLogBytes / 1024 / 1024).toFixed(1)} MB exceeds threshold ${maxFiles} files / ${(maxBytes / 1024 / 1024).toFixed(1)} MB)`;
+      gates.push({
+        name: "logs-hygiene",
+        status: "fail",
+        path: logPath,
+        violators: [violator],
+        detail: violator,
+      });
+      allViolators.push(violator);
+    } else if (staleFilesCount > 0 || totalLogFiles > 100) {
+      gates.push({
+        name: "logs-hygiene",
+        status: "warn",
+        path: logPath,
+        violators: [],
+        detail: `${totalLogFiles} log files (${(totalLogBytes / 1024 / 1024).toFixed(1)} MB), ${staleFilesCount} stale (>14 days)`,
+      });
+    } else {
+      gates.push({
+        name: "logs-hygiene",
+        status: "pass",
+        path: candidateLogDirs[0] ? logPath : ".",
+        violators: [],
+        detail: `${totalLogFiles} log files in hygiene bounds`,
+      });
+    }
+  } catch (err) {
+    gates.push({
+      name: "logs-hygiene",
+      status: "warn",
+      path: ".",
+      violators: [],
+      detail: `logs-hygiene scan skipped: ${err.message}`,
+    });
+  }
+
+  // Gate 4: orphan / orphan-files
+  try {
+    const orphanViolators = [];
+    const NEVER_DIRS = new Set([
+      "node_modules", ".git", ".archmap", "target", "dist", "build", "out", "coverage", ".venv",
+    ]);
+
+    function scanOrphans(dir, relPrefix = "") {
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (NEVER_DIRS.has(entry.name)) continue;
+        const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+        const fullPath = join(dir, entry.name);
+
+        if (entry.isDirectory()) {
+          if (entry.name === ".tmp") {
+            try {
+              const subEntries = readdirSync(fullPath, { withFileTypes: true });
+              for (const sub of subEntries) {
+                if (sub.name !== "worktrees") {
+                  orphanViolators.push(`${relPath}/${sub.name}`);
+                }
+              }
+            } catch {}
+            continue;
+          }
+          scanOrphans(fullPath, relPath);
+        } else if (entry.isFile()) {
+          const lower = entry.name.toLowerCase();
+          if (/(?:^|[._-])orphan(?:[._-]|$)/i.test(lower) || /\.(tmp|bak|swp|orig)$/i.test(lower)) {
+            orphanViolators.push(relPath);
+          }
+        }
+      }
+    }
+
+    scanOrphans(absRoot);
+
+    const maxOrphans = options["max-orphans"] !== undefined
+      ? Number(options["max-orphans"])
+      : (options.maxOrphans ?? 0);
+
+    if (orphanViolators.length > maxOrphans) {
+      gates.push({
+        name: "orphan-files",
+        status: "fail",
+        path: orphanViolators.join(", "),
+        violators: orphanViolators.map((f) => `${f} (orphan/temporary file)`),
+        detail: `${orphanViolators.length} orphan/temporary file(s) found`,
+      });
+      allViolators.push(...orphanViolators);
+    } else if (orphanViolators.length > 0) {
+      gates.push({
+        name: "orphan-files",
+        status: "warn",
+        path: orphanViolators.join(", "),
+        violators: [],
+        detail: `${orphanViolators.length} orphan file(s) tolerated`,
+      });
+    } else {
+      gates.push({
+        name: "orphan-files",
+        status: "pass",
+        path: ".",
+        violators: [],
+        detail: "0 orphan files",
+      });
+    }
+  } catch (err) {
+    gates.push({
+      name: "orphan-files",
+      status: "warn",
+      path: ".",
+      violators: [],
+      detail: `orphan scan skipped: ${err.message}`,
+    });
+  }
+
+  const ok = allViolators.length === 0 && gates.every((g) => g.status !== "fail");
+
+  for (const g of gates) {
+    const msg = `workflow check-ci: [${g.name}] ${g.status}: ${g.path} (${g.detail})`;
+    if (g.status === "fail") {
+      console.error(msg);
+    } else {
+      console.log(msg);
+    }
+  }
+
+  if (!ok) {
+    console.error(`workflow check-ci: quality gate failures:`);
+    for (const v of allViolators) {
+      console.error(`  - ${v}`);
+    }
+  }
+
+  return { ok, gates, violators: allViolators };
+}
+
+function cmdCheckCi(root, flags = {}) {
   if (flags.push) return checkPushEvidence(root, flags);
+  if (flags.quality || flags["quality-only"] || flags.tier === "quality") {
+    const qg = checkQualityGates(root, flags);
+    return qg.ok ? 0 : 1;
+  }
   let tier = null;
   if (flags.labels !== undefined) {
     const raw = Array.isArray(flags.labels) ? flags.labels : String(flags.labels).split(/[\s,]+/);
@@ -1822,14 +2112,21 @@ function cmdCheckCi(root, flags) {
         }
       }
     }
+    if (!flags["skip-quality"] && !flags.skipQuality) {
+      const qg = checkQualityGates(root, flags);
+      if (!qg.ok) return 1;
+    }
     console.log(`workflow check-ci: tier T0 passed (lean tier).`);
     return 0;
   }
 
   if (tier === "T1") {
+    if (!flags["skip-quality"] && !flags.skipQuality) {
+      const qg = checkQualityGates(root, flags);
+      if (!qg.ok) return 1;
+    }
     return validateCheckCiT1(root, flags, baseRef);
   }
-
   // T2 and T3 require committed change artifacts
   const changeId = flags.change ? String(flags.change).trim() : null;
   if (!changeId) {
@@ -1944,6 +2241,10 @@ function cmdCheckCi(root, flags) {
   // and fails spuriously on sequential oracle commits.
   const gitCode = validateCheckCiGit(root, oracleRelForCommit || join(relChangeDir, "review-evidence.json"), baseRef);
   if (gitCode !== 0) return gitCode;
+  if (!flags["skip-quality"] && !flags.skipQuality) {
+    const qg = checkQualityGates(root, flags);
+    if (!qg.ok) return 1;
+  }
   console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
   return 0;
 }
@@ -2067,7 +2368,7 @@ export function runWorkflowCli(argv = [], options = {}) {
 
 /* ---------------------------------------------------------------------- exports and main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, checkQualityGates, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS };
 
 import { fileURLToPath } from "node:url";
 
