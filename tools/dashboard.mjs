@@ -425,6 +425,118 @@ export function parseManifestRequirements(file, state = null) {
 }
 
 /**
+ * Рекомендация нарезки задач (~3000 строк/тикет).
+ * merge если <1500, split если >4500, иначе ok.
+ * @param {number} lines
+ * @returns {"merge" | "split" | "ok"}
+ */
+export function calibrationHint(lines) {
+  const n = Number(lines) || 0;
+  if (n < 1500) return "merge";
+  if (n > 4500) return "split";
+  return "ok";
+}
+
+/**
+ * Собирает волны тикетов из plan-check артефактов (tickets с wave/zone).
+ * @param {string|object|Array} root Путь к корню репозитория или объекту/массиву с тикетами
+ * @returns {Array<{ n: number, tickets: Array<{ id: string, title: string, status: string, lines: number }> }>}
+ */
+function readTicketsFile(p) {
+  if (!p || !existsSync(p)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(p, "utf8"));
+    if (Array.isArray(raw)) return raw;
+    if (raw && Array.isArray(raw.tickets)) return raw.tickets;
+  } catch {}
+  return null;
+}
+
+export function collectWaves(root = ".") {
+  let tickets = [];
+  if (Array.isArray(root)) {
+    tickets = root;
+  } else if (root && typeof root === "object" && Array.isArray(root.tickets)) {
+    tickets = root.tickets;
+  } else {
+    const absRoot = resolve(typeof root === "string" ? root : ".");
+    tickets = readTicketsFile(absRoot) || [];
+
+    if (tickets.length === 0) {
+      const candidates = [
+        join(absRoot, "tickets.json"),
+        join(absRoot, "plan.json"),
+        join(absRoot, ".workflow", "tickets.json"),
+        join(absRoot, ".workflow", "plan.json"),
+        join(absRoot, ".workflow", "plan-check.json"),
+      ];
+      for (const p of candidates) {
+        const loaded = readTicketsFile(p);
+        if (loaded) { tickets = loaded; break; }
+      }
+    }
+
+    if (tickets.length === 0) {
+      const statePath = join(absRoot, ".workflow", "state.json");
+      if (existsSync(statePath)) {
+        try {
+          const st = JSON.parse(readFileSync(statePath, "utf8"));
+          if (Array.isArray(st.tickets)) tickets = st.tickets;
+          else if (st.plan && Array.isArray(st.plan.tickets)) tickets = st.plan.tickets;
+        } catch {}
+      }
+    }
+
+    if (tickets.length === 0) {
+      const changesDir = join(absRoot, "openspec", "changes");
+      if (existsSync(changesDir)) {
+        try {
+          for (const d of readdirSync(changesDir)) {
+            const found = readTicketsFile(join(changesDir, d, "tickets.json")) ||
+                          readTicketsFile(join(changesDir, d, "plan.json"));
+            if (found) { tickets = found; break; }
+          }
+        } catch {}
+      }
+    }
+  }
+
+  if (!Array.isArray(tickets) || tickets.length === 0) {
+    return [];
+  }
+
+  const waveMap = new Map();
+  for (const t of tickets) {
+    if (!t || typeof t !== "object") continue;
+    const waveNum = typeof t.wave === "number" && Number.isInteger(t.wave) ? t.wave : (Number(t.n) || 1);
+    if (!waveMap.has(waveNum)) {
+      waveMap.set(waveNum, []);
+    }
+
+    let lines = 0;
+    if (typeof t.lines === "number" && !Number.isNaN(t.lines)) {
+      lines = t.lines;
+    }
+
+    waveMap.get(waveNum).push({
+      id: String(t.id || ""),
+      title: String(t.title || t.name || t.id || ""),
+      status: String(t.status || (t.done ? "done" : "pending")),
+      lines,
+      ...(t.zone ? { zone: t.zone } : {}),
+      ...(t.requirements ? { requirements: t.requirements } : {}),
+    });
+  }
+
+  return Array.from(waveMap.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([n, tList]) => ({
+      n,
+      tickets: tList,
+    }));
+}
+
+/**
  * Гейты качества G1–G4:
  * G1: manifest записан
  * G2: openspec валиден (proposal + tasks + specs)
@@ -671,6 +783,27 @@ export function collectRunState(root = ".", _session = null) {
     return { id, status, durationMs };
   });
 
+  const waves = collectWaves(absRoot);
+  let totalLines = 0;
+  let totalTickets = 0;
+  for (const w of waves) {
+    for (const t of (w.tickets || [])) {
+      totalLines += Number(t.lines) || 0;
+      totalTickets++;
+    }
+  }
+  const avgLines = totalTickets > 0 ? Math.round(totalLines / totalTickets) : 0;
+  const calibration = {
+    targetLines: 3000,
+    linesPerTicket: 3000,
+    minLines: 1500,
+    maxLines: 4500,
+    totalLines,
+    totalTickets,
+    avgLinesPerTicket: avgLines,
+    hint: calibrationHint(avgLines),
+  };
+
   const gates = computeGates({ root: absRoot, change, artifacts, state, stages, requirements, waits });
 
   const rev = createHash("sha256")
@@ -682,6 +815,8 @@ export function collectRunState(root = ".", _session = null) {
         reqs: requirements,
         gates,
         waitsCount: waits.length,
+        wavesCount: waves.length,
+        totalLines,
         eventsCount: feed.length,
         closedAt: state.closedAt,
       })
@@ -699,6 +834,8 @@ export function collectRunState(root = ".", _session = null) {
     closedAt: state.closedAt || null,
     stages,
     requirements,
+    waves,
+    calibration,
     gates,
     waits,
     beats: Array.isArray(state.beats) ? state.beats : (Array.isArray(state.journal?.beats) ? state.journal.beats : []),
@@ -1833,6 +1970,15 @@ export function generateDashboardHtml(data, options = {}) {
   .run-feed-list { font-family: var(--mono); font-size: 11.5px; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
   .run-feed-item { display: grid; grid-template-columns: 66px 85px 1fr; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line-soft); }
   .run-feed-item:last-child { border-bottom: 0; }
+  /* ---------- run waves (universal-1) ---------- */
+  .run-waves-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; margin-bottom: 16px; }
+  .run-wave-card { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: var(--r); padding: 12px 14px; margin-bottom: 12px; }
+  .run-wave-card:last-child { margin-bottom: 0; }
+  .run-wave-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
+  .run-wave-bar { height: 6px; border-radius: 3px; background: var(--line); display: flex; overflow: hidden; margin-bottom: 10px; }
+  .run-wave-bar .bar-done { background: var(--lime); }
+  .run-wave-bar .bar-prog { background: var(--blue); }
+  .run-wave-bar .bar-wait { background: var(--amber); }
   .badge-offline { font-family: var(--mono); font-size: 11px; padding: 4px 10px; border-radius: 999px; background: #C81E1E; color: #fff; font-weight: 700; display: inline-flex; align-items: center; gap: 5px; }
 </style>
 </head>
@@ -1941,6 +2087,13 @@ export function generateDashboardHtml(data, options = {}) {
       runFilterAll: "Все", runFilterDone: "Выполнены", runFilterOpen: "В работе",
       gateG1: "G1: Манифест записан", gateG2: "G2: OpenSpec валиден", gateG3: "G3: Интерфейсы записаны", gateG4: "G4: Приёмка Оракула",
       gatePass: "ПРОЙДЕН", gateOpen: "ОТКРЫТ", gateFail: "ПРОВАЛ",
+      runWaves: "Волны выполнения (SDD)",
+      calibrationTarget: "Калибровка ~3000 строк/тикет",
+      calibMerge: "слить (<1500)",
+      calibSplit: "разбить (>4500)",
+      calibOk: "в норме (~3K)",
+      tickets: "задач",
+      linesCount: "строк",
       offline: "OFFLINE", offlineBadge: "автономный снимок", noRun: "Нет активного прогона воркфлоу",
     },
     en: {
@@ -1992,6 +2145,13 @@ export function generateDashboardHtml(data, options = {}) {
       gateG1: "G1: Manifest recorded", gateG2: "G2: OpenSpec valid", gateG3: "G3: Interfaces recorded", gateG4: "G4: Oracle acceptance",
       gatePass: "PASS", gateOpen: "OPEN", gateFail: "FAIL",
       offline: "OFFLINE", offlineBadge: "offline snapshot", noRun: "No active workflow run",
+      runWaves: "Execution waves (SDD)",
+      calibrationTarget: "Calibration ~3000 lines/ticket",
+      calibMerge: "merge (<1500)",
+      calibSplit: "split (>4500)",
+      calibOk: "optimal (~3K)",
+      tickets: "tickets",
+      linesCount: "lines",
     }
   };
   function t(k) { return (I18N[lang] && I18N[lang][k]) || (I18N.ru[k] || k); }
@@ -2205,6 +2365,76 @@ export function generateDashboardHtml(data, options = {}) {
       '</div>' +
       '<div class="run-words-list">' + reqRows + '</div>' +
     '</div>';
+    var wavesList = r.waves || [];
+    var wavesCards = "";
+    if (wavesList.length > 0) {
+      wavesCards = wavesList.map(function (w) {
+        var tList = w.tickets || [];
+        var doneCount = tList.filter(function (t) { return t.status === "done" || t.status === "closed" || t.status === "verified"; }).length;
+        var inProgCount = tList.filter(function (t) { return t.status === "in_progress" || t.status === "running" || t.status === "active"; }).length;
+        var pendingCount = Math.max(0, tList.length - doneCount - inProgCount);
+        var donePct = tList.length ? Math.round((doneCount / tList.length) * 100) : 0;
+        var inProgPct = tList.length ? Math.round((inProgCount / tList.length) * 100) : 0;
+        var pendingPct = Math.max(0, 100 - donePct - inProgPct);
+        var waveLines = tList.reduce(function (sum, t) { return sum + (Number(t.lines) || 0); }, 0);
+
+        var tRows = tList.map(function (t) {
+          var tLines = Number(t.lines) || 0;
+          var tHint = tLines < 1500 ? "merge" : (tLines > 4500 ? "split" : "ok");
+          var hintBadge = "";
+          if (tHint === "merge") {
+            hintBadge = '<span class="pill" style="color:var(--amber);border-color:color-mix(in srgb, var(--amber) 40%, transparent)">' + esc(t("calibMerge")) + '</span>';
+          } else if (tHint === "split") {
+            hintBadge = '<span class="pill" style="color:var(--red);border-color:color-mix(in srgb, var(--red) 40%, transparent)">' + esc(t("calibSplit")) + '</span>';
+          } else if (tLines > 0) {
+            hintBadge = '<span class="pill" style="color:var(--dim)">' + esc(t("calibOk")) + '</span>';
+          }
+          var isDone = t.status === "done" || t.status === "closed" || t.status === "verified";
+          var isProg = t.status === "in_progress" || t.status === "running" || t.status === "active";
+          var stCls = isDone ? "done" : (isProg ? "open" : "deferred");
+          var stLabel = isDone ? t("st_done") : (isProg ? t("st_in_progress") : t("st_pending"));
+
+          return '<div class="run-req-row">' +
+            '<span class="run-req-id">' + esc(t.id) + '</span>' +
+            '<span class="run-req-status ' + stCls + '">' + esc(stLabel) + '</span>' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;overflow:hidden;flex:1">' +
+              '<span style="color:var(--text);font-weight:600;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">' + esc(t.title || t.id) + '</span>' +
+              '<div style="display:flex;align-items:center;gap:6px;flex:0 0 auto">' +
+                (tLines ? '<span class="mono" style="font-size:11px;color:var(--dim)">' + tLines + ' ' + esc(t("linesCount")) + '</span>' : '') +
+                hintBadge +
+              '</div>' +
+            '</div>' +
+          '</div>';
+        }).join("");
+
+        return '<div class="run-wave-card">' +
+          '<div class="run-wave-header">' +
+            '<div style="display:flex;align-items:center;gap:8px">' +
+              '<span class="mono" style="font-weight:700;font-size:12px">' + esc(t("wave")) + " " + w.n + '</span>' +
+              '<span class="pill">' + tList.length + ' ' + esc(t("tickets")) + '</span>' +
+            '</div>' +
+            '<span class="mono" style="font-size:11px;color:var(--dim)">' + waveLines + ' ' + esc(t("linesCount")) + '</span>' +
+          '</div>' +
+          '<div class="run-wave-bar">' +
+            '<div class="bar-done" style="width:' + donePct + '%"></div>' +
+            '<div class="bar-prog" style="width:' + inProgPct + '%"></div>' +
+            '<div class="bar-wait" style="width:' + pendingPct + '%"></div>' +
+          '</div>' +
+          '<div class="run-wave-tickets">' + tRows + '</div>' +
+        '</div>';
+      }).join("");
+    } else {
+      wavesCards = '<div class="empty">' + esc(t("noData")) + '</div>';
+    }
+
+    var wavesHtml = '<div class="run-waves-section">' +
+      '<div class="run-words-header">' +
+        '<div class="label" style="margin-bottom:0">' + esc(t("runWaves")) + (wavesList.length ? ' (' + wavesList.length + ')' : '') + '</div>' +
+        '<span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t("calibrationTarget")) + '</span>' +
+      '</div>' +
+      '<div class="run-waves-list">' + wavesCards + '</div>' +
+    '</div>';
+
 
     var feedItems = (r.feed || []).slice(-50).reverse();
     var feedRows = feedItems.length ? feedItems.map(function (item) {
@@ -2220,7 +2450,7 @@ export function generateDashboardHtml(data, options = {}) {
       '<div class="run-feed-list">' + feedRows + '</div>' +
     '</div>';
 
-    host.innerHTML = heroHtml + trackHtml + tilesHtml + gatesHtml + wordsHtml + feedHtml;
+    host.innerHTML = heroHtml + trackHtml + tilesHtml + gatesHtml + wavesHtml + wordsHtml + feedHtml;
     host.querySelectorAll(".run-filter-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
         setRunFilter(btn.getAttribute("data-filter"));
@@ -3187,6 +3417,36 @@ export function sanitizeHttpState(data) {
         text: redactSecrets(String(r?.text || "")).replace(/[A-Za-z0-9_-]*SECRET[A-Za-z0-9_-]*/gi, "[REDACTED]").slice(0, 200),
         status: ["done", "open", "deferred", "dropped"].includes(r?.status) ? r.status : "open",
       })),
+      waves: (data.run.waves || []).map((w) => ({
+        n: Number(w?.n) || 1,
+        tickets: (w?.tickets || []).map((t) => ({
+          id: String(t?.id || ""),
+          title: String(t?.title || t?.id || ""),
+          status: String(t?.status || "pending"),
+          lines: Number(t?.lines) || 0,
+          ...(t?.zone ? { zone: t.zone } : {}),
+          ...(t?.requirements ? { requirements: t.requirements } : {}),
+        })),
+      })),
+      calibration: data.run.calibration ? {
+        targetLines: Number(data.run.calibration.targetLines) || 3000,
+        linesPerTicket: Number(data.run.calibration.linesPerTicket) || 3000,
+        minLines: Number(data.run.calibration.minLines) || 1500,
+        maxLines: Number(data.run.calibration.maxLines) || 4500,
+        totalLines: Number(data.run.calibration.totalLines) || 0,
+        totalTickets: Number(data.run.calibration.totalTickets) || 0,
+        avgLinesPerTicket: Number(data.run.calibration.avgLinesPerTicket) || 0,
+        hint: String(data.run.calibration.hint || calibrationHint(data.run.calibration.avgLinesPerTicket || 0)),
+      } : {
+        targetLines: 3000,
+        linesPerTicket: 3000,
+        minLines: 1500,
+        maxLines: 4500,
+        totalLines: 0,
+        totalTickets: 0,
+        avgLinesPerTicket: 0,
+        hint: "ok",
+      },
       gates: {
         G1: { ok: data.run.gates?.G1?.ok ?? null, label: String(data.run.gates?.G1?.label || "Manifest recorded"), status: data.run.gates?.G1?.status || "open" },
         G2: { ok: data.run.gates?.G2?.ok ?? null, label: String(data.run.gates?.G2?.label || "OpenSpec valid"), status: data.run.gates?.G2?.status || "open" },
