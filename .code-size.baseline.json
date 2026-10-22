@@ -30,8 +30,8 @@
       "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; quote args explicitly so shell-based omp.cmd spawns stop emitting DEP0190 on stderr install.ps1 treats as fatal; accept a complete plugin list when OMP 18.3.3+ exits 1 after printing it"
     },
     "tools/oracle-model.mjs": {
-      "lines": 750,
-      "reason": ""
+      "lines": 780,
+      "reason": "Cross-family oracle selection (R01): deriveModelFamily + resolveOracleModel overload"
     },
     "tools/tests/benchmark.test.mjs": {
       "lines": 889,
@@ -54,8 +54,8 @@
       "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated on macOS"
     },
     "tools/workflow.mjs": {
-      "lines": 1935,
-      "reason": "Fail-closed nested Git measurement, NUL porcelain paths and Markdown-bold Oracle verdict integrity (R04-R05)"
+      "lines": 1986,
+      "reason": "Blast-radius triage rationale (R06): fileCount/dirSpread/keywords in suggestTier"
     }
   },
   "functions": {
