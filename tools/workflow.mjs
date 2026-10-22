@@ -138,7 +138,12 @@ function load(root) {
     // "a task with no requirements": otherwise `check` reports COMPLETE on `{}`
     // and `status` dies with a TypeError on the missing artifacts map.
     if (!isPlainObject(parsed) || !LADDER.includes(parsed.tier)) return null;
-    return { ...parsed, artifacts: isPlainObject(parsed.artifacts) ? parsed.artifacts : {} };
+    return {
+      mode: parsed.mode || "semi",
+      depth: parsed.depth || "normal",
+      ...parsed,
+      artifacts: isPlainObject(parsed.artifacts) ? parsed.artifacts : {},
+    };
   }
   catch { return null; }
 }
@@ -588,12 +593,27 @@ function logEvent(root, kind, text, extra = {}) {
   }
 }
 
+const ALLOWED_MODES = ["full", "semi", "interview", "manual"];
+const ALLOWED_DEPTHS = ["strict", "normal", "deep"];
+
 function cmdStart(root, flags) {
   return withStateLock(root, () => {
     reconcileMetrics(root, { lockHeld: true });
     const tier = String(flags.tier || "").toUpperCase();
     if (!LADDER.includes(tier)) {
       console.error(`workflow: --tier must be one of ${LADDER.join(', ')} (got '${flags.tier || ''}')`);
+      return 2;
+    }
+
+    const mode = flags.mode !== undefined ? String(flags.mode) : "semi";
+    if (!ALLOWED_MODES.includes(mode)) {
+      console.error(`workflow: --mode must be one of ${ALLOWED_MODES.join(', ')} (got '${flags.mode}')`);
+      return 2;
+    }
+
+    const depth = flags.depth !== undefined ? String(flags.depth) : "normal";
+    if (!ALLOWED_DEPTHS.includes(depth)) {
+      console.error(`workflow: --depth must be one of ${ALLOWED_DEPTHS.join(', ')} (got '${flags.depth}')`);
       return 2;
     }
 
@@ -612,11 +632,16 @@ function cmdStart(root, flags) {
           st = {
             version: 1,
             tier,
+            mode,
+            depth,
             task: String(flags.task || "(untitled)"),
             startedAt: new Date().toISOString(),
             status: "refused",
             artifacts: {},
           };
+        } else {
+          st.mode = mode;
+          st.depth = depth;
         }
         st.autoRefusal = refusal;
         save(root, st);
@@ -676,6 +701,8 @@ function cmdStart(root, flags) {
     const st = {
       version: 1,
       tier,
+      mode,
+      depth,
       task: String(flags.task || "(untitled)"),
       startedAt: new Date().toISOString(),
       status: "open",
@@ -1976,7 +2003,7 @@ export function runWorkflowCli(argv = [], options = {}) {
 
 /* ---------------------------------------------------------------------- exports and main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, printWorkflowHelp };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS };
 
 import { fileURLToPath } from "node:url";
 
