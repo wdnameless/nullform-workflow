@@ -55,9 +55,12 @@ import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } 
 import { runWorkspaceCommand } from "./workflow/workspaces.mjs";
 import { runClaimCommand } from "./workflow/claims.mjs";
 import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review/http-runtime.mjs";
+import { runBriefRounds, appendAddenda } from "./brief-rounds.mjs";
+import { oracleInput } from "./brief.mjs";
 function printWorkflowHelp() {
   printCoreWorkflowHelp();
   console.log("  review-run: --admission-policy PATH runs the controlled Node transport; --dry-run reads policy/ledger read-only; --resume-session DIR imports exact evidence.");
+  console.log("  brief: --rounds N (default 2, max 5) --manifest PATH [--brief TEXT|PATH] runs interactive briefing rounds.");
 }
 const DIR = ".workflow";
 const FILE = "state.json";
@@ -1970,6 +1973,57 @@ function cmdStageB(root, flags) {
   } catch (err) { console.error(`workflow stage-b error: ${err.message}`); return 1; }
 }
 
+async function cmdBrief(root, flags, options = {}) {
+  try {
+    let rounds = flags.rounds !== undefined ? parseInt(flags.rounds, 10) : 2;
+    if (isNaN(rounds) || rounds < 1) rounds = 2;
+    if (rounds > 5) rounds = 5;
+
+    let manifestPath = flags.manifest ? String(flags.manifest).trim() : null;
+    if (!manifestPath) {
+      const st = load(root);
+      if (st?.artifacts?.manifest?.path) {
+        manifestPath = st.artifacts.manifest.path;
+      }
+    }
+    if (!manifestPath) {
+      console.error("workflow brief: manifest path required (--manifest <path>)");
+      return 1;
+    }
+    manifestPath = resolve(root, manifestPath);
+
+    let briefText = "";
+    const briefArg = flags.brief || flags["brief-file"] || flags.file;
+    if (briefArg) {
+      const candidatePath = resolve(root, String(briefArg));
+      if (existsSync(candidatePath) && statSync(candidatePath).isFile()) {
+        briefText = readFileSync(candidatePath, "utf8");
+      } else {
+        briefText = String(briefArg);
+      }
+    } else {
+      const manifestDir = dirname(manifestPath);
+      try {
+        const frozen = oracleInput(manifestDir);
+        if (frozen && existsSync(frozen)) {
+          briefText = readFileSync(frozen, "utf8");
+        }
+      } catch {
+        // No frozen brief, briefText defaults to empty
+      }
+    }
+
+    const ask = options?.ask;
+    const addenda = await runBriefRounds(briefText, { rounds, ask });
+    appendAddenda(manifestPath, addenda);
+    console.log(`workflow brief: recorded ${addenda.length} addenda in ${basename(manifestPath)} (${rounds} rounds).`);
+    return 0;
+  } catch (err) {
+    console.error(`workflow brief error: ${err.message}`);
+    return 1;
+  }
+}
+
 export function runWorkflowCli(argv = [], options = {}) {
   const args = parse(argv);
   const root = args.flags.root ? String(args.flags.root) : (options.cwd || process.cwd());
@@ -1993,6 +2047,7 @@ export function runWorkflowCli(argv = [], options = {}) {
     case "check-ci":     code = cmdCheckCi(root, args.flags); break;
     case "review-run":   code = cmdReviewRun(root, args.flags, Math.max(0, args._.length - 1)); break;
     case "stage-b":      code = cmdStageB(root, args.flags); break;
+    case "brief":        code = cmdBrief(root, args.flags, options); break;
     default:
       if (cmd !== undefined) console.error(`workflow: unknown command '${cmd}'\n`);
       printWorkflowHelp();
@@ -2003,10 +2058,15 @@ export function runWorkflowCli(argv = [], options = {}) {
 
 /* ---------------------------------------------------------------------- exports and main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS };
 
 import { fileURLToPath } from "node:url";
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
-  process.exitCode = runWorkflowCli(process.argv.slice(2));
+  const result = runWorkflowCli(process.argv.slice(2));
+  if (result && typeof result.then === "function") {
+    result.then((c) => { process.exitCode = typeof c === "number" ? c : 0; });
+  } else {
+    process.exitCode = result;
+  }
 }
