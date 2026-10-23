@@ -209,3 +209,23 @@ Loop:
   6. Run all tests → confirm no regressions
   7. Repeat
 ```
+
+## Angry Tests (adapted from yegor256/prompt, MIT)
+
+Style for hostile, behavior-focused tests. Apply on top of AAA/TDD above.
+
+1. **One behavior, one assertion**: each test verifies a single behavior and
+   ends with exactly one assert as its last statement. Split multi-assert
+   tests; each failure must point at exactly one broken behavior.
+2. **Phrase failure messages negatively**: state what must NOT happen
+   (`"must not accept empty name"`, `"must never return null"`), so a
+   failure reads as a violated contract.
+3. **Name tests as sentences**: `test_rejects_empty_name`,
+   `cannot_checkout_with_expired_card` — the name is the specification.
+4. **Isolate**: no shared mutable attributes, no setUp/tearDown cleverness,
+   no inter-test constants. Inline brief fixtures; generate bulky ones
+   (tmp dirs) at runtime.
+5. **Fakes over mocks**: prefer hand-written fakes/stubs; keep filesystem,
+   sockets, and memory unmocked where a fake is cheap.
+6. **Bounded runtime**: timeouts on every wait; assume no Internet;
+   ephemeral ports; retry-then-quarantine for flaky concurrency blocks.
