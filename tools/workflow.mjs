@@ -36,10 +36,11 @@
  *
  * defer: workflow monolithic cli with ci gates | ceiling: 2500 lines | upgrade: split into workflow-ci and workflow-core modules
  */
-import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, lstatSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname, resolve, basename, relative } from "node:path";
+import { readJsonlSafe } from "./session-log.mjs";
 import {
   validateOracleArtifact,
   getPorcelainStatusRaw,
@@ -156,8 +157,19 @@ function save(root, st) {
   // затирать друг другу запись (раньше это был общий state.json.tmp).
   const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
   mkdirSync(dirname(target), { recursive: true });
+  assertWorkflowDirOwned(root);
   writeFileSync(tmp, JSON.stringify(st, null, 2));
   renameSync(tmp, target);
+}
+
+// S5: .workflow must be a real directory, never a planted symlink.
+// acquireLock's O_EXCL token logic is solid; this closes the path-redirection
+// hole (persistent planted symlink; a link swapped mid-call is out of scope).
+function assertWorkflowDirOwned(root) {
+  const dir = join(root, DIR);
+  let st = null;
+  try { st = lstatSync(dir); } catch { return; }
+  if (st.isSymbolicLink()) throw new Error(`workflow: refusing symlinked state dir: ${dir}`);
 }
 
 function appendMetric(root, record) {
@@ -249,6 +261,7 @@ function acquireLock(root, timeoutMs = 5000, staleMs = 60000) {
   if (!existsSync(dir)) {
     try { mkdirSync(dir, { recursive: true }); } catch {}
   }
+  assertWorkflowDirOwned(root);
   const lockFile = join(dir, "state.lock");
   const deadline = Date.now() + timeoutMs;
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -1086,22 +1099,17 @@ function loadSoftBudgets(root) {
 // supports explicit --tokens/--calls CLI flags as zero-overhead overrides.
 function parseSessionUsage(filePath) {
   let tokens = 0, calls = 0;
-  try {
-    for (const line of readFileSync(filePath, "utf8").split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      let ev;
-      try { ev = JSON.parse(trimmed); } catch { continue; }
-      const u = ev.message?.usage || ev.data?.usage || ev.usage;
-      if (u) tokens += typeof u.totalTokens === "number" ? u.totalTokens : ((u.input || 0) + (u.output || 0));
-      if (ev.type === "toolCall" || ev.type === "tool_call" || ev.type === "tool_use") calls++;
-      else if (Array.isArray(ev.message?.tool_calls)) calls += ev.message.tool_calls.length;
-      else {
-        const blk = Array.isArray(ev.message?.content) ? ev.message.content : Array.isArray(ev.content) ? ev.content : null;
-        if (blk) for (const b of blk) if (b && (b.type === "toolCall" || b.type === "tool_call" || b.type === "tool_use")) calls++;
-      }
+  for (const ev of readJsonlSafe(filePath)) {
+    if (!ev || typeof ev !== "object") continue;
+    const u = ev.message?.usage || ev.data?.usage || ev.usage;
+    if (u) tokens += typeof u.totalTokens === "number" ? u.totalTokens : ((u.input || 0) + (u.output || 0));
+    if (ev.type === "toolCall" || ev.type === "tool_call" || ev.type === "tool_use") calls++;
+    else if (Array.isArray(ev.message?.tool_calls)) calls += ev.message.tool_calls.length;
+    else {
+      const blk = Array.isArray(ev.message?.content) ? ev.message.content : Array.isArray(ev.content) ? ev.content : null;
+      if (blk) for (const b of blk) if (b && (b.type === "toolCall" || b.type === "tool_call" || b.type === "tool_use")) calls++;
     }
-  } catch {}
+  }
   return { tokens, calls };
 }
 
@@ -1677,7 +1685,16 @@ export function runWorkflowCli(argv = [], options = {}) {
     case "workspace": case "integrate": code = runWorkspaceCommand(cmd, root, args.flags, args._.length); break;
     case "claim": case "release": case "context": code = runClaimCommand(cmd, root, args.flags, args._.length); break;
     case "start":
-      code = cmdStart(root, args.flags);
+      try {
+        code = cmdStart(root, args.flags);
+      } catch (err) {
+        if (err && /refusing symlinked state dir/.test(err.message || "")) {
+          console.error(err.message);
+          code = 2;
+          break;
+        }
+        throw err;
+      }
       if (code === 0 && !options.noDashboard) autoOpenDashboard(root, args.flags);
       break;
     case "suggest":      code = cmdSuggest(args.flags); break;

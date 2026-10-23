@@ -11,12 +11,6 @@
 
 import {
   existsSync,
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
   realpathSync
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -125,7 +119,6 @@ function resolveRoots(opts = {}) {
     agentDir: resolve(agentDir),
   };
 }
-import { runProc } from "./verify-shared.mjs";
 export { testTierGate } from "./verify-shared.mjs";
 
 

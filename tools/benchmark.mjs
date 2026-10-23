@@ -8,6 +8,10 @@
  * Требования: Node 18+, LF, без внешних зависимостей.
  *
  * defer: benchmark harness expansion with eval-metrics pass@k | ceiling: 2000 lines | upgrade: split reporter and comparison modules
+ *
+ * TRUST BOUNDARY: task YAML (setup/cmd/checks) executes via shell:true in an
+ * isolated git clone. Treat task files as CODE, not data: review the task file
+ * before `run --yes`. Never run unreviewed third-party tasks.
  */
 
 import {
@@ -495,6 +499,7 @@ export function findRecentSessionTranscript(sinceMs = 0) {
  * @param {string} [options.transcript]
  * @param {boolean} [options.yes=false]
  * @param {boolean} [options.dryRun=false]
+ * Task setup/cmd/checks run with shell:true (see TRUST BOUNDARY above).
  * @returns {object|Array<object>} план (при dryRun) или массив результатов
  */
 export function runBenchmark(options) { // code-size:allow

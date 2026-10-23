@@ -173,6 +173,46 @@ test("redactSecrets: masks database connection strings", () => {
   assert.equal(redacted, "Postgres URI: [REDACTED:CONNECTION_STRING] and Mongo: [REDACTED:CONNECTION_STRING]");
 });
 
+test("redactSecrets: masks github_pat_ and glpat- tokens", () => {
+  const gh = "github_pat_ABCDEF1234567890abcdef";
+  const gl = "glpat-xyz1234567890abcdef";
+  const redacted = redactSecrets(`gh=${gh} gl=${gl}`);
+  assert.ok(!redacted.includes(gh));
+  assert.ok(!redacted.includes(gl));
+  assert.equal(redacted, "gh=[REDACTED:GITHUB_TOKEN] gl=[REDACTED:GITLAB_TOKEN]");
+});
+
+test("redactSecrets: masks Google AIza keys", () => {
+  const secret = "AIzaSyA-1234567890abcdef1234";
+  const redacted = redactSecrets(`key=${secret}`);
+  assert.ok(!redacted.includes(secret));
+  assert.equal(redacted, "key=[REDACTED:GOOGLE_KEY]");
+});
+
+test("redactSecrets: masks PEM private key blocks and lone headers", () => {
+  const block = "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc123\n-----END RSA PRIVATE KEY-----";
+  assert.equal(redactSecrets(block), "[REDACTED:PRIVATE_KEY_BLOCK]");
+  assert.equal(redactSecrets("key: -----BEGIN PRIVATE KEY----- tail"), "key: [REDACTED:PRIVATE_KEY] tail");
+});
+
+test("redactSecrets: masks Bearer tokens, keeps JWT redaction", () => {
+  assert.equal(redactSecrets("auth Bearer abc123XYZ789qwerty end"), "auth Bearer [REDACTED:BEARER_TOKEN] end");
+  assert.equal(redactSecrets("Bearer [REDACTED:JWT]"), "Bearer [REDACTED:JWT]");
+});
+
+test("redactSecrets: masks generic api_key assignments", () => {
+  assert.equal(redactSecrets("api_key=abcdef123456"), "api_key=[REDACTED:API_KEY]");
+  assert.equal(redactSecrets('api-key: "XYZ98765"'), 'api-key: "[REDACTED:API_KEY]"');
+});
+
+test("redactSecrets: masks extended Slack xoxo/xoxr tokens", () => {
+  const o = "xoxo-123456789012-abcdefghij";
+  const r = "xoxr-xyz-78901234567890";
+  const redacted = redactSecrets(`${o} ${r}`);
+  assert.ok(!redacted.includes(o));
+  assert.ok(!redacted.includes(r));
+});
+
 // ---------------------------------------------------------------------------
 // 3. Freeze brief & refusal of overwrite
 // ---------------------------------------------------------------------------

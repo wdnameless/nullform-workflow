@@ -635,7 +635,10 @@ function handleRequest(req, res, absRoot, session = null) {
           found = true;
           let fd = null;
           try {
-            fd = openSync(join(absRoot, safe), "r");
+            const full = realpathSync(join(absRoot, safe));
+            const rel = relative(absRoot, full);
+            if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("diff path escapes root");
+            fd = openSync(full, "r");
             const buf = Buffer.alloc(65536);
             let n = 0, nl = 0;
             while ((n = readSync(fd, buf, 0, buf.length, null)) > 0) {

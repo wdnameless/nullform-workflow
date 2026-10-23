@@ -119,6 +119,16 @@ function WriteText([string]$path, [string]$text) {
   if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
   [System.IO.File]::WriteAllText($path, $text, $Utf8NoBom)   # a BOM makes the first YAML/JSON key unparsable
 }
+function LockSecretsFile([string]$path) {
+  # Secrets-bearing YAML must not stay world-readable on shared hosts.
+  try {
+    if ($env:OS -eq 'Windows_NT') {
+      icacls $path /inheritance:r /grant:r "$env:USERNAME:(R,W)" | Out-Null
+    } else {
+      chmod 600 $path
+    }
+  } catch { Warn "could not lock $path : $($_.Exception.Message)" }
+}
 
 Write-Host "`n=== NULLFORM WORKFLOW installer ===`n"
 Write-Host "  user home    : $UserHome"
@@ -359,10 +369,12 @@ Ok "rules -> $agentDir\rules (and ~/.agents\rules)"
 # ---------- 4. Provider + model routing ----------
 if ($providerBase) {
   WriteText "$agentDir/models.yml" (Patch (Get-Content "$PSScriptRoot\agent\models.yml.example" -Raw -Encoding UTF8))
+  LockSecretsFile "$agentDir/models.yml"
   Ok "models.yml -> $agentDir/models.yml (provider: my-provider)"
 
   if (-not (Test-Path "$agentDir/config.yml")) {
     WriteText "$agentDir/config.yml" (Patch (Get-Content "$PSScriptRoot\agent\config.yml.example" -Raw -Encoding UTF8))
+    LockSecretsFile "$agentDir/config.yml"
     Ok "config.yml installed (roles -> my-provider/$modelId)"
   } else {
     Warn "config.yml already exists -> left untouched. Update its modelRoles to 'my-provider/$modelId' by hand."

@@ -14,7 +14,7 @@
       "reason": ""
     },
     "tools/benchmark.mjs": {
-      "lines": 1263,
+      "lines": 1268,
       "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
     "tools/code-size.mjs": {
@@ -30,7 +30,7 @@
       "reason": ""
     },
     "tools/dashboard.mjs": {
-      "lines": 1083,
+      "lines": 1086,
       "reason": "Autopilot parity (R12): embedSnapshot + detectCollision + isOwnServer helpers"
     },
     "tools/doctor-checks.mjs": {
@@ -66,7 +66,7 @@
       "reason": "Same-commit oracle, binary/rename numstat, NUL dirty-check regressions (R03-R05, R07)"
     },
     "tools/workflow.mjs": {
-      "lines": 1717,
+      "lines": 1734,
       "reason": "Autopilot parity (R01): mode/depth dials in cmdStart + state"
     }
   },
@@ -117,7 +117,7 @@
       "lines": 282,
       "file": "tools/benchmark.mjs",
       "name": "runBenchmark",
-      "line": 500,
+      "line": 505,
       "reason": ""
     },
     "tools/dashboard-collectors.mjs:collectRunState": {
@@ -138,7 +138,7 @@
       "lines": 138,
       "file": "tools/dashboard.mjs",
       "name": "main",
-      "line": 930,
+      "line": 933,
       "reason": ""
     },
     "tools/oracle-model.mjs:run": {
@@ -187,7 +187,7 @@
       "lines": 148,
       "file": "tools/workflow.mjs",
       "name": "cmdStart",
-      "line": 600,
+      "line": 613,
       "reason": "Autopilot parity (R01): mode/depth validation + persistence"
     }
   }
