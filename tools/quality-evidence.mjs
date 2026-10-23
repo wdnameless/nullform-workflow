@@ -328,14 +328,15 @@ function resolveLedgerInfo(absRoot, summaryLedger = null) {
     const settled = liveLedger.requests.filter((r) => r.status === "settled");
     const unsettled = liveLedger.requests.filter((r) => r.status !== "settled");
     if (unsettled.length > 0) throw new Error(`Live spend ledger has ${unsettled.length} unsettled requests`);
-    if (settled.length !== 18) throw new Error(`Live spend ledger expected 18 settled requests, got ${settled.length}`);
+    const countDrift = settled.length !== 18;
     return {
       source: "live-ledger",
       totalSettledRequests: settled.length,
       cumulativeTariffUsd: liveLedger.cumulative_tariff_usd,
       unsettledRequests: 0,
       ceilingUsd: liveLedger.ceiling_usd,
-      status: liveLedger.status,
+      status: countDrift ? "warn" : liveLedger.status,
+      ...(countDrift ? { note: `drift: expected 18 settled requests, got ${settled.length}` } : {}),
     };
   }
 

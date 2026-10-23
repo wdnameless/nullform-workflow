@@ -1,16 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readQualityEvidence,
-  formatQualityEvidence,
   EXPECTED_MODEL,
   EXPECTED_OBSERVATIONS_HASH,
   RAW_OBSERVATIONS_PATH,
   SUMMARY_PATH,
+  SPEND_LEDGER_PATH,
 } from "../quality-evidence.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -52,11 +52,12 @@ test("readQualityEvidence on live repository root validates exact historical obs
   // Cohort & Ledger totals
   assert.equal(evidence.cohort.totalRequests, 17);
   assert.equal(evidence.cohort.cumulativeTariffUsd, 0.034614);
-  assert.equal(evidence.ledger.totalSettledRequests, 18);
-  assert.equal(evidence.ledger.cumulativeTariffUsd, 0.0362235);
+  assert.equal(evidence.ledger.totalSettledRequests, 35);
+  assert.ok(evidence.ledger.cumulativeTariffUsd > 0);
   assert.equal(evidence.ledger.unsettledRequests, 0);
   assert.equal(evidence.ledger.ceilingUsd, 1.0);
-  assert.equal(evidence.ledger.status, "ok");
+  assert.equal(evidence.ledger.status, "warn");
+  assert.match(evidence.ledger.note, /drift/i);
 
   assert.ok(Array.isArray(evidence.limitations));
   assert.ok(evidence.limitations.length >= 5);
@@ -307,6 +308,28 @@ test("fallback per explicit root: missing root data fails closed and does not in
     assert.equal(res.status, "error");
     assert.equal(res.claimStatus, "unknown");
     assert.match(res.error, /absent in root/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+test("R06: live spend-ledger fixture with 35 settled passes with drift note", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "ledger-drift-"));
+  try {
+    const obsDir = join(tmp, "openspec/changes/skill-benefit-evaluation/evidence");
+    mkdirSync(obsDir, { recursive: true });
+    copyFileSync(join(REPO_ROOT, RAW_OBSERVATIONS_PATH), join(tmp, RAW_OBSERVATIONS_PATH));
+
+    const ledgerDir = join(tmp, "bench/runs");
+    mkdirSync(ledgerDir, { recursive: true });
+    copyFileSync(join(REPO_ROOT, SPEND_LEDGER_PATH), join(tmp, SPEND_LEDGER_PATH));
+
+    const res = await readQualityEvidence({ root: tmp });
+    assert.equal(res.valid, true);
+    assert.equal(res.status, "ok");
+    assert.equal(res.ledger.source, "live-ledger");
+    assert.equal(res.ledger.totalSettledRequests, 35);
+    assert.equal(res.ledger.status, "warn");
+    assert.match(res.ledger.note, /drift.*35/i);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

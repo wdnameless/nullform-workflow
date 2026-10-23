@@ -11,6 +11,8 @@
  *   - Маркер defer: в заголовке файла (первые 50 строк) освобождает файл от падения при росте.
  *   - Комментарий // code-size:allow (или # code-size:allow) на строке объявления функции освобождает функцию.
  *
+ * defer: size gate with template/regex-aware masking | ceiling: 800 lines | upgrade: extract maskJsCode to code-size-mask.mjs
+ *
  * Базовая линия:
  *   .code-size.baseline.json фиксирует текущие превышения, предотвращая блокировку существующего кода.
  *   `check` падает ТОЛЬКО при:
@@ -100,8 +102,20 @@ function isEscaped(str, idx) {
   return count % 2 === 1;
 }
 
+function isRegexStart(line, slashIdx) {
+  let k = slashIdx - 1;
+  while (k >= 0 && (line[k] === " " || line[k] === "\t")) k--;
+  if (k < 0) return true;
+  const ch = line[k];
+  if ("(=[,:!&|?{;~^<>+*-/%".includes(ch)) return true;
+  let wordEnd = k;
+  while (k >= 0 && /[a-zA-Z0-9_$]/.test(line[k])) k--;
+  const word = line.slice(k + 1, wordEnd + 1);
+  return ["return", "case", "throw", "yield", "delete", "void", "typeof"].includes(word);
+}
+
 function maskJsCode(lines) {
-  let inBlock = false, inSingle = false, inDouble = false;
+  let inBlock = false, inSingle = false, inDouble = false, inRegex = false, inCharClass = false;
   const tplStack = [];
   return lines.map((line) => {
     let out = "";
@@ -116,23 +130,30 @@ function maskJsCode(lines) {
       } else if (inDouble) {
         if (ch === '"' && !isEscaped(line, c)) inDouble = false;
         out += " ";
+      } else if (inRegex) {
+        if (!inCharClass && ch === "[" && !isEscaped(line, c)) inCharClass = true;
+        else if (inCharClass && ch === "]" && !isEscaped(line, c)) inCharClass = false;
+        else if (!inCharClass && ch === "/" && !isEscaped(line, c)) inRegex = false;
+        out += " ";
       } else if (tplStack.length > 0 && tplStack[tplStack.length - 1] === null) {
         if (ch === "`" && !isEscaped(line, c)) { tplStack.pop(); out += " "; }
-        else if (ch === "$" && next === "{" && !isEscaped(line, c)) { tplStack[tplStack.length - 1] = 0; out += " {"; c++; }
+        else if (ch === "$" && next === "{" && !isEscaped(line, c)) { tplStack.push(0); out += "  "; c++; }
         else out += " ";
       } else {
         if (ch === "/" && next === "/") { out += " ".repeat(line.length - c); break; }
         if (ch === "/" && next === "*") { inBlock = true; out += "  "; c++; continue; }
+        if (ch === "/" && isRegexStart(line, c)) { inRegex = true; inCharClass = false; out += " "; continue; }
         if (ch === "'") { inSingle = true; out += " "; }
         else if (ch === '"') { inDouble = true; out += " "; }
         else if (ch === "`") { tplStack.push(null); out += " "; }
         else if (tplStack.length > 0 && typeof tplStack[tplStack.length - 1] === "number") {
-          if (ch === "{") tplStack[tplStack.length - 1]++;
+          if (ch === "{") { tplStack[tplStack.length - 1]++; out += ch; }
           else if (ch === "}") {
-            if (tplStack[tplStack.length - 1] > 0) tplStack[tplStack.length - 1]--;
-            else tplStack[tplStack.length - 1] = null;
+            if (tplStack[tplStack.length - 1] > 0) { tplStack[tplStack.length - 1]--; out += ch; }
+            else { tplStack.pop(); out += " "; }
+          } else {
+            out += ch;
           }
-          out += ch;
         } else {
           out += ch;
         }
@@ -141,6 +162,8 @@ function maskJsCode(lines) {
     if (!line.endsWith("\\") || isEscaped(line, line.length)) {
       inSingle = false;
       inDouble = false;
+      inRegex = false;
+      inCharClass = false;
     }
     return out;
   });

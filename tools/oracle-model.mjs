@@ -177,7 +177,7 @@ export function parseModelsYaml(content) {
  * 2. $HOME/.omp/agent/oracle-priority.json if exists
  * 3. agent/oracle-priority.example.json next to script's repo
  */
-export function resolvePriorityFile(cliPriority) {
+function resolvePriorityFile(cliPriority) {
   if (cliPriority) {
     return resolve(cliPriority);
   }
@@ -197,7 +197,7 @@ export function resolvePriorityFile(cliPriority) {
  * Read priority file and return array of entries.
  * Ensures the last entry is the neutral fallback marker (FALLBACK_MATCH).
  */
-export function loadPriorityList(priorityPath) {
+function loadPriorityList(priorityPath) {
   let list = [];
   if (existsSync(priorityPath)) {
     try {
@@ -289,7 +289,7 @@ export async function probeProvider(provider) {
 /**
  * Redact API key material from any text or objects.
  */
-export function redactSecrets(text, secretKeys = []) {
+function redactSecrets(text, secretKeys = []) {
   if (!text) return text;
   let out = String(text);
   for (const key of secretKeys) {
@@ -312,7 +312,7 @@ export function redactSecrets(text, secretKeys = []) {
  * @returns {Promise<{available: Array, notes: string[], secrets: string[],
  *   providers: Object<string, {reachable: boolean|null, error: string|null, declared: number, discovered: number}>}>}
  */
-export async function collectAvailableModels(modelsYamlPath, probe = false) {
+async function collectAvailableModels(modelsYamlPath, probe = false) {
   if (!existsSync(modelsYamlPath)) {
     return {
       available: [],
@@ -391,7 +391,7 @@ export async function collectAvailableModels(modelsYamlPath, probe = false) {
  * then take the prefix before the first '-' or ':' delimiter, lowercased.
  * If no delimiter is present, the whole trimmed identifier is the family.
  */
-export function deriveModelFamily(modelId) {
+function deriveModelFamily(modelId) {
   if (typeof modelId !== "string" || !modelId.trim()) return "";
   const raw = modelId.trim();
   const name = raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
@@ -404,20 +404,13 @@ export function deriveModelFamily(modelId) {
  * Returns the first candidate whose derived family differs from writerFamily.
  * Throws naming the conflicting family when none qualifies.
  */
-export function assignChecker({ writerFamily, candidates = [] } = {}) {
-  const wFamily = deriveModelFamily(writerFamily) || (typeof writerFamily === "string" ? writerFamily.toLowerCase().trim() : "");
-  for (const cand of candidates) {
-    const cFamily = deriveModelFamily(cand);
-    if (cFamily !== wFamily) {
-      return cand;
-    }
-  }
-  throw new Error(`No checker candidate available outside conflicting family '${writerFamily}'`);
+function assignChecker({ writerFamily, candidates = [] } = {}) {
+  return resolveOracleModel({ writerFamily, candidates });
 }
 
 /**
  * Resolve oracle model:
- * 1. resolveOracleModel({ builderFamily, candidates })
+ * 1. resolveOracleModel({ builderFamily/writerFamily, candidates })
  *    Derives family deterministically from the model id string.
  *    Returns the first candidate of a different family.
  *    Throws naming the conflicting family when none qualifies.
@@ -425,16 +418,18 @@ export function assignChecker({ writerFamily, candidates = [] } = {}) {
  *    Match priority entries against available models.
  */
 export function resolveOracleModel(arg1, arg2) {
-  if (arg1 && typeof arg1 === "object" && !Array.isArray(arg1) && ("builderFamily" in arg1 || "candidates" in arg1)) {
-    const { builderFamily, candidates = [] } = arg1;
-    const bFamily = deriveModelFamily(builderFamily) || (typeof builderFamily === "string" ? builderFamily.toLowerCase().trim() : "");
+  if (arg1 && typeof arg1 === "object" && !Array.isArray(arg1) && ("builderFamily" in arg1 || "writerFamily" in arg1 || "candidates" in arg1)) {
+    const rawFamily = arg1.writerFamily || arg1.builderFamily;
+    const { candidates = [] } = arg1;
+    const bFamily = deriveModelFamily(rawFamily) || (typeof rawFamily === "string" ? rawFamily.toLowerCase().trim() : "");
     for (const cand of candidates) {
       const cFamily = deriveModelFamily(cand);
       if (cFamily !== bFamily) {
         return cand;
       }
     }
-    throw new Error(`No oracle candidate available outside conflicting family '${builderFamily}'`);
+    const role = arg1.writerFamily ? "checker" : "oracle";
+    throw new Error(`No ${role} candidate available outside conflicting family '${rawFamily}'`);
   }
   const priorityEntries = Array.isArray(arg1) ? arg1 : [];
   const availableModels = Array.isArray(arg2) ? arg2 : [];
@@ -485,7 +480,7 @@ export function resolveOracleModel(arg1, arg2) {
  * Preserves every other byte, comments, blank lines, and line endings (CRLF or LF).
  * Idempotent.
  */
-export function updateConfigYaml(content, newOracleValue) {
+function updateConfigYaml(content, newOracleValue) {
   // Detect line ending
   const isCrlf = content.includes("\r\n");
   const eol = isCrlf ? "\r\n" : "\n";

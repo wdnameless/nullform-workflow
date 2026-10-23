@@ -17,7 +17,7 @@ import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs as utilParseArgs } from "node:util";
 
-export const ALLOWED_STATUSES = [
+const ALLOWED_STATUSES = [
   "DONE",
   "DONE_WITH_CONCERNS",
   "HANDOFF",
@@ -25,7 +25,7 @@ export const ALLOWED_STATUSES = [
   "NEEDS_CONTEXT",
 ];
 
-export const REQUIRED_SECTIONS = [
+const REQUIRED_SECTIONS = [
   "STATUS",
   "FILES",
   "TESTS",

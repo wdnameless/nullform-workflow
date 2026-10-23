@@ -5,10 +5,6 @@
     "maxFunctionLines": 120
   },
   "files": {
-    "skills/biblicism-extractor/scripts/run_pipeline.py": {
-      "lines": 770,
-      "reason": ""
-    },
     "skills/design-system/scripts/generate-slide.py": {
       "lines": 771,
       "reason": ""
@@ -21,6 +17,10 @@
       "lines": 2017,
       "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
+    "tools/code-size.mjs": {
+      "lines": 719,
+      "reason": ""
+    },
     "tools/dashboard.mjs": {
       "lines": 4039,
       "reason": "Autopilot parity (R12): embedSnapshot + detectCollision + isOwnServer helpers"
@@ -30,7 +30,7 @@
       "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; quote args explicitly so shell-based omp.cmd spawns stop emitting DEP0190 on stderr install.ps1 treats as fatal; accept a complete plugin list when OMP 18.3.3+ exits 1 after printing it"
     },
     "tools/oracle-model.mjs": {
-      "lines": 796,
+      "lines": 791,
       "reason": "Round1 cross-family selection + round2 assignChecker diversity gate"
     },
     "tools/sync.mjs": {
@@ -42,12 +42,16 @@
       "reason": ""
     },
     "tools/tests/dashboard.test.mjs": {
-      "lines": 1505,
+      "lines": 1504,
       "reason": "Behavioral regressions for static snapshot redaction and bounded untracked diff reads"
     },
     "tools/tests/doctor.test.mjs": {
       "lines": 1502,
       "reason": "Regression tests for the OMP 18.3.3+ plugin-list exit-code tolerance"
+    },
+    "tools/tests/usage-audit.test.mjs": {
+      "lines": 762,
+      "reason": ""
     },
     "tools/tests/workflow-gate.test.mjs": {
       "lines": 1089,
@@ -112,6 +116,13 @@
       "line": 1765,
       "reason": ""
     },
+    "tools/dashboard.mjs:collectRunState": {
+      "lines": 188,
+      "file": "tools/dashboard.mjs",
+      "name": "collectRunState",
+      "line": 662,
+      "reason": ""
+    },
     "tools/dashboard.mjs:sanitizeHttpState": {
       "lines": 394,
       "file": "tools/dashboard.mjs",
@@ -137,7 +148,7 @@
       "lines": 210,
       "file": "tools/oracle-model.mjs",
       "name": "run",
-      "line": 575,
+      "line": 570,
       "reason": ""
     },
     "tools/return-contract.mjs:validateReturnContract": {

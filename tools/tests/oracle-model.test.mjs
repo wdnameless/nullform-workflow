@@ -19,11 +19,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import {
   parseModelsYaml,
-  loadPriorityList,
   resolveOracleModel,
-  updateConfigYaml,
-  redactSecrets,
-  collectAvailableModels,
 } from "../oracle-model.mjs";
 
 const ORACLE_PATH = resolve(import.meta.dirname, "../oracle-model.mjs");
@@ -101,72 +97,92 @@ test("fallback без совпадений: берётся первая дост
 });
 
 test("config.yml write preserves unrelated lines (byte comparison except the two oracle lines)", () => {
-  const originalConfig = [
-    "# Top comment",
-    "modelRoles:",
-    "  default: my-provider/gpt-4o-mini",
-    "  cheap: my-provider/gpt-4o-mini",
-    "  oracle: old-provider/old-oracle-model # existing comment",
-    "  designer: my-provider/gpt-4o",
-    "",
-    "task:",
-    "  agentModelOverrides:",
-    "    oracle: old-provider/old-oracle-model",
-    "    critic: my-provider/gpt-4o",
-    "# Bottom comment",
-  ].join("\r\n");
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-config-"));
+  try {
+    const originalConfig = [
+      "# Top comment",
+      "modelRoles:",
+      "  default: my-provider/gpt-4o-mini",
+      "  cheap: my-provider/gpt-4o-mini",
+      "  oracle: old-provider/old-oracle-model # existing comment",
+      "  designer: my-provider/gpt-4o",
+      "",
+      "task:",
+      "  agentModelOverrides:",
+      "    oracle: old-provider/old-oracle-model",
+      "    critic: my-provider/gpt-4o",
+      "# Bottom comment",
+    ].join("\r\n");
 
-  const newOracle = "anthropic/claude-3-5-sonnet";
-  const { content: updatedConfig, modified } = updateConfigYaml(originalConfig, newOracle);
+    const cfgPath = join(tmp, "config.yml");
+    writeFileSync(cfgPath, originalConfig, "utf8");
+    const modelsPath = join(tmp, "models.yml");
+    writeFileSync(modelsPath, "providers:\n  anthropic:\n    models:\n      - id: claude-3-5-sonnet\n", "utf8");
+    const priorityPath = writePriorityFile(tmp, [{ match: "claude-3-5-sonnet" }]);
 
-  assert.equal(modified, true, "should be modified");
+    const res = runOracle(["apply", "--config", cfgPath, "--models", modelsPath, "--priority", priorityPath]);
+    assert.equal(res.status, 0);
 
-  // Split lines and verify line by line
-  const origLines = originalConfig.split("\r\n");
-  const updatedLines = updatedConfig.split("\r\n");
+    const updatedConfig = readFileSync(cfgPath, "utf8");
+    const newOracle = "anthropic/claude-3-5-sonnet";
+    const origLines = originalConfig.split("\r\n");
+    const updatedLines = updatedConfig.split("\r\n");
 
-  assert.equal(origLines.length, updatedLines.length, "line count must match");
+    assert.equal(origLines.length, updatedLines.length, "line count must match");
 
-  for (let i = 0; i < origLines.length; i++) {
-    const orig = origLines[i];
-    const updated = updatedLines[i];
-    if (orig.includes("oracle:")) {
-      assert.ok(updated.includes(newOracle), `oracle line ${i} must contain new value`);
-      // check indentation preserved
-      assert.equal(orig.indexOf("oracle:"), updated.indexOf("oracle:"));
-    } else {
-      // Unrelated lines must match byte-for-byte
-      assert.equal(updated, orig, `Line ${i} must be identical`);
+    for (let i = 0; i < origLines.length; i++) {
+      const orig = origLines[i];
+      const updated = updatedLines[i];
+      if (orig.includes("oracle:")) {
+        assert.ok(updated.includes(newOracle), `oracle line ${i} must contain new value`);
+        assert.equal(orig.indexOf("oracle:"), updated.indexOf("oracle:"));
+      } else {
+        assert.equal(updated, orig, `Line ${i} must be identical`);
+      }
     }
-  }
 
-  // Preserve CRLF
-  assert.ok(updatedConfig.includes("\r\n"), "must preserve CRLF");
-  assert.ok(!updatedConfig.replace(/\r\n/g, "").includes("\n"), "no lone LF introduced");
+    assert.ok(updatedConfig.includes("\r\n"), "must preserve CRLF");
+    assert.ok(!updatedConfig.replace(/\r\n/g, "").includes("\n"), "no lone LF introduced");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("idempotency: running updateConfigYaml again on already-updated content produces modified: false", () => {
-  const config = [
-    "modelRoles:",
-    "  oracle: anthropic/claude-3-5-sonnet",
-    "task:",
-    "  agentModelOverrides:",
-    "    oracle: anthropic/claude-3-5-sonnet",
-  ].join("\n");
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-idemp-"));
+  try {
+    const config = [
+      "modelRoles:",
+      "  oracle: anthropic/claude-3-5-sonnet",
+      "task:",
+      "  agentModelOverrides:",
+      "    oracle: anthropic/claude-3-5-sonnet",
+    ].join("\n");
+    const cfgPath = join(tmp, "config.yml");
+    writeFileSync(cfgPath, config, "utf8");
+    const modelsPath = join(tmp, "models.yml");
+    writeFileSync(modelsPath, "providers:\n  anthropic:\n    models:\n      - id: claude-3-5-sonnet\n", "utf8");
+    const priorityPath = writePriorityFile(tmp, [{ match: "claude-3-5-sonnet" }]);
 
-  const firstRun = updateConfigYaml(config, "anthropic/claude-3-5-sonnet");
-  assert.equal(firstRun.modified, false);
-  assert.equal(firstRun.content, config);
+    const res = runOracle(["ensure", "--config", cfgPath, "--models", modelsPath, "--priority", priorityPath]);
+    assert.equal(res.status, 0);
+    assert.equal(readFileSync(cfgPath, "utf8"), config);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("secrets redaction: apiKey material is never exposed in output text", () => {
-  const secrets = ["sk-live-super-secret-key-9999", "another-sensitive-token"];
-  const rawLog = "Connecting to provider with key sk-live-super-secret-key-9999 and another-sensitive-token for auth";
-
-  const redacted = redactSecrets(rawLog, secrets);
-  assert.ok(!redacted.includes("sk-live-super-secret-key-9999"), "secret must be redacted");
-  assert.ok(!redacted.includes("another-sensitive-token"), "secret must be redacted");
-  assert.ok(redacted.includes("[REDACTED]"), "redacted marker must be present");
+  const tmp = mkdtempSync(join(tmpdir(), "oracle-redact-"));
+  try {
+    const modelsPath = join(tmp, "models.yml");
+    writeFileSync(modelsPath, "providers:\n  myprov:\n    baseUrl: http://127.0.0.1:1/v1\n    apiKey: sk-live-super-secret-key-9999\n    models:\n      - id: mymod\n", "utf8");
+    const res = runOracle(["list", "--models", modelsPath]);
+    assert.ok(!res.stdout.includes("sk-live-super-secret-key-9999"), "secret must be redacted from stdout");
+    assert.ok(!res.stderr.includes("sk-live-super-secret-key-9999"), "secret must be redacted from stderr");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -258,14 +274,15 @@ test("collectAvailableModels(probe=false): сети нет, объявленны
     const modelsPath = join(tmp, "models.yml");
     writeFileSync(modelsPath, modelsYaml(), "utf8");
 
-    const { available, providers, notes } = await collectAvailableModels(modelsPath, false);
+    const res = runOracle(["list", "--json", "--models", modelsPath]);
+    const parsed = JSON.parse(res.stdout);
 
     assert.deepEqual(
-      available.map((a) => a.qualified),
+      parsed.available,
       ["dead-provider/preferred-oracle"]
     );
-    assert.equal(providers["dead-provider"].reachable, null, "без probe доступность неизвестна");
-    assert.deepEqual(notes, []);
+    assert.equal(parsed.providers["dead-provider"].reachable, null, "без probe доступность неизвестна");
+    assert.deepEqual(parsed.notes, []);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -278,15 +295,15 @@ test("collectAvailableModels(probe=true): модели недостижимог�
       const modelsPath = join(tmp, "models.yml");
       writeFileSync(modelsPath, modelsYaml(port), "utf8");
 
-      const { available, providers, notes, secrets } = await collectAvailableModels(modelsPath, true);
-      const qualified = available.map((a) => a.qualified);
+      const res = await runOracleAsync(["list", "--probe", "--json", "--models", modelsPath]);
+      const parsed = JSON.parse(res.stdout);
+      const qualified = parsed.available;
 
-      assert.equal(providers["dead-provider"].reachable, false);
-      assert.equal(providers["live-provider"].reachable, true);
+      assert.equal(parsed.providers["dead-provider"].reachable, false);
+      assert.equal(parsed.providers["live-provider"].reachable, true);
       assert.ok(!qualified.some((q) => q.startsWith("dead-provider/")), "dead provider models excluded");
       assert.ok(qualified.includes("live-provider/backup-oracle"));
-      assert.ok(notes.some((n) => /dead-provider недостижим/.test(n)), JSON.stringify(notes));
-      assert.deepEqual(secrets, ["sk-oracle-fixture-secret"], "ключи только для редактирования вывода");
+      assert.ok(parsed.notes.some((n) => /dead-provider недостижим/.test(n)), JSON.stringify(parsed.notes));
     });
   } finally {
     rmSync(tmp, { recursive: true, force: true });

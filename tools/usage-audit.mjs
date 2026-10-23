@@ -26,7 +26,7 @@ const KNOWN_OPTIONS = new Set(["sessions", "days", "top", "mcp", "skills", "plug
  * Ключ — имя плагина, значение — маркеры, по которым видно его использование в
  * сессии: имена тулов и слэш-команды. Аудит ищет именно эти маркеры.
  */
-export const KNOWN_PLUGIN_TOOLS = {
+const KNOWN_PLUGIN_TOOLS = {
   "oh-my-pi-plugin-morph": ["fast_edit", "fastcompact", "codebase_warpsearch"],
   "pi-lens": ["pi_lens_activate_tools", "lens_diagnostics", "/lens"],
   "pi-goal-x": ["goal_", "/goal"],
@@ -57,7 +57,7 @@ function parseCount(raw, flag, min, errors) {
   return value;
 }
 
-export function parseCliArgs(args = process.argv.slice(2)) {
+function parseCliArgs(args = process.argv.slice(2)) {
   const defaultHome = homedir();
   const defaultSessions = join(defaultHome, ".omp", "agent", "sessions");
   const defaultMcp = join(defaultHome, ".omp", "agent", "mcp.json");
@@ -118,7 +118,7 @@ export function parseCliArgs(args = process.argv.slice(2)) {
 /**
  * Рекурсивный поиск всех .jsonl файлов в директории.
  */
-export function findJsonlFiles(dir) {
+function findJsonlFiles(dir) {
   if (!existsSync(dir)) return [];
   try {
     return readdirSync(dir, { recursive: true })
@@ -138,7 +138,7 @@ export function findJsonlFiles(dir) {
  * @param {string[]} [notes]
  * @returns {string[]}
  */
-export function loadMcpServers(mcpFilePath, notes = []) {
+function loadMcpServers(mcpFilePath, notes = []) {
   if (!mcpFilePath || typeof mcpFilePath !== "string" || !existsSync(mcpFilePath)) return [];
   try {
     const raw = readFileSync(mcpFilePath, "utf8");
@@ -158,7 +158,7 @@ export function loadMcpServers(mcpFilePath, notes = []) {
 /**
  * Загрузка списка установленных скиллов из каталога скиллов.
  */
-export function loadInstalledSkills(skillsDirPath) {
+function loadInstalledSkills(skillsDirPath) {
   if (!skillsDirPath || !existsSync(skillsDirPath)) return [];
   const skills = [];
   try {
@@ -201,7 +201,7 @@ function barePluginName(name) {
  * @param {string[]} [notes]
  * @returns {string[]} отсортированные уникальные имена плагинов
  */
-export function loadPlugins(pluginsPath, notes = []) {
+function loadPlugins(pluginsPath, notes = []) {
   if (!pluginsPath || typeof pluginsPath !== "string" || !existsSync(pluginsPath)) return [];
 
   let data;
@@ -234,7 +234,7 @@ export function loadPlugins(pluginsPath, notes = []) {
 /**
  * Анализ сессий.
  */
-export function auditUsage(options) {
+function auditUsage(options) {
   const {
     sessionsDir,
     days = 30,
@@ -554,7 +554,7 @@ export function auditUsage(options) {
 /**
  * Текстовое RU форматирование отчёта.
  */
-export function formatAuditReport(data, { top = 15 } = {}) {
+function formatAuditReport(data, { top = 15 } = {}) {
   if (data.empty) {
     const lines = [data.reason || "Сессий не найдено"];
     if (data.notes && data.notes.length > 0) {
@@ -635,8 +635,8 @@ export function formatAuditReport(data, { top = 15 } = {}) {
   return lines.join("\n");
 }
 
-// Запуск при прямом вызове CLI
-if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
+// Точка входа CLI
+export function main(argv = process.argv.slice(2)) {
   const USAGE = `Использование: node tools/usage-audit.mjs [параметры]
 
 Параметры:
@@ -652,16 +652,16 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
 
   let options;
   try {
-    options = parseCliArgs();
+    options = parseCliArgs(argv);
   } catch (err) {
     console.error(`Ошибка разбора аргументов: ${err.message}`);
     console.error(USAGE);
-    process.exit(2);
+    return 2;
   }
 
   if (options.help) {
     console.log(USAGE);
-    process.exit(0);
+    return 0;
   }
 
   // Неверный/опечатанный параметр раньше молча менял окно аудита (--day 30 → 30 дней).
@@ -670,7 +670,7 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
       console.error(`Ошибка: ${err}.`);
     }
     console.error(USAGE);
-    process.exit(2);
+    return 2;
   }
 
   const auditResult = auditUsage(options);
@@ -681,5 +681,9 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
     console.log(formatAuditReport(auditResult, { top: options.top }));
   }
 
-  process.exitCode = 0;
+  return 0;
+}
+
+if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
+  process.exitCode = main();
 }

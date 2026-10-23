@@ -2158,7 +2158,7 @@ export function generateDashboardHtml(data, options = {}) {
   };
   function t(k) { return (I18N[lang] && I18N[lang][k]) || (I18N.ru[k] || k); }
 
-  function esc(s) { return String(s === null || s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); } // code-size:allow
+  function esc(s) { return String(s === null || s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
   function fmtDur(ms) {
     if (ms === null || ms === undefined || ms < 0) return "—";
     var s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;

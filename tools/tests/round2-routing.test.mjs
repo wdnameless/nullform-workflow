@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assignChecker, deriveModelFamily } from "../oracle-model.mjs";
+import { resolveOracleModel } from "../oracle-model.mjs";
+const assignChecker = (opts) => resolveOracleModel(opts);
 import { normalizeUsage } from "../usage-normalize.mjs";
 import { withBreaker, defaultIsRetryable } from "../fallback.mjs";
 

@@ -31,9 +31,9 @@ export const RUNS_DIR = "bench/runs";
  * Тиры задач: `safety` — проверка инвариантов и скрытых граничных условий,
  * `perf` — производительность, `standard` — обычная задача (по умолчанию).
  */
-export const TASK_TIERS = ["standard", "safety", "perf"];
+const TASK_TIERS = ["standard", "safety", "perf"];
 
-export const DEFAULT_TASKS_TEMPLATE = {
+const DEFAULT_TASKS_TEMPLATE = {
   version: 1,
   tasks: [
     {
@@ -58,7 +58,7 @@ export const DEFAULT_TASKS_TEMPLATE = {
   ],
 };
 
-export const DEFAULT_README_CONTENT = `# Бенчмарки воркфлоу (bench/)
+const DEFAULT_README_CONTENT = `# Бенчмарки воркфлоу (bench/)
 
 Директория для замера ценности подходов, конфигураций и промптов («армов») на фиксированных задачах.
 
@@ -83,13 +83,13 @@ node tools/benchmark.mjs compare --baseline base-arm --candidate my-agent
 \`\`\`
 `;
 
-export const DEFAULT_GITIGNORE_CONTENT = `runs/\n`;
+const DEFAULT_GITIGNORE_CONTENT = `runs/\n`;
 
 /**
  * Служебные каталоги инструментов (индексатор OMP, карты, воркфлоу-состояние).
  * Их изменения — не работа агента, в метрики задачи они не попадают.
  */
-export const TOOL_ARTIFACT_PATHS = [
+const TOOL_ARTIFACT_PATHS = [
   ".opencode",
   ".workflow",
   ".prompt-lint",
@@ -176,7 +176,7 @@ function countFileLines(filePath) {
  * @param {string} baseSha базовая ревизия (до запуска агента), может быть ""
  * @returns {{metrics: object, toolArtifacts: object, worktreeChanges: number, warnings: string[]}}
  */
-export function collectRunMetrics(repoDir, baseSha) {
+function collectRunMetrics(repoDir, baseSha) {
   const warnings = [];
   const ref = baseSha || "HEAD";
 
@@ -264,7 +264,7 @@ function gitStaged(repoDir, warnings) {
  * @param {string} dir
  * @returns {boolean}
  */
-export function isGitRepo(dir) {
+function isGitRepo(dir) {
   try {
     const res = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
       cwd: dir,
@@ -396,7 +396,7 @@ export function loadTasks(root) {
  * @param {number[]} values
  * @returns {number}
  */
-export function median(values) {
+function median(values) {
   if (!values || values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -788,7 +788,7 @@ export function runBenchmark(options) { // code-size:allow
  * @param {string} root
  * @returns {Map<string, string>}
  */
-export function readTaskTiers(root) {
+function readTaskTiers(root) {
   const map = new Map();
   try {
     const data = loadTasks(root);
@@ -808,7 +808,7 @@ export function readTaskTiers(root) {
  * @param {object} res
  * @returns {boolean}
  */
-export function isRunPassed(res) {
+function isRunPassed(res) {
   if (!res || typeof res !== "object") return false;
   if (typeof res.passed === "boolean") return res.passed;
   if (Array.isArray(res.checks)) {
@@ -1579,7 +1579,7 @@ export function validateTasks(rootOrData = ".") {
   return { valid: errors.length === 0, count: data.tasks.length, errors };
 }
 
-export function loadSmokeRuns(dirPath) {
+function loadSmokeRuns(dirPath) {
   const absDir = resolve(dirPath);
   if (!existsSync(absDir)) {
     const err = new Error(`Директория smoke не найдена: ${absDir}`);
@@ -1762,7 +1762,7 @@ function printUsage() {
  * @param {string[]} [argv=process.argv.slice(2)]
  * @returns {number}
  */
-export function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
 
   if (args.help || !args.command) {

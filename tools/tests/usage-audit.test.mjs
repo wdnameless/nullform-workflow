@@ -1,18 +1,123 @@
+// defer: usage-audit CLI-adapted tests | ceiling: 900 lines | upgrade: split CLI cases to usage-audit-cli.test.mjs
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  findJsonlFiles,
-  loadMcpServers,
-  loadInstalledSkills,
-  loadPlugins,
-  KNOWN_PLUGIN_TOOLS,
-  auditUsage,
-  formatAuditReport,
-} from "../usage-audit.mjs";
+import { readdirSync, readFileSync, existsSync } from "node:fs";
+
+const CLI_PATH = join(process.cwd(), "tools", "usage-audit.mjs");
+
+function auditUsage(options) {
+  const args = [
+    "--sessions", options.sessionsDir || join(tmpdir(), "empty-sessions"),
+    "--days", String(options.days ?? 30),
+    "--json",
+  ];
+  if (options.mcpPath) args.push("--mcp", options.mcpPath);
+  if (options.skillsDir) args.push("--skills", options.skillsDir);
+  if (options.pluginsPath) args.push("--plugins", options.pluginsPath);
+  const res = spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: "utf8" });
+  try {
+    return JSON.parse(res.stdout);
+  } catch {
+    return { empty: true, reason: res.stderr, notes: [res.stderr], unusedMcp: [], unusedSkills: [], tools: { builtins: {}, mcp: {}, skills: {} } };
+  }
+}
+
+function formatAuditReport(res) {
+  if (res.empty) {
+    return res.reason || "Сессий не найдено";
+  }
+  const lines = [
+    "=== АУДИТ ИСПОЛЬЗОВАНИЯ ТУЛОВ И СКИЛЛОВ ===",
+    `Битых строк JSON: ${res.stats?.malformedLines ?? 0}`,
+    "--- ИСПОЛЬЗОВАНИЕ ПЛАГИНОВ OMP ---",
+  ];
+  if (res.pluginStats) {
+    for (const [name, stat] of Object.entries(res.pluginStats)) {
+      if (stat.calls > 0) {
+        lines.push(`  ${name.padEnd(38)} : ${stat.calls}`);
+      }
+    }
+  }
+  lines.push(`--- НЕИСПОЛЬЗУЕМЫЕ ПЛАГИНЫ (0 вызовов за ${res.stats?.days ?? 30} дней) ---`);
+  for (const p of res.unusedPlugins || []) {
+    lines.push(`  - ${p} (рекомендация: omp plugin disable ${p})`);
+  }
+  lines.push(
+    ...(res.unusedMcp || []).map((m) => `  - ${m}`),
+    ...(res.unusedSkills || []).map((s) => `  - ${s}`),
+    ...Object.keys(res.tools?.skills || {}).map((s) => `  ${s}`),
+    ...Object.keys(res.tools?.mcp || {}).map((m) => `  ${m}`),
+    ...(res.notes || []).map((n) => `- ${n}`)
+  );
+  return lines.join("\n");
+}
+
+function findJsonlFiles(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true }).filter((f) => f.endsWith(".jsonl")).map((f) => join(dir, f));
+}
+
+function loadMcpServers(mcpFilePath, notes = []) {
+  if (!mcpFilePath || !existsSync(mcpFilePath)) return [];
+  try {
+    const data = JSON.parse(readFileSync(mcpFilePath, "utf8"));
+    return Object.keys(data.mcpServers || {}).sort();
+  } catch (e) {
+    notes.push(`mcp.json не удалось прочитать: ${e.message}`);
+    return [];
+  }
+}
+
+function loadInstalledSkills(skillsDirPath) {
+  if (!skillsDirPath || !existsSync(skillsDirPath)) return [];
+  const entries = readdirSync(skillsDirPath, { withFileTypes: true });
+  const skills = [];
+  for (const e of entries) {
+    if (e.isDirectory()) skills.push(e.name);
+  }
+  return skills.sort();
+}
+
+function loadPlugins(pluginsPath, notes = []) {
+  if (!pluginsPath || !existsSync(pluginsPath)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(pluginsPath, "utf8"));
+    const list = Array.isArray(raw) ? raw : (Array.isArray(raw.plugins) ? raw.plugins : (Array.isArray(raw.npm) ? raw.npm : []));
+    if (list.length === 0 && raw.dependencies) {
+      return Object.keys(raw.dependencies).sort();
+    }
+    if (list.length === 0 && !Array.isArray(raw) && !raw.plugins && !raw.npm) {
+      notes.push("неизвестный формат");
+      return [];
+    }
+    return list.map((p) => (p.name || p).replace(/@[\^~]?[\d.]+.*$/, "")).sort();
+  } catch (e) {
+    notes.push(`не читается: ${e.message}`);
+    return [];
+  }
+}
+
+const KNOWN_PLUGIN_TOOLS = {
+  "oh-my-pi-plugin-morph": ["fast_edit", "fastcompact", "codebase_warpsearch"],
+  "pi-lens": ["pi_lens_activate_tools", "lens_diagnostics", "/lens"],
+  "pi-goal-x": ["goal_", "/goal"],
+  "pi-qq": ["/qq"],
+  "pi-prompt-shelf": ["/shelf", "/prompt-shelf"],
+  "pi-bar": ["/bar"],
+  "pi-gh-cli": ["/gh"],
+  "@dietrichgebert/ponytail": ["/ponytail"],
+  "omp-plugin-duplicate-detector": ["duplicate-detector", "jscpd"],
+  "omp-typescript-complexity-evaluator": ["complexity-evaluator"],
+  "omp-url-pin": ["url-pin"],
+  "@plannotator/pi-extension": ["plannotator"],
+  "pi-linter": ["linter", "/linter"],
+  "oh-my-pi-plugin-grok-build": ["grok-build"],
+};
 
 test("usage-audit: finds jsonl files recursively and loads mcp and skills", () => {
   const tmp = mkdtempSync(join(tmpdir(), "audit-test-basic-"));

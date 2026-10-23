@@ -472,3 +472,29 @@ test("R38: two baseline runs produce byte-identical output", () => {
     assert.deepStrictEqual(b1, b2, "buildBaseline calls must produce identical objects");
   });
 });
+test("R05: template with ${x} followed by arrow functions finds real function without phantoms", () => {
+  const src = [
+    "const tpl = `${x}`;",
+    "const myArrowFn = (a, b) => {",
+    "  return a + b;",
+    "};",
+    "const otherFn = () => {",
+    "  return 42;",
+    "};",
+  ].join("\n");
+
+  const fns = scanFunctions(src, ".mjs");
+  const names = fns.map((f) => f.name);
+  assert.deepStrictEqual(names, ["myArrowFn", "otherFn"]);
+  assert.equal(fns[0].startLine, 2);
+  assert.equal(fns[0].endLine, 4);
+});
+
+test("R05: regression tools/dashboard.mjs: esc() phantom is absent, generateDashboardHtml is found", () => {
+  const dashboardPath = join(fileURLToPath(new URL("../..", import.meta.url)), "tools/dashboard.mjs");
+  const text = readFileSync(dashboardPath, "utf8");
+  const fns = scanFunctions(text, ".mjs");
+  const names = fns.map((f) => f.name);
+  assert.ok(!names.includes("esc"), "esc() phantom MUST NOT appear in dashboard.mjs scan");
+  assert.ok(names.includes("generateDashboardHtml"), "generateDashboardHtml MUST be found in dashboard.mjs scan");
+});
