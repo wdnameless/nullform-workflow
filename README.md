@@ -5,6 +5,7 @@
 [![npm](https://img.shields.io/npm/v/nullform-workflow?color=171717)](https://www.npmjs.com/package/nullform-workflow)
 [![CI](https://github.com/wdnameless/nullform-workflow/actions/workflows/repo-gate.yml/badge.svg)](https://github.com/wdnameless/nullform-workflow/actions/workflows/repo-gate.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-171717)](LICENSE)
+[![skills.sh](https://skills.sh/b/wdnameless/nullform-workflow/nullform)](https://skills.sh/wdnameless/nullform-workflow/nullform)
 
 [Установка](#установка) · [Как работать](#как-работать) · [Структура](#структура) · [Параллельные фичи](#параллельные-фичи) · [Ограничения](#что-важно-знать)
 
@@ -26,6 +27,21 @@
 Это сравнение подходов, а не утверждение, что другим харнессам недоступны тесты, ревью или worktree.
 
 ## Установка
+
+### Навык для AI-агентов (skills.sh)
+
+Подключите Nullform как навык в Claude Code, Cursor, Codex, OpenCode или любой агент с поддержкой skills:
+
+```bash
+npx skills add wdnameless/nullform-workflow --skill nullform
+```
+
+Проверить состояние реестра навыков:
+```bash
+node tools/skills-doctor.mjs
+```
+
+### CLI-пакет (полный харнесс)
 
 Нужен Node.js ≥18.19; для проверенного развёртывания рекомендуются **Node.js 22 или 24 LTS**. Сам харнесс устанавливается отдельно. Команды npm ниже устанавливают опубликованный релиз, **не unreleased adaptive CLI**; не применяйте старый Hermes-адаптер к личному профилю в ожидании нового поведения.
 

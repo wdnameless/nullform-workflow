@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "skills": {
+    "nullform": {
+      "source": "wdnameless/nullform-workflow",
+      "sourceType": "github",
+      "skillPath": "skills/nullform/SKILL.md",
+      "computedHash": "2fad9371724f8ebf54a55ba64f8c1fa42613f1e736539162ee1e96bf3d427b1d",
+      "hash": "2fad9371724f8ebf54a55ba64f8c1fa42613f1e736539162ee1e96bf3d427b1d"
+    }
+  }
+}
