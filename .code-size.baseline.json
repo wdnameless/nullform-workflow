@@ -57,12 +57,8 @@
       "lines": 1089,
       "reason": "Same-commit oracle, binary/rename numstat, NUL dirty-check regressions (R03-R05, R07)"
     },
-    "tools/verify.mjs": {
-      "lines": 1285,
-      "reason": "realpathSync entry guard plus exitCode instead of process.exit so --json is not truncated on macOS"
-    },
     "tools/workflow.mjs": {
-      "lines": 2383,
+      "lines": 1747,
       "reason": "Autopilot parity (R01): mode/depth dials in cmdStart + state"
     }
   },
@@ -100,6 +96,13 @@
       "file": "skills/ui-ux-pro-max/scripts/design_system.py",
       "name": "format_master_md",
       "line": 900,
+      "reason": ""
+    },
+    "tools/audit-profile.mjs:runAuditProfile": {
+      "lines": 226,
+      "file": "tools/audit-profile.mjs",
+      "name": "runAuditProfile",
+      "line": 27,
       "reason": ""
     },
     "tools/benchmark.mjs:runBenchmark": {
@@ -179,25 +182,18 @@
       "line": 237,
       "reason": ""
     },
-    "tools/verify.mjs:runVerifyProfile": {
+    "tools/verify-profile.mjs:runVerifyProfile": {
       "lines": 555,
-      "file": "tools/verify.mjs",
+      "file": "tools/verify-profile.mjs",
       "name": "runVerifyProfile",
-      "line": 377,
-      "reason": ""
-    },
-    "tools/verify.mjs:runAuditProfile": {
-      "lines": 226,
-      "file": "tools/verify.mjs",
-      "name": "runAuditProfile",
-      "line": 933,
+      "line": 100,
       "reason": ""
     },
     "tools/workflow.mjs:cmdStart": {
       "lines": 148,
       "file": "tools/workflow.mjs",
       "name": "cmdStart",
-      "line": 607,
+      "line": 600,
       "reason": "Autopilot parity (R01): mode/depth validation + persistence"
     }
   }
