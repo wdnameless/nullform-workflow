@@ -143,3 +143,31 @@ test("measure-session: CLI --usage JSON работает", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("measure-session: читает живые metrics.jsonl и events.jsonl", () => {
+  const root = makeTmpDir();
+  try {
+    mkdirSync(join(root, ".workflow"), { recursive: true });
+    writeFileSync(
+      join(root, ".workflow", "state.json"),
+      JSON.stringify({ status: "open", tier: "T1", startedAt: "2026-10-23T10:00:00.000Z" }),
+      "utf8"
+    );
+    writeFileSync(
+      join(root, ".workflow", "metrics.jsonl"),
+      '{"task":"a","durationMs":60000}\nnot-json\n{"task":"b","durationMs":120000}\n',
+      "utf8"
+    );
+    writeFileSync(
+      join(root, ".workflow", "events.jsonl"),
+      '{"at":"2026-10-23T10:01:00.000Z","kind":"start","text":"hi"}\n',
+      "utf8"
+    );
+    const run = measureSession(root, { usageLog: [{ role: "fixer", output: 10, cacheWrite: 20, cacheRead: 30 }] });
+    assert.equal(typeof run.total, "number");
+    assert.ok(run.total > 0);
+    assert.equal(typeof run.wallMs, "number");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

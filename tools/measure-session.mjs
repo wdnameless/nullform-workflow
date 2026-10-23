@@ -34,11 +34,11 @@ export function measureSession(root = process.cwd(), options = {}) {
 
   // 2. Чтение metrics.jsonl
   const metricsPath = resolveFile(rootDir, [".workflow/metrics.jsonl", "metrics.jsonl"]);
-  const metrics = metricsPath ? parseJsonlSafe(metricsPath) : [];
+  const metrics = metricsPath ? readJsonlSafe(metricsPath) : [];
 
   // 3. Чтение events.jsonl
   const eventsPath = resolveFile(rootDir, [".workflow/events.jsonl", "events.jsonl"]);
-  const events = eventsPath ? parseJsonlSafe(eventsPath) : [];
+  const events = eventsPath ? readJsonlSafe(eventsPath) : [];
 
   // 4. Определение временных границ (startedAt / closedAt)
   let startedAt = state.startedAt || state.started || null;
