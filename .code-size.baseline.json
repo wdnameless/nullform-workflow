@@ -14,7 +14,7 @@
       "reason": ""
     },
     "tools/benchmark.mjs": {
-      "lines": 2017,
+      "lines": 1263,
       "reason": "One added import (realpathSync) to make the CLI entry guard symlink-safe"
     },
     "tools/code-size.mjs": {
@@ -25,9 +25,9 @@
       "lines": 4039,
       "reason": "Autopilot parity (R12): embedSnapshot + detectCollision + isOwnServer helpers"
     },
-    "tools/doctor.mjs": {
-      "lines": 1431,
-      "reason": "Require sync.mjs, sync-manifest.json and code-size.mjs; quote args explicitly so shell-based omp.cmd spawns stop emitting DEP0190 on stderr install.ps1 treats as fatal; accept a complete plugin list when OMP 18.3.3+ exits 1 after printing it"
+    "tools/doctor-checks.mjs": {
+      "lines": 975,
+      "reason": ""
     },
     "tools/oracle-model.mjs": {
       "lines": 791,
@@ -58,7 +58,7 @@
       "reason": "Same-commit oracle, binary/rename numstat, NUL dirty-check regressions (R03-R05, R07)"
     },
     "tools/workflow.mjs": {
-      "lines": 1747,
+      "lines": 1717,
       "reason": "Autopilot parity (R01): mode/depth dials in cmdStart + state"
     }
   },
@@ -109,14 +109,7 @@
       "lines": 282,
       "file": "tools/benchmark.mjs",
       "name": "runBenchmark",
-      "line": 504,
-      "reason": ""
-    },
-    "tools/benchmark.mjs:main": {
-      "lines": 248,
-      "file": "tools/benchmark.mjs",
-      "name": "main",
-      "line": 1765,
+      "line": 500,
       "reason": ""
     },
     "tools/dashboard.mjs:collectRunState": {
@@ -138,13 +131,6 @@
       "file": "tools/dashboard.mjs",
       "name": "main",
       "line": 3886,
-      "reason": ""
-    },
-    "tools/doctor.mjs:runDoctor": {
-      "lines": 745,
-      "file": "tools/doctor.mjs",
-      "name": "runDoctor",
-      "line": 616,
       "reason": ""
     },
     "tools/oracle-model.mjs:run": {
