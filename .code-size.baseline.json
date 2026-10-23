@@ -21,8 +21,16 @@
       "lines": 719,
       "reason": ""
     },
+    "tools/dashboard-collectors.mjs": {
+      "lines": 1689,
+      "reason": ""
+    },
+    "tools/dashboard-ui.mjs": {
+      "lines": 1273,
+      "reason": ""
+    },
     "tools/dashboard.mjs": {
-      "lines": 4039,
+      "lines": 1083,
       "reason": "Autopilot parity (R12): embedSnapshot + detectCollision + isOwnServer helpers"
     },
     "tools/doctor-checks.mjs": {
@@ -112,25 +120,25 @@
       "line": 500,
       "reason": ""
     },
-    "tools/dashboard.mjs:collectRunState": {
-      "lines": 188,
-      "file": "tools/dashboard.mjs",
+    "tools/dashboard-collectors.mjs:collectRunState": {
+      "lines": 176,
+      "file": "tools/dashboard-collectors.mjs",
       "name": "collectRunState",
-      "line": 662,
+      "line": 646,
       "reason": ""
     },
     "tools/dashboard.mjs:sanitizeHttpState": {
       "lines": 394,
       "file": "tools/dashboard.mjs",
       "name": "sanitizeHttpState",
-      "line": 3129,
+      "line": 173,
       "reason": ""
     },
     "tools/dashboard.mjs:main": {
       "lines": 138,
       "file": "tools/dashboard.mjs",
       "name": "main",
-      "line": 3886,
+      "line": 930,
       "reason": ""
     },
     "tools/oracle-model.mjs:run": {

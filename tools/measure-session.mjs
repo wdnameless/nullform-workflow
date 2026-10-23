@@ -7,43 +7,12 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizedCost } from "./cost-snapshot.mjs";
 import { honestTime } from "./journal.mjs";
+import { parseJsonSafe, readJsonlSafe, resolveLogFile as resolveFile } from "./session-log.mjs";
 
-function parseJsonSafe(content) {
-  try {
-    return JSON.parse(content);
-  } catch {
-    return null;
-  }
-}
-
-function parseJsonlSafe(filePath) {
-  if (!existsSync(filePath)) return [];
-  try {
-    const lines = readFileSync(filePath, "utf8").split("\n");
-    const records = [];
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const parsed = parseJsonSafe(trimmed);
-      if (parsed) records.push(parsed);
-    }
-    return records;
-  } catch {
-    return [];
-  }
-}
-
-function resolveFile(rootDir, subPaths) {
-  for (const sub of subPaths) {
-    const full = join(rootDir, sub);
-    if (existsSync(full)) return full;
-  }
-  return null;
-}
 
 /**
  * Замер метрик сессии из артефактов рабочего каталога и лога использования.
