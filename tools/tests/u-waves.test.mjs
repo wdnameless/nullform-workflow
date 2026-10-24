@@ -287,7 +287,9 @@ test("dashboard: HTML contains waves section and calibration target", () => {
 
   const html = generateDashboardHtml(mock);
   assert.ok(html.includes("run-waves-section"), "HTML must contain run-waves-section");
-  assert.ok(html.includes("run-wave-card"), "HTML must contain run-wave-card");
+  // The run-view redesign (live-dash-parity) replaced the flat wave card with a
+  // lane + task matrix; the section container is unchanged.
+  assert.ok(html.includes("run-wave-lane"), "HTML must contain run-wave-lane");
   assert.ok(html.includes("run-wave-bar"), "HTML must contain run-wave-bar");
   assert.ok(html.includes("Smart install"), "HTML must contain ticket title");
   assert.ok(html.includes("calibMerge") || html.includes("слить"), "HTML must render calibration merge hint");

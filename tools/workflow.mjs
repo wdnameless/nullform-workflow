@@ -204,17 +204,25 @@ function buildMetricRecord(st) {
   const startedMs = Number.isNaN(startedMsRaw) ? closedMs : startedMsRaw;
   const durationMs = Math.max(0, closedMs - startedMs);
   const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
-  const isForced = Boolean(st.deviation?.forced);
-  return {
+  const deviation = st.deviation?.forced ? st.deviation : null;
+  const record = {
     task: st.task || "(untitled)",
     tier: st.tier,
     startedAt: st.startedAt || st.closedAt,
     closedAt: st.closedAt,
     durationMs,
-    forced: isForced,
+    forced: Boolean(deviation),
     auto: st.auto ?? null,
     artifactsCount,
   };
+  if (deviation) {
+    // The reason lived only in state.json, and `start` replaces that file for the next
+    // task. A shortcut repeated three times therefore left no trace to correct the
+    // playbook from — the metric said `forced: true` and nothing else.
+    record.reason = String(deviation.reason || "(no reason recorded)");
+    record.deviationKind = deviation.replacedTask ? "replaced-lane" : "incomplete-close";
+  }
+  return record;
 }
 
 function reconcileMetrics(root, { lockHeld = false } = {}) {

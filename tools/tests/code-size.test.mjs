@@ -490,12 +490,15 @@ test("R05: template with ${x} followed by arrow functions finds real function wi
   assert.equal(fns[0].endLine, 4);
 });
 
-test("R05: regression dashboard split: esc() phantom absent, generateDashboardHtml in ui module", () => {
+test("R05: regression dashboard split: single esc() helper, real render fn in ui module", () => {
   const root = fileURLToPath(new URL("../..", import.meta.url));
   for (const rel of ["tools/dashboard.mjs", "tools/dashboard-ui.mjs", "tools/dashboard-collectors.mjs"]) {
     const names = scanFunctions(readFileSync(join(root, rel), "utf8"), ".mjs").map((f) => f.name);
-    assert.ok(!names.includes("esc"), `esc() phantom MUST NOT appear in ${rel} scan`);
+    assert.ok(names.filter((n) => n === "esc").length <= 1, `esc() must appear at most once per module (${rel})`);
   }
+  // The redesign exports esc() for reuse and keeps the inline `esc` closure inside
+  // the generated client script; both are intentional, so assert the render fn.
   const uiNames = scanFunctions(readFileSync(join(root, "tools/dashboard-ui.mjs"), "utf8"), ".mjs").map((f) => f.name);
   assert.ok(uiNames.includes("generateDashboardHtml"), "generateDashboardHtml MUST be found in dashboard-ui.mjs scan");
+  assert.ok(uiNames.includes("esc"), "dashboard-ui.mjs must expose esc() for reuse");
 });

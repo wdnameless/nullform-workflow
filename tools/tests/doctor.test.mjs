@@ -1502,26 +1502,30 @@ test("doctor tools-syntax never executes tools under a Bun caller", (t) => {
   }
 });
 
-test("F01 (9): doctorLite при превышении лимита времени добавляет warn с именами пропущенных файлов", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "doctor-lite-abort-"));
-  const origNow = globalThis.performance.now;
+test("F01 (9): синтаксическая проверка doctorLite покрывает ВСЕ файлы, а не урезается таймаутом", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-lite-coverage-"));
   try {
     const toolsDir = join(tmp, "tools");
     mkdirSync(toolsDir, { recursive: true });
-    writeFileSync(join(toolsDir, "a-tool.mjs"), "export const a = 1;\n", "utf8");
-    writeFileSync(join(toolsDir, "b-tool.mjs"), "export const b = 2;\n", "utf8");
-
-    let count = 0;
-    globalThis.performance.now = () => {
-      count++;
-      return count > 2 ? 1600 : 0;
-    };
+    // Many files: the old per-file timeout skipped the tail once the budget ran out,
+    // hiding broken files behind a warn. Coverage must be complete now.
+    for (let i = 0; i < 40; i++) {
+      writeFileSync(join(toolsDir, `tool-${String(i).padStart(2, "0")}.mjs`), `export const v${i} = ${i};\n`, "utf8");
+    }
+    // A genuinely broken file at the END of the ordering must still be reported.
+    writeFileSync(join(toolsDir, "zz-broken.mjs"), "export const = ;\n", "utf8");
 
     const res = doctorLite(tmp);
-    assert.equal(res.ok, false, "res.ok должен быть false при пропуске файлов");
-    assert.ok(res.warns.some(w => w.includes("пропущены файлы") && (w.includes("a-tool.mjs") || w.includes("b-tool.mjs"))));
+    assert.equal(res.ok, false, "a broken tool file must fail the probe");
+    assert.ok(
+      res.warns.some((w) => w.includes("zz-broken.mjs")),
+      `the last file must be checked, not skipped: ${JSON.stringify(res.warns)}`,
+    );
+    assert.ok(
+      !res.warns.some((w) => w.includes("пропущены файлы")),
+      "no file may be skipped by a time budget",
+    );
   } finally {
-    globalThis.performance.now = origNow;
     rmSync(tmp, { recursive: true, force: true });
   }
 });
