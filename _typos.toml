@@ -1,0 +1,7 @@
+# typos configuration. Only identifiers that are genuinely correct go here:
+# a blanket allow would defeat the check.
+[default.extend-identifiers]
+# Portable Network Graphics: the plural form is read as a misspelling of "ON".
+PNGs = "PNGs"
+
+[default.extend-words]

@@ -1,3 +1,5 @@
+---
+# yamllint disable rule:line-length
 name: Publish Release
 
 on:
@@ -104,7 +106,7 @@ jobs:
             echo "Expected candidate .tmp/${EXPECTED_NAME} missing from download"
             exit 1
           fi
-          MATCH_COUNT=$(ls -1 .tmp/nullform-workflow-*.tgz | wc -l)
+          MATCH_COUNT=$(find .tmp -maxdepth 1 -name 'nullform-workflow-*.tgz' -type f | wc -l)
           if [ "$MATCH_COUNT" -ne 1 ]; then
             echo "Expected exactly one candidate tarball, found $MATCH_COUNT"
             exit 1
