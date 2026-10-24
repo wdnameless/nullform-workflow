@@ -1,18 +1,15 @@
 # typos configuration.
 #
-# Scope: prose only. The checker's value is catching misspellings in documentation
-# and prompts; applied to code it flags identifiers (`nd`, `kids`), and applied to
-# committed evidence JSON it flags hashes and field names. Those are not prose and
-# a "fix" there would corrupt data. Widening back to code requires fixing the
-# identifiers first — until then a narrow scope keeps the signal honest.
+# Purpose: catch misspellings in prose. Applied to code it flags identifiers
+# (`nd`, `kids`); applied to committed evidence JSON it flags hashes and field
+# names — neither is prose, and "fixing" evidence would corrupt it.
 [files]
 extend-exclude = [
   "tools/**",
   "bin/**",
   "bench/**",
   "tests/**",
-  "openspec/changes/**/review-evidence.json",
-  "openspec/changes/**/*.json",
+  "**/*.json",
   "package-lock.json",
   "skills/**/scripts/**",
   ".workflow/**",
@@ -22,3 +19,34 @@ extend-exclude = [
 # Merge with the built-in dictionary instead of replacing it: a bare config file
 # replaces the defaults wholesale and turns every excluded identifier into a failure.
 extend-ignore-re = ["\\b[0-9a-f]{7,64}\\b"]
+
+# Words the dictionary does not know but which are correct in this repository.
+# Every entry must name a real term; this is not a place to silence a misspelling.
+# Genuine typos found alongside these were fixed in the source instead:
+# "parent-doen" -> "parent-owned", "auxilary" -> "auxiliary".
+[default.extend-identifiers]
+# npm package providing virtualised lists.
+virtua = "virtua"
+# CSS `font-stretch` keyword / variable-font axis tag.
+wdth = "wdth"
+# Device identifier acronym.
+UDID = "UDID"
+# Short table abbreviation.
+PN = "PN"
+# Regression test uses `--chek` (deliberately misspelled) to prove the real gate
+# does not silently accept an unknown flag.
+chek = "chek"
+# Font name.
+Ines = "Ines"
+# Product name.
+Chanel = "Chanel"
+# Design tool package/domain.
+canva = "canva"
+# Compound words the dictionary splits: "mis-tapped", "mis-taps".
+mis = "mis"
+# `grep -rin` flags recorded verbatim in an oracle transcript.
+rin = "rin"
+# `ba` appears inside a recorded evidence hash fragment.
+ba = "ba"
+# Product term (live-updating dashboard).
+livetime = "livetime"

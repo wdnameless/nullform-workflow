@@ -2,7 +2,7 @@
 
 ## Владение
 - S01: `tools/dashboard.mjs` (server/CLI), `tools/dashboard-collectors.mjs` (new),
-  `tools/dashboard-ui.mjs` (new). Sequential, parent-doen.
+  `tools/dashboard-ui.mjs` (new). Sequential, parent-owned.
 - S02: `tools/session-log.mjs` (new) + 4 потребителя (замена дубликатов).
 - Parent: openspec/, .workflow/, сьют, oracle.
 
