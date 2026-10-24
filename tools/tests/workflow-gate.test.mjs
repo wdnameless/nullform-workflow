@@ -23,13 +23,15 @@ import { writeEvidence as writeValidEvidence, prepareEvidence } from "./fixtures
 
 function setupT2(root, extra = {}) {
   const featDir = join(root, "openspec", "changes", "feat-x");
-  mkdirSync(join(featDir, "specs"), { recursive: true });
+  mkdirSync(join(featDir, "specs", "cap"), { recursive: true });
   writeFileSync(join(root, "manifest.md"), "| R01 | \"user wanted X\" |\n", "utf8");
   writeFileSync(join(featDir, "manifest.md"), "| R01 | \"user wanted X\" |\n", "utf8");
   writeFileSync(join(root, "interfaces.md"), "# Interfaces\n- export function run(): void\n", "utf8");
+  // The artifact gate requires the interfaces contract to live inside the change.
+  writeFileSync(join(featDir, "interfaces.md"), "# Interfaces\n- export function run(): void\n", "utf8");
   writeFileSync(join(featDir, "proposal.md"), "proposal body\n", "utf8");
   writeFileSync(join(featDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
-  writeFileSync(join(featDir, "specs", "spec.md"), "# Spec\n", "utf8");
+  writeFileSync(join(featDir, "specs", "cap", "spec.md"), "## ADDED Requirements\n\n### Requirement: Cap\nThe system SHALL cap.\n\n#### Scenario: capped\n- **WHEN** validated\n- **THEN** accepted\n", "utf8");
   writeFileSync(join(featDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
   if (extra.evidence !== false) {
     writeValidEvidence(root, featDir, "feat-x", extra.evidenceOverrides);
@@ -88,9 +90,9 @@ test("gate: shared validator ensures cmdCheck and cmdClose agree when manifest i
     cmdStart(root, { tier: "T2", task: "empty-manifest" });
 
     assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
     assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
     assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
 
     // Empty the manifest file
@@ -111,9 +113,9 @@ test("gate: T2 rejects negative oracle verdict at close", () => {
     cmdStart(root, { tier: "T2", task: "negative-oracle" });
 
     assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
     assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
     assert.equal(cmdArtifact(root, { kind: "oracle", detail: "REJECT: acceptance tests failed on boundary checks" }), 0);
 
     const checkCode = cmdCheck(root);
@@ -136,9 +138,9 @@ test("gate: retained evidence check refuses close if artifact file is deleted be
     cmdStart(root, { tier: "T2", task: "deleted-artifact" });
 
     assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
     assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
-    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
     assert.equal(cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against the brief, no gaps found" }), 0);
 
     // Delete manifest file after recording
@@ -154,6 +156,10 @@ test("gate: retained evidence check refuses close if artifact file is deleted be
 test("check-ci: enforces PR tier label and lean T0/T1 execution", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-gate-ci-labels-"));
   try {
+    // A gate over zero files is not a gate: give the fixture one source file so the
+    // quality gates measure something real, as a repository would.
+    mkdirSync(join(root, "tools"), { recursive: true });
+    writeFileSync(join(root, "tools", "ok.mjs"), "export const ok = true;\n", "utf8");
     // Missing tier or labels fails
     assert.equal(cmdCheckCi(root, {}), 1, "missing tier and labels must fail");
 
@@ -176,7 +182,7 @@ test("check-ci: enforces PR tier label and lean T0/T1 execution", () => {
     assert.equal(cmdCheckCi(root, { tier: "T0" }), 0, "direct tier T0 is lean");
     assert.equal(cmdCheckCi(root, { labels: "workflow:T1" }), 1, "T1 without recon must fail");
     assert.equal(cmdCheckCi(root, { tier: "T1" }), 1, "direct tier T1 without recon must fail");
-    writeFileSync(join(root, "recon.md"), "# Recon\n## Files touched\n- a\n## Acceptance check\n- check\n", "utf8");
+    writeFileSync(join(root, "recon.md"), "# Recon\n## Files touched\n- tools/ok.mjs\n## Acceptance check\n- node --test tools/tests/ok.test.mjs\n", "utf8");
     assert.equal(cmdCheckCi(root, { tier: "T1", recon: "recon.md" }), 0, "T1 with recon passes");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -223,9 +229,18 @@ test("check-ci: validates committed T2 OpenSpec artifacts (manifest + proposal +
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: REJECT\n", "utf8");
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "oracle REJECT must fail");
 
-    // Positive oracle.md (ACCEPT) succeeds
+    // Positive oracle.md (ACCEPT) succeeds — but only in a git worktree: commit
+    // verification refuses a root that cannot produce commit evidence, and the
+    // acceptance commit must carry ONLY evidence (role prompts and the frozen test
+    // belong to the source commit, so they are scaffolded before it).
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nEvidence verified.\n", "utf8");
+    assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "a non-git root cannot pass commit verification");
+    rmSync(join(changeDir, "oracle.md"));
+    prepareEvidence(root, changeId);
+    gitInitCommit(root, "source");
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nEvidence verified.\n", "utf8");
     writeValidEvidence(root, changeDir, changeId);
+    gitInitCommit(root, "acceptance");
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "complete valid evidence passes");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -285,7 +300,12 @@ test("check-ci: distinguishes anchored positive/negative verdicts from prose wor
       "# Oracle\nVerdict: ACCEPT\nExternal symlink artifacts are rejected; contradictory wrapper status is rejected.\n",
       "utf8"
     );
+    rmSync(join(changeDir, "oracle.md"));
+    prepareEvidence(root, changeId);
+    gitInitCommit(root, "source");
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nExternal symlink artifacts are rejected; contradictory wrapper status is rejected.\n", "utf8");
     writeValidEvidence(root, changeDir, changeId);
+    gitInitCommit(root, "acceptance");
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 0, "Verdict: ACCEPT with prose 'rejected' must pass");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -506,12 +526,28 @@ test("check-ci: rejects external symlink in change directory or artifacts", () =
     rmSync(outside, { recursive: true, force: true });
   }
 });
+/** Initialize a git worktree in `root` and commit everything, so commit-based gates
+ *  have real evidence instead of silently skipping. */
+function gitInitCommit(root, message = "fixture") {
+  const run = (...args) => {
+    const res = spawnSync("git", args, {
+      cwd: root, encoding: "utf8", windowsHide: true,
+      env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+    });
+    assert.equal(res.status, 0, `${args.join(" ")}: ${res.stderr}`);
+    return res;
+  };
+  if (!existsSync(join(root, ".git"))) run("init", "-q");
+  run("add", "-A", "--force");
+  run("commit", "-qm", message);
+}
+
 function writeT2Files(dir, extra = {}) {
-  mkdirSync(join(dir, "specs"), { recursive: true });
-  writeFileSync(join(dir, "manifest.md"), "| R01 | quote |\n", "utf8");
+  mkdirSync(join(dir, "specs", "cap"), { recursive: true });
+  writeFileSync(join(dir, "manifest.md"), "| R01 | «quote» | x | open |\n", "utf8");
   writeFileSync(join(dir, "proposal.md"), "# Proposal\n", "utf8");
   writeFileSync(join(dir, "tasks.md"), "# Tasks\n- task\n", "utf8");
-  writeFileSync(join(dir, "specs", "spec.md"), "# Spec\n", "utf8");
+  writeFileSync(join(dir, "specs", "cap", "spec.md"), "## ADDED Requirements\n\n### Requirement: Cap\nThe system SHALL cap.\n\n#### Scenario: capped\n- **WHEN** validated\n- **THEN** accepted\n", "utf8");
   writeFileSync(join(dir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
   if (extra.oracle !== false) writeFileSync(join(dir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
   if (extra.worktrees) writeFileSync(join(dir, "worktrees.md"), "# Worktrees\n- isolated wt-1\n", "utf8");
@@ -549,7 +585,7 @@ test("check-ci: T1 requires --recon, 3-9 files ceiling, >9 refuses with hint", (
     git("commit", "-qm", "init");
     git("checkout", "-qb", "feature-t1");
     assert.equal(cmdCheckCi(root, { tier: "T1", "base-ref": "main" }), 1, "T1 without --recon must fail");
-    const reconContent = "# Recon\n## Files touched\n- a.txt\n- b.txt\n## Acceptance check\nSmoke ok.\n";
+    const reconContent = "# Recon\n## Files touched\n- a.txt\n- b.txt\n## Acceptance check\n- smoke: both files load\n";
     writeFileSync(join(root, "recon.md"), reconContent, "utf8");
     writeFileSync(join(root, "a.txt"), "a\n", "utf8");
     writeFileSync(join(root, "b.txt"), "b\n", "utf8");
@@ -569,10 +605,19 @@ test("check-ci: T3 requires committed worktrees.md describing at least one isola
   const root = mkdtempSync(join(tmpdir(), "wf-gate-t3-"));
   try {
     const changeDir = join(root, "openspec", "changes", "t3-change");
-    writeT2Files(changeDir);
+    // evidence:false — the fixture must not write review evidence before the source
+    // commit, or the acceptance commit would mix product files with the verdict.
+    writeT2Files(changeDir, { evidence: false });
     assert.equal(cmdCheckCi(root, { tier: "T3", change: "t3-change" }), 1, "T3 without worktrees.md must fail");
     writeFileSync(join(changeDir, "worktrees.md"), "# Worktrees\n- isolated worktree wt-1\n", "utf8");
+    // The verdict must live ONLY in the acceptance commit: git resolves the evidence
+    // commit by walking history for the oracle file, so a verdict committed with the
+    // source makes that walk land on the source commit and read it as mixed.
+    rmSync(join(changeDir, "oracle.md"));
+    gitInitCommit(root, "source");
+    writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
     writeValidEvidence(root, changeDir, "t3-change");
+    gitInitCommit(root, "acceptance");
     assert.equal(cmdCheckCi(root, { tier: "T3", change: "t3-change" }), 0, "T3 with worktrees.md must pass");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -605,12 +650,14 @@ test("local T2: refuses while proposal/tasks/specs/oracle file are absent", () =
     const changeDir = join(root, "openspec", "changes", "align-feat");
     mkdirSync(changeDir, { recursive: true });
     writeFileSync(join(changeDir, "stub.txt"), "stub\n", "utf8");
-    writeFileSync(join(root, "manifest.md"), "| R01 | quote |\n", "utf8");
-    writeFileSync(join(root, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
+    // Manifest and interfaces must live inside the change directory: a sibling's file
+    // satisfies the letter of the contract while proving nothing about this change.
+    writeFileSync(join(changeDir, "manifest.md"), "| R01 | «quote» | x | open |\n", "utf8");
+    writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
     cmdStart(root, { tier: "T2", task: "align-t2-test" });
     cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" });
-    cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from brief" });
-    cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "manifest", path: "openspec/changes/align-feat/manifest.md", detail: "captured R01 verbatim from brief" });
+    cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/align-feat/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/align-feat", detail: "change proposal scaffolded and validated" });
     cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against brief, no gaps found" });
     assert.equal(cmdCheck(root), 1, "missing proposal, tasks, specs, oracle file");
@@ -619,11 +666,13 @@ test("local T2: refuses while proposal/tasks/specs/oracle file are absent", () =
     assert.equal(cmdCheck(root), 1, "missing tasks, specs, oracle file");
     writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
     assert.equal(cmdCheck(root), 1, "missing specs, oracle file");
-    mkdirSync(join(changeDir, "specs"), { recursive: true });
-    writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
+    // A real capability path with a scenario: `openspec validate` rejects a delta spec
+    // sitting at specs/ root, which is exactly the defect this gate now catches.
+    mkdirSync(join(changeDir, "specs", "align"), { recursive: true });
+    writeFileSync(join(changeDir, "specs", "align", "spec.md"), "## ADDED Requirements\n\n### Requirement: Align\nThe system SHALL align.\n\n#### Scenario: aligned\n- **WHEN** a change is validated\n- **THEN** it is accepted\n", "utf8");
     assert.equal(cmdCheck(root), 1, "missing oracle file");
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
-    writeFileSync(join(changeDir, "manifest.md"), "| R01 | quote |\n", "utf8");
+    writeFileSync(join(changeDir, "manifest.md"), "| R01 | «quote» | x | open |\n", "utf8");
     writeValidEvidence(root, changeDir, "align-feat");
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/align-feat", detail: "change proposal scaffolded and validated" });
     cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against brief, no gaps found" });
@@ -694,9 +743,9 @@ test("gate: local check/close refuse when explicit oracle ACCEPT has sibling REJ
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "sibling-reject" });
     cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" });
-    cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" });
+    cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from the brief" });
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" });
-    cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
 
     const changeDir = join(root, "openspec", "changes", "feat-x");
     writeFileSync(join(changeDir, "oracle-1.md"), "# Oracle 1\nVerdict: ACCEPT\n", "utf8");
@@ -739,9 +788,9 @@ test("gate: local check/close refuse borrowing positive oracle --path from anoth
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "borrow-accept" });
     cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" });
-    cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" });
+    cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from the brief" });
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" });
-    cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
 
     const registeredDir = join(root, "openspec", "changes", "feat-x");
     rmSync(join(registeredDir, "oracle.md"), { force: true });
@@ -891,9 +940,9 @@ test("gate: local check/close and CI refuse Markdown-bold **Verdict:** REJECT si
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "bold-reject-test" });
     cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" });
-    cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" });
+    cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from the brief" });
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" });
-    cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
 
     const changeDir = join(root, "openspec", "changes", "feat-x");
     rmSync(join(changeDir, "oracle.md"), { force: true });
