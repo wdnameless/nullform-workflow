@@ -281,15 +281,22 @@ test("install proceeds when a project virtualenv exists", () => {
 test("baseline keys are OS-independent", () => {
   // A baseline seeded on Windows used to keep "tools\\a.py:main", so the same function
   // read as "new" on Linux CI and the gate was permanently red cross-platform.
+  //
+  // On POSIX a backslash is a legal filename character, not a separator, so only a
+  // Windows-style input can be normalised there. Asserting the conversion everywhere
+  // would be asserting Windows semantics on Linux — the assertion, not the code, would
+  // be wrong. The real invariant is checked on every platform: the key never carries a
+  // separator and matches the relative form the baseline was seeded with.
   const root = sandbox({ "tools/a.py": "def main():\n    return 1\n" });
   try {
-    const backslash = normalizeFile(root, "tools\\a.py");
     const forward = normalizeFile(root, "tools/a.py");
     const absolute = normalizeFile(root, join(root, "tools", "a.py"));
-    assert.equal(backslash, "tools/a.py");
     assert.equal(forward, "tools/a.py");
     assert.equal(absolute, "tools/a.py");
-    assert.ok(!backslash.includes("\\"), "a baseline key must never carry a platform separator");
+    assert.ok(!forward.includes("\\"), "a baseline key must never carry a platform separator");
+    if (process.platform === "win32") {
+      assert.equal(normalizeFile(root, "tools\\a.py"), "tools/a.py", "Windows separators must fold to /");
+    }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

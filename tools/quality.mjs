@@ -345,7 +345,16 @@ export function normalizeFile(root, file) {
   const rel = relative(root, absolute);
   // A path outside the root keeps its own form rather than becoming "../x".
   if (rel.startsWith("..")) return String(file).split("\\").join("/");
-  return rel.split(sep).join("/");
+  const native = rel.split(sep).join("/");
+  // A baseline seeded on Windows carries "tools\\a.py:main". On POSIX a backslash is a legal
+  // filename character, and `path.join` does not treat it as a separator, so the check is
+  // gated on the platform rather than on a filesystem probe that cannot distinguish the
+  // two meanings there.
+  if (process.platform === "win32" || !native.includes("\\")) return native;
+  const folded = native.split("\\").join("/");
+  // On POSIX, fold only when the folded path exists and no file literally carries the
+  // backslash — then it was a separator, not part of the name.
+  return !existsSync(join(root, native)) && existsSync(join(root, folded)) ? folded : native;
 }
 
 function nameRows(root, stackId, rows) {
