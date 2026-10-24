@@ -97,6 +97,16 @@ jobs:
         run: |
           node tools/code-size.mjs check --root .
 
+      - name: Cognitive complexity ratchet
+        # Runs only when the consuming project opted in by seeding a baseline.
+        # A missing analyzer is reported as "unverified" and exits 1, not 0.
+        run: |
+          if [ -f .quality-baseline.json ]; then
+            node tools/quality.mjs check --root .
+          else
+            echo "no .quality-baseline.json: run 'nullform quality install' to opt in"
+          fi
+
       - name: Auto-review gate
         run: |
           node tools/auto-review.mjs --root . --json

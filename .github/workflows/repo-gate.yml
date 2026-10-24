@@ -344,6 +344,18 @@ jobs:
       - name: ESLint strict gate
         run: npm run lint
 
+      - name: Cognitive complexity ratchet
+        # Installs nothing here: `install` already seeded .quality-baseline.json and the
+        # analyzer is a devDependency. Only GROWTH past a baselined COCO, or a NEW
+        # offender above the threshold, fails. A skipped/unrunnable analyzer exits 1
+        # (unverified), never 0 — see docs/quality-gate.md.
+        run: |
+          if [ -f .quality-baseline.json ]; then
+            node tools/quality.mjs check --root .
+          else
+            echo "no .quality-baseline.json: quality gate not opted in, skipping"
+          fi
+
       - name: Agent definition lint
         # Replaces agnix: it validated tool names against the Claude convention while
         # this harness's canon is the OMP vocabulary (read/bash), so it reported

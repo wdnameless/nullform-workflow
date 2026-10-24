@@ -7,7 +7,7 @@ This document defines dependency management, pinning standards, and update workf
 | Category | Component / Package | Pinned Version / Mechanism | Purpose |
 | --- | --- | --- | --- |
 | npm (deps) | `json5`, `jsonc-parser`, `yaml` | Exact semver in `package.json` | Core parsing utilities |
-| npm (devDeps) | `@eslint/js`, `eslint`, `globals` | Exact in `package-lock.json` | Strict linting suite |
+| npm (devDeps) | `@eslint/js`, `eslint`, `globals`, `eslint-plugin-sonarjs` | Exact in `package-lock.json` | Strict linting suite + cognitive-complexity analyzer (`tools/quality.mjs`) |
 | actions (5) | `actions/checkout` | `v7` | Unified repository checkout |
 | actions (5) | `actions/setup-node` | `v4` | Node.js runtime setup |
 | actions (5) | `actions/{upload,download}-artifact` | `v4` | Build artifact handoff |
@@ -16,7 +16,7 @@ This document defines dependency management, pinning standards, and update workf
 | openspec | `@fission-ai/openspec` | `1.13.2` (`npx --yes` pin) | OpenSpec schema validation |
 | actionlint | `rhysd/actionlint` | `v1.7.12` (release asset + SHA256) | Workflow syntax/shell checks |
 
-Total managed pins: 6 npm packages + 5 action suites + OpenSpec + actionlint.
+Total managed pins: 7 npm packages + 5 action suites + OpenSpec + actionlint.
 
 ## Rules
 

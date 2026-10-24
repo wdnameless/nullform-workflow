@@ -86,13 +86,30 @@ export function readPackageVersion(root = PACKAGE_ROOT) {
   throw new Error(`Package version metadata missing or corrupt in ${root}`);
 }
 
+/** Turn node:util parseArgs diagnostics into one-line operator-facing messages. */
+function translateParseError(err) {
+  if (err.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+    const match = err.message.match(/'([^']+)'/);
+    return new Error(`Unknown option "${match ? match[1] : ""}"`);
+  }
+  if (err.code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+    const match = err.message.match(/Option '([^'\s]+)/);
+    return new Error(`Missing value for ${match ? match[1] : "option"}`);
+  }
+  return err;
+}
+
+/**
+ * Commands that own their flags forward argv verbatim, so there is one parser per
+ * surface instead of two that can drift apart. `quality` needs this for --stack,
+ * --changed and --baseline; `workflow` has always worked this way.
+ */
+const PASSTHROUGH = { workflow: "workflowArgs", quality: "qualityArgs" };
+
 export function parseCliArgs(argv = []) {
-  if (Array.isArray(argv) && argv.length > 0 && argv[0] === "workflow") {
-    return {
-      command: "workflow",
-      workflowArgs: argv.slice(1),
-      help: false,
-    };
+  const head = Array.isArray(argv) ? argv[0] : undefined;
+  if (head && Object.prototype.hasOwnProperty.call(PASSTHROUGH, head)) {
+    return { command: head, [PASSTHROUGH[head]]: argv.slice(1), help: false };
   }
 
   const options = {
@@ -128,15 +145,7 @@ export function parseCliArgs(argv = []) {
   try {
     parsed = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
   } catch (err) {
-    if (err.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
-      const match = err.message.match(/'([^']+)'/);
-      throw new Error(`Unknown option "${match ? match[1] : ""}"`);
-    }
-    if (err.code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
-      const match = err.message.match(/Option '([^'\s]+)/);
-      throw new Error(`Missing value for ${match ? match[1] : "option"}`);
-    }
-    throw err;
+    throw translateParseError(err);
   }
 
   let command = null;
@@ -771,6 +780,27 @@ export async function runCapabilitiesCommand(options = {}, deps = {}) {
   return 0;
 }
 
+/**
+ * `nullform quality …` — one line of glue so the npm CLI and `node tools/quality.mjs`
+ * share a single implementation. The gate's own argv is forwarded untouched.
+ */
+export async function runQualityCommand(qualityArgs = [], deps = {}) {
+  const output = deps.stdout || process.stdout;
+  const errOut = deps.stderr || process.stderr;
+  try {
+    let runQualityCli;
+    if (deps.runQualityCli) runQualityCli = deps.runQualityCli;
+    else {
+      const mod = await import("../tools/quality.mjs");
+      runQualityCli = mod.runQualityCli;
+    }
+    return runQualityCli(qualityArgs, { stdout: output, stderr: errOut });
+  } catch (err) {
+    errOut.write(`quality error: ${sanitizeError(err && err.message ? err.message : String(err))}\n`);
+    return 2;
+  }
+}
+
 export async function runEvidenceCommand(options = {}, deps = {}) {
   const output = deps.stdout || process.stdout;
   const errOut = deps.stderr || process.stderr;
@@ -854,6 +884,7 @@ Usage:
   nullform doctor [options]
   nullform update [options]
   nullform workflow <command> [args...]
+  nullform quality <command> [args...]
   nullform capabilities [options]
   nullform evidence [options]
   nullform --version
@@ -868,6 +899,7 @@ Commands:
   update        Check npm registry, update global package and re-apply saved installation
   workflow      Execute core workflow gates (start, suggest, artifact, check, status, close, check-ci, stage-b, metrics)
   capabilities  Inspect supported configuration adapters, core workflow runtime, and execution boundaries
+  quality       Stack-aware static analysis: detect, plan, install, check, baseline (cognitive-complexity ratchet)
   evidence      Report verifiable development quality evidence and historical limitations
 
 Init Options:
@@ -910,6 +942,9 @@ Workflow Usage:
   nullform workflow check-ci --tier T2 --change <name>
   nullform workflow status
   nullform workflow metrics
+  nullform quality detect
+  nullform quality install --dry-run
+  nullform quality check --changed
 
 Capabilities Options:
   --json             Output structured JSON capabilities report
@@ -919,6 +954,21 @@ Evidence Options:
   --json             Output structured JSON evidence report
 `.trim() + "\n");
 }
+
+/** One table instead of a chain of ifs: adding a command is one row, and the
+ * unknown-command path stays a single place. */
+const COMMANDS = {
+  workflow: (o, d) => runWorkflowCommand(o.workflowArgs, d),
+  quality: (o, d) => runQualityCommand(o.qualityArgs, d),
+  init: runInit,
+  setup: runSetup,
+  heal: runHeal,
+  inspect: runInspectCommand,
+  doctor: runDoctorCommand,
+  update: runUpdateCommand,
+  capabilities: runCapabilitiesCommand,
+  evidence: runEvidenceCommand,
+};
 
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const output = deps.stdout || process.stdout;
@@ -943,23 +993,17 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       return 1;
     }
   }
-  if (options.command === "workflow") return runWorkflowCommand(options.workflowArgs, deps);
-
   if (options.help || !options.command) {
     printCliHelp(output);
     return options.help ? 0 : 2;
   }
 
-  if (options.command === "init") return runInit(options, deps);
-  if (options.command === "setup") return runSetup(options, deps);
-  if (options.command === "heal") return runHeal(options, deps);
-  if (options.command === "inspect") return runInspectCommand(options, deps);
-  if (options.command === "doctor") return runDoctorCommand(options, deps);
-  if (options.command === "update") return runUpdateCommand(options, deps);
-  if (options.command === "capabilities") return runCapabilitiesCommand(options, deps);
-  if (options.command === "evidence") return runEvidenceCommand(options, deps);
-  errOut.write(`Error: Unknown command "${options.command}"\n`);
-  return 2;
+  const handler = COMMANDS[options.command];
+  if (!handler) {
+    errOut.write(`Error: Unknown command "${options.command}"\n`);
+    return 2;
+  }
+  return handler(options, deps);
 }
 
 if (
