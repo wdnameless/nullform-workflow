@@ -12,8 +12,35 @@ import {
   SUMMARY_PATH,
   SPEND_LEDGER_PATH,
 } from "../quality-evidence.mjs";
+import { computeTariffCost, REQUEST_RESERVE_USD } from "../bench-budget.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+
+/** A ledger the production loader accepts: version 2, unique ids, tariff provenance.
+ * Built from the same tariff table the loader validates against, so the fixture cannot
+ * drift from the rule it is meant to exercise. */
+function makeLedger(count) {
+  const selector = EXPECTED_MODEL;
+  const usage = { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0 };
+  const requests = [];
+  let cumulative = 0;
+  for (let i = 0; i < count; i++) {
+    const cost = computeTariffCost(usage, selector).tariff_usd;
+    cumulative += cost;
+    requests.push({
+      id: `req-${String(i).padStart(4, "0")}`,
+      runId: `run-${i}`,
+      selector,
+      status: "settled",
+      reserve_usd: REQUEST_RESERVE_USD,
+      dispatchedAt: "2026-01-01T00:00:00.000Z",
+      usage,
+      sdk_tariff_usd: cost,
+      tariff_usd: cost,
+    });
+  }
+  return { version: 2, ceiling_usd: 1, cumulative_tariff_usd: cumulative, status: "ok", requests };
+}
 
 function getValidSummary() {
   const summaryContent = readFileSync(join(REPO_ROOT, SUMMARY_PATH), "utf8");
@@ -52,12 +79,16 @@ test("readQualityEvidence on live repository root validates exact historical obs
   // Cohort & Ledger totals
   assert.equal(evidence.cohort.totalRequests, 17);
   assert.equal(evidence.cohort.cumulativeTariffUsd, 0.034614);
-  assert.equal(evidence.ledger.totalSettledRequests, 35);
+  // The spend ledger is gitignored runtime data (bench/runs/), so a clean checkout has
+  // only the packaged snapshot (18 settled requests) and a developer machine has the live
+  // one (35+). Asserting either count here made this test pass locally and fail in CI.
+  // The two sources are distinguished instead; the drift path is covered by the fixture
+  // test below, which builds its own ledger.
+  assert.ok(["live-ledger", "historical-snapshot"].includes(evidence.ledger.source));
+  assert.ok(evidence.ledger.totalSettledRequests > 0);
   assert.ok(evidence.ledger.cumulativeTariffUsd > 0);
   assert.equal(evidence.ledger.unsettledRequests, 0);
   assert.equal(evidence.ledger.ceilingUsd, 1.0);
-  assert.equal(evidence.ledger.status, "warn");
-  assert.match(evidence.ledger.note, /drift/i);
 
   assert.ok(Array.isArray(evidence.limitations));
   assert.ok(evidence.limitations.length >= 5);
@@ -319,9 +350,11 @@ test("R06: live spend-ledger fixture with 35 settled passes with drift note", as
     mkdirSync(obsDir, { recursive: true });
     copyFileSync(join(REPO_ROOT, RAW_OBSERVATIONS_PATH), join(tmp, RAW_OBSERVATIONS_PATH));
 
+    // Built here, not copied: bench/runs/ is gitignored, so the previous copyFileSync
+    // threw ENOENT on every clean checkout. 35 settled requests is the number under test.
     const ledgerDir = join(tmp, "bench/runs");
     mkdirSync(ledgerDir, { recursive: true });
-    copyFileSync(join(REPO_ROOT, SPEND_LEDGER_PATH), join(tmp, SPEND_LEDGER_PATH));
+    writeFileSync(join(tmp, SPEND_LEDGER_PATH), JSON.stringify(makeLedger(35), null, 2), "utf8");
 
     const res = await readQualityEvidence({ root: tmp });
     assert.equal(res.valid, true);

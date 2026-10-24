@@ -134,6 +134,62 @@ export function skillFolderHash(skillDir) {
  * swapped `references/*.md` cannot hide behind an unchanged SKILL.md.
  * Throws an Error naming the skill if hash mismatches or file is missing.
  */
+/** Normalize the two accepted lock shapes into one entry list. */
+function lockEntries(lockData) {
+  const source = lockData.skills || lockData;
+  if (Array.isArray(source)) {
+    return source.filter(Boolean).map((s) => ({ name: s.name || s.skill || s.id, expectedHash: s.hash || s.sha256, path: s.path || null }));
+  }
+  return mapLockEntries(source);
+}
+
+/** The object-shaped lock: `name -> hash` or `name -> { hash, folderHash, path }`. */
+function mapLockEntries(source) {
+  if (!source || typeof source !== 'object') return [];
+  return Object.entries(source)
+    .filter(([key]) => key !== 'version' && key !== 'generatedAt')
+    .map(([key, val]) => (typeof val === 'string'
+      ? { name: key, expectedHash: val, path: null }
+      : (val && typeof val === 'object'
+        ? { name: key, expectedHash: val.hash || val.sha256, path: val.path || null, folderHash: typeof val.folderHash === 'string' ? val.folderHash.toLowerCase() : null }
+        : null)))
+    .filter(Boolean);
+}
+
+/** Where a locked skill's SKILL.md may live, in priority order. */
+function skillFileCandidates(entry, baseDir, lockAbs) {
+  const { name, path } = entry;
+  const out = [];
+  if (path) {
+    out.push(resolve(baseDir, path));
+    out.push(resolve(dirname(lockAbs), path));
+  }
+  out.push(resolve(baseDir, 'skills', name, 'SKILL.md'));
+  out.push(resolve(baseDir, name, 'SKILL.md'));
+  out.push(resolve(baseDir, name));
+  out.push(resolve(dirname(lockAbs), 'skills', name, 'SKILL.md'));
+  out.push(resolve(dirname(lockAbs), name, 'SKILL.md'));
+  return out;
+}
+
+/** Verify one entry. Returns an error message, or null when the entry is sound. */
+function entryProblem(entry, baseDir, lockAbs) {
+  const foundFile = skillFileCandidates(entry, baseDir, lockAbs).find((c) => existsSync(c));
+  if (!foundFile) return `Skill "${entry.name}" verification failed: SKILL.md not found`;
+  const actualHash = createHash('sha256').update(readFileSync(foundFile)).digest('hex');
+  const expected = String(entry.expectedHash || '').toLowerCase();
+  if (actualHash.toLowerCase() !== expected) {
+    return `Skill "${entry.name}" verification failed: hash mismatch (expected ${expected}, got ${actualHash})`;
+  }
+  if (entry.folderHash) {
+    const actualFolder = skillFolderHash(dirname(foundFile));
+    if (actualFolder !== entry.folderHash) {
+      return `Skill "${entry.name}" verification failed: bundled files changed (folder hash ${actualFolder} != expected ${entry.folderHash})`;
+    }
+  }
+  return null;
+}
+
 export function verifySkillsLock(lockPath, rootDir = null, { throws = true } = {}) {
   const lockAbs = resolve(lockPath);
   if (!existsSync(lockAbs)) {
@@ -150,87 +206,20 @@ export function verifySkillsLock(lockPath, rootDir = null, { throws = true } = {
     return { ok: false, error: err.message };
   }
 
-  const entries = [];
-  const source = lockData.skills || lockData;
-  if (Array.isArray(source)) {
-    for (const s of source) {
-      if (s) {
-        entries.push({
-          name: s.name || s.skill || s.id,
-          expectedHash: s.hash || s.sha256,
-          path: s.path || null,
-        });
-      }
-    }
-  } else if (source && typeof source === 'object') {
-    for (const [key, val] of Object.entries(source)) {
-      if (key === 'version' || key === 'generatedAt') continue;
-      if (typeof val === 'string') {
-        entries.push({ name: key, expectedHash: val, path: null });
-      } else if (val && typeof val === 'object') {
-        entries.push({
-          name: key,
-          expectedHash: val.hash || val.sha256,
-          path: val.path || null,
-          folderHash: typeof val.folderHash === 'string' ? val.folderHash.toLowerCase() : null,
-        });
-      }
-    }
-  }
+  const entries = lockEntries(lockData);
 
   const baseDir = rootDir ? resolve(rootDir) : dirname(lockAbs);
   const verified = [];
 
   for (const entry of entries) {
-    const skillName = entry.name;
-    const candidates = [];
-    if (entry.path) {
-      candidates.push(resolve(baseDir, entry.path));
-      candidates.push(resolve(dirname(lockAbs), entry.path));
-    }
-    candidates.push(resolve(baseDir, 'skills', skillName, 'SKILL.md'));
-    candidates.push(resolve(baseDir, skillName, 'SKILL.md'));
-    candidates.push(resolve(baseDir, skillName));
-    candidates.push(resolve(dirname(lockAbs), 'skills', skillName, 'SKILL.md'));
-    candidates.push(resolve(dirname(lockAbs), skillName, 'SKILL.md'));
-
-    let foundFile = null;
-    for (const c of candidates) {
-      if (existsSync(c)) {
-        foundFile = c;
-        break;
-      }
-    }
-
-    if (!foundFile) {
-      const err = new Error(`Skill "${skillName}" verification failed: SKILL.md not found`);
-      err.skill = skillName;
+    const problem = entryProblem(entry, baseDir, lockAbs);
+    if (problem) {
+      const err = new Error(problem);
+      err.skill = entry.name;
       if (throws) throw err;
-      return { ok: false, skill: skillName, error: err.message };
+      return { ok: false, skill: entry.name, error: err.message };
     }
-
-    const content = readFileSync(foundFile);
-    const actualHash = createHash('sha256').update(content).digest('hex');
-    const expected = String(entry.expectedHash || '').toLowerCase();
-
-    if (actualHash.toLowerCase() !== expected) {
-      const err = new Error(`Skill "${skillName}" verification failed: hash mismatch (expected ${expected}, got ${actualHash})`);
-      err.skill = skillName;
-      if (throws) throw err;
-      return { ok: false, skill: skillName, error: err.message };
-    }
-
-    if (entry.folderHash) {
-      const actualFolder = skillFolderHash(dirname(foundFile));
-      if (actualFolder !== entry.folderHash) {
-        const err = new Error(`Skill "${skillName}" verification failed: bundled files changed (folder hash ${actualFolder} != expected ${entry.folderHash})`);
-        err.skill = skillName;
-        if (throws) throw err;
-        return { ok: false, skill: skillName, error: err.message };
-      }
-    }
-
-    verified.push(skillName);
+    verified.push(entry.name);
   }
 
   return { ok: true, verified };
