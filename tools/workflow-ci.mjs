@@ -13,6 +13,7 @@ import {
   isNegativeOracleVerdict,
   isAcceptanceArtifactFilename,
   validateReviewEvidence,
+  LEGACY_MARKER,
   isSupersededOracleArtifact,
 } from "./review/evidence.mjs";
 import { validateReviewEvidenceAtRevision } from "./review/evidence-history.mjs";
@@ -645,9 +646,13 @@ export function cmdCheckCi(root, flags = {}) {
     return 1;
   }
 
-  const oracleFiles = validateCheckCiOracleFiles(root, relChangeDir);
-  if (!oracleFiles.ok) return 1;
-  let { oracleRelForCommit } = oracleFiles;
+  // Legacy changes predate oracle-artifact and native-evidence; marker = exemption.
+  let oracleRelForCommit = null;
+  if (!existsSync(join(changeDir, LEGACY_MARKER))) {
+    const oracleFiles = validateCheckCiOracleFiles(root, relChangeDir);
+    if (!oracleFiles.ok) return 1;
+    oracleRelForCommit = oracleFiles.oracleRelForCommit;
+  }
 
   // T3 additionally requires worktrees.md
   if (tier === "T3") {
@@ -678,12 +683,10 @@ export function cmdCheckCi(root, flags = {}) {
   // already walks commit history from the oracle acceptance commit forward,
   // so a second call on review-evidence.json only repeats subprocess work
   // and fails spuriously on sequential oracle commits.
-  // When evidence is validated at a historical revision (push gate), the
-  // "modified after acceptance" scan is scoped to this change's own directory:
+  // In the push gate the post-acceptance scan is scoped to this change directory:
   // a later commit touching unrelated files cannot taint an archived acceptance.
   const evidenceRevision = flags['evidence-revision'] ? String(flags['evidence-revision']) : null;
-  // Legacy changes have no native acceptance commit to walk forward from.
-  if (!revRes.legacy) {
+  if (!revRes.legacy) { // legacy: no native acceptance commit to walk from
     const gitCode = validateCheckCiGit(root, oracleRelForCommit || join(relChangeDir, "review-evidence.json"), baseRef, evidenceRevision ? relChangeDir : null);
     if (gitCode !== 0) return gitCode;
   }
