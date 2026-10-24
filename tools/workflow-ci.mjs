@@ -13,11 +13,11 @@ import {
   isNegativeOracleVerdict,
   isAcceptanceArtifactFilename,
   validateReviewEvidence,
-  validateReviewEvidenceAtRevision,
   isSupersededOracleArtifact,
 } from "./review/evidence.mjs";
+import { validateReviewEvidenceAtRevision } from "./review/evidence-history.mjs";
 import { isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath } from "./worktree-snapshot.mjs";
-import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
+import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries, gitIgnoredPaths, lastTouchingRevision } from "./workflow-shared.mjs";
 
 export function resolveChangedFilesAgainstBase(root, baseRef) {
   try {
@@ -192,17 +192,6 @@ export function validateCheckCiOracleFiles(root, relChangeDir) {
     return { ok: false };
   }
   return { ok: true, oracleRelForCommit };
-}
-
-/** Last commit in `baseRef..HEAD` that touched a change's directory (empty when untouched). */
-function lastTouchingRevision(root, change, baseRef) {
-  try {
-    return execFileSync("git", ["log", "-1", "--format=%H", `${baseRef}..HEAD`, "--", `openspec/changes/${change}`], {
-      cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000,
-    }).trim();
-  } catch {
-    return "";
-  }
 }
 
 export function checkPushEvidence(root, flags) {
@@ -418,6 +407,11 @@ export function checkQualityGates(root = ".", options = {}) {
     const NEVER_DIRS = new Set([
       "node_modules", ".git", ".archmap", "target", "dist", "build", "out", "coverage", ".venv",
     ]);
+    // A gitignored path is not an orphan: the operator's ignore rules are the
+    // statement of intent. `.tmp/` is where our own containment law sends scratch
+    // work, so counting its contents as "orphan/temporary files" made the gate
+    // demand the deletion of files the workflow explicitly tells agents to create.
+    const ignored = gitIgnoredPaths(absRoot);
 
     function scanOrphans(dir, relPrefix = "") {
       let entries;
@@ -429,21 +423,9 @@ export function checkQualityGates(root = ".", options = {}) {
       for (const entry of entries) {
         if (NEVER_DIRS.has(entry.name)) continue;
         const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
-        const fullPath = join(dir, entry.name);
-
+        if (ignored.has(relPath)) continue;
         if (entry.isDirectory()) {
-          if (entry.name === ".tmp") {
-            try {
-              const subEntries = readdirSync(fullPath, { withFileTypes: true });
-              for (const sub of subEntries) {
-                if (sub.name !== "worktrees") {
-                  orphanViolators.push(`${relPath}/${sub.name}`);
-                }
-              }
-            } catch {}
-            continue;
-          }
-          scanOrphans(fullPath, relPath);
+          scanOrphans(join(dir, entry.name), relPath);
         } else if (entry.isFile()) {
           const lower = entry.name.toLowerCase();
           if (/(?:^|[._-])orphan(?:[._-]|$)/i.test(lower) || /\.(tmp|bak|swp|orig)$/i.test(lower)) {

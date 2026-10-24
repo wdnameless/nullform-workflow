@@ -76,3 +76,29 @@ export function getPorcelainEntries(root) {
     return null;
   }
 }
+
+/** Paths git ignores, as root-relative POSIX strings (empty when unavailable). */
+export function gitIgnoredPaths(root) {
+  const out = new Set();
+  try {
+    const raw = execFileSync("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], {
+      cwd: root, encoding: "utf8", windowsHide: true, timeout: 20000, maxBuffer: 16 * 1024 * 1024,
+    });
+    for (const entry of raw.split("\0")) {
+      const rel = entry.trim().replace(/\\/g, "/").replace(/\/$/, "");
+      if (rel) out.add(rel);
+    }
+  } catch { /* no git or nothing ignored: an unreadable ignore set cannot invent orphans */ }
+  return out;
+}
+
+/** Last commit in `baseRef..HEAD` that touched a change's directory (empty when untouched). */
+export function lastTouchingRevision(root, change, baseRef) {
+  try {
+    return execFileSync("git", ["log", "-1", "--format=%H", `${baseRef}..HEAD`, "--", `openspec/changes/${change}`], {
+      cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}

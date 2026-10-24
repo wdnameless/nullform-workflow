@@ -124,7 +124,15 @@ function integer(value, name) {
   return value;
 }
 function nativeEvents(text) {
-  const events = text.split(/\r?\n/).filter(s => s.trim()).map(s => JSON.parse(s));
+  const events = text.split(/\r?\n/).filter(s => s.trim()).map((line, index) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      // A malformed transcript line is not evidence; name the line instead of
+      // surfacing a bare SyntaxError from deep inside the parser.
+      throw new Error(`Malformed native event line ${index + 1}: not valid JSON`);
+    }
+  });
   const retained = [];
   for (const ev of events) {
     if (ev.type === 'session') retained.push({ type: 'session', id: ev.id, timestamp: ev.timestamp });
@@ -276,7 +284,14 @@ function loadRun(root, sessionDir, changeId) {
   const runs = statePath(root, '.workflow/review-runs');
   const directory = statePath(root, sessionDir);
   if (dirname(directory) !== runs) throw new Error('Resume requires an original .workflow/review-runs/run-* directory');
-  const run = JSON.parse(readBounded(statePath(root, join(directory, 'run.json')), 128 * 1024));
+  const run = (() => {
+    try {
+      return JSON.parse(readBounded(statePath(root, join(directory, 'run.json')), 128 * 1024));
+    } catch (error) {
+      // Resume must fail closed with a readable reason, not a bare SyntaxError.
+      throw new Error(`Retained run manifest is unreadable: ${error.message}`);
+    }
+  })();
   if (run.schemaVersion !== 1 || run.runId !== basename(directory) || run.workspace !== realpathSync(root) || run.changeId !== changeId || !run.provenance) throw new Error('Retained run identity/workspace mismatch');
   return { directory, run };
 }
@@ -598,45 +613,6 @@ function validateRecord(record, role, current, errors, root, text = null) {
     if (record.testFilesHash !== current.tests) throw new Error('Frozen Stage-A tests mismatch');
   } catch (error) { errors.push(`review-evidence: ${role}: ${error.message}`); }
 }
-/**
- * Validate a change's evidence against the tree AT a historical revision.
- *
- * Why this exists: `validateReviewEvidence` compares recorded hashes against the
- * CURRENT working tree (sourceDigest covers the whole worktree). Re-validating an
- * archived change at HEAD therefore fails as soon as any later, unrelated commit
- * lands — history becomes permanently red. A push range must judge each change by
- * the tree it was accepted against: the revision that last touched it.
- *
- * The historical tree is materialised in a throwaway `git worktree` under the OS
- * temp dir; the live tree is never mutated. Failure is fail-closed: an unreadable
- * revision is not treated as evidence of validity.
- */
-export function validateReviewEvidenceAtRevision({ root = '.', changeId, tier, baseRef = null, revision = null }) {
-  if (!['T2', 'T3'].includes(tier)) return { ok: true, errors: [] };
-  if (!revision) return { ok: false, errors: ['missing revision for historical evidence validation'] };
-  const absRoot = resolve(root);
-  let tmpRoot = null;
-  try {
-    const base = mkdtempSync(join(tmpdir(), 'nf-evidence-'));
-    tmpRoot = join(base, 'tree');
-    execFileSync('git', ['worktree', 'add', '--detach', '--quiet', tmpRoot, revision], {
-      cwd: absRoot, encoding: 'utf8', windowsHide: true, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return validateReviewEvidence({ root: tmpRoot, changeId, tier, baseRef });
-  } catch (error) {
-    return { ok: false, errors: [`historical worktree unavailable at ${String(revision).slice(0, 8)}: ${error.message}`] };
-  } finally {
-    if (tmpRoot) {
-      try {
-        execFileSync('git', ['worktree', 'remove', '--force', tmpRoot], {
-          cwd: absRoot, encoding: 'utf8', windowsHide: true, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'],
-        });
-      } catch { /* best-effort cleanup; a leaked temp worktree is not evidence of anything */ }
-      try { rmSync(dirname(tmpRoot), { recursive: true, force: true }); } catch { /* best-effort */ }
-    }
-  }
-}
-
 export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = null }) {
   if (!['T2', 'T3'].includes(tier)) return { ok: true, errors: [] };
   const errors = [];
