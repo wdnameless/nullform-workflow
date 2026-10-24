@@ -165,6 +165,34 @@ test("a stack with no analyzer installed reports unverified, never pass", () => 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("an analyzer that prints nothing is a tool error, not a clean run", async () => {
+  // Regression guard: parsing "" used to throw and be reported as `unparsable`, and a
+  // parse function that tolerates empty input would have produced `ran` with zero rows —
+  // indistinguishable from "no violations". A silently broken analyzer must exit 1.
+  const root = sandbox({ "a.py": "def f():\n    return 1\n" });
+  try {
+    saveBaseline(root, { version: 1, stacks: { python: { threshold: 15, seeded: true, functions: {} } } });
+    const { runStack } = await import("../quality.mjs");
+    const silent = { run: { argv: ["node", "-e", ""], parser: "pylint-json" }, markers: ["*.py"], threshold: 15 };
+    const result = runStack(silent, { root, qualityDir: ".quality", files: null });
+    assert.notEqual(result.status, "ran", "empty stdout must never be reported as a completed run");
+    assert.equal(result.status, "tool-error");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("check exits 1 when the analyzer runs but reports an unreadable payload", async () => {
+  const root = sandbox({ "a.py": "def f():\n    return 1\n" });
+  try {
+    saveBaseline(root, { version: 1, stacks: { python: { threshold: 15, seeded: true, functions: {} } } });
+    const mod = await import("../quality.mjs");
+    // A parser that throws on garbage is the realistic case (analyzer changed its schema).
+    const broken = { run: { argv: ["node", "-e", "process.stdout.write('not json')"], parser: "pylint-json" }, markers: ["*.py"], threshold: 15 };
+    const result = mod.runStack(broken, { root, qualityDir: ".quality", files: null });
+    assert.equal(result.status, "unparsable");
+    assert.ok(result.detail, "an unparsable report must carry the reason, not just the status");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("check on a project with no known stack cannot exit 0", () => {
   const root = sandbox({ "README.md": "nothing here\n" });
   try {
