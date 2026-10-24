@@ -1315,15 +1315,8 @@ function findNewestSessionJsonl(dir) {
 function sessionFileForRoot(root) {
   const fromEnv = process.env.PI_SESSION_FILE || process.env.OMP_SESSION_FILE;
   if (!fromEnv || !existsSync(fromEnv)) return null;
-  try {
-    for (const ev of readJsonlSafe(fromEnv)) {
-      if (ev && ev.type === "session" && typeof ev.cwd === "string") {
-        const same = resolve(ev.cwd).toLowerCase() === resolve(root).toLowerCase();
-        return same ? fromEnv : null;
-      }
-    }
-  } catch {}
-  return null;
+  const declared = declaredCwd(fromEnv);
+  return declared && resolve(declared).toLowerCase() === resolve(root).toLowerCase() ? fromEnv : null;
 }
 
 /** Which transcript to read, in order of authority: an explicit --sessions path, the
@@ -1345,6 +1338,41 @@ function resolveSessionFile(root, flags = {}) {
     const found = findNewestSessionJsonl(d);
     if (found) return found;
   }
+  // Home fallback is intentional (a project often has no local transcript), but a session
+  // that DECLARES another project's cwd is not this lane's history. A session declaring no
+  // cwd at all stays eligible: there is nothing to contradict the assumption.
+  return newestSessionForRoot(join(homedir(), ".omp", "agent", "sessions"), root);
+}
+
+/** Newest transcript under `dir` that does not declare a different project root. */
+function newestSessionForRoot(dir, root) {
+  for (const f of newestFirstSessions(dir)) {
+    const declared = declaredCwd(f);
+    if (declared && resolve(declared).toLowerCase() !== resolve(root).toLowerCase()) continue;
+    return f;
+  }
+  return null;
+}
+
+/** Session files under `dir`, newest mtime first. */
+function newestFirstSessions(dir) {
+  const out = [];
+  try {
+    if (!existsSync(dir)) return out;
+    for (const f of findJsonlFiles(dir)) {
+      try { out.push({ path: f, mtimeMs: statSync(f).mtimeMs }); } catch {}
+    }
+  } catch { return out; }
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).map((e) => e.path);
+}
+
+/** The cwd a transcript declares on its session header, or null. */
+function declaredCwd(file) {
+  try {
+    for (const ev of readJsonlSafe(file)) {
+      if (ev && ev.type === "session" && typeof ev.cwd === "string") return ev.cwd;
+    }
+  } catch {}
   return null;
 }
 
