@@ -230,6 +230,12 @@ export function checkQualityGates(root = ".", options = {}) {
   const absRoot = resolve(root);
   const gates = [];
   const allViolators = [];
+  // Recorder: every gate pushed the same five-field object by hand, which is where
+  // this module's size came from. One call per outcome keeps the checks readable.
+  const record = (name, status, path, detail, violators = []) => {
+    gates.push({ name, status, path, violators, detail });
+    if (status === "fail") allViolators.push(...(violators.length ? violators : [`${name}: ${detail}`]));
+  };
 
   // Gate 1: code-size
   try {
@@ -242,39 +248,18 @@ export function checkQualityGates(root = ".", options = {}) {
     const sizeRes = checkCodeSize(absRoot, { config: sizeConfig });
     if (!sizeRes.ok && sizeRes.failures.length > 0) {
       const violators = sizeRes.failures.map((f) => `${f.file} (${f.message})`);
-      gates.push({
-        name: "code-size",
-        status: "fail",
-        path: [...new Set(sizeRes.failures.map((f) => f.file))].join(", "),
-        violators,
-        detail: `${sizeRes.failures.length} threshold violations`,
-      });
-      allViolators.push(...violators);
+      record("code-size", "fail", [...new Set(sizeRes.failures.map((f) => f.file))].join(", "), `${sizeRes.failures.length} threshold violations`, violators);
     } else if (sizeRes.stats.fileOffenders > 0 || sizeRes.stats.functionOffenders > 0) {
-      gates.push({
-        name: "code-size",
-        status: "warn",
-        path: sizeRes.files[0]?.file || ".",
-        violators: [],
-        detail: `${sizeRes.stats.exempt} exempt, ${sizeRes.stats.baselined} baselined`,
-      });
+      record("code-size", "warn", sizeRes.files[0]?.file || ".", `${sizeRes.stats.exempt} exempt, ${sizeRes.stats.baselined} baselined`);
+    } else if (sizeRes.stats.scannedFiles === 0) {
+      // A gate over zero files cannot pass: it measured nothing. An empty root, a
+      // wrong --root, or a scope matching nothing all used to reach here as "pass".
+      record("code-size", "fail", ".", "0 files scanned — nothing was measured", [`code-size: 0 files scanned under ${absRoot}`]);
     } else {
-      gates.push({
-        name: "code-size",
-        status: "pass",
-        path: ".",
-        violators: [],
-        detail: `all ${sizeRes.stats.scannedFiles} files within limits`,
-      });
+      record("code-size", "pass", ".", `all ${sizeRes.stats.scannedFiles} files within limits`);
     }
   } catch (err) {
-    gates.push({
-      name: "code-size",
-      status: "warn",
-      path: ".",
-      violators: [],
-      detail: `code-size scan skipped: ${err.message}`,
-    });
+    record("code-size", "warn", ".", `code-size scan skipped: ${err.message}`);
   }
 
   // Gate 2: debt-ledger
