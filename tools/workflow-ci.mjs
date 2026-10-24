@@ -318,30 +318,12 @@ export function checkQualityGates(root = ".", options = {}) {
       const violators = offending.map((m) => `${m.file}:${m.line} (defer: ${m.what || "untriggered debt"})`);
       record("debt-ledger", "fail", [...new Set(offending.map((m) => m.file))].join(", "), `${offending.length} unmanaged/untriggered debt marker(s)`, violators);
     } else if (debtRes.total > 0) {
-      gates.push({
-        name: "debt-ledger",
-        status: "warn",
-        path: Object.keys(debtRes.byFile).join(", "),
-        violators: [],
-        detail: `${debtRes.total} tracked defer markers with upgrade triggers`,
-      });
+      record("debt-ledger", "warn", Object.keys(debtRes.byFile).join(", "), `${debtRes.total} tracked defer markers with upgrade triggers`);
     } else {
-      gates.push({
-        name: "debt-ledger",
-        status: "pass",
-        path: ".",
-        violators: [],
-        detail: "0 defer markers",
-      });
+      record("debt-ledger", "pass", ".", "0 defer markers");
     }
   } catch (err) {
-    gates.push({
-      name: "debt-ledger",
-      status: "warn",
-      path: ".",
-      violators: [],
-      detail: `debt scan skipped: ${err.message}`,
-    });
+    record("debt-ledger", "warn", ".", `debt scan skipped: ${err.message}`);
   }
 
   // Gate 3: logs-hygiene

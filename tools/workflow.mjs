@@ -39,7 +39,7 @@
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, lstatSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join, dirname, resolve, basename } from "node:path";
+import { join, dirname, resolve, basename, relative, isAbsolute } from "node:path";
 import { readJsonlSafe } from "./session-log.mjs";
 import {
   validateOracleArtifact,
@@ -48,6 +48,7 @@ import {
   recordStageB,
 } from "./review/evidence.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
+import { parseRequirement } from "./requirements.mjs";
 export { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
 import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
@@ -98,7 +99,10 @@ const REQUIREMENTS = {
     { kind: "oracle", label: "oracle verdict + its reasons", path: null, minDetail: 30, mustContain: /ACCEPT|REJECT/i },
   ],
   T3: [
-    { kind: "worktree", label: "isolated worktree per major slice", path: null },
+    // The label promises "isolated worktree per major slice", so the evidence must
+    // name the worktree and its branch. It was a free-text note with no floor and no
+    // path, which `--detail "x"` satisfied.
+    { kind: "worktree", label: "isolated worktree per major slice (worktrees.md: slice, path, branch)", path: "openspec/changes/<name>/worktrees.md", requiresPath: true, minDetail: 40, detailMustContain: /worktree/i },
   ],
 };
 
@@ -846,8 +850,61 @@ function validateOpenspecArtifact(root, a, fullPath, invalid) {
   if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) invalid.push(`openspec: missing proposal.md in '${a.path}'`);
   if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) invalid.push(`openspec: missing tasks.md in '${a.path}'`);
   if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) invalid.push(`openspec: missing specs/ directory in '${a.path}'`);
+  if (invalid.length) return;
+  // File presence is not validation: a specs/spec.md at the capability root is
+  // silently ignored on archive, and only `openspec validate` reports that. The
+  // command's name appeared in this file solely inside an error hint before.
+  const changeId = basename(fullPath);
+  const res = spawnSync("openspec", ["validate", changeId, "--strict"], {
+    cwd: root, encoding: "utf8", windowsHide: true, timeout: 60000, shell: process.platform === "win32",
+  });
+  if (res.error) {
+    invalid.push(`openspec: could not run 'openspec validate ${changeId}' (${res.error.code || res.error.message})`);
+    return;
+  }
+  if (res.status !== 0) {
+    const detail = `${res.stdout || ""}${res.stderr || ""}`.trim().split(/\r?\n/).filter(Boolean).slice(0, 4).join(" / ");
+    invalid.push(`openspec: '${changeId}' does not validate (${detail || `exit ${res.status}`})`);
+  }
 }
 
+
+/** Kinds whose file must live inside the current change directory. */
+function isChangeScopedKind(kind) {
+  return kind === "manifest" || kind === "interfaces";
+}
+
+/** The change directory recorded for this task, or null when none is bound yet. */
+function changeDirOf(st) {
+  const rel = st?.artifacts?.openspec?.path;
+  return rel ? String(rel) : null;
+}
+
+/**
+ * A manifest is only a manifest if its rows parse as requirements. `/R\d\d/` was the
+ * whole check, so a file containing the literal string "R01" and nothing else passed
+ * as "manifest.md with R## rows + verbatim user quotes".
+ *
+ * Returns a problem description, or null when the rows are usable.
+ */
+function validateManifestRows(body) {
+  const rows = String(body || "").split(/\r?\n/).filter((line) => /^\s*\|/.test(line));
+  const parsed = rows.map(parseRequirement).filter(Boolean);
+  if (parsed.length === 0) return "no requirement rows parse (expected | R01 | <verbatim quote> | ... | <status> |)";
+  const ids = new Set(parsed.map((r) => r.id));
+  if (ids.size !== parsed.length) return "duplicate requirement IDs";
+  // A row with no text outside its own ID and status names no requirement.
+  for (const row of rows) {
+    const req = parseRequirement(row);
+    if (!req) continue;
+    const cells = row.split("|").map((c) => c.trim()).filter(Boolean);
+    const quote = cells.filter((c) => c !== req.id && !/^(open|in-spec|in-ticket|done|placeholder|deferred|dropped)$/i.test(c));
+    if (quote.length === 0 || quote.every((c) => c.length < 3)) {
+      return `row '${req.id}' carries no verbatim quote`;
+    }
+  }
+  return null;
+}
 
 function validateArtifacts(root, st) {
   const reqs = requiredFor(st.tier);
@@ -908,6 +965,21 @@ function validateArtifacts(root, st) {
         if (r.kind === "interfaces" && body.trim().length < 10) {
           invalid.push(`${r.kind}: file '${a.path}' is too short (< 10 chars)`);
           continue;
+        }
+        // A sibling change's manifest or interfaces file satisfies the letter of the
+        // contract but proves nothing about THIS change. The oracle path already had
+        // this guard; the other two path artifacts did not.
+        const boundChange = changeDirOf(st);
+        if (boundChange && isChangeScopedKind(r.kind)) {
+          const relFromChange = relative(join(root, boundChange), fullPath).replace(/\\/g, "/");
+          if (relFromChange.startsWith("..") || isAbsolute(relFromChange)) {
+            invalid.push(`${r.kind}: '${a.path}' belongs to another change, not '${boundChange}'`);
+            continue;
+          }
+        }
+        if (r.kind === "manifest") {
+          const rowProblem = validateManifestRows(body);
+          if (rowProblem) invalid.push(`manifest: ${rowProblem}`);
         }
       }
     }
@@ -1133,15 +1205,20 @@ function cmdCheck(root) {
   return 0;
 }
 
-function loadSoftBudgets(root) {
+function loadSoftBudgets(root, tier = null) {
   const p = budgetsPath(root);
-  const def = { tokens: BUDGET_WARN_DEFAULT_TOKENS, calls: BUDGET_WARN_DEFAULT_CALLS, warnRatio: BUDGET_WARN_RATIO };
+  // The tier budget is what `status` prints and what the lane declares. The check
+  // used a flat 45 for every tier, so a T1 lane (declared 25) only warned at 36 —
+  // two different numbers for one contract.
+  const tierCalls = tier && DEFAULT_BUDGETS[tier] ? DEFAULT_BUDGETS[tier] : BUDGET_WARN_DEFAULT_CALLS;
+  const def = { tokens: BUDGET_WARN_DEFAULT_TOKENS, calls: tierCalls, warnRatio: BUDGET_WARN_RATIO };
   if (!existsSync(p)) return def;
   try {
     const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
+    const tierOverride = tier && raw.tiers && typeof raw.tiers[tier] === "number" && raw.tiers[tier] > 0 ? raw.tiers[tier] : null;
     return {
       tokens: typeof raw.tokens === "number" && raw.tokens > 0 ? raw.tokens : def.tokens,
-      calls: typeof raw.calls === "number" && raw.calls > 0 ? raw.calls : def.calls,
+      calls: tierOverride ?? (typeof raw.calls === "number" && raw.calls > 0 ? raw.calls : def.calls),
       warnRatio: typeof raw.warnRatio === "number" && raw.warnRatio > 0 ? raw.warnRatio : def.warnRatio,
     };
   } catch { return def; }
@@ -1258,7 +1335,7 @@ function cmdStatus(root, flags = {}) {
     const a = st.artifacts[r.kind];
     console.log(`  ${a ? "+" : "-"} ${r.kind}${a && a.path ? ` (${a.path})` : ""}`);
   }
-  const soft = loadSoftBudgets(root);
+  const soft = loadSoftBudgets(root, st.tier);
   const usage = getSessionConsumption(root, flags);
   console.log(`budget  consumption ${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`);
   const tokenRatio = soft.tokens > 0 ? usage.tokens / soft.tokens : 0;
@@ -1269,6 +1346,21 @@ function cmdStatus(root, flags = {}) {
   return 0;
 }
 
+/**
+ * Single budget evaluation shared by `close` and `check-budget`, so the gate that
+ * blocks and the command that reports can never disagree about the numbers.
+ */
+function evaluateBudget(root, st, flags = {}) {
+  const soft = loadSoftBudgets(root, st.tier);
+  const usage = getSessionConsumption(root, flags);
+  const warnTokens = Math.floor(soft.tokens * soft.warnRatio);
+  const warnCalls = Math.floor(soft.calls * soft.warnRatio);
+  const isOver = usage.tokens >= warnTokens || usage.calls >= warnCalls;
+  const handoff = isOver ? checkHandoffFile(root, st.startedAt) : null;
+  const over = isOver && !handoff?.valid;
+  return { soft, usage, warnTokens, warnCalls, isOver, handoff, over };
+}
+
 function cmdCheckBudget(root, flags = {}) {
   const st = load(root);
   if (!st) {
@@ -1276,25 +1368,35 @@ function cmdCheckBudget(root, flags = {}) {
     else console.error("workflow check-budget: no active task.");
     return 2;
   }
-  const soft = loadSoftBudgets(root);
-  const usage = getSessionConsumption(root, flags);
-  const warnTokens = Math.floor(soft.tokens * soft.warnRatio);
-  const warnCalls = Math.floor(soft.calls * soft.warnRatio);
-  const isOver = usage.tokens >= warnTokens || usage.calls >= warnCalls;
-  if (!isOver) {
-    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: false, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, message: "under budget threshold" }, null, 2));
-    else console.log(`workflow check-budget: under budget threshold (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls).`);
+  const { soft, usage, warnTokens, warnCalls, handoff, over } = evaluateBudget(root, st, flags);
+  const budget = { tokens: soft.tokens, calls: soft.calls };
+  const threshold = { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio };
+  const counts = `${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`;
+  if (!over && !handoff) {
+    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: false, consumption: usage, budget, threshold, message: "under budget threshold" }, null, 2));
+    else console.log(`workflow check-budget: under budget threshold (${counts}).`);
     return 0;
   }
-  const handoff = checkHandoffFile(root, st.startedAt);
-  if (handoff.valid) {
-    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: true, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, handoff, message: "over budget, valid fresh handoff present" }, null, 2));
-    else console.log(`workflow check-budget: over budget threshold (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls), but valid fresh .workflow/handoff.md present.`);
+  if (handoff?.valid) {
+    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: true, consumption: usage, budget, threshold, handoff, message: "over budget, valid fresh handoff present" }, null, 2));
+    else console.log(`workflow check-budget: over budget threshold (${counts}), but valid fresh .workflow/handoff.md present.`);
     return 0;
   }
-  const err = `workflow check-budget: budget threshold exceeded (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls). Requires .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ sections newer than task start (${st.startedAt}). ${handoff.reason ? `Current handoff state: ${handoff.reason}.` : ""}`.trim();
-  if (flags.json) console.log(JSON.stringify({ ok: false, overBudget: true, consumption: usage, budget: { tokens: soft.tokens, calls: soft.calls }, threshold: { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio }, handoff, error: err }, null, 2));
+  const err = `workflow check-budget: budget threshold exceeded (${counts}). Requires .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ sections newer than task start (${st.startedAt}). ${handoff?.reason ? `Current handoff state: ${handoff.reason}.` : ""}`.trim();
+  if (flags.json) console.log(JSON.stringify({ ok: false, overBudget: true, consumption: usage, budget, threshold, handoff, error: err }, null, 2));
   else console.error(err);
+  return 1;
+}
+
+/** Close-time budget gate: same evaluation, different refusal message. */
+function checkBudgetState(root, st) {
+  const { soft, usage, handoff, over } = evaluateBudget(root, { ...st, tier: st.tier });
+  if (!over) return 0;
+  const counts = `${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`;
+  console.error(`workflow: cannot close ${st.tier} — budget threshold exceeded (${counts}).`);
+  console.error(`  write .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ (${handoff?.reason || "missing"}),`);
+  console.error(`  or close with --force --reason "<why the budget overrun is accepted>".`);
+  logEvent(root, "budget-refusal", `${st.tier} — ${st.task} (${counts})`);
   return 1;
 }
 
@@ -1484,10 +1586,37 @@ function measureAutoDiff(root, st) {
   return { ok: true, isGit: true, totalLines };
 }
 
+/** Guarded-auto refusal checks, extracted so `cmdClose` stays within its complexity limit. */
+function checkAutoClose(root, st, flags) {
+  const autoCheck = measureAutoDiff(root, st);
+  if (!autoCheck.ok) {
+    console.error(`workflow: auto close failed — ${autoCheck.error}`);
+    return 1;
+  }
+  if (flags["diff-lines"] !== undefined) {
+    const diffLines = Number(flags["diff-lines"]);
+    const cap = st.auto?.maxDiff ?? 20;
+    if (Number.isNaN(diffLines) || diffLines > cap) {
+      console.error(`workflow: auto close failed — diff lines (${diffLines}) exceed cap of ${cap}`);
+      return 1;
+    }
+  }
+  return 0;
+}
+
 function cmdClose(root, flags) {
   return withStateLock(root, () => {
     const st = load(root);
     if (!st) { console.error("workflow: no task state."); return 2; }
+
+    // The budget gate existed but nothing called it: a lane could run to 399/45
+    // calls and close cleanly. Exhausted budget now refuses the close unless a fresh
+    // handoff records where the work stands, or the operator forces with a reason.
+    // `--force --reason` stays the hatch, and the deviation is recorded below.
+    if (!flags.force) {
+      const budgetCode = checkBudgetState(root, st);
+      if (budgetCode !== 0) return budgetCode;
+    }
 
     // Closing twice appends a second metric for the same task: `metrics` then counts
     // one task as two and invents a duration between the two closes.
@@ -1504,19 +1633,8 @@ function cmdClose(root, flags) {
     }
 
   if (flags.auto || st.auto) {
-    const autoCheck = measureAutoDiff(root, st);
-    if (!autoCheck.ok) {
-      console.error(`workflow: auto close failed — ${autoCheck.error}`);
-      return 1;
-    }
-    if (flags["diff-lines"] !== undefined) {
-      const diffLines = Number(flags["diff-lines"]);
-      const cap = st.auto?.maxDiff ?? 20;
-      if (Number.isNaN(diffLines) || diffLines > cap) {
-        console.error(`workflow: auto close failed — diff lines (${diffLines}) exceed cap of ${cap}`);
-        return 1;
-      }
-    }
+    const autoResult = checkAutoClose(root, st, flags);
+    if (autoResult !== 0) return autoResult;
   }
 
   const { missing, invalid } = validateArtifacts(root, st);
