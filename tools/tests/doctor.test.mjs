@@ -1507,24 +1507,14 @@ test("F01 (9): синтаксическая проверка doctorLite покр
   try {
     const toolsDir = join(tmp, "tools");
     mkdirSync(toolsDir, { recursive: true });
-    // Many files: the old per-file timeout skipped the tail once the budget ran out,
-    // hiding broken files behind a warn. Coverage must be complete now.
-    for (let i = 0; i < 40; i++) {
-      writeFileSync(join(toolsDir, `tool-${String(i).padStart(2, "0")}.mjs`), `export const v${i} = ${i};\n`, "utf8");
-    }
-    // A genuinely broken file at the END of the ordering must still be reported.
+    for (let i = 0; i < 40; i++) writeFileSync(join(toolsDir, `tool-${i}.mjs`), `export const v${i} = ${i};\n`, "utf8");
+    // A broken file at the END of the ordering: the old per-file budget skipped the
+    // tail once time ran out, hiding it behind a warn. Coverage is complete now.
     writeFileSync(join(toolsDir, "zz-broken.mjs"), "export const = ;\n", "utf8");
-
     const res = doctorLite(tmp);
     assert.equal(res.ok, false, "a broken tool file must fail the probe");
-    assert.ok(
-      res.warns.some((w) => w.includes("zz-broken.mjs")),
-      `the last file must be checked, not skipped: ${JSON.stringify(res.warns)}`,
-    );
-    assert.ok(
-      !res.warns.some((w) => w.includes("пропущены файлы")),
-      "no file may be skipped by a time budget",
-    );
+    assert.ok(res.warns.some((w) => w.includes("zz-broken.mjs")), JSON.stringify(res.warns));
+    assert.ok(!res.warns.some((w) => w.includes("пропущены файлы")), "no file may be skipped");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

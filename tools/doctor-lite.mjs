@@ -85,7 +85,6 @@ export function doctorLite(root = ".") {
 
     const checker = (!process.versions.bun && process.execPath) || "node";
     const syntaxErrors = [];
-    const skippedFiles = [];
 
     // One child process for the whole set instead of one `node --check` per file:
     // ~250 spawns cost ~1.5 s and grew with the repo until the probe timed out and
@@ -115,9 +114,6 @@ for(const f of process.argv.slice(1)){try{new vm.SourceTextModule(fs.readFileSyn
 
     if (syntaxErrors.length > 0) {
       warns.push(`Синтаксические ошибки в: ${syntaxErrors.join(", ")}`);
-    }
-    if (skippedFiles.length > 0) {
-      warns.push(`Проверка синтаксиса прервана по таймауту (>1500мс), пропущены файлы: ${skippedFiles.join(", ")}`);
     }
   }
 
