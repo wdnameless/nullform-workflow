@@ -18,7 +18,7 @@ import {
 } from "./review/evidence.mjs";
 import { validateReviewEvidenceAtRevision } from "./review/evidence-history.mjs";
 import { isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath } from "./worktree-snapshot.mjs";
-import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries, gitIgnoredPaths, lastTouchingRevision } from "./workflow-shared.mjs";
+import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries, gitIgnoredPaths, lastTouchingRevision, hasReconEvidence } from "./workflow-shared.mjs";
 
 export function resolveChangedFilesAgainstBase(root, baseRef) {
   try {
@@ -70,8 +70,9 @@ function validateCheckCiT1(root, flags, baseRef) {
     console.error(`workflow check-ci: recon file '${reconFlag}' is empty.`);
     return 1;
   }
-  if (!/(touched files|files touched|files:)/i.test(reconBody) || !/(acceptance check|acceptance criteria|smoke|verified|acceptance:)/i.test(reconBody)) {
-    console.error(`workflow check-ci: recon file '${reconFlag}' must name touched files and acceptance check.`);
+  if (!hasReconEvidence(reconBody)) {
+    console.error(`workflow check-ci: recon file '${reconFlag}' must name touched files and an acceptance check.`);
+    console.error("  headings alone are not evidence: name the files and the command/observation that proves completion.");
     return 1;
   }
 
@@ -226,6 +227,31 @@ export function checkPushEvidence(root, flags) {
   return cmdCheckCi(root, { tier, recon, 'base-ref': baseRef });
 }
 
+/** Directories no gate scans: build output, VCS metadata, and agent caches. */
+const IGNORED_SCAN_DIRS = new Set([
+  "node_modules", ".git", ".archmap", "target", "dist", "build", "out", "coverage", ".venv",
+]);
+
+/** Count regular files under `dir`, bounded: used only to tell an empty root from a
+ *  docs-only one, so a runaway walk must not hang a gate. */
+function countFiles(dir, limit = 5000) {
+  let n = 0;
+  const walk = (current) => {
+    if (n >= limit) return;
+    let entries;
+    try { entries = readdirSync(current, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (n >= limit) return;
+      if (IGNORED_SCAN_DIRS.has(entry.name)) continue;
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) n++;
+    }
+  };
+  walk(dir);
+  return n;
+}
+
 export function checkQualityGates(root = ".", options = {}) {
   const absRoot = resolve(root);
   const gates = [];
@@ -252,9 +278,16 @@ export function checkQualityGates(root = ".", options = {}) {
     } else if (sizeRes.stats.fileOffenders > 0 || sizeRes.stats.functionOffenders > 0) {
       record("code-size", "warn", sizeRes.files[0]?.file || ".", `${sizeRes.stats.exempt} exempt, ${sizeRes.stats.baselined} baselined`);
     } else if (sizeRes.stats.scannedFiles === 0) {
-      // A gate over zero files cannot pass: it measured nothing. An empty root, a
-      // wrong --root, or a scope matching nothing all used to reach here as "pass".
-      record("code-size", "fail", ".", "0 files scanned — nothing was measured", [`code-size: 0 files scanned under ${absRoot}`]);
+      // A gate over zero files measured nothing. That is a defect when the root has
+      // no content at all (empty dir, wrong --root) — the whole gate reported "pass"
+      // for an empty tree. A docs-only tree is different: it has content, source
+      // scanning simply does not apply, so it is reported and not failed.
+      const fileCount = countFiles(absRoot);
+      if (fileCount === 0) {
+        record("code-size", "fail", ".", "0 files in root — nothing was measured", [`code-size: empty root ${absRoot}`]);
+      } else {
+        record("code-size", "warn", ".", `no source files in scope (${fileCount} non-source file(s) present) — scan not applicable`);
+      }
     } else {
       record("code-size", "pass", ".", `all ${sizeRes.stats.scannedFiles} files within limits`);
     }
@@ -283,14 +316,7 @@ export function checkQualityGates(root = ".", options = {}) {
         ? debtRes.markers
         : untriggeredMarkers;
       const violators = offending.map((m) => `${m.file}:${m.line} (defer: ${m.what || "untriggered debt"})`);
-      gates.push({
-        name: "debt-ledger",
-        status: "fail",
-        path: [...new Set(offending.map((m) => m.file))].join(", "),
-        violators,
-        detail: `${offending.length} unmanaged/untriggered debt marker(s)`,
-      });
-      allViolators.push(...violators);
+      record("debt-ledger", "fail", [...new Set(offending.map((m) => m.file))].join(", "), `${offending.length} unmanaged/untriggered debt marker(s)`, violators);
     } else if (debtRes.total > 0) {
       gates.push({
         name: "debt-ledger",
@@ -392,9 +418,7 @@ export function checkQualityGates(root = ".", options = {}) {
   // Gate 4: orphan / orphan-files
   try {
     const orphanViolators = [];
-    const NEVER_DIRS = new Set([
-      "node_modules", ".git", ".archmap", "target", "dist", "build", "out", "coverage", ".venv",
-    ]);
+    const NEVER_DIRS = IGNORED_SCAN_DIRS;
     // A gitignored path is not an orphan: the operator's ignore rules are the
     // statement of intent. `.tmp/` is where our own containment law sends scratch
     // work, so counting its contents as "orphan/temporary files" made the gate

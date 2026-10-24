@@ -102,3 +102,27 @@ export function lastTouchingRevision(root, change, baseRef) {
     return "";
   }
 }
+
+/**
+ * Acceptance vocabulary shared by the local recon artifact gate and the CI recon
+ * file gate. They used to hold two different regexes: a note could pass locally and
+ * fail in CI (or the reverse) because each matched its own wording.
+ *
+ * Evidence words only — "plan"/"mapped" describe intent, not proof.
+ */
+export const ACCEPTANCE_VERDICT_RE = /(accept|verif|check|prove|proof|proven|test(?:s|ed)?\b|pass(?:es|ed)?\b|green|criteria|criterion|exit\s*code|repro|assert|smoke|suite|\d+\s*\/\s*\d+|провер|приёмк|приемк|критери|тест|готов)/i;
+
+/** Files the recon note claims to touch: a path, a filename, or a "Files:" label. */
+export const RECON_FILES_RE = /(touched files|files touched|files:|\b[\w@.-]+\.(?:mjs|cjs|js|ts|tsx|json|jsonl|md|py|ps1|sh|ya?ml|toml)\b|(?:^|\s)[\w.-]+\/[\w./-]+)/i;
+
+/** True when the text names both what it touches and how completion is proven. */
+export function hasReconEvidence(text) {
+  // Headings are labels, not evidence: a file whose only content is
+  // "## Files touched" / "## Acceptance check" matched both patterns and passed
+  // while proving nothing, so the section titles are removed before testing.
+  const body = String(text || "")
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#{1,6}\s/.test(line))
+    .join("\n");
+  return RECON_FILES_RE.test(body) && ACCEPTANCE_VERDICT_RE.test(body);
+}
