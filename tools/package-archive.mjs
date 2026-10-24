@@ -133,13 +133,36 @@ export function resolveNpmInvocation(env = process.env) {
   }
   return { command: "npm", prefixArgs: [], shell: false };
 }
+/**
+ * Pick a tar that can round-trip this repository's filenames.
+ *
+ * Windows ships bsdtar (`System32\\tar.exe`), which writes a non-ASCII name as
+ * `??????????.md`: the archive is created "successfully" and then fails its own listing
+ * with "Archive entry has empty or unreadable filename". This repo has 20 Cyrillic
+ * filenames, so Windows certification failed on every run. Git for Windows bundles GNU
+ * tar, which handles them; prefer it, and keep bsdtar as the fallback.
+ */
+/** Git for Windows ships GNU tar, which treats `C:/x` as a remote host named `C:`.
+ * `--force-local` restores local-path semantics. Applied only when the resolved tar is
+ * that build, so POSIX tar (which does not accept the flag) is untouched. */
+function tarArgs(tarCmd, args) {
+  if (!/Git[\\/]usr[\\/]bin[\\/]tar\.exe$/i.test(tarCmd)) return args;
+  // GNU tar under MSYS cannot open `C:\\a\\b` at all: it needs forward slashes, and
+  // `--force-local` stops it reading the drive letter as a remote host.
+  return ["--force-local", ...args.map((a) => (typeof a === "string" ? a.replace(/\\/g, "/") : a))];
+}
+
 export function resolveTarCommand() {
   if (process.platform === "win32") {
+    const candidates = [
+      process.env.GIT_TAR,
+      join(process.env.ProgramFiles || "C:\\Program Files", "Git", "usr", "bin", "tar.exe"),
+      join(process.env.ProgramW6432 || "C:\\Program Files", "Git", "usr", "bin", "tar.exe"),
+    ].filter(Boolean);
+    for (const candidate of candidates) if (existsSync(candidate)) return candidate;
     const sysRoot = process.env.SystemRoot || "C:\\Windows";
     const system32Tar = join(sysRoot, "System32", "tar.exe");
-    if (existsSync(system32Tar)) {
-      return system32Tar;
-    }
+    if (existsSync(system32Tar)) return system32Tar;
   }
   return "tar";
 }
@@ -153,7 +176,7 @@ export function safeExtractArchive(tarballPath, targetDir, options = {}) {
 
   const tarCmd = resolveTarCommand();
 
-  const listRes = spawnSync(tarCmd, ["-tf", tarFile], {
+  const listRes = spawnSync(tarCmd, tarArgs(tarCmd, ["-tf", tarFile]), {
     cwd: tarDir,
     encoding: "utf8",
     windowsHide: true,
@@ -168,7 +191,7 @@ export function safeExtractArchive(tarballPath, targetDir, options = {}) {
       assert.ok(norm === "package" || norm.startsWith("package/"), `Entry not under package/: ${norm}`);
     }
   }
-  const extractRes = spawnSync(tarCmd, ["-xzf", tarFile, "-C", absTarget], {
+  const extractRes = spawnSync(tarCmd, tarArgs(tarCmd, ["-xzf", tarFile, "-C", absTarget]), {
     cwd: tarDir,
     encoding: "utf8",
     windowsHide: true,
@@ -204,7 +227,7 @@ export function createArchive(tarballPath, sourceDir, itemToPack = "package") {
   const absSource = resolve(sourceDir);
   const tarCmd = resolveTarCommand();
   mkdirSync(tarDir, { recursive: true });
-  const res = spawnSync(tarCmd, ["-czf", tarFile, "-C", absSource, itemToPack], {
+  const res = spawnSync(tarCmd, tarArgs(tarCmd, ["-czf", tarFile, "-C", absSource, itemToPack]), {
     cwd: tarDir,
     encoding: "utf8",
     windowsHide: true,
