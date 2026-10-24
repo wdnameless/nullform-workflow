@@ -490,11 +490,12 @@ test("R05: template with ${x} followed by arrow functions finds real function wi
   assert.equal(fns[0].endLine, 4);
 });
 
-test("R05: regression tools/dashboard.mjs: esc() phantom is absent, generateDashboardHtml is found", () => {
-  const dashboardPath = join(fileURLToPath(new URL("../..", import.meta.url)), "tools/dashboard.mjs");
-  const text = readFileSync(dashboardPath, "utf8");
-  const fns = scanFunctions(text, ".mjs");
-  const names = fns.map((f) => f.name);
-  assert.ok(!names.includes("esc"), "esc() phantom MUST NOT appear in dashboard.mjs scan");
-  assert.ok(names.includes("generateDashboardHtml"), "generateDashboardHtml MUST be found in dashboard.mjs scan");
+test("R05: regression dashboard split: esc() phantom absent, generateDashboardHtml in ui module", () => {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  for (const rel of ["tools/dashboard.mjs", "tools/dashboard-ui.mjs", "tools/dashboard-collectors.mjs"]) {
+    const names = scanFunctions(readFileSync(join(root, rel), "utf8"), ".mjs").map((f) => f.name);
+    assert.ok(!names.includes("esc"), `esc() phantom MUST NOT appear in ${rel} scan`);
+  }
+  const uiNames = scanFunctions(readFileSync(join(root, "tools/dashboard-ui.mjs"), "utf8"), ".mjs").map((f) => f.name);
+  assert.ok(uiNames.includes("generateDashboardHtml"), "generateDashboardHtml MUST be found in dashboard-ui.mjs scan");
 });
