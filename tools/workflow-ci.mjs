@@ -684,12 +684,7 @@ export function cmdCheckCi(root, flags = {}) {
   const evidenceRevision = flags['evidence-revision'] ? String(flags['evidence-revision']) : null;
   // Legacy changes have no native acceptance commit to walk forward from.
   if (!revRes.legacy) {
-    const gitCode = validateCheckCiGit(
-      root,
-      oracleRelForCommit || join(relChangeDir, "review-evidence.json"),
-      baseRef,
-      evidenceRevision ? relChangeDir : null,
-    );
+    const gitCode = validateCheckCiGit(root, oracleRelForCommit || join(relChangeDir, "review-evidence.json"), baseRef, evidenceRevision ? relChangeDir : null);
     if (gitCode !== 0) return gitCode;
   }
   if (!flags["skip-quality"] && !flags.skipQuality) {
