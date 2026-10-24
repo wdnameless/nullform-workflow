@@ -13,6 +13,7 @@ import {
   isNegativeOracleVerdict,
   isAcceptanceArtifactFilename,
   validateReviewEvidence,
+  validateReviewEvidenceAtRevision,
   isSupersededOracleArtifact,
 } from "./review/evidence.mjs";
 import { isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath } from "./worktree-snapshot.mjs";
@@ -187,6 +188,17 @@ export function validateCheckCiOracleFiles(root, relChangeDir) {
   return { ok: true, oracleRelForCommit };
 }
 
+/** Last commit in `baseRef..HEAD` that touched a change's directory (empty when untouched). */
+function lastTouchingRevision(root, change, baseRef) {
+  try {
+    return execFileSync("git", ["log", "-1", "--format=%H", `${baseRef}..HEAD`, "--", `openspec/changes/${change}`], {
+      cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
 export function checkPushEvidence(root, flags) {
   const baseRef = flags['base-ref'] || flags.baseRef || flags['base_ref'];
   if (!baseRef || /^0+$/.test(baseRef)) {
@@ -199,7 +211,11 @@ export function checkPushEvidence(root, flags) {
   if (changes.length) {
     for (const change of changes) {
       const tier = existsSync(join(root, 'openspec', 'changes', change, 'worktrees.md')) ? 'T3' : 'T2';
-      if (cmdCheckCi(root, { tier, change, 'base-ref': baseRef }) !== 0) return 1;
+      // Judge each change by the tree it was accepted against: the last commit that
+      // touched its directory. Validating archived changes against HEAD makes every
+      // later, unrelated commit redden the push forever (see W01 / R03).
+      const revision = lastTouchingRevision(root, change, baseRef) || baseRef;
+      if (cmdCheckCi(root, { tier, change, 'base-ref': baseRef, 'evidence-revision': revision }) !== 0) return 1;
     }
     return 0;
   }
@@ -657,7 +673,9 @@ export function cmdCheckCi(root, flags = {}) {
       return 1;
     }
   }
-  const revRes = validateReviewEvidence({ root, changeId, tier, baseRef });
+  const revRes = flags['evidence-revision']
+    ? validateReviewEvidenceAtRevision({ root, changeId, tier, baseRef, revision: String(flags['evidence-revision']) })
+    : validateReviewEvidence({ root, changeId, tier, baseRef });
   if (!revRes.ok) {
     console.error(`workflow check-ci: review execution evidence failed for '${changeId}':\n  ${revRes.errors.join("\n  ")}`);
     return 1;

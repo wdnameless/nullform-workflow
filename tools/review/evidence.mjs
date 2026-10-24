@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, mkdtempSync, rmSync, realpathSync, lstatSync, openSync, closeSync, fstatSync, readSync, fsyncSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot, isPathInsideRoot, validateRootPath, validatePathWithinScope, cleanGitEnv } from '../worktree-snapshot.mjs';
@@ -597,6 +598,45 @@ function validateRecord(record, role, current, errors, root, text = null) {
     if (record.testFilesHash !== current.tests) throw new Error('Frozen Stage-A tests mismatch');
   } catch (error) { errors.push(`review-evidence: ${role}: ${error.message}`); }
 }
+/**
+ * Validate a change's evidence against the tree AT a historical revision.
+ *
+ * Why this exists: `validateReviewEvidence` compares recorded hashes against the
+ * CURRENT working tree (sourceDigest covers the whole worktree). Re-validating an
+ * archived change at HEAD therefore fails as soon as any later, unrelated commit
+ * lands — history becomes permanently red. A push range must judge each change by
+ * the tree it was accepted against: the revision that last touched it.
+ *
+ * The historical tree is materialised in a throwaway `git worktree` under the OS
+ * temp dir; the live tree is never mutated. Failure is fail-closed: an unreadable
+ * revision is not treated as evidence of validity.
+ */
+export function validateReviewEvidenceAtRevision({ root = '.', changeId, tier, baseRef = null, revision = null }) {
+  if (!['T2', 'T3'].includes(tier)) return { ok: true, errors: [] };
+  if (!revision) return { ok: false, errors: ['missing revision for historical evidence validation'] };
+  const absRoot = resolve(root);
+  let tmpRoot = null;
+  try {
+    const base = mkdtempSync(join(tmpdir(), 'nf-evidence-'));
+    tmpRoot = join(base, 'tree');
+    execFileSync('git', ['worktree', 'add', '--detach', '--quiet', tmpRoot, revision], {
+      cwd: absRoot, encoding: 'utf8', windowsHide: true, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return validateReviewEvidence({ root: tmpRoot, changeId, tier, baseRef });
+  } catch (error) {
+    return { ok: false, errors: [`historical worktree unavailable at ${String(revision).slice(0, 8)}: ${error.message}`] };
+  } finally {
+    if (tmpRoot) {
+      try {
+        execFileSync('git', ['worktree', 'remove', '--force', tmpRoot], {
+          cwd: absRoot, encoding: 'utf8', windowsHide: true, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch { /* best-effort cleanup; a leaked temp worktree is not evidence of anything */ }
+      try { rmSync(dirname(tmpRoot), { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  }
+}
+
 export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = null }) {
   if (!['T2', 'T3'].includes(tier)) return { ok: true, errors: [] };
   const errors = [];
