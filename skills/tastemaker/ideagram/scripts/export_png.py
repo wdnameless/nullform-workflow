@@ -4,7 +4,7 @@ Export a generated SVG illustration to PNG at common social/web dimensions.
 
 SVG is the right source format (crisp, tiny, infinitely recolorable/scalable),
 but most social platforms and many CMSes want a raster file to upload. This
-renders flattened PNGs at standard sizes so the same illustration is ready
+renders flattened PNG images at standard sizes so the same illustration is ready
 for a tweet, an OG/link-preview image, or a square Instagram-style post
 without the user having to figure out dimensions themselves.
 
@@ -17,9 +17,9 @@ Usage:
     python3 export_png.py illustration.svg --out design/export/
 """
 
-import sys
-import os
 import argparse
+import os
+import sys
 
 SIZES = {
     "social-square": (1080, 1080),      # Instagram/LinkedIn square post
