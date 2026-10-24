@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "provider": "nullform-gateway",
+  "model": "gemini-3.8-flash-high",
+  "transport": "nullform-http-v1",
+  "endpoint": "https://ai-gateway.nullform.cv/v1/chat/completions",
+  "ceilingUsd": 0.5,
+  "maxRequests": 4,
+  "maxContextBytes": 1048576,
+  "maxResponseBytes": 262144,
+  "maxOutputTokens": 8192,
+  "timeoutMs": 600000,
+  "tariffsUsdPerMillion": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+  }
+}
