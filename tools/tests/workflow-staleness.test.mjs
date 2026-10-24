@@ -47,8 +47,8 @@ function project() {
 function completeT2(root) {
   const pDir = join(root, "openspec", "changes", "p");
   mkdirSync(join(pDir, "specs"), { recursive: true });
-  writeFileSync(join(root, "m.md"), "| R01 | \"user asked for X\" |\n", "utf8");
-  writeFileSync(join(root, "i.md"), "# iface\n- fn(): void\n", "utf8");
+  writeFileSync(join(pDir, "m.md"), "| R01 | \"user asked for X\" |\n", "utf8");
+  writeFileSync(join(pDir, "i.md"), "# iface\n- fn(): void\n", "utf8");
   writeFileSync(join(pDir, "proposal.md"), "proposal\n", "utf8");
   writeFileSync(join(pDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
   writeFileSync(join(pDir, "specs", "spec.md"), "# Spec\n", "utf8");
@@ -62,9 +62,9 @@ function completeT2(root) {
   writeEvidence(root, pDir, "p");
   const steps = [
     ["recon", null, "recon done: mapped the tree and the acceptance criteria"],
-    ["manifest", "m.md", "captured R01 verbatim from the brief"],
+    ["manifest", "openspec/changes/p/m.md", "captured R01 verbatim from the brief"],
     ["openspec", "openspec/changes/p", "change scaffolded and validated"],
-    ["interfaces", "i.md", "public signatures recorded: fn() -> void, plus invariants"],
+    ["interfaces", "openspec/changes/p/i.md", "public signatures recorded: fn() -> void, plus invariants"],
   ];
   for (const [kind, path, detail] of steps) {
     assert.equal(cmdArtifact(root, { kind, path, detail }), 0, `${kind} must record`);

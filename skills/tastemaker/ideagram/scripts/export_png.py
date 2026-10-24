@@ -76,7 +76,11 @@ def main():
         print(f"File not found: {args.svg_path}", file=sys.stderr)
         sys.exit(1)
 
-    os.makedirs(args.out, exist_ok=True)
+    try:
+        os.makedirs(args.out, exist_ok=True)
+    except OSError as err:
+        print(f"Cannot create output directory {args.out}: {err}", file=sys.stderr)
+        sys.exit(1)
     basename = os.path.splitext(os.path.basename(args.svg_path))[0]
 
     sizes_to_export = SIZES if "all" in args.sizes else {k: SIZES[k] for k in args.sizes}
@@ -101,7 +105,12 @@ def main():
         offset = ((w - new_size[0]) // 2, (h - new_size[1]) // 2)
         canvas.paste(rendered, offset, rendered)
         canvas.save(dest)
-        os.remove(temp_png)
+        # The intermediate render is scratch, not a deliverable: failing to remove it
+        # must not discard an export that already succeeded.
+        try:
+            os.remove(temp_png)
+        except OSError as err:
+            print(f"Warning: could not remove scratch file {temp_png}: {err}", file=sys.stderr)
 
         print(f"Exported {dest} ({w}x{h})")
 

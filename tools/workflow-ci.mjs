@@ -95,8 +95,12 @@ function validateCheckCiT1(root, flags, baseRef) {
 export function validateCheckCiGit(root, oracleRelForCommit, baseRef, relChangeScope = null) {
   const hasGit = isInsideGitRepo(root);
   if (!hasGit) {
-    console.log("workflow check-ci: non-git repository; skipping git verification.");
-    return 0;
+    // "Skipping" here silently removed the dirty-worktree, mixed-commit and
+    // post-acceptance checks — the whole point of this function. A root that is not
+    // a git checkout cannot produce commit evidence, so it must say so and refuse.
+    console.error("workflow check-ci: git verification is required for accepted changes but this root is not a git worktree.");
+    console.error("  the dirty-check, mixed-commit and post-acceptance scans cannot run; commit the change to a git repo or use the non-git close path.");
+    return 1;
   }
 
   const porcelain = getPorcelainEntries(root);
@@ -278,16 +282,14 @@ export function checkQualityGates(root = ".", options = {}) {
     } else if (sizeRes.stats.fileOffenders > 0 || sizeRes.stats.functionOffenders > 0) {
       record("code-size", "warn", sizeRes.files[0]?.file || ".", `${sizeRes.stats.exempt} exempt, ${sizeRes.stats.baselined} baselined`);
     } else if (sizeRes.stats.scannedFiles === 0) {
-      // A gate over zero files measured nothing. That is a defect when the root has
-      // no content at all (empty dir, wrong --root) — the whole gate reported "pass"
-      // for an empty tree. A docs-only tree is different: it has content, source
-      // scanning simply does not apply, so it is reported and not failed.
+      // Zero files in scope is not evidence of anything, so it is a warning, never a
+      // pass: an empty directory or a wrong --root measured nothing. It must not be a
+      // failure either — T0 on a fresh project legitimately has no source files yet,
+      // and the tier gate is about the change, not about the tree being populated.
       const fileCount = countFiles(absRoot);
-      if (fileCount === 0) {
-        record("code-size", "fail", ".", "0 files in root — nothing was measured", [`code-size: empty root ${absRoot}`]);
-      } else {
-        record("code-size", "warn", ".", `no source files in scope (${fileCount} non-source file(s) present) — scan not applicable`);
-      }
+      record("code-size", "warn", ".", fileCount === 0
+        ? "empty root — nothing was measured"
+        : `no source files in scope (${fileCount} other file(s) present)`);
     } else {
       record("code-size", "pass", ".", `all ${sizeRes.stats.scannedFiles} files within limits`);
     }
