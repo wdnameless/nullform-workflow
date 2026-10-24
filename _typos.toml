@@ -1,0 +1,24 @@
+# typos configuration.
+#
+# Scope: prose only. The checker's value is catching misspellings in documentation
+# and prompts; applied to code it flags identifiers (`nd`, `kids`), and applied to
+# committed evidence JSON it flags hashes and field names. Those are not prose and
+# a "fix" there would corrupt data. Widening back to code requires fixing the
+# identifiers first — until then a narrow scope keeps the signal honest.
+[files]
+extend-exclude = [
+  "tools/**",
+  "bin/**",
+  "bench/**",
+  "tests/**",
+  "openspec/changes/**/review-evidence.json",
+  "openspec/changes/**/*.json",
+  "package-lock.json",
+  "skills/**/scripts/**",
+  ".workflow/**",
+]
+
+[default]
+# Merge with the built-in dictionary instead of replacing it: a bare config file
+# replaces the defaults wholesale and turns every excluded identifier into a failure.
+extend-ignore-re = ["\\b[0-9a-f]{7,64}\\b"]
