@@ -202,7 +202,11 @@ export function checkPushEvidence(root, flags) {
   }
   const changedFiles = getBaseDiffFiles(root, baseRef);
   if (!changedFiles) return 1;
-  const changes = [...new Set(changedFiles.map(path => /^openspec\/changes\/([A-Za-z0-9_-]+)\//.exec(path)?.[1]).filter(Boolean))];
+  const changes = [...new Set(changedFiles.map(path => /^openspec\/changes\/([A-Za-z0-9_-]+)\//.exec(path)?.[1]).filter(Boolean))]
+    // `archive/` is the container for retired changes, not a change itself: it has no
+    // manifest/specs of its own, so treating it as one demands artifacts that cannot
+    // exist. Its children keep their own paths and stay validated.
+    .filter((change) => change !== "archive");
   if (changes.length) {
     for (const change of changes) {
       const tier = existsSync(join(root, 'openspec', 'changes', change, 'worktrees.md')) ? 'T3' : 'T2';
