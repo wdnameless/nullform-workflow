@@ -44,20 +44,24 @@ function project() {
  * The gate enforces per-kind detail floors (interfaces >= 40 chars), so a silent
  * failure here would leave close() blocked for the wrong reason and mask a real
  * staleness regression. */
+/** Manifest table the gate accepts: id, verbatim quote, acceptance, status. */
+const MANIFEST_ROWS = "| ID | Verbatim quote | Acceptance | Status |\n|----|----------------|------------|--------|\n| R01 | \"user asked for X\" | works | open |\n";
+
 function completeT2(root) {
   const pDir = join(root, "openspec", "changes", "p");
   mkdirSync(join(pDir, "specs"), { recursive: true });
-  writeFileSync(join(pDir, "m.md"), "| R01 | \"user asked for X\" |\n", "utf8");
+  writeFileSync(join(pDir, "m.md"), MANIFEST_ROWS, "utf8");
   writeFileSync(join(pDir, "i.md"), "# iface\n- fn(): void\n", "utf8");
   writeFileSync(join(pDir, "proposal.md"), "proposal\n", "utf8");
   writeFileSync(join(pDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
-  writeFileSync(join(pDir, "specs", "spec.md"), "# Spec\n", "utf8");
+  mkdirSync(join(pDir, "specs", "cap"), { recursive: true });
+  writeFileSync(join(pDir, "specs", "cap", "spec.md"), "## ADDED Requirements\n\n### Requirement: capability x\nThe system SHALL do x.\n\n#### Scenario: y\n- **WHEN** a\n- **THEN** b\n", "utf8");
   writeFileSync(join(pDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
   const agentDir = join(root, "agent", "agents");
   mkdirSync(agentDir, { recursive: true });
   writeFileSync(join(agentDir, "reviewer.md"), "# Reviewer\n", "utf8");
   writeFileSync(join(agentDir, "oracle.md"), "# Oracle\n", "utf8");
-  writeFileSync(join(pDir, "manifest.md"), "| R01 | \"user asked for X\" |\n", "utf8");
+  writeFileSync(join(pDir, "manifest.md"), MANIFEST_ROWS, "utf8");
 
   writeEvidence(root, pDir, "p");
   const steps = [
