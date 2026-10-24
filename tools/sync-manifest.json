@@ -316,5 +316,11 @@
   },
   {
     "rel": "tools/quality/stacks.json"
+  },
+  {
+    "rel": "tools/sanitize-text.mjs"
+  },
+  {
+    "rel": "tools/preflight-env.mjs"
   }
 ]

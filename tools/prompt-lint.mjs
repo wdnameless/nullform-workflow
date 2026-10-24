@@ -28,6 +28,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, realpathSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { safeForTerminal } from "./sanitize-text.mjs";
 import { cmdSkills, auditSkills } from "./skill-audit.mjs";
 
 export { auditSkills };
@@ -562,10 +563,12 @@ function cmdScan(root, home) {
   }
 
   console.log(`prompt-lint: ${hits} volatile literal(s) across ${perFile.length} file(s)\n`);
+  // Hits can come from an installed third-party skill: path and sample are untrusted
+  // text reaching a terminal, so both are sanitised (CWE-150).
   for (const { file, found } of perFile) {
-    console.log(`  ${file}`);
+    console.log(`  ${safeForTerminal(file)}`);
     for (const h of found) {
-      console.log(`    ${String(h.line).padStart(5)}  ${h.name.padEnd(14)} ${JSON.stringify(h.sample)}  — ${h.why}`);
+      console.log(`    ${String(h.line).padStart(5)}  ${h.name.padEnd(14)} ${safeForTerminal(JSON.stringify(h.sample))}  — ${h.why}`);
     }
   }
   console.log("\nExempt a legitimate example with `prompt-lint:allow` on its line.");

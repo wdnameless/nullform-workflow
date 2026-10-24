@@ -262,7 +262,12 @@ function buildDecisionRequest(task, skills, model) {
   if (Array.isArray(skills)) {
     for (const s of skills.slice(0, 254)) {
       if (s?.name && typeof s.name === "string") {
-        skillCriteria[s.name.trim()] = String(s.description || s.name).slice(0, 500);
+        // 500 characters cut the trigger list off 11 of our own skills (973, 866, 655, ...)
+        // — the classifier then routes on a description whose tail it never saw. 1200
+        // clears every description we ship while still bounding the payload; the audit
+        // limit stays at 500 because that is a readability budget for humans, not a
+        // routing budget for the model.
+        skillCriteria[s.name.trim()] = String(s.description || s.name).slice(0, 1200);
       }
     }
   }
