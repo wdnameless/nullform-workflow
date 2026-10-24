@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 
 import {
   loadStacks, detectStacks, applyRatchet, expandArgv, baselineKey,
-  loadBaseline, saveBaseline, runQualityCli, sourceFiles,
+  loadBaseline, saveBaseline, runQualityCli, sourceFiles, normalizeFile,
 } from "../quality.mjs";
 import {
   parseEslintJson, parsePylintJson, parseCargoJson, parseDotnetText,
@@ -275,6 +275,21 @@ test("install proceeds when a project virtualenv exists", () => {
     runQualityCli(["install", "--root", root, "--stack", "python", "--json"], io);
     const action = JSON.parse(out.text).actions.find((a) => a.id === "python");
     assert.notEqual(action.install.status, "skipped-no-venv", "a venv must satisfy the guard; the exact install outcome depends on pip");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("baseline keys are OS-independent", () => {
+  // A baseline seeded on Windows used to keep "tools\\a.py:main", so the same function
+  // read as "new" on Linux CI and the gate was permanently red cross-platform.
+  const root = sandbox({ "tools/a.py": "def main():\n    return 1\n" });
+  try {
+    const backslash = normalizeFile(root, "tools\\a.py");
+    const forward = normalizeFile(root, "tools/a.py");
+    const absolute = normalizeFile(root, join(root, "tools", "a.py"));
+    assert.equal(backslash, "tools/a.py");
+    assert.equal(forward, "tools/a.py");
+    assert.equal(absolute, "tools/a.py");
+    assert.ok(!backslash.includes("\\"), "a baseline key must never carry a platform separator");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -26,7 +26,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, realpathSync } from "node:fs";
-import { join, resolve, relative, dirname, basename, sep } from "node:path";
+import { join, resolve, relative, dirname, basename, sep, isAbsolute } from "node:path";
 import { spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { PARSERS } from "./quality/parsers.mjs";
@@ -332,11 +332,27 @@ function resolveName(sourceLines, line) {
   return null;
 }
 
+/** Normalize a reported path to a repo-relative, forward-slash form.
+ *
+ * Analyzers report paths differently: pylint on Windows emits `tools\\session_cost.py`,
+ * eslint emits an absolute path. Baseline keys must not depend on the OS, or a baseline
+ * seeded on Windows reports every function as "new" on Linux CI — the gate would be
+ * permanently red cross-platform for reasons that have nothing to do with complexity.
+ */
+export function normalizeFile(root, file) {
+  if (!file) return "";
+  const absolute = isAbsolute(file) ? file : resolve(root, file);
+  const rel = relative(root, absolute);
+  // A path outside the root keeps its own form rather than becoming "../x".
+  if (rel.startsWith("..")) return String(file).split("\\").join("/");
+  return rel.split(sep).join("/");
+}
+
 function nameRows(root, stackId, rows) {
   const cache = new Map();
   return rows.map((row) => {
-    if (row.fn || stackId !== "node") return row;
-    const rel = relative(root, resolve(root, row.file)).split(sep).join("/");
+    const rel = normalizeFile(root, row.file);
+    if (row.fn || stackId !== "node") return { ...row, file: rel };
     if (!cache.has(rel)) {
       try { cache.set(rel, readFileSync(join(root, rel), "utf8").split(/\r?\n/)); }
       catch { cache.set(rel, []); }
