@@ -16,6 +16,7 @@ nullform quality detect                  # which stacks, and the file that prove
 nullform quality plan                    # what install would run, touching nothing
 nullform quality install --dry-run       # same, without writing
 nullform quality install                 # sidecar configs + baseline seed
+nullform quality install --allow-host-install   # CI runners only: allow pip outside a venv
 nullform quality check                   # the gate: exit 0/1/2
 nullform quality check --changed         # only tracked+untracked files in the stack's languages
 nullform quality baseline                # re-seed; may only LOWER a recorded value
@@ -30,6 +31,11 @@ nullform quality baseline                # re-seed; may only LOWER a recorded va
 | 0 | every detected stack ran and nothing grew |
 | 1 | a violation, or an analyzer did not run (`unverified`) |
 | 2 | cannot run: bad flags, unknown stack, no stack detected |
+
+`install` refuses to run a `pip install` outside a project virtualenv and reports
+`skipped-no-venv`; `--allow-host-install` exists for disposable CI runners, where installing
+is not a change to a machine anyone keeps. It is never the default: an early version of this
+tool put pylint into the system interpreter of the development host.
 
 `unverified` is deliberately an error. A missing toolchain reported as `pass` is how a
 gate becomes decoration.
@@ -122,6 +128,22 @@ node tools/quality.mjs check
 ```
 
 For a monorepo, `check --changed` limits the run to languages the diff actually touched.
+
+## File selection
+
+The gate never hands an analyzer a bare directory. Each run receives an explicit list of
+the project's own sources, built from the stack's `*.ext` markers minus one exclusion list
+(`node_modules`, `.venv`, `venv`, `vendor`, `target`, `dist`, `build`, `obj`, `.tmp`,
+`.quality`, caches). Two failures this prevents, both observed:
+
+- pylint ran on a project root that contained a CI virtualenv and reported **556 findings**
+  from `site-packages` — the analyzer grading itself;
+- `bin/` was once in the exclusion list (copied from the code-size gate, where it means
+  build output) and coverage silently dropped seven baselined functions, turning the gate
+  green by measuring less.
+
+A `.cjs`/`.mjs`-only marker set matters for the same reason: a file type missing from
+`markers` is a file type the gate does not see.
 
 ## Boundaries
 

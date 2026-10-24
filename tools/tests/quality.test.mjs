@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 
 import {
   loadStacks, detectStacks, applyRatchet, expandArgv, baselineKey,
-  loadBaseline, saveBaseline, runQualityCli,
+  loadBaseline, saveBaseline, runQualityCli, sourceFiles,
 } from "../quality.mjs";
 import {
   parseEslintJson, parsePylintJson, parseCargoJson, parseDotnetText,
@@ -276,6 +276,33 @@ test("install proceeds when a project virtualenv exists", () => {
     const action = JSON.parse(out.text).actions.find((a) => a.id === "python");
     assert.notEqual(action.install.status, "skipped-no-venv", "a venv must satisfy the guard; the exact install outcome depends on pip");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("sourceFiles never returns vendored or virtualenv trees", () => {
+  // Measured failure: passing the bare root to pylint graded a CI venv and produced 556
+  // findings from site-packages. The analyzer must receive a list, not a directory.
+  const root = sandbox({
+    "package.json": "{}",
+    "src/app.mjs": "export const a = 1;\n",
+    "bin/cli.mjs": "export const b = 2;\n",
+    "node_modules/dep/index.mjs": "export const c = 3;\n",
+    ".venv/Lib/site-packages/x/mod.py": "def f():\n    return 1\n",
+    "tools/legacy.cjs": "module.exports = 1;\n",
+  });
+  try {
+    const doc = loadStacks();
+    const node = doc.stacks.find((s) => s.id === "node");
+    const files = sourceFiles(root, node);
+    assert.ok(files.includes("src/app.mjs"));
+    assert.ok(files.includes("bin/cli.mjs"), "bin/ is source, not build output");
+    assert.ok(files.includes("tools/legacy.cjs"), "a .cjs marker is required or coverage silently shrinks");
+    assert.deepEqual(files.filter((f) => /node_modules|\.venv/.test(f)), [], "vendored trees must never be graded");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("expandArgv with an empty file list yields no root fallback", () => {
+  const argv = expandArgv(["x", "{files...}"], { root: "/p", qualityDir: ".quality", files: [], stack: {} });
+  assert.deepEqual(argv, ["x"], "an empty source list means 'nothing to analyze', not 'analyze everything'");
 });
 
 test("an unseeded baseline is reported as a setup gap, not as dozens of findings", () => {

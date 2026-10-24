@@ -27,6 +27,7 @@
         "tsconfig.json",
         "*.tsx",
         "*.jsx",
+        "*.cjs",
         "*.mjs"
       ],
       "coco": "native",

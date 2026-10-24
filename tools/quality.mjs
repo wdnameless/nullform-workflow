@@ -38,7 +38,16 @@ export const STACKS_FILE = join(dirname(fileURLToPath(import.meta.url)), "qualit
 export const BASELINE_FILE = ".quality-baseline.json";
 export const SIDECAR_DIR = ".quality";
 
-const SKIP_DIRS = new Set(["node_modules", ".git", "vendor", "target", "dist", "build", "obj", "bin", ".tmp", ".quality"]);
+// Vendored/host-provisioned trees are not the project's code. `.venv`/`venv` matter most:
+// the CI step creates one to hold the analyzer, and without this the gate graded
+// site-packages of the analyzer itself (798 findings, measured).
+// Deliberately NOT listing "bin": in this repo (and in most Node/Python projects) it is
+// source. It came from code-size's build-output list and silently dropped 7 baselined
+// functions from coverage — the gate went green by measuring less.
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "vendor", "target", "dist", "build", "obj",
+  ".tmp", ".quality", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+]);
 
 export function loadStacks(file = STACKS_FILE) {
   const doc = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
@@ -57,7 +66,7 @@ export function loadStacks(file = STACKS_FILE) {
 
 /** Bounded walk: markers are shallow by nature, so depth is capped instead of
  * scanning an entire monorepo. Symlinked directories are not followed. */
-export function walk(root, limit = 4000, maxDepth = 4) {
+export function walk(root, limit = 20000, maxDepth = 12) {
   const out = [];
   const queue = [{ dir: root, depth: 0 }];
   while (queue.length && out.length < limit) {
@@ -99,22 +108,49 @@ export function detectStacks(root, doc = loadStacks()) {
   return detected;
 }
 
+/** Project source files for a stack, by the extension markers it declares.
+ *
+ * Why the analyzers get a list instead of a root: every analyzer has its own idea of
+ * what to skip, and a root passed to pylint walked a CI venv and reported 556 findings
+ * from site-packages. One exclusion list (SKIP_DIRS) is the authority, and the analyzer
+ * is never asked to make that decision.
+ */
+export function sourceFiles(root, stack) {
+  const exts = (stack.markers || []).filter((m) => /^\*\.[A-Za-z0-9]+$/.test(m)).map((m) => m.slice(1));
+  const files = walk(root);
+  return files
+    .map((abs) => relative(root, abs).split(sep).join("/"))
+    .filter((rel) => exts.some((ext) => rel.endsWith(ext)));
+}
+
 /* ---------------------------------------------------------------- command tokens */
 
-function pythonBin() {
+/** True only for an interpreter inside a project virtualenv. Installing a linter with
+ * a global pip is a change to the operator's machine, not to the project, and was
+ * observed happening: `install` polluted a system Python before this guard existed. */
+function venvPython(root) {
+  const candidates = [".venv/bin/python", ".venv/Scripts/python.exe", "venv/bin/python", "venv/Scripts/python.exe"];
+  return candidates.find((rel) => existsSync(join(root, rel))) || null;
+}
+
+/** Interpreter for the project under test. `root` is authoritative: reading cwd made
+ * `--root <other project>` resolve a venv that belonged to a different directory (or
+ * none at all) and silently fall back to the host python — the exact path that put
+ * pylint into a system interpreter. */
+function pythonBin(root) {
   if (process.env.QUALITY_PYTHON) return process.env.QUALITY_PYTHON;
-  const local = join(process.cwd(), ".venv", "bin", "python");
-  if (existsSync(local)) return ".venv/bin/python";
-  const winLocal = join(process.cwd(), ".venv", "Scripts", "python.exe");
-  if (existsSync(winLocal)) return ".venv/Scripts/python.exe";
+  const venv = venvPython(root);
+  if (venv) return venv;
   return process.platform === "win32" ? "python" : "python3";
 }
 
 export function expandArgv(argv, { root, qualityDir, files, stack }) {
-  const values = { root, quality: qualityDir, python: pythonBin() };
+  const values = { root, quality: qualityDir, python: pythonBin(root) };
   const out = [];
   for (const token of argv) {
-    if (token === "{files...}") { out.push(...(files && files.length ? files : [root])); continue; }
+    // An empty list is meaningful: it means "no project sources of this kind". Falling
+    // back to {root} here is what let an analyzer grade its own virtualenv.
+    if (token === "{files...}") { out.push(...(files || [])); continue; }
     out.push(token.replace(/\{(root|quality|python)\}/g, (_, k) => values[k]));
   }
   return out;
@@ -190,7 +226,9 @@ export function runStack(stack, { root, qualityDir, files }) {
   // what `install` writes — is what makes `check` runnable on a clean checkout
   // instead of failing as "tool-error: config doesn't exist".
   if (stack.configs && !sidecarPresent(root, stack, qualityDir)) writeConfigs(root, stack, { defaults: { sidecarDir: qualityDir } }, { onlyMissing: true });
-  const argv = expandArgv(run.argv, { root, qualityDir, files, stack });
+  // No explicit file list => analyze the project's own sources, never the bare root.
+  const resolvedFiles = files ?? (run.argv.includes("{files...}") ? sourceFiles(root, stack) : null);
+  const argv = expandArgv(run.argv, { root, qualityDir, files: resolvedFiles, stack });
   const missingFiles = files && files.length > 0 && !argv.includes(root) && run.argv.includes("{files...}") && files.length === 0;
   if (missingFiles) return { rows: [], status: "no-input" };
   if (!toolAvailable(argv, root)) return { rows: [], status: "missing-tool", argv };
@@ -325,7 +363,7 @@ export default [
       // must carry a reason; the gate reports unreasoned suppressions separately.
     },
   },
-  { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.quality/**"] },
+  { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.quality/**", "**/.venv/**", "**/venv/**", "**/vendor/**", "**/target/**", "**/.tmp/**"] },
 ];
 `,
   "pylint-coco": (stack) => `# Generated by nullform quality install — harness-owned, safe to delete.
@@ -335,6 +373,12 @@ enable=too-cognitively-complex
 
 [COGNITIVE COMPLEXITY]
 max-cognitive-complexity=${stack.threshold}
+
+# Analyzer installs live here (CI creates a venv for pylint); grading site-packages
+# would report the analyzer's own code as project defects.
+[MASTER]
+ignore=.venv,venv,node_modules,vendor,build,dist,.quality,.tmp,__pycache__,
+ignore-paths=^\\.venv/.*$,^venv/.*$,^node_modules/.*$,^vendor/.*$,^\\.tmp/.*$
 `,
   "clippy-threshold": (stack) => `# Generated by nullform quality install — harness-owned, safe to delete.
 # Consumed via CLIPPY_CONF_DIR, so the project's own clippy.toml is not modified.
@@ -423,12 +467,15 @@ export function writeConfigs(root, stack, doc, { onlyMissing = false } = {}) {
 /* ------------------------------------------------------------------------- CLI */
 
 export function parseArgs(argv) {
-  const args = { _: [], root: ".", stack: null, json: false, dryRun: false, changed: false, help: false, baseline: null, errors: [] };
+  const args = { _: [], root: ".", stack: null, json: false, dryRun: false, changed: false, help: false, baseline: null, allowHostInstall: false, errors: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "-h" || arg === "--help") args.help = true;
     else if (arg === "--json") args.json = true;
     else if (arg === "--dry-run") args.dryRun = true;
+    // CI runners are disposable: installing there is not a change to an operator machine.
+    // An explicit flag keeps the default safe and the exception visible in the workflow.
+    else if (arg === "--allow-host-install") args.allowHostInstall = true;
     else if (arg === "--changed") args.changed = true;
     else if (arg === "--root") args.root = argv[++i] || ".";
     else if (arg === "--stack") args.stack = argv[++i] || "";
@@ -506,24 +553,16 @@ function seedBaseline(root, doc, chosen, qualityDir, baselineFile, err) {
  *   - never force a fresh peer tool onto a project that already has one (`whenPresent`),
  *     because replacing a project's eslint major is not a quality gate's call.
  */
-/** True only for an interpreter inside a project virtualenv. Installing a linter with
- * a global pip is a change to the operator's machine, not to the project, and was
- * observed happening: `install` polluted a system Python before this guard existed. */
-function venvPython(root) {
-  const candidates = [".venv/bin/python", ".venv/Scripts/python.exe", "venv/bin/python", "venv/Scripts/python.exe"];
-  return candidates.find((rel) => existsSync(join(root, rel))) || null;
-}
-
-function installAnalyzer(stack, { root, qualityDir }) {
+function installAnalyzer(stack, { root, qualityDir, allowHostInstall = false }) {
   if (!stack.install) return { status: "ships-with-toolchain" };
   const variant = stack.install.whenPresent && existsSync(join(root, stack.install.whenPresent.marker))
     ? stack.install.whenPresent
     : stack.install;
-  if (variant.requiresVenv) {
+  if (variant.requiresVenv && !allowHostInstall) {
     const venv = venvPython(root);
     if (!venv) {
       return { status: "skipped-no-venv", argv: variant.argv.join(" "),
-        detail: "refusing to install into the host interpreter; create .venv and re-run, or install manually" };
+        detail: "refusing to install into the host interpreter; create .venv and re-run, or pass --allow-host-install on a disposable CI runner" };
     }
   }
   const argv = expandArgv(variant.argv, { root, qualityDir, stack });
@@ -547,7 +586,7 @@ function cmdInstall(ctx) {
       return { id: s.id, configs: Object.keys(stack.configs || {}), install: variant ? expandArgv(variant.argv, { root, qualityDir, stack }) : null, status: "dry-run" };
     }
     const configs = writeConfigs(root, stack, doc);
-    return { id: s.id, configs, install: installAnalyzer(stack, { root, qualityDir }) };
+    return { id: s.id, configs, install: installAnalyzer(stack, { root, qualityDir, allowHostInstall: args.allowHostInstall }) };
   });
   if (!args.dryRun) seedBaseline(root, doc, chosen, qualityDir, baselineFile, err);
   const text = actions.map((a) => `${a.id}: ${a.status || a.install?.status || "installed"} ${JSON.stringify(a.configs)}${a.install?.detail ? ` — ${a.install.detail}` : ""}\n`).join("")
@@ -659,10 +698,12 @@ const HELP = `quality.mjs — stack-aware static analysis with a cognitive-compl
 
   node tools/quality.mjs detect   [--root <dir>] [--json]
   node tools/quality.mjs plan     [--root <dir>] [--stack <id>] [--json]
-  node tools/quality.mjs install  [--root <dir>] [--stack <id>] [--dry-run] [--json]
+  node tools/quality.mjs install  [--root <dir>] [--stack <id>] [--dry-run] [--allow-host-install] [--json]
   node tools/quality.mjs check    [--root <dir>] [--stack <id>] [--changed] [--json]
   node tools/quality.mjs baseline [--root <dir>] [--stack <id>] [--dry-run] [--json]
 
+Installs are refused outside a project virtualenv unless --allow-host-install is
+given; that flag is for disposable CI runners, not a developer machine.
 Exit: 0 clean · 1 violation or unverified · 2 cannot run.
 A missing analyzer reports "unverified", never "pass". See docs/quality-gate.md.
 `;

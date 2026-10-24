@@ -99,7 +99,8 @@ jobs:
 
       - name: Cognitive complexity ratchet
         # Runs only when the consuming project opted in by seeding a baseline.
-        # A missing analyzer is reported as "unverified" and exits 1, not 0.
+        # Analyzers are the project's own devDependencies; the gate never installs them
+        # here, and a missing analyzer is reported as "unverified" (exit 1), not 0.
         run: |
           if [ -f .quality-baseline.json ]; then
             node tools/quality.mjs check --root .
