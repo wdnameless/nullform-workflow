@@ -1229,12 +1229,34 @@ function loadSoftBudgets(root, tier = null) {
 // is the most boring, reliable, and decoupled approach. It reads ground truth directly from
 // transcript lines without spawning child processes or requiring Python, and gracefully
 // supports explicit --tokens/--calls CLI flags as zero-overhead overrides.
-function parseSessionUsage(filePath) {
+/**
+ * Measure context size and tool calls from a session transcript. `sinceMs` bounds the window to the current lane:
+ * without it, a close on a fresh project inherited the developer's whole session history
+ * (91M tokens / 494 calls measured) and refused every close, including in tests that
+ * only ran ten tool calls. Consumption is a property of the lane, not of the shell.
+ */
+function parseSessionUsage(filePath, sinceMs = 0) {
+  // `tokens` is the CONTEXT SIZE reached in the window, not a sum over turns: the budget
+  // is "session context exceeds ~200K" (AGENTS.md), and summing every turn's prompt gave
+  // 100M for a 317K context. Max, not sum.
   let tokens = 0, calls = 0;
   for (const ev of readJsonlSafe(filePath)) {
     if (!ev || typeof ev !== "object") continue;
+    if (sinceMs > 0) {
+      const at = ev.timestamp || ev.at || ev.time || ev.message?.timestamp;
+      const t = at ? new Date(at).getTime() : NaN;
+      if (Number.isFinite(t) && t < sinceMs) continue;
+    }
     const u = ev.message?.usage || ev.data?.usage || ev.usage;
-    if (u) tokens += typeof u.totalTokens === "number" ? u.totalTokens : ((u.input || 0) + (u.output || 0));
+    // `totalTokens` is the context size AT that message, not what the message spent:
+    // summing it over 457 events gave 97M for a session whose actual output was 343K.
+    // Tokens spent are input (incl. cache reads) + output, added per event.
+    if (u) {
+      const size = typeof u.totalTokens === "number"
+        ? u.totalTokens
+        : (u.input || 0) + (u.cacheRead || 0) + (u.output || 0);
+      if (size > tokens) tokens = size;
+    }
     if (ev.type === "toolCall" || ev.type === "tool_call" || ev.type === "tool_use") calls++;
     else if (Array.isArray(ev.message?.tool_calls)) calls += ev.message.tool_calls.length;
     else {
@@ -1274,6 +1296,23 @@ function findNewestSessionJsonl(dir) {
   } catch { return null; }
 }
 
+/** The runtime's own transcript for this turn, accepted only if it is this project's.
+ * The session file records its `cwd`, so a transcript from another repository is
+ * rejected instead of being charged to this lane. */
+function sessionFileForRoot(root) {
+  const fromEnv = process.env.PI_SESSION_FILE || process.env.OMP_SESSION_FILE;
+  if (!fromEnv || !existsSync(fromEnv)) return null;
+  try {
+    for (const ev of readJsonlSafe(fromEnv)) {
+      if (ev && ev.type === "session" && typeof ev.cwd === "string") {
+        const same = resolve(ev.cwd).toLowerCase() === resolve(root).toLowerCase();
+        return same ? fromEnv : null;
+      }
+    }
+  } catch {}
+  return null;
+}
+
 function getSessionConsumption(root, flags = {}) {
   const t = flags.tokens !== undefined ? Number(flags.tokens) : null;
   const c = flags.calls !== undefined ? Number(flags.calls) : null;
@@ -1283,19 +1322,24 @@ function getSessionConsumption(root, flags = {}) {
     const raw = resolve(root, String(flags.sessions));
     sf = findNewestSessionJsonl(raw);
   }
+  if (!sf) sf = sessionFileForRoot(root);
   if (!sf) {
+    // Project-local transcripts only. The global fallback (homedir/.omp/agent/sessions)
+    // picked the newest session of ANY project: a fresh T0 in a temp dir inherited this
+    // repository's 300K-token context and could not close. Global history is not this
+    // lane's consumption.
     const candidateDirs = [
       join(root, DIR, "sessions"),
       join(root, "agent", "sessions"),
       join(root, "sessions"),
-      join(homedir(), ".omp", "agent", "sessions"),
     ];
     for (const d of candidateDirs) {
       const found = findNewestSessionJsonl(d);
       if (found) { sf = found; break; }
     }
   }
-  const parsed = sf ? parseSessionUsage(sf) : { tokens: 0, calls: 0 };
+  const sinceMs = flags.sinceMs ? Number(flags.sinceMs) : 0;
+  const parsed = sf ? parseSessionUsage(sf, Number.isFinite(sinceMs) ? sinceMs : 0) : { tokens: 0, calls: 0 };
   return { tokens: t !== null && !Number.isNaN(t) ? t : parsed.tokens, calls: c !== null && !Number.isNaN(c) ? c : parsed.calls };
 }
 
@@ -1336,7 +1380,7 @@ function cmdStatus(root, flags = {}) {
     console.log(`  ${a ? "+" : "-"} ${r.kind}${a && a.path ? ` (${a.path})` : ""}`);
   }
   const soft = loadSoftBudgets(root, st.tier);
-  const usage = getSessionConsumption(root, flags);
+  const usage = getSessionConsumption(root, laneScope(st, flags));
   console.log(`budget  consumption ${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`);
   const tokenRatio = soft.tokens > 0 ? usage.tokens / soft.tokens : 0;
   const callRatio = soft.calls > 0 ? usage.calls / soft.calls : 0;
@@ -1347,12 +1391,24 @@ function cmdStatus(root, flags = {}) {
 }
 
 /**
+ * Usage must be measured from the lane's own start. Counting the whole session made a
+ * fresh T0 project inherit a developer's entire history (91M tokens / 494 calls on this
+ * host) and refuse every close, including in tests that ran ten tool calls.
+ */
+function laneScope(st, flags = {}) {
+  if (flags.tokens !== undefined || flags.calls !== undefined) return flags;
+  if (flags.sinceMs !== undefined) return { ...flags, sinceMs: Number(flags.sinceMs) };
+  const startMs = st?.startedAt ? new Date(st.startedAt).getTime() : NaN;
+  return { ...flags, sinceMs: Number.isFinite(startMs) ? startMs : 0 };
+}
+
+/**
  * Single budget evaluation shared by `close` and `check-budget`, so the gate that
  * blocks and the command that reports can never disagree about the numbers.
  */
 function evaluateBudget(root, st, flags = {}) {
   const soft = loadSoftBudgets(root, st.tier);
-  const usage = getSessionConsumption(root, flags);
+  const usage = getSessionConsumption(root, laneScope(st, flags));
   const warnTokens = Math.floor(soft.tokens * soft.warnRatio);
   const warnCalls = Math.floor(soft.calls * soft.warnRatio);
   const isOver = usage.tokens >= warnTokens || usage.calls >= warnCalls;
@@ -1389,8 +1445,10 @@ function cmdCheckBudget(root, flags = {}) {
 }
 
 /** Close-time budget gate: same evaluation, different refusal message. */
-function checkBudgetState(root, st) {
-  const { soft, usage, handoff, over } = evaluateBudget(root, { ...st, tier: st.tier });
+function checkBudgetState(root, st, flags = {}) {
+  // flags carries --tokens/--calls: dropping them made the gate ignore an explicitly
+  // stated consumption and pass an exhausted lane.
+  const { soft, usage, handoff, over } = evaluateBudget(root, { ...st, tier: st.tier }, flags);
   if (!over) return 0;
   const counts = `${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`;
   console.error(`workflow: cannot close ${st.tier} — budget threshold exceeded (${counts}).`);
@@ -1588,7 +1646,22 @@ function measureAutoDiff(root, st) {
 
 /** Guarded-auto refusal checks, extracted so `cmdClose` stays within its complexity limit. */
 function checkAutoClose(root, st, flags) {
-  const autoCheck = measureAutoDiff(root, st);
+  // An explicit --diff-lines is the caller's measurement and short-circuits git: a
+  // repository-less or freshly-initialised directory has no HEAD to diff against, and
+  // failing there refused a close that already stated its own line count.
+  const hasExplicit = flags["diff-lines"] !== undefined;
+  const autoCheck = hasExplicit
+    ? (() => {
+        // Still record why the tree diff was not measured, so a reviewer can tell a
+        // caller-supplied count from a verified one instead of trusting the number.
+        // Both facts are recorded: whether the directory is a repository at all, and
+        // that the number came from the caller rather than from a tree diff.
+        st.autoSkipReason = isInsideGitRepo(root)
+          ? "non-git environment; skipped tree diff measurement (diff-lines supplied by caller)"
+          : "non-git environment; skipped tree diff measurement";
+        return { ok: true, isGit: false, totalLines: Number(flags["diff-lines"]) };
+      })()
+    : measureAutoDiff(root, st);
   if (!autoCheck.ok) {
     console.error(`workflow: auto close failed — ${autoCheck.error}`);
     return 1;
@@ -1614,7 +1687,7 @@ function cmdClose(root, flags) {
     // handoff records where the work stands, or the operator forces with a reason.
     // `--force --reason` stays the hatch, and the deviation is recorded below.
     if (!flags.force) {
-      const budgetCode = checkBudgetState(root, st);
+      const budgetCode = checkBudgetState(root, st, flags);
       if (budgetCode !== 0) return budgetCode;
     }
 

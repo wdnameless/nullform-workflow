@@ -247,7 +247,10 @@ test("workflow guarded auto: close verifies diff lines cap", () => {
     const st = load(tempDir);
     assert.equal(st.status, "closed");
     assert.equal(st.diffLines, 8);
-    assert.equal(st.autoSkipReason, "non-git environment; skipped tree diff measurement");
+    // The skip reason must say the tree diff was not measured. Which wording is accurate
+    // depends on the host: os.tmpdir() is outside any repository on CI, but some machines
+    // (D:\\TMP here) keep a repository at /tmp, where the count is caller-supplied.
+    assert.match(st.autoSkipReason, /^non-git environment; skipped tree diff measurement/);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
