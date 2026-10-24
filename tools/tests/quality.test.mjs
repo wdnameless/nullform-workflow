@@ -247,6 +247,37 @@ test("check does not overwrite an existing sidecar config", () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("install never runs a pip install outside a project virtualenv", () => {
+  // A quality gate that mutates the operator's global Python is a defect, not a feature.
+  // Observed: an early install put pylint into the system interpreter on this host.
+  const root = sandbox({ "pyproject.toml": "[project]\nname='x'\n", "a.py": "def f():\n    return 1\n" });
+  try {
+    const out = { text: "", err: "" };
+    const io = { stdout: { write: (s) => { out.text += s; } }, stderr: { write: (s) => { out.err += s; } } };
+    const code = runQualityCli(["install", "--root", root, "--stack", "python", "--json"], io);
+    assert.equal(code, 0);
+    const payload = JSON.parse(out.text);
+    const action = payload.actions.find((a) => a.id === "python");
+    assert.equal(action.install.status, "skipped-no-venv");
+    assert.match(action.install.detail, /host interpreter/);
+    assert.match(readFileSync(join(root, ".quality", "python", "pylintrc"), "utf8"), /max-cognitive-complexity/,
+      "the config is still written; only the host-polluting install is skipped");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("install proceeds when a project virtualenv exists", () => {
+  const root = sandbox({ "pyproject.toml": "[project]\nname='x'\n", "a.py": "def f():\n    return 1\n" });
+  mkdirSync(join(root, ".venv", "Scripts"), { recursive: true });
+  writeFileSync(join(root, ".venv", "Scripts", "python.exe"), "");
+  try {
+    const out = { text: "", err: "" };
+    const io = { stdout: { write: (s) => { out.text += s; } }, stderr: { write: (s) => { out.err += s; } } };
+    runQualityCli(["install", "--root", root, "--stack", "python", "--json"], io);
+    const action = JSON.parse(out.text).actions.find((a) => a.id === "python");
+    assert.notEqual(action.install.status, "skipped-no-venv", "a venv must satisfy the guard; the exact install outcome depends on pip");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("an unseeded baseline is reported as a setup gap, not as dozens of findings", () => {
   const root = sandbox({ "package.json": "{}" });
   try {

@@ -506,11 +506,26 @@ function seedBaseline(root, doc, chosen, qualityDir, baselineFile, err) {
  *   - never force a fresh peer tool onto a project that already has one (`whenPresent`),
  *     because replacing a project's eslint major is not a quality gate's call.
  */
+/** True only for an interpreter inside a project virtualenv. Installing a linter with
+ * a global pip is a change to the operator's machine, not to the project, and was
+ * observed happening: `install` polluted a system Python before this guard existed. */
+function venvPython(root) {
+  const candidates = [".venv/bin/python", ".venv/Scripts/python.exe", "venv/bin/python", "venv/Scripts/python.exe"];
+  return candidates.find((rel) => existsSync(join(root, rel))) || null;
+}
+
 function installAnalyzer(stack, { root, qualityDir }) {
   if (!stack.install) return { status: "ships-with-toolchain" };
   const variant = stack.install.whenPresent && existsSync(join(root, stack.install.whenPresent.marker))
     ? stack.install.whenPresent
     : stack.install;
+  if (variant.requiresVenv) {
+    const venv = venvPython(root);
+    if (!venv) {
+      return { status: "skipped-no-venv", argv: variant.argv.join(" "),
+        detail: "refusing to install into the host interpreter; create .venv and re-run, or install manually" };
+    }
+  }
   const argv = expandArgv(variant.argv, { root, qualityDir, stack });
   if (!toolAvailable([argv[0]], root)) return { status: "skipped-missing-package-manager", argv: argv[0] };
   const res = spawnArgv(argv, root, null);

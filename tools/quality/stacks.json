@@ -10,7 +10,8 @@
     "install": "argv run by `quality install` to add the analyzer; whenPresent.marker + argv keeps an existing peer tool untouched (a project on eslint 8 must not be forced onto 9)",
     "configs": "sidecar files written under .quality/<id>/ - harness-owned; the project's own config is never rewritten",
     "env": "extra environment for run.argv, {quality} substitued",
-    "verifiedOn": "version actually executed while building this adapter; null = unproven on the development host"
+    "verifiedOn": "version actually executed while building this adapter; null = unproven on the development host",
+    "install.requiresVenv": "true = never install into the host interpreter; the gate reports what to run instead when no project venv exists"
   },
   "schemaVersion": 1,
   "defaults": {
@@ -102,7 +103,8 @@
           "install",
           "pylint==4.1.3",
           "pylint-cognitive-complexity==0.1.1"
-        ]
+        ],
+        "requiresVenv": true
       },
       "configs": {
         "python/pylintrc": "pylint-coco"
