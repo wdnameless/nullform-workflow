@@ -126,7 +126,9 @@ test("context returns only pinned task requirements files checks and workspace i
   assert.deepEqual(result.contract, f.contract);
   assert.deepEqual(result.scope.files, f.contract.files);
   assert.deepEqual(result.verification, f.contract.checks);
-  assert.equal(result.workspaceRoot, realpathSync(f.root));
+  // Windows is case-insensitive and realpathSync.native lowercases the on-disk casing
+  // ("...\Local\temp" vs "...\Local\Temp"). Identity must be stable across both forms.
+  assert.equal(result.workspaceRoot.toLowerCase(), realpathSync(f.root).toLowerCase());
   assert.equal(result.baseCommit, null);
   assert.equal(claim.contractDigest, digest(readFileSync(join(f.root, f.contractPath))));
   assert.equal(result.claim.generation, claim.generation);

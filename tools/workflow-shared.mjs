@@ -112,8 +112,23 @@ export function lastTouchingRevision(root, change, baseRef) {
  */
 export const ACCEPTANCE_VERDICT_RE = /(accept|verif|check|prove|proof|proven|test(?:s|ed)?\b|pass(?:es|ed)?\b|green|criteria|criterion|exit\s*code|repro|assert|smoke|suite|\d+\s*\/\s*\d+|провер|приёмк|приемк|критери|тест|готов)/i;
 
-/** Files the recon note claims to touch: a path, a filename, or a "Files:" label. */
-export const RECON_FILES_RE = /(touched files|files touched|files:|\b[\w@.-]+\.(?:mjs|cjs|js|ts|tsx|json|jsonl|md|py|ps1|sh|ya?ml|toml)\b|(?:^|\s)[\w.-]+\/[\w./-]+)/i;
+/** Files the recon note claims to touch: a path, a filename, or a "Files:" label.
+ *
+ * The extension list is data, not a judgement about which languages count: a note that
+ * names `a.txt` or `schema.sql` is naming a file just as much as one that names `.mjs`.
+ * The previous narrower list rejected `- a.txt` as "no evidence", which is a false
+ * negative on a perfectly explicit recon note.
+ */
+const RECON_EXTENSIONS = [
+  "mjs", "cjs", "js", "jsx", "ts", "tsx", "json", "jsonl", "md", "txt", "py", "ps1", "sh",
+  "bash", "ya?ml", "toml", "ini", "cfg", "conf", "env", "sql", "csv", "xml", "html", "css",
+  "scss", "vue", "svelte", "java", "kt", "kts", "go", "rs", "rb", "php", "cs", "swift",
+  "c", "h", "cc", "cpp", "hpp", "gradle", "lock", "snap",
+];
+export const RECON_FILES_RE = new RegExp(
+  `(touched files|files touched|files:|\\b[\\w@.-]+\\.(?:${RECON_EXTENSIONS.join("|")})\\b|(?:^|\\s)[\\w.-]+\\/[\\w./-]+)`,
+  "i",
+);
 
 /** True when the text names both what it touches and how completion is proven. */
 export function hasReconEvidence(text) {
