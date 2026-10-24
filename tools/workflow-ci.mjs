@@ -682,9 +682,7 @@ export function cmdCheckCi(root, flags = {}) {
   // "modified after acceptance" scan is scoped to this change's own directory:
   // a later commit touching unrelated files cannot taint an archived acceptance.
   const evidenceRevision = flags['evidence-revision'] ? String(flags['evidence-revision']) : null;
-  // A legacy change has no native acceptance commit to walk forward from: its
-  // oracle-verdict.md is the record, and later edits cannot be measured against a
-  // run that never happened. The marker itself is the exemption (see validator).
+  // Legacy changes have no native acceptance commit to walk forward from.
   if (!revRes.legacy) {
     const gitCode = validateCheckCiGit(
       root,
