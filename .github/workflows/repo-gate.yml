@@ -63,14 +63,14 @@ jobs:
           (cd .tmp && sha256sum "${EXPECTED_NAME}" > tarball.sha256 && sha512sum "${EXPECTED_NAME}" > tarball.sha512)
           cat .tmp/tarball.sha256
       - name: Upload candidate tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: candidate-tarball
           path: .tmp/nullform-workflow-*.tgz
           include-hidden-files: true
           if-no-files-found: error
       - name: Upload candidate checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: candidate-checksums
           path: |
@@ -124,7 +124,7 @@ jobs:
           PKG_VERSION=$(node -p "require('./package.json').version")
           node tools/certify-package.mjs --tarball ".tmp/nullform-workflow-${PKG_VERSION}.tgz" --output ".tmp/cert-${{ matrix.os }}-node${{ matrix.node }}.json"
       - name: Upload platform certificate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cert-${{ matrix.os }}-node${{ matrix.node }}
           path: .tmp/cert-${{ matrix.os }}-node${{ matrix.node }}.json
