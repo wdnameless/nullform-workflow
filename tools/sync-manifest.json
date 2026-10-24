@@ -307,5 +307,11 @@
   },
   {
     "rel": "tools/run-skill-benefit-eval.mjs"
+  },
+  {
+    "rel": "tools/sanitize-text.mjs"
+  },
+  {
+    "rel": "tools/preflight-env.mjs"
   }
 ]

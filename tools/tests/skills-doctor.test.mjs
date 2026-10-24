@@ -358,3 +358,55 @@ test("skills-doctor --help returns exit 0 with usage", () => {
   assert.equal(res.status, 0);
   assert.match(res.stdout, /skills-doctor\.mjs — registry health for installed skills/);
 });
+
+test("folded and literal YAML descriptions are parsed, not reported as the marker", () => {
+  // Measured: 33 installed skills use `description: >` or `|`, and a line-by-line reader
+  // returned the marker ("|") as the description. The skill then routed on a one-character
+  // string and the doctor stayed silent, because a marker is non-empty.
+  const tmp = mkdtempSync(join(tmpdir(), "sd-yaml-"));
+  try {
+    const { installedRoot, repoRoot } = fixture(tmp, { installed: ["folded", "literal"], repo: ["folded", "literal"] });
+    writeFileSync(join(installedRoot, "folded", "SKILL.md"),
+      "---\nname: folded\ndescription: >\n  A folded description\n  that spans two lines.\n---\n\nbody\n", "utf8");
+    writeFileSync(join(installedRoot, "literal", "SKILL.md"),
+      "---\nname: literal\ndescription: |\n  First line.\n  Second line.\n---\n\nbody\n", "utf8");
+    copyFileSync(join(installedRoot, "folded", "SKILL.md"), join(repoRoot, "folded", "SKILL.md"));
+    copyFileSync(join(installedRoot, "literal", "SKILL.md"), join(repoRoot, "literal", "SKILL.md"));
+
+    const res = doctor(installedRoot, repoRoot);
+    assert.doesNotMatch(res.stdout, /folded\s+frontmatter/);
+    assert.doesNotMatch(res.stdout, /literal\s+frontmatter/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("an unclosed description quote is reported, not downgraded to a regex read", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "sd-quote-"));
+  try {
+    const { installedRoot, repoRoot } = fixture(tmp, { installed: ["broken"], repo: [] });
+    writeFileSync(join(installedRoot, "broken", "SKILL.md"),
+      "---\nname: broken\ndescription: \"never closed\n---\n\nbody\n", "utf8");
+    const res = doctor(installedRoot, repoRoot);
+    assert.match(res.stdout, /broken\s+frontmatter/);
+    assert.match(res.stdout, /DROPPED from the registry/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("untrusted names cannot inject terminal escapes into the report", () => {
+  // A SKILL.md name is attacker-controlled. Before sanitisation, a name carrying
+  // ESC[31m reached stdout as a live colour change (CWE-150).
+  const tmp = mkdtempSync(join(tmpdir(), "sd-esc-"));
+  try {
+    const { installedRoot, repoRoot } = fixture(tmp, { installed: ["evil"] });
+    writeFileSync(join(installedRoot, "evil", "SKILL.md"),
+      '---\nname: "\u001b[31mRED\u001b[0m"\ndescription: "x"\n---\nbody\n', "utf8");
+    const res = doctor(installedRoot, repoRoot);
+    assert.equal(res.stdout.includes("\u001b"), false, "no raw escape byte may reach stdout");
+    assert.match(res.stdout, /RED/, "the visible text survives; only the control bytes go");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

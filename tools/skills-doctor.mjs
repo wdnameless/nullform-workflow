@@ -32,9 +32,43 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+// Optional: this tool is copied standalone into installed harnesses and into test
+// sandboxes that have no node_modules, so a hard import would crash the deployed copy.
+// Absent the package, the block-scalar case degrades to a REPORTED problem below, never
+// to a silently-wrong description.
+let parseYaml = null;
+try {
+  ({ parse: parseYaml } = await import("yaml"));
+} catch {
+  parseYaml = null;
+}
 import { parseArgs } from "node:util";
 
 /* ----------------------------------------------------------------- utilities */
+/**
+ * Strip terminal escape sequences from untrusted text (CWE-150).
+ *
+ * Inlined rather than imported: this tool is copied standalone into installed harnesses
+ * and test sandboxes, and a sibling import crashes that copy. The canonical module is
+ * tools/sanitize-text.mjs (with its own tests); keep the two bodies identical.
+ */
+const TERM_OSC_RE = /\x1b\][\s\S]*?(?:\x07|\x1b\\)/g;
+const TERM_DCS_RE = /\x1b[P^_][\s\S]*?(?=\x1b\\)/g;
+const TERM_CSI_RE = /\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g;
+const TERM_ESC_RE = /\x1b[\x20-\x7e]/g;
+const TERM_C1_RE = /[\x80-\x9f]/g;
+const TERM_CTRL_RE = /[\x00-\x06\x07\x08\x0b\x0c\x0d-\x1a\x1c-\x1f\x7f]/g;
+function safeForTerminal(value) {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(TERM_OSC_RE, "")
+    .replace(TERM_DCS_RE, "")
+    .replace(TERM_CSI_RE, "")
+    .replace(TERM_ESC_RE, "")
+    .replace(TERM_C1_RE, "")
+    .replace(TERM_CTRL_RE, "");
+}
+
 const stripBom = (s) => (typeof s === "string" && s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s);
 const norm = (s) => stripBom(s).replace(/\r\n/g, "\n");
 const sha = (s) => createHash("sha256").update(norm(s), "utf8").digest("hex").slice(0, 16);
@@ -42,12 +76,26 @@ const sha = (s) => createHash("sha256").update(norm(s), "utf8").digest("hex").sl
 function parseFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(norm(text));
   if (!m) return null;
-  const out = {};
-  for (const line of m[1].split("\n")) {
-    const kv = /^([A-Za-z_-]+):\s*(.*)$/.exec(line);
-    if (kv) out[kv[1]] = kv[2].trim();
+  // A line reader is not YAML: for `description: >` or `|` it returns the marker as the
+  // value, so the skill advertises a one-character description. 33 installed skills use
+  // a block scalar. No regex fallback: a YAML error IS the finding (an unclosed quote
+  // drops the skill from the registry), and downgrading would hide that case.
+  if (typeof parseYaml !== "function") return { __noYaml: true };
+  let parsed;
+  try {
+    parsed = parseYaml(m[1]);
+  } catch (error) {
+    return { __error: String(error && error.message ? error.message : error) };
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(parsed)) out[k] = typeof v === "string" ? v.trim() : v;
   return out;
+}
+
+/** A YAML block scalar marker that leaked through as the value instead of the text. */
+function isDescriptionMarker(v) {
+  return typeof v === "string" && /^[>|][+-]?$/.test(v.trim());
 }
 
 /** A description that opens a quote but never closes it breaks the parser. */
@@ -132,6 +180,32 @@ function resolveDefaultRepoRoot(scriptDir, agentsHome) {
 
 /* -------------------------------------------------------------------- checks */
 
+/** Everything the frontmatter itself can tell us about one skill.
+ *
+ * Extracted from run() so the loop stays readable and each rule is testable on its own.
+ * `skip: true` means later checks cannot judge the skill (no parse, or no YAML reader).
+ */
+function inspectFrontmatter(name, fm) {
+  const problems = [];
+  const notes = [];
+  if (!fm) return { problems: [{ skill: name, kind: "frontmatter", detail: "no parsable --- frontmatter block" }], notes, skip: true };
+  if (fm.__error) return { problems: [{ skill: name, kind: "frontmatter", detail: `unparsable frontmatter (skill is DROPPED from the registry): ${fm.__error}` }], notes, skip: true };
+  if (fm.__noYaml) {
+    notes.push({ skill: name, kind: "yaml-unavailable", detail: "the `yaml` package is not installed next to this tool: folded/literal descriptions cannot be verified" });
+    return { problems, notes, skip: true };
+  }
+  if (!fm.name) problems.push({ skill: name, kind: "frontmatter", detail: "missing `name:`" });
+  if (!fm.description) problems.push({ skill: name, kind: "frontmatter", detail: "missing `description:`" });
+  else if (!quoteBalanced(fm.description)) {
+    problems.push({ skill: name, kind: "frontmatter", detail: "unclosed description quote -> skill is DROPPED from the registry" });
+  } else if (isDescriptionMarker(fm.description)) {
+    // A YAML block marker used as a value means the block was not read: the skill
+    // advertises a one-character description and routes on nothing.
+    problems.push({ skill: name, kind: "frontmatter", detail: `description parsed as the YAML marker '${fm.description}' -> folded/literal block was not read` });
+  }
+  return { problems, notes, skip: false };
+}
+
 function run(installedRoot, repoRoot, disabled = [], agentsHome = null) {
   const problems = [];
   const notes = [];
@@ -166,13 +240,10 @@ function run(installedRoot, repoRoot, disabled = [], agentsHome = null) {
     const path = join(installedRoot, name, "SKILL.md");
     const text = readFileSync(path, "utf8");
     const fm = parseFrontmatter(text);
-
-    if (!fm) { problems.push({ skill: name, kind: "frontmatter", detail: "no parsable --- frontmatter block" }); continue; }
-    if (!fm.name) problems.push({ skill: name, kind: "frontmatter", detail: "missing `name:`" });
-    if (!fm.description) problems.push({ skill: name, kind: "frontmatter", detail: "missing `description:`" });
-    else if (!quoteBalanced(fm.description)) {
-      problems.push({ skill: name, kind: "frontmatter", detail: `unclosed description quote -> skill is DROPPED from the registry` });
-    }
+    const verdict = inspectFrontmatter(name, fm);
+    for (const p of verdict.problems) problems.push(p);
+    for (const n of verdict.notes) notes.push(n);
+    if (verdict.skip) continue;
 
     if (fm.name) {
       if (names.has(fm.name)) {
@@ -342,12 +413,12 @@ console.log(`skills-doctor: ${installedCount} installed, ${repoCount} in repo${d
 
 if (infos.length) {
   console.log("\n  info");
-  for (const i of infos) console.log(`    ${i.skill}: ${i.detail}`);
+  for (const i of infos) console.log(`    ${safeForTerminal(i.skill)}: ${safeForTerminal(i.detail)}`);
 }
 
 if (notes.length) {
   console.log("\n  notes (informational)");
-  for (const n of notes) console.log(`    ${n.skill ? `${n.skill}: ` : ""}${n.detail}`);
+  for (const n of notes) console.log(`    ${n.skill ? `${safeForTerminal(n.skill)}: ` : ""}${safeForTerminal(n.detail)}`);
 }
 
 if (!problems.length) {
@@ -357,6 +428,6 @@ if (!problems.length) {
 
 console.log(`\n  ${problems.length} problem(s):\n`);
 const width = Math.max(...problems.map((p) => p.kind.length));
-for (const p of problems) console.log(`    ${p.skill.padEnd(28)} ${p.kind.padEnd(width)}  ${p.detail}`);
+for (const p of problems) console.log(`    ${safeForTerminal(p.skill).padEnd(28)} ${p.kind.padEnd(width)}  ${safeForTerminal(p.detail)}`);
 console.log("\n  A skill that fails to parse is dropped from the registry SILENTLY.");
 process.exit(1);
