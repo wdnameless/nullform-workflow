@@ -174,12 +174,22 @@ function spawnArgv(argv, cwd, env) {
   return spawnSync(local, rest, { ...options, shell: false });
 }
 
+/** True when every declared sidecar file already exists on disk. */
+function sidecarPresent(root, stack, qualityDir) {
+  return Object.keys(stack.configs || {}).every((rel) => existsSync(join(root, qualityDir, rel)));
+}
+
 /* ---------------------------------------------------------------------- run one */
 
 /** Run one stack's analyzer and return parsed rows plus how they were obtained. */
 export function runStack(stack, { root, qualityDir, files }) {
   const run = stack.run;
   if (!run) return { rows: [], status: "no-runner" };
+  // The sidecar is generated, not committed (.quality/ is gitignored), so a fresh CI
+  // clone has the baseline but no config. Materializing it here — byte-identical to
+  // what `install` writes — is what makes `check` runnable on a clean checkout
+  // instead of failing as "tool-error: config doesn't exist".
+  if (stack.configs && !sidecarPresent(root, stack, qualityDir)) writeConfigs(root, stack, { defaults: { sidecarDir: qualityDir } }, { onlyMissing: true });
   const argv = expandArgv(run.argv, { root, qualityDir, files, stack });
   const missingFiles = files && files.length > 0 && !argv.includes(root) && run.argv.includes("{files...}") && files.length === 0;
   if (missingFiles) return { rows: [], status: "no-input" };
@@ -390,18 +400,22 @@ cyclomatic_complexity:
 `,
 };
 
-export function writeConfigs(root, stack, doc) {
+/** Materialize the harness-owned sidecar configs. `onlyMissing` is used by `check` on a
+ * fresh clone: it writes what a clean checkout lacks and never rewrites an existing file,
+ * so a locally tuned sidecar is not silently replaced. */
+export function writeConfigs(root, stack, doc, { onlyMissing = false } = {}) {
   const written = [];
   const sidecar = join(root, doc.defaults?.sidecarDir || SIDECAR_DIR);
   for (const [rel, kind] of Object.entries(stack.configs || {})) {
     const make = CONFIG_BODIES[kind];
     if (!make) throw new Error(`no config body for kind '${kind}' (stack '${stack.id}')`);
     const dest = join(sidecar, rel);
-    mkdirSync(dirname(dest), { recursive: true });
     const body = make(stack);
-    const existed = existsSync(dest) && readFileSync(dest, "utf8") === body;
-    if (!existed) writeFileSync(dest, body, "utf8");
-    written.push({ file: relative(root, dest).split(sep).join("/"), status: existed ? "unchanged" : "written" });
+    if (onlyMissing && existsSync(dest)) continue;
+    mkdirSync(dirname(dest), { recursive: true });
+    const unchanged = existsSync(dest) && readFileSync(dest, "utf8") === body;
+    if (!unchanged) writeFileSync(dest, body, "utf8");
+    written.push({ file: relative(root, dest).split(sep).join("/"), status: unchanged ? "unchanged" : "written" });
   }
   return written;
 }

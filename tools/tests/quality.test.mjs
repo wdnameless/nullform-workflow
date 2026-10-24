@@ -212,6 +212,41 @@ test("install --dry-run writes nothing", () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a fresh clone with no sidecar configs still gets a real verdict", () => {
+  // .quality/ is gitignored, so CI checks out the baseline and nothing else. Before this
+  // guard, `check` reported `tool-error: config file ... doesn't exist` — a red build on a
+  // clean checkout that no local run reproduced.
+  const root = sandbox({
+    "package.json": "{}",
+    ".quality-baseline.json": JSON.stringify({ version: 1, stacks: { node: { threshold: 15, seeded: true, functions: {} } } }),
+    "src/ok.mjs": "export function small(a) {\n  return a ? 1 : 0;\n}\n",
+  });
+  try {
+    const { code, text } = cli(root, ["check", "--stack", "node"]);
+    const written = readFileSync(join(root, ".quality", "node", "eslint.config.mjs"), "utf8");
+    assert.match(written, /cognitive-complexity/, "check must materialize the same config install writes");
+    assert.doesNotMatch(text, /config file .*doesn't exist/i, "a missing sidecar must be regenerated, not reported as a broken analyzer");
+    // No node_modules in the sandbox, so the honest verdict here is "the analyzer is absent",
+    // which is a different fact from "the config is absent" and must not be confused with it.
+    assert.match(text, /missing-tool|unverified/i);
+    assert.equal(code, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("check does not overwrite an existing sidecar config", () => {
+  const root = sandbox({
+    "package.json": "{}",
+    ".quality-baseline.json": JSON.stringify({ version: 1, stacks: { node: { threshold: 15, seeded: true, functions: {} } } }),
+    ".quality/node/eslint.config.mjs": "// locally tuned\n",
+    "src/ok.mjs": "export function small(a) {\n  return a ? 1 : 0;\n}\n",
+  });
+  try {
+    cli(root, ["check", "--stack", "node"]);
+    assert.equal(readFileSync(join(root, ".quality", "node", "eslint.config.mjs"), "utf8"), "// locally tuned\n",
+      "only missing files may be generated; a hand-edited sidecar is the operator's");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("an unseeded baseline is reported as a setup gap, not as dozens of findings", () => {
   const root = sandbox({ "package.json": "{}" });
   try {
