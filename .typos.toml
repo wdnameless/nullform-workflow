@@ -1,0 +1,4 @@
+# typos configuration: identifiers that are correct in context but read as
+# misspellings. Keep this list tiny; a blanket allow would defeat the check.
+[default.extend-words]
+PNGs = "PNGs"
