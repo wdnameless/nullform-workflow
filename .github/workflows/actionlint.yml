@@ -19,7 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: get_actionlint
-        run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+        run: |
+          curl -sSLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          curl -sSLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt
+          grep "actionlint_1.7.12_linux_amd64.tar.gz" actionlint_1.7.12_checksums.txt | sha256sum --check
+          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
+          rm actionlint_1.7.12_linux_amd64.tar.gz actionlint_1.7.12_checksums.txt
+          echo "executable=$(pwd)/actionlint" >> "$GITHUB_OUTPUT"
         shell: bash
       - run: ${{ steps.get_actionlint.outputs.executable }} -color
         shell: bash

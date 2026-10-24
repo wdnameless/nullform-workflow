@@ -1,0 +1,26 @@
+# Dependabot configuration for nullform-workflow
+# Policy note: NO auto-merge config here.
+# Merges go through repo-gate + human/pr-triage policy.
+# PRs without the 'bugfix' label are placed on HOLD by pr-triage.
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps):"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "ci"
+    commit-message:
+      prefix: "chore(deps):"
