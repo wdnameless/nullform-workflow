@@ -30,7 +30,7 @@ function setupT2(root, extra = {}) {
   // The artifact gate requires the interfaces contract to live inside the change.
   writeFileSync(join(featDir, "interfaces.md"), "# Interfaces\n- export function run(): void\n", "utf8");
   writeFileSync(join(featDir, "proposal.md"), "proposal body\n", "utf8");
-  writeFileSync(join(featDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+  writeFileSync(join(featDir, "tasks.md"), "# Tasks\n- [ ] 1.1 task 1\n", "utf8");
   writeFileSync(join(featDir, "specs", "cap", "spec.md"), "## ADDED Requirements\n\n### Requirement: Cap\nThe system SHALL cap.\n\n#### Scenario: capped\n- **WHEN** validated\n- **THEN** accepted\n", "utf8");
   writeFileSync(join(featDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
   if (extra.evidence !== false) {
@@ -209,7 +209,7 @@ test("check-ci: validates committed T2 OpenSpec artifacts (manifest + proposal +
 
     // Missing tasks.md fails
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "missing tasks fails");
-    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- [ ] 1.1 task 1\n", "utf8");
 
     // Missing specs/ fails
     assert.equal(cmdCheckCi(root, { tier: "T2", change: changeId }), 1, "missing specs dir fails");
@@ -282,7 +282,7 @@ test("check-ci: distinguishes anchored positive/negative verdicts from prose wor
 
     writeFileSync(join(changeDir, "manifest.md"), "| R01 | user quote |\n", "utf8");
     writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
-    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- [ ] 1.1 task 1\n", "utf8");
     writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
     writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- export fn(): void\n", "utf8");
 
@@ -327,7 +327,7 @@ test("check-ci: rejects manifest modified in commits after oracle acceptance", (
 
     writeFileSync(join(changeDir, "manifest.md"), "| R01 | quote |\n", "utf8");
     writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
-    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task\n", "utf8");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- [ ] 1.1 task\n", "utf8");
     writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
     writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
     prepareEvidence(root, changeId);
@@ -510,7 +510,7 @@ test("check-ci: rejects external symlink in change directory or artifacts", () =
 
     writeFileSync(join(outside, "manifest.md"), "| R01 | quote |\n", "utf8");
     writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
-    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task\n", "utf8");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- [ ] 1.1 task\n", "utf8");
     writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
     writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
@@ -546,7 +546,7 @@ function writeT2Files(dir, extra = {}) {
   mkdirSync(join(dir, "specs", "cap"), { recursive: true });
   writeFileSync(join(dir, "manifest.md"), "| R01 | «quote» | x | open |\n", "utf8");
   writeFileSync(join(dir, "proposal.md"), "# Proposal\n", "utf8");
-  writeFileSync(join(dir, "tasks.md"), "# Tasks\n- task\n", "utf8");
+  writeFileSync(join(dir, "tasks.md"), "# Tasks\n- [ ] 1.1 task\n", "utf8");
   writeFileSync(join(dir, "specs", "cap", "spec.md"), "## ADDED Requirements\n\n### Requirement: Cap\nThe system SHALL cap.\n\n#### Scenario: capped\n- **WHEN** validated\n- **THEN** accepted\n", "utf8");
   writeFileSync(join(dir, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
   if (extra.oracle !== false) writeFileSync(join(dir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");
@@ -664,7 +664,7 @@ test("local T2: refuses while proposal/tasks/specs/oracle file are absent", () =
     assert.equal(cmdClose(root, {}), 1, "close must refuse when artifacts absent");
     writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
     assert.equal(cmdCheck(root), 1, "missing tasks, specs, oracle file");
-    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+    writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- [ ] 1.1 task 1\n", "utf8");
     assert.equal(cmdCheck(root), 1, "missing specs, oracle file");
     // A real capability path with a scenario: `openspec validate` rejects a delta spec
     // sitting at specs/ root, which is exactly the defect this gate now catches.

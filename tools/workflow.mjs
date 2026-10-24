@@ -855,11 +855,17 @@ function validateOpenspecArtifact(root, a, fullPath, invalid) {
   // silently ignored on archive, and only `openspec validate` reports that. The
   // command's name appeared in this file solely inside an error hint before.
   const changeId = basename(fullPath);
-  const res = spawnSync("openspec", ["validate", changeId, "--strict"], {
-    cwd: root, encoding: "utf8", windowsHide: true, timeout: 60000, shell: process.platform === "win32",
-  });
+  // `openspec` is pinned through `npx` in CI and is not a dependency of this package, so
+  // PATH is not a reliable place to find it. Resolve a local install first, then the
+  // pinned npx invocation, so the same tree validates identically on every machine.
+  const localCli = join(dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "@fission-ai", "openspec", "bin", "openspec.js");
+  const res = existsSync(localCli)
+    ? spawnSync(process.execPath, [localCli, "validate", changeId, "--strict"], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60000 })
+    : spawnSync("openspec", ["validate", changeId, "--strict"], {
+        cwd: root, encoding: "utf8", windowsHide: true, timeout: 60000, shell: process.platform === "win32",
+      });
   if (res.error) {
-    invalid.push(`openspec: could not run 'openspec validate ${changeId}' (${res.error.code || res.error.message})`);
+    invalid.push(`openspec: could not run 'openspec validate ${changeId}' (${res.error.code || res.error.message}); the change is UNVERIFIED, not valid`);
     return;
   }
   if (res.status !== 0) {

@@ -53,7 +53,7 @@ function completeT2(root) {
   writeFileSync(join(pDir, "m.md"), MANIFEST_ROWS, "utf8");
   writeFileSync(join(pDir, "i.md"), "# iface\n- fn(): void\n", "utf8");
   writeFileSync(join(pDir, "proposal.md"), "proposal\n", "utf8");
-  writeFileSync(join(pDir, "tasks.md"), "# Tasks\n- task 1\n", "utf8");
+  writeFileSync(join(pDir, "tasks.md"), "# Tasks\n- [ ] 1.1 task 1\n", "utf8");
   mkdirSync(join(pDir, "specs", "cap"), { recursive: true });
   writeFileSync(join(pDir, "specs", "cap", "spec.md"), "## ADDED Requirements\n\n### Requirement: capability x\nThe system SHALL do x.\n\n#### Scenario: y\n- **WHEN** a\n- **THEN** b\n", "utf8");
   writeFileSync(join(pDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\n", "utf8");

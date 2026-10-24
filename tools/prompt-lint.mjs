@@ -28,25 +28,13 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, realpathSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-// Optional: this tool is copied standalone into installed harnesses and test sandboxes
-// that have no node_modules, so a hard sibling import crashes the deployed copy.
-// Without it, output stays unsanitised rather than the tool failing to start.
+// Both sibling modules are optional: this file is copied standalone into installed
+// harnesses and sandboxes without node_modules, so a hard import crashes that copy.
 let safeForTerminal = (v) => (v === null || v === undefined ? "" : String(v));
-try {
-  ({ safeForTerminal } = await import("./sanitize-text.mjs"));
-} catch {}
-
-// Optional: `prompt-lint.mjs` is copied standalone into installed harnesses and test
-// sandboxes, where a sibling module may be absent. Only the `skills` subcommand needs it,
-// so a missing import must degrade that one subcommand, not crash `scan`/`fingerprint`.
-let cmdSkills = () => {
-  console.error("prompt-lint: the `skills` subcommand needs tools/skill-audit.mjs next to this file.");
-  return 2;
-};
+let cmdSkills = () => { console.error("prompt-lint: `skills` needs tools/skill-audit.mjs next to this file."); return 2; };
 let auditSkills = null;
-try {
-  ({ cmdSkills, auditSkills } = await import("./skill-audit.mjs"));
-} catch {}
+try { ({ safeForTerminal } = await import("./sanitize-text.mjs")); } catch { /* optional */ }
+try { ({ cmdSkills, auditSkills } = await import("./skill-audit.mjs")); } catch { /* optional */ }
 
 export { auditSkills };
 
