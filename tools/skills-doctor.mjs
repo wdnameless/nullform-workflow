@@ -191,8 +191,11 @@ function inspectFrontmatter(name, fm) {
   if (!fm) return { problems: [{ skill: name, kind: "frontmatter", detail: "no parsable --- frontmatter block" }], notes, skip: true };
   if (fm.__error) return { problems: [{ skill: name, kind: "frontmatter", detail: `unparsable frontmatter (skill is DROPPED from the registry): ${fm.__error}` }], notes, skip: true };
   if (fm.__noYaml) {
-    notes.push({ skill: name, kind: "yaml-unavailable", detail: "the `yaml` package is not installed next to this tool: folded/literal descriptions cannot be verified" });
-    return { problems, notes, skip: true };
+    // Without the YAML package only the frontmatter-specific checks are unavailable.
+    // Parity truncation and orphans work on raw bytes, so they must still run: returning
+    // skip:true here silently stopped verifying anything in a standalone deployment.
+    notes.push({ skill: name, kind: "yaml-unavailable", detail: "the `yaml` package is not installed next to this tool: frontmatter rules and folded descriptions were not verified" });
+    return { problems, notes, skip: false };
   }
   if (!fm.name) problems.push({ skill: name, kind: "frontmatter", detail: "missing `name:`" });
   if (!fm.description) problems.push({ skill: name, kind: "frontmatter", detail: "missing `description:`" });

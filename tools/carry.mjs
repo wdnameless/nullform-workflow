@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
+import { resolve, join, dirname, relative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 
 /**
@@ -98,7 +98,40 @@ export function carryDebts(prevDir, nextDir) {
 }
 
 /**
+ * Deterministic hash over a skill's whole directory: every file, sorted, with its
+ * repo-relative path folded in so a rename changes the digest and an added reference file
+ * is caught.
+ *
+ * Why this exists: `hash` covers SKILL.md only, so 45 of our 72 skills ship 476 bundled
+ * files (`references/*.md`, scripts) that a tampered install could change invisibly —
+ * the SKILL.md still matched. Vercel's skills CLI tracks this as `skillFolderHash`.
+ * Line endings are normalised so a Windows checkout and a Linux CI agree.
+ */
+export function skillFolderHash(skillDir) {
+  const abs = resolve(skillDir);
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) files.push(full);
+    }
+  };
+  walk(abs);
+  const digest = createHash('sha256');
+  for (const file of files.sort()) {
+    const rel = relative(abs, file).split(sep).join('/');
+    digest.update(rel + '\0');
+    digest.update(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'));
+    digest.update('\0');
+  }
+  return digest.digest('hex');
+}
+
+/**
  * Verify SHA-256 of each locked SKILL.md against a lock file.
+ * When an entry carries `folderHash`, the whole skill directory is verified too, so a
+ * swapped `references/*.md` cannot hide behind an unchanged SKILL.md.
  * Throws an Error naming the skill if hash mismatches or file is missing.
  */
 export function verifySkillsLock(lockPath, rootDir = null, { throws = true } = {}) {
@@ -139,6 +172,7 @@ export function verifySkillsLock(lockPath, rootDir = null, { throws = true } = {
           name: key,
           expectedHash: val.hash || val.sha256,
           path: val.path || null,
+          folderHash: typeof val.folderHash === 'string' ? val.folderHash.toLowerCase() : null,
         });
       }
     }
@@ -184,6 +218,16 @@ export function verifySkillsLock(lockPath, rootDir = null, { throws = true } = {
       err.skill = skillName;
       if (throws) throw err;
       return { ok: false, skill: skillName, error: err.message };
+    }
+
+    if (entry.folderHash) {
+      const actualFolder = skillFolderHash(dirname(foundFile));
+      if (actualFolder !== entry.folderHash) {
+        const err = new Error(`Skill "${skillName}" verification failed: bundled files changed (folder hash ${actualFolder} != expected ${entry.folderHash})`);
+        err.skill = skillName;
+        if (throws) throw err;
+        return { ok: false, skill: skillName, error: err.message };
+      }
     }
 
     verified.push(skillName);

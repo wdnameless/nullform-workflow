@@ -118,6 +118,11 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
   scratch pad, or a home for implementation decisions.
 - **ADR** — Architectural Decision Record. Written only when a decision is hard
   to reverse, surprising without context, and the result of a real trade-off.
+  (No `docs/adr/` exists yet; that is a fact about this repo, not a convention.)
+- **Rejection ledger** — `.out-of-scope/`: one file per proposal that was considered
+  and refused, naming the evidence against it and what would reopen it. Read it before
+  proposing a change to how skills are registered, invoked, or installed. Distinct from
+  a *defer:* marker (work postponed) and from an ADR (a choice taken).
 - **Deep module** — a lot of behaviour behind a small interface.
 - **Shallow module** — an interface nearly as complex as its implementation, or a
   1:1 pass-through wrapper. Rejected by the oracle.
