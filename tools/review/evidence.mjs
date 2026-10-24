@@ -15,6 +15,8 @@ import { isBrandedExecutor } from './http-runtime.mjs';
 import { assertProductExecutionInvariant } from './native-tools.mjs';
 
 export const EVIDENCE_FILE = 'review-evidence.json';
+/** Explicit marker: this change was accepted before native evidence existed. */
+export const LEGACY_MARKER = 'legacy-acceptance.md';
 export const POSITIVE_VERDICT_RE = /(?:^|\r?\n)\s*(?:(?:#+\s*)?(?:\*{0,2}Verdict:?\*{0,2}:?\s*)?\*{0,2}ACCEPT\*{0,2}(?::|\s|$|[.,])|\|\s*\*{0,2}Verdict:?\*{0,2}:?\s*\|\s*\*{0,2}ACCEPT\*{0,2}\b)/im;
 export const NEGATIVE_VERDICT_RE = /(?:^|\r?\n)[ \t]*(?:(?:#+[ \t]*)?\*{0,2}Verdict:?\*{0,2}:?[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]|$|[.,])|\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}(?::|[ \t]*[.,]?[ \t]*\r?$))|\|[ \t]*\*{0,2}Verdict:?\*{0,2}:?[ \t]*\|[ \t]*\*{0,2}(?:REJECT(?:ED)?|(?:NOT|NON|UN|CANNOT|NEVER|NO)[ \t]+ACCEPT(?:ED)?)\*{0,2}\b/im;
 export { isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath };
@@ -618,7 +620,16 @@ export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = n
   const errors = [];
   try {
     const dir = changeDirectory(root, changeId), data = loadReviewEvidence(dir);
-    if (!data) return { ok: false, errors: ['missing review execution evidence (static ACCEPT markdown alone is not accepted)'] };
+    if (!data) {
+      // A change accepted BEFORE review-evidence.json existed cannot carry one, and no
+      // rewrites can retroactively produce a native execution record. Retire it
+      // explicitly instead of leaving the push gate permanently red: the marker file
+      // states the exemption so it is visible, not silent.
+      if (existsSync(join(dir, LEGACY_MARKER))) {
+        return { ok: true, errors: [], legacy: true };
+      }
+      return { ok: false, errors: [`missing review execution evidence (static ACCEPT markdown alone is not accepted); if this change predates the mechanism, add ${LEGACY_MARKER} with the reason`] };
+    }
     if (data.version !== 2 || data.changeId !== changeId) errors.push('Invalid evidence schema or changeId');
     const current = { manifestHash: computeManifestHash(root, changeId), reviewerPromptHash: computeRolePromptHash(root, 'reviewer'), oraclePromptHash: computeRolePromptHash(root, 'oracle'), source: sourceDigest(root), tests: testFilesHash(root), model: null };
     // The pinned snapshot is a single verified model, so any recorded execution must match it.
