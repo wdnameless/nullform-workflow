@@ -67,6 +67,19 @@ nullform workflow close
 Dashboard: `node tools/dashboard.mjs --url` в checkout исходников.
 [Пример интерфейса](docs/assets/dashboard-graph.jpg).
 
+`start` сам поднимает дашборд и печатает живой адрес, проверенный пробой:
+`dashboard: http://localhost:4200`. Если поднять не удалось — печатается
+`dashboard: unavailable (<причина>)`; молчаливого пропуска нет. Отключить:
+`--no-dashboard` или `NF_NO_DASHBOARD=1`.
+
+Установка и починка без диалога (агентские команды):
+
+```bash
+nullform setup --dry-run   # план: что найдено, почему, что будет изменено
+nullform setup --yes       # установить по этому плану
+nullform heal              # doctor -> разрешённый ремонт -> doctor
+```
+
 Параллельные фичи — по одной изолированной папке на фичу, один писатель
 на папку ([подробности](#параллельные-фичи)).
 

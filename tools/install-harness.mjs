@@ -421,6 +421,9 @@ function installHarness(options = {}) {
     });
     journal.start();
   }
+  // Coalesce journal writes for the bulk write phase regardless of who owns the
+  // journal; the finally block below always closes the batch (forced flush).
+  if (journal && typeof journal.beginBatch === "function") journal.beginBatch();
 
   try {
     const priorManaged = options.managedFiles && typeof options.managedFiles === "object" ? options.managedFiles : {};
@@ -505,7 +508,8 @@ function installHarness(options = {}) {
         plan.baselineRecorded = false;
       }
     }
-    if (isOwnJournal && journal) {
+    if (isOwnJournal && journal && typeof journal.finalize === "function") {
+      journal.endBatch();
       journal.finalize();
     }
     return plan;
@@ -518,6 +522,9 @@ function installHarness(options = {}) {
     }
     throw err;
   } finally {
+    // Always close the coalescing window: a forced flush runs even on the error
+    // path, so crash recovery never sees a stale journal with unflushed entries.
+    if (journal && typeof journal.endBatch === "function" && journal.batching) journal.endBatch();
     if (shouldManageLock && !options.deferLock && lock) {
       lock.release();
     }
