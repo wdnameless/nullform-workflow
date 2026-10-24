@@ -39,7 +39,7 @@ export function generateDashboardHtml(data, options = {}) {
   :root {
     --bg: #0b0e14; --panel: #11151f; --panel-2: #161b28; --line: #232a3a; --line-soft: #1a2030;
     --text: #e6ebf5; --dim: #8b94a7; --dim-2: #5d6779;
-    --lime: #b8ff2e; --lime-dim: #7fae1f; --amber: #ffb545; --red: #ff5f56; --blue: #6ea8fe; --violet: #c58fff;
+    --lime: #b8ff2e; --lime-dim: #7fae1f; --green: #10b981; --amber: #ffb545; --red: #ff5f56; --blue: #6ea8fe; --violet: #c58fff;
     --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --r: 10px;
@@ -47,7 +47,7 @@ export function generateDashboardHtml(data, options = {}) {
   body.light {
     --bg: #f7f8fa; --panel: #ffffff; --panel-2: #f2f4f7; --line: #e2e6ee; --line-soft: #edf0f5;
     --text: #10141c; --dim: #5f6878; --dim-2: #98a1b0;
-    --lime: #5f8f00; --lime-dim: #7fae1f;
+    --lime: #5f8f00; --lime-dim: #7fae1f; --green: #059669;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: var(--sans); background: var(--bg); color: var(--text); line-height: 1.45; }
@@ -224,6 +224,7 @@ export function generateDashboardHtml(data, options = {}) {
   .run-wip-badge { font-family: var(--mono); font-size: 11px; font-weight: 800; letter-spacing: 0.8px; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,0.28); color: #fff; border: 1px solid rgba(255,255,255,0.4); }
   .run-hero-title { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
   .run-hero-sentence { font-size: 13.5px; opacity: 0.95; line-height: 1.4; margin-top: 6px; }
+  .run-tokens { font-family: var(--mono); font-size: 12px; opacity: 0.9; margin-top: 6px; }
   .run-hero-question { margin-top: 14px; padding: 12px 14px; background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 8px; display: flex; align-items: flex-start; gap: 10px; }
   .run-question-badge { font-family: var(--mono); font-size: 13px; font-weight: 800; background: #fff; color: #FF6B35; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; line-height: 1; }
   .run-question-content { flex: 1; min-width: 0; }
@@ -282,6 +283,21 @@ export function generateDashboardHtml(data, options = {}) {
   .task-card-white .task-state-badge { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3); }
   .run-task-repairs { font-family: var(--mono); font-size: 10px; color: var(--dim); padding: 1px 5px; border-radius: 4px; background: var(--panel-2); }
   .run-task-repairs.has-repairs { color: #06b6d4; background: rgba(6, 182, 212, 0.15); font-weight: 700; }
+  .run-zones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+  @media (max-width: 700px) { .run-zones { grid-template-columns: 1fr; } }
+  .run-zone-card { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: var(--r); padding: 10px 12px; cursor: pointer; transition: border-color .15s; }
+  .run-zone-card:hover { border-color: var(--dim); }
+  .run-zone-card.zone-green { border-left: 3px solid var(--green); }
+  .run-zone-card.zone-orange { border-left: 3px solid var(--amber); }
+  .run-zone-card.zone-red { border-left: 3px solid var(--red); }
+  .run-zone-card.active { border-color: var(--text); background: color-mix(in srgb, var(--panel-2) 90%, #fff); }
+  .run-zone-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+  .run-zone-name { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  .run-zone-count { font-family: var(--mono); font-size: 13px; font-weight: 800; }
+  .zone-green .run-zone-count { color: var(--green); }
+  .zone-orange .run-zone-count { color: var(--amber); }
+  .zone-red .run-zone-count { color: var(--red); }
+  .run-zone-tickets { font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
   .run-words-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; margin-bottom: 16px; }
   .run-words-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
   .run-filter-group { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -427,6 +443,11 @@ export function generateDashboardHtml(data, options = {}) {
       calibOk: "в норме (~3K)",
       tickets: "задач",
       linesCount: "строк",
+      runTokens: "Токены",
+      runZones: "Зоны статуса",
+      runZoneGreen: "Зелёная",
+      runZoneOrange: "Оранжевая",
+      runZoneRed: "Красная",
       offline: "OFFLINE", offlineBadge: "автономный снимок", noRun: "Нет активного прогона воркфлоу",
     },
     en: {
@@ -488,6 +509,12 @@ export function generateDashboardHtml(data, options = {}) {
       calibOk: "optimal (~3K)",
       tickets: "tickets",
       linesCount: "lines",
+      runTokens: "Tokens",
+      runZones: "Status zones",
+      runZoneGreen: "Green",
+      runZoneOrange: "Orange",
+      runZoneRed: "Red",
+      offline: "OFFLINE", offlineBadge: "offline snapshot", noRun: "No active workflow run",
     }
   };
   function t(k) { return (I18N[lang] && I18N[lang][k]) || (I18N.ru[k] || k); }
@@ -545,6 +572,15 @@ export function generateDashboardHtml(data, options = {}) {
   /* ============================ run ============================ */
   var currentRunRev = null;
   var runReqFilter = "all";
+  var runZoneFilter = "all";
+
+  function getTicketZone(tk) {
+    var rep = Number(tk.repairs !== undefined ? tk.repairs : (tk.repairCount !== undefined ? tk.repairCount : 0)) || 0;
+    var st = String(tk.status || "").toLowerCase();
+    if (rep >= 2 || st === "failed" || st === "blocked" || st === "error") return "red";
+    if (st === "done" || st === "closed" || st === "verified") return "green";
+    return "orange";
+  }
 
   function getReqType(id) {
     if (!id) return "R";
@@ -652,7 +688,13 @@ export function generateDashboardHtml(data, options = {}) {
   }
 
   function setRunFilter(flt) {
-    runReqFilter = flt;
+    if (flt === "green" || flt === "orange" || flt === "red") {
+      runZoneFilter = (runZoneFilter === flt) ? "all" : flt;
+    } else if (flt === "all-zones") {
+      runZoneFilter = "all";
+    } else {
+      runReqFilter = flt;
+    }
     currentRunRev = null;
     if (DATA && DATA.run) renderRun(DATA);
   }
@@ -709,6 +751,20 @@ export function generateDashboardHtml(data, options = {}) {
       '</div>';
     }
 
+    var tok = r.tokens || (d.session && d.session.usage ? {
+      input: d.session.usage.inputTokens,
+      output: d.session.usage.outputTokens,
+      cached: d.session.usage.cachedTokens,
+      costUsd: d.session.usage.costUsd,
+    } : null);
+    var tokensText = "—";
+    if (tok && (tok.input > 0 || tok.output > 0 || tok.cached > 0 || tok.costUsd !== null)) {
+      var cPct = (tok.input + tok.cached > 0) ? Math.round((tok.cached / (tok.input + tok.cached)) * 100) : 0;
+      var costStr = tok.costUsd !== null ? ("$" + tok.costUsd) : "—";
+      tokensText = num(tok.input) + " / " + num(tok.output) + " (" + esc(t("cache")) + " " + cPct + "%) · " + costStr;
+    }
+    var tokensHtml = '<div class="run-tokens">' + tokensText + '</div>';
+
     var heroHtml = '<div class="run-hero ' + heroCls + '">' +
       '<div class="run-hero-top">' +
         '<div class="run-hero-badges">' +
@@ -719,6 +775,7 @@ export function generateDashboardHtml(data, options = {}) {
       '</div>' +
       '<div class="run-hero-title">' + esc(r.task || ("Задача " + (r.tier || "T1"))) + '</div>' +
       '<div class="run-hero-sentence">' + esc(sentence) + '</div>' +
+      tokensHtml +
       questionHtml +
     '</div>';
 
@@ -783,7 +840,41 @@ export function generateDashboardHtml(data, options = {}) {
       '</div>';
     }).join("") + '</div>';
 
+
     var wavesList = r.waves || [];
+    var allTickets = [];
+    wavesList.forEach(function (w) { (w.tickets || []).forEach(function (tk) { allTickets.push(tk); }); });
+
+    var zonesData = r.zones || {
+      green: { count: 0, tickets: [] },
+      orange: { count: 0, tickets: [] },
+      red: { count: 0, tickets: [] },
+    };
+    if (!r.zones) {
+      allTickets.forEach(function (tk) {
+        var z = getTicketZone(tk);
+        zonesData[z].count++;
+        zonesData[z].tickets.push(tk.id);
+      });
+    }
+
+    var zoneKeys = ["green", "orange", "red"];
+    var zoneCardsHtml = zoneKeys.map(function (zk) {
+      var zObj = zonesData[zk] || { count: 0, tickets: [] };
+      var zTickets = allTickets.filter(function (tk) { return getTicketZone(tk) === zk; });
+      var zTitles = zTickets.map(function (tk) { return tk.title || tk.id; }).join(", ");
+      var zLabel = t("runZone" + zk.charAt(0).toUpperCase() + zk.slice(1)) || zk;
+      var activeCls = runZoneFilter === zk ? " active" : "";
+      return '<div class="run-zone-card zone-' + zk + activeCls + '" data-zone="' + zk + '">' +
+        '<div class="run-zone-header">' +
+          '<span class="run-zone-name">' + esc(zLabel) + '</span>' +
+          '<span class="run-zone-count">' + (zObj.count || 0) + '</span>' +
+        '</div>' +
+        '<div class="run-zone-tickets" title="' + esc(zTitles || "—") + '">' + esc(zTitles || "—") + '</div>' +
+      '</div>';
+    }).join("");
+    var zonesHtml = '<div class="run-zones">' + zoneCardsHtml + '</div>';
+
     var wavesHtml = "";
     if (wavesList.length > 0) {
       var lanesHtml = wavesList.map(function (w) {
@@ -796,7 +887,11 @@ export function generateDashboardHtml(data, options = {}) {
         var pendingPct = Math.max(0, 100 - donePct - inProgPct);
         var waveLines = tList.reduce(function (sum, tk) { return sum + (Number(tk.lines) || 0); }, 0);
 
-        var taskCards = tList.map(function (tk) {
+        var visibleTickets = tList.filter(function (tk) {
+          return runZoneFilter === "all" || getTicketZone(tk) === runZoneFilter;
+        });
+
+        var taskCards = visibleTickets.length > 0 ? visibleTickets.map(function (tk) {
           var tLines = Number(tk.lines) || 0;
           var color = getTaskStateColor(tk.status);
           var repCount = Number(tk.repairs !== undefined ? tk.repairs : (tk.repairCount !== undefined ? tk.repairCount : (color === "cyan" ? 1 : 0))) || 0;
@@ -825,7 +920,7 @@ export function generateDashboardHtml(data, options = {}) {
               '</div>' +
             '</div>' +
           '</div>';
-        }).join("");
+        }).join("") : '<span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t("empty")) + '</span>';
 
         return '<div class="run-wave-lane">' +
           '<div class="run-wave-header">' +
@@ -849,11 +944,13 @@ export function generateDashboardHtml(data, options = {}) {
           '<div class="label" style="margin-bottom:0">' + esc(t("runWaves")) + ' (' + wavesList.length + ')' + '</div>' +
           '<span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t("calibrationTarget")) + '</span>' +
         '</div>' +
+        zonesHtml +
         '<div class="run-waves-list">' + lanesHtml + '</div>' +
       '</div>';
     } else {
       wavesHtml = '<div class="run-waves-section">' +
         '<div class="label">' + esc(t("runWaves")) + '</div>' +
+        zonesHtml +
         '<div class="empty">' + esc(t("noData")) + '</div>' +
       '</div>';
     }
@@ -916,6 +1013,11 @@ export function generateDashboardHtml(data, options = {}) {
     host.querySelectorAll(".run-filter-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
         setRunFilter(btn.getAttribute("data-filter"));
+      });
+    });
+    host.querySelectorAll(".run-zone-card").forEach(function (card) {
+      card.addEventListener("click", function () {
+        setRunFilter(card.getAttribute("data-zone"));
       });
     });
   }

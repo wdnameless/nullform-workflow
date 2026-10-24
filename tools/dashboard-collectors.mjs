@@ -509,6 +509,7 @@ export function collectWaves(root = ".") {
       title: String(t.title || t.name || t.id || ""),
       status: String(t.status || (t.done ? "done" : "pending")),
       lines,
+      ...(t.repairs !== undefined ? { repairs: Number(t.repairs) || 0 } : (t.repairCount !== undefined ? { repairs: Number(t.repairCount) || 0 } : {})),
       ...(t.zone ? { zone: t.zone } : {}),
       ...(t.requirements ? { requirements: t.requirements } : {}),
     });
@@ -649,11 +650,7 @@ export function collectRunState(root = ".", _session = null) {
   if (!existsSync(statePath)) return null;
 
   let state = null;
-  try {
-    state = JSON.parse(readFileSync(statePath, "utf8"));
-  } catch {
-    return null;
-  }
+  try { state = JSON.parse(readFileSync(statePath, "utf8")); } catch { return null; }
   if (!state || typeof state !== "object") return null;
 
   const artifacts = state.artifacts || {};
@@ -672,11 +669,7 @@ export function collectRunState(root = ".", _session = null) {
         const dirs = readdirSync(changesDir).filter((d) => d !== "archive" && statSync(join(changesDir, d)).isDirectory());
         for (const d of dirs) {
           const p = join(changesDir, d, "manifest.md");
-          if (existsSync(p)) {
-            manifestPath = p;
-            change = d;
-            break;
-          }
+          if (existsSync(p)) { manifestPath = p; change = d; break; }
         }
       } catch {}
     }
@@ -695,16 +688,7 @@ export function collectRunState(root = ".", _session = null) {
   const startedAt = state.startedAt ? new Date(state.startedAt).getTime() : now;
   const closedAt = state.closedAt ? new Date(state.closedAt).getTime() : null;
 
-  const waits = [];
-  if (Array.isArray(state.waits)) {
-    for (const w of state.waits) {
-      if (w) waits.push(w);
-    }
-  } else if (Array.isArray(state.journal?.waits)) {
-    for (const w of state.journal.waits) {
-      if (w) waits.push(w);
-    }
-  }
+  const waits = (Array.isArray(state.waits) ? state.waits : (Array.isArray(state.journal?.waits) ? state.journal.waits : [])).filter(Boolean);
 
   const historyList = Array.isArray(state.history) ? state.history : rawEvents;
   let lastClose = null;
@@ -713,14 +697,10 @@ export function collectRunState(root = ".", _session = null) {
     const at = ev?.at || ev?.t;
     if (k === "close" && at) {
       const msAt = new Date(at).getTime();
-      if (!Number.isNaN(msAt) && msAt >= startedAt - 5000) {
-        lastClose = at;
-      }
+      if (!Number.isNaN(msAt) && msAt >= startedAt - 5000) lastClose = at;
     } else if ((k === "open" || k === "start") && lastClose && at) {
       const ms = new Date(at).getTime() - new Date(lastClose).getTime();
-      if (ms > 0) {
-        waits.push({ kind: "close/open", from: lastClose, to: at, durationMs: ms });
-      }
+      if (ms > 0) waits.push({ kind: "close/open", from: lastClose, to: at, durationMs: ms });
       lastClose = null;
     }
   }
@@ -733,9 +713,7 @@ export function collectRunState(root = ".", _session = null) {
   let waitMs = 0;
   for (const w of waits) {
     const dur = typeof w.durationMs === "number" ? w.durationMs : (new Date(w.to).getTime() - new Date(w.from).getTime());
-    if (!Number.isNaN(dur) && dur > 0) {
-      waitMs += dur;
-    }
+    if (!Number.isNaN(dur) && dur > 0) waitMs += dur;
   }
 
   const totalElapsed = Math.max(0, (closedAt || now) - startedAt);
@@ -745,37 +723,41 @@ export function collectRunState(root = ".", _session = null) {
   let foundCurrent = false;
   const stages = RUN_STAGE_IDS.map((id) => {
     let status = "pending";
-    let durationMs = 0;
-    if (artifacts[id]) {
-      status = "done";
-    } else if (state.status === "closed") {
-      status = "missed";
-    } else if (!foundCurrent) {
-      status = "in_progress";
-      foundCurrent = true;
-    }
-    return { id, status, durationMs };
+    if (artifacts[id]) status = "done";
+    else if (state.status === "closed") status = "missed";
+    else if (!foundCurrent) { status = "in_progress"; foundCurrent = true; }
+    return { id, status, durationMs: 0 };
   });
 
   const waves = collectWaves(absRoot);
+  const zones = { green: { count: 0, tickets: [] }, orange: { count: 0, tickets: [] }, red: { count: 0, tickets: [] } };
   let totalLines = 0;
   let totalTickets = 0;
   for (const w of waves) {
     for (const t of (w.tickets || [])) {
       totalLines += Number(t.lines) || 0;
       totalTickets++;
+      const rep = Number(t.repairs ?? t.repairCount) || 0;
+      const st = String(t.status || "").toLowerCase();
+      const z = (rep >= 2 || st === "failed" || st === "blocked" || st === "error") ? "red"
+        : (st === "done" || st === "closed" || st === "verified") ? "green" : "orange";
+      zones[z].tickets.push(t.id);
+      zones[z].count++;
     }
   }
+  const usage = (_session && typeof _session === "object" && "usage" in _session)
+    ? _session.usage
+    : collectSessionUsage(absRoot, sessionKey(typeof _session === "string" ? _session : null));
+  const tokens = {
+    input: Number(usage?.inputTokens) || 0,
+    output: Number(usage?.outputTokens) || 0,
+    cached: Number(usage?.cachedTokens) || 0,
+    costUsd: typeof usage?.costUsd === "number" ? usage.costUsd : null,
+  };
   const avgLines = totalTickets > 0 ? Math.round(totalLines / totalTickets) : 0;
   const calibration = {
-    targetLines: 3000,
-    linesPerTicket: 3000,
-    minLines: 1500,
-    maxLines: 4500,
-    totalLines,
-    totalTickets,
-    avgLinesPerTicket: avgLines,
-    hint: calibrationHint(avgLines),
+    targetLines: 3000, linesPerTicket: 3000, minLines: 1500, maxLines: 4500,
+    totalLines, totalTickets, avgLinesPerTicket: avgLines, hint: calibrationHint(avgLines),
   };
 
   const gates = computeGates({ root: absRoot, change, artifacts, state, stages, requirements, waits });
@@ -812,6 +794,8 @@ export function collectRunState(root = ".", _session = null) {
     calibration,
     gates,
     waits,
+    tokens,
+    zones,
     beats: Array.isArray(state.beats) ? state.beats : (Array.isArray(state.journal?.beats) ? state.journal.beats : []),
     activeMs,
     waitMs,
@@ -1180,7 +1164,7 @@ export function collectDashboardData(root = ".", options = {}) {
     critique: critique.verdicts,
     history,
     fleet,
-    run: cached(`run:${absRoot}`, 1000, () => collectRunState(absRoot, options.session)),
+    run: cached(`run:${absRoot}`, 1000, () => collectRunState(absRoot, session)),
   };
 }
 

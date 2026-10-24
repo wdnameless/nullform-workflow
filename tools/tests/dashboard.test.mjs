@@ -1811,3 +1811,137 @@ test("D01 + D02: freeze-silence и конфигурируемый pollMs 1000-30
   assert.equal(helpProc.status, 0);
   assert.ok(helpProc.stdout.includes("--poll <ms>"), "справка --help содержит строку с --poll <ms>");
 });
+
+test("D03: tokens aggregate: собирает tokens из session usage и безопасно обрабатывает null usage", () => {
+  const tmp = createTempDir();
+  try {
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(join(wfDir, "state.json"), JSON.stringify({ status: "open", tier: "T1", task: "Tokens test" }));
+
+    // Случай 1: usage передан в session
+    const runWithUsage = collectRunState(tmp, {
+      usage: { inputTokens: 5000, outputTokens: 1200, cachedTokens: 3000, costUsd: 0.025 },
+    });
+    assert.ok(runWithUsage.tokens, "tokens присутствуют в run");
+    assert.equal(runWithUsage.tokens.input, 5000);
+    assert.equal(runWithUsage.tokens.output, 1200);
+    assert.equal(runWithUsage.tokens.cached, 3000);
+    assert.equal(runWithUsage.tokens.costUsd, 0.025);
+
+    // Случай 2: null usage (без PASEO_AGENT_ID)
+    const runNullUsage = collectRunState(tmp, null);
+    assert.ok(runNullUsage.tokens, "tokens присутствуют при null usage");
+    assert.equal(runNullUsage.tokens.input, 0);
+    assert.equal(runNullUsage.tokens.output, 0);
+    assert.equal(runNullUsage.tokens.cached, 0);
+    assert.equal(runNullUsage.tokens.costUsd, null);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("D03: zones aggregate: группирует тикеты по green/orange/red с учётом правила repairs>=2 -> red", () => {
+  const tmp = createTempDir();
+  try {
+    const wfDir = join(tmp, ".workflow");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(join(wfDir, "state.json"), JSON.stringify({
+      status: "open",
+      tier: "T2",
+      task: "Zones test",
+      tickets: [
+        { id: "T-DONE", title: "Done ticket", status: "done", lines: 100, repairs: 0 },
+        { id: "T-VERIFIED", title: "Verified ticket", status: "verified", lines: 150, repairs: 1 },
+        { id: "T-PROG", title: "In-progress ticket", status: "in_progress", lines: 200, repairs: 0 },
+        { id: "T-WAIT", title: "Waiting ticket", status: "waiting", lines: 50, repairs: 1 },
+        { id: "T-FAIL", title: "Failed ticket", status: "failed", lines: 300, repairs: 0 },
+        { id: "T-REPAIR2", title: "Done but 2 repairs", status: "done", lines: 250, repairs: 2 },
+        { id: "T-REPAIR3", title: "Active but 3 repairs", status: "active", lines: 180, repairs: 3 },
+      ],
+    }));
+
+    const run = collectRunState(tmp);
+    assert.ok(run.zones, "zones присутствуют в run");
+
+    // Green: done/verified с repairs < 2
+    assert.deepEqual(run.zones.green.tickets, ["T-DONE", "T-VERIFIED"]);
+    assert.equal(run.zones.green.count, 2);
+
+    // Orange: in_progress/waiting с repairs < 2
+    assert.deepEqual(run.zones.orange.tickets, ["T-PROG", "T-WAIT"]);
+    assert.equal(run.zones.orange.count, 2);
+
+    // Red: failed + repairs >= 2 (T-REPAIR2, T-REPAIR3)
+    assert.deepEqual(run.zones.red.tickets, ["T-FAIL", "T-REPAIR2", "T-REPAIR3"]);
+    assert.equal(run.zones.red.count, 3);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("D03: HTML contains run-tokens + run-zones sections via generateDashboardHtml", () => {
+  const data = {
+    project: { name: "test-tokens-zones", branch: "main", commit: { hash: "abc", when: "" } },
+    task: { tier: "T1", status: "open", title: "Test tokens and zones", elapsedMs: 1000, budget: 25 },
+    progress: { percent: 50, stagesDone: 1, stagesRequired: 2, stagesSkipped: 0, artifactsDone: 1, artifactsTotal: 2 },
+    stages: [{ id: "lane", name: "Ярус", wave: 0, status: "done" }],
+    currentStage: { id: "lane", name: "Ярус", wave: 0, detail: "" },
+    timing: { elapsedMs: 1000, remainingMin: 5, remainingMax: 10, medianTaskMs: 1000 },
+    metrics: { briefCoverage: 50, requirements: { total: 1, byStatus: {}, items: [], change: null }, debt: { total: 0, noTrigger: 0, items: [] }, memory: { status: "fresh", daysSince: null }, checks: null },
+    git: { isRepo: false, branch: "main", commit: { hash: "", when: "" }, files: [], added: 0, deleted: 0, staged: 0, unstaged: 0, untracked: 0 },
+    arch: { name: "root", kind: "dir", lines: 0, files: 0, children: [] },
+    archGraph: { nodes: [], edges: [] },
+    modules: [], critique: [], history: { total: 0, medianMs: 0, byTier: {}, recent: [] }, fleet: [], events: [],
+    log: { file: null, entries: [] },
+    session: { key: "local", name: null },
+    waves: [],
+    run: {
+      open: true,
+      status: "open",
+      tier: "T1",
+      task: "Tokens & Zones UI Test",
+      tokens: { input: 12500, output: 4300, cached: 8500, costUsd: 0.045 },
+      zones: {
+        green: { count: 1, tickets: ["T01"] },
+        orange: { count: 1, tickets: ["T02"] },
+        red: { count: 1, tickets: ["T03"] },
+      },
+      waves: [
+        {
+          n: 1,
+          tickets: [
+            { id: "T01", title: "Ticket green", status: "done", lines: 200, repairs: 0 },
+            { id: "T02", title: "Ticket orange", status: "in_progress", lines: 150, repairs: 0 },
+            { id: "T03", title: "Ticket red", status: "failed", lines: 300, repairs: 0 },
+          ],
+        },
+      ],
+      stages: [{ id: "lane", status: "done" }],
+      requirements: [],
+      gates: {},
+      waits: [],
+      beats: [],
+      activeMs: 5000,
+      waitMs: 1000,
+      rev: "rev-tokens",
+      feed: [],
+    },
+  };
+
+  const html = generateDashboardHtml(data);
+  assert.ok(html.includes("run-tokens"), "HTML содержит hero tokens row (.run-tokens)");
+  assert.ok(html.includes("run-zones"), "HTML содержит status zones strip (.run-zones)");
+  assert.ok(html.includes("zone-green"), "HTML содержит green zone card");
+  assert.ok(html.includes("zone-orange"), "HTML содержит orange zone card");
+  assert.ok(html.includes("zone-red"), "HTML содержит red zone card");
+  assert.ok(html.includes("run-zone-tickets"), "HTML содержит контейнер тикетов зоны");
+
+  // Проверка генерации скрипта со стилями токенов и зон
+  const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(scriptMatch, "HTML содержит блок <script>");
+  assert.ok(html.includes("tokensHtml"), "скрипт содержит вычисление tokensHtml");
+  assert.ok(html.includes("zonesHtml"), "скрипт содержит вычисление zonesHtml");
+  assert.ok(html.includes(".run-tokens"), "стили содержат класс .run-tokens");
+  assert.ok(html.includes(".run-zones"), "стили содержат класс .run-zones");
+});
