@@ -17,6 +17,7 @@ import { runWorkflowCli } from "../tools/workflow.mjs";
 import { acquireDeploymentLock, releaseDeploymentLock, DeploymentJournal } from "../tools/installation/journal.mjs";
 import { getCapabilitiesInfo, checkVersionAlignment } from "../tools/installation/capabilities.mjs";
 import { inspectHarness, resolveHostHome } from "../tools/installation/profiles.mjs";
+import { runSetup, runHeal } from "../tools/harness-setup.mjs";
 import {
   PACKAGE_NAME,
   HARNESS_CHOICES,
@@ -140,7 +141,7 @@ export function parseCliArgs(argv = []) {
 
   let command = null;
   for (const pos of parsed.positionals) {
-    if (["init", "inspect", "doctor", "update", "capabilities", "evidence"].includes(pos)) {
+    if (["init", "inspect", "doctor", "update", "capabilities", "evidence", "setup", "heal"].includes(pos)) {
       if (command && command !== pos) throw new Error(`Unexpected command "${pos}" after "${command}"`);
       command = pos;
     } else {
@@ -846,8 +847,10 @@ export function printCliHelp(output = process.stdout) {
 nullform — NULLFORM WORKFLOW CLI (v${ver})
 
 Usage:
+  nullform setup [--harness <name>] [--yes] [--dry-run] [--json]
   nullform init [options]
   nullform inspect --harness <name> [--host-home <dir>] [--host-manifest <file>] [--probe]
+  nullform heal [--dry-run] [--json]
   nullform doctor [options]
   nullform update [options]
   nullform workflow <command> [args...]
@@ -857,8 +860,10 @@ Usage:
   nullform --help
 
 Commands:
+  setup         Detect harnesses with reasons, print plan, confirm, install (agent-friendly; --yes/--dry-run)
   init          Select harness (interactive menu or --harness), preview plan, install adapter & save state
   inspect       Read-only profile facts and evidence-aware decisions; optional bounded native probe
+  heal          Diagnose with doctor, apply allow-listed repairs, re-verify (self-healing; --dry-run)
   doctor        Verify installed workflow assets and selected native harness integration
   update        Check npm registry, update global package and re-apply saved installation
   workflow      Execute core workflow gates (start, suggest, artifact, check, status, close, check-ci, stage-b, metrics)
@@ -946,6 +951,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   }
 
   if (options.command === "init") return runInit(options, deps);
+  if (options.command === "setup") return runSetup(options, deps);
+  if (options.command === "heal") return runHeal(options, deps);
   if (options.command === "inspect") return runInspectCommand(options, deps);
   if (options.command === "doctor") return runDoctorCommand(options, deps);
   if (options.command === "update") return runUpdateCommand(options, deps);

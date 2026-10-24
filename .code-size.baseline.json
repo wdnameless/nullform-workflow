@@ -22,15 +22,15 @@
       "reason": ""
     },
     "tools/dashboard-collectors.mjs": {
-      "lines": 1689,
+      "lines": 1673,
       "reason": ""
     },
     "tools/dashboard-ui.mjs": {
-      "lines": 1273,
-      "reason": ""
+      "lines": 1564,
+      "reason": "Autopilot-style run view (live-dash-parity R01-R03): hero, stage track, waves matrix, zones strip"
     },
     "tools/dashboard.mjs": {
-      "lines": 1086,
+      "lines": 1118,
       "reason": "Autopilot parity (R12): embedSnapshot + detectCollision + isOwnServer helpers"
     },
     "tools/doctor-checks.mjs": {
@@ -50,11 +50,11 @@
       "reason": ""
     },
     "tools/tests/dashboard.test.mjs": {
-      "lines": 1504,
+      "lines": 1948,
       "reason": "Behavioral regressions for static snapshot redaction and bounded untracked diff reads"
     },
     "tools/tests/doctor.test.mjs": {
-      "lines": 1502,
+      "lines": 1541,
       "reason": "Regression tests for the OMP 18.3.3+ plugin-list exit-code tolerance"
     },
     "tools/tests/usage-audit.test.mjs": {
@@ -62,11 +62,11 @@
       "reason": ""
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 1089,
+      "lines": 1140,
       "reason": "Same-commit oracle, binary/rename numstat, NUL dirty-check regressions (R03-R05, R07)"
     },
     "tools/workflow.mjs": {
-      "lines": 1734,
+      "lines": 1680,
       "reason": "Autopilot parity (R01): mode/depth dials in cmdStart + state"
     }
   },
@@ -121,24 +121,24 @@
       "reason": ""
     },
     "tools/dashboard-collectors.mjs:collectRunState": {
-      "lines": 176,
+      "lines": 159,
       "file": "tools/dashboard-collectors.mjs",
       "name": "collectRunState",
-      "line": 646,
+      "line": 647,
       "reason": ""
     },
     "tools/dashboard.mjs:sanitizeHttpState": {
-      "lines": 394,
+      "lines": 395,
       "file": "tools/dashboard.mjs",
       "name": "sanitizeHttpState",
       "line": 173,
       "reason": ""
     },
     "tools/dashboard.mjs:main": {
-      "lines": 138,
+      "lines": 139,
       "file": "tools/dashboard.mjs",
       "name": "main",
-      "line": 933,
+      "line": 964,
       "reason": ""
     },
     "tools/oracle-model.mjs:run": {
@@ -187,7 +187,7 @@
       "lines": 148,
       "file": "tools/workflow.mjs",
       "name": "cmdStart",
-      "line": 613,
+      "line": 614,
       "reason": "Autopilot parity (R01): mode/depth validation + persistence"
     }
   }

@@ -568,15 +568,27 @@ function parse(argv) {
 }
 
 /**
- * Start or reuse the dashboard and print only the URL verified by its own HTTP health
+ * Start or reuse the dashboard and report only the URL verified by its own HTTP health
  * probe. Reading dashboard.json here used to publish a stale or hung server's address.
- * Observability is best-effort and never changes the workflow command's exit code.
+ *
+ * R08: the outcome is never silent. Either a live URL is printed, or an explicit
+ * "unavailable (<reason>)" line names why. Observability stays best-effort and never
+ * changes the workflow command's exit code.
  */
 function autoOpenDashboard(root, flags) {
-  if (flags && flags["no-dashboard"]) return;
-  if (process.env.NF_NO_DASHBOARD === "1") return;
+  if (flags && flags["no-dashboard"]) {
+    console.log("  dashboard: disabled (--no-dashboard)");
+    return { live: false, reason: "disabled" };
+  }
+  if (process.env.NF_NO_DASHBOARD === "1") {
+    console.log("  dashboard: disabled (NF_NO_DASHBOARD=1)");
+    return { live: false, reason: "disabled" };
+  }
   const dash = join(dirname(fileURLToPath(import.meta.url)), "dashboard.mjs");
-  if (!existsSync(dash)) return;
+  if (!existsSync(dash)) {
+    console.error("  dashboard: unavailable (dashboard.mjs missing from this installation)");
+    return { live: false, reason: "missing-dashboard-module" };
+  }
   const result = spawnSync(process.execPath, [dash, "--ensure", "--root", root], {
     encoding: "utf8",
     timeout: 35000,
@@ -586,14 +598,20 @@ function autoOpenDashboard(root, flags) {
     ? result.stdout.match(/Дашборд: (http:\/\/localhost:\d+)/)?.[1]
     : null;
   if (!url) {
-    console.error(`  dashboard: ${result.stderr.trim() || result.error?.message || "не удалось запустить"}`);
-    return;
+    const reason = result.error?.code === "ETIMEDOUT"
+      ? "probe timed out"
+      : result.signal
+        ? `terminated by ${result.signal}`
+        : (result.stderr.trim().split("\n")[0] || "server did not report a live URL");
+    console.error(`  dashboard: unavailable (${reason})`);
+    return { live: false, reason };
   }
   if (process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI) {
     console.log(`  dashboard: ${url} — открой во вкладке Paseo: browser_new_tab("${url}")`);
   } else {
     console.log(`  dashboard: ${url} (сервер запущен, открывается в браузере)`);
   }
+  return { live: true, url };
 }
 
 /** Событие воркфлоу для вкладки «Логи» дашборда: одна строка JSON. */

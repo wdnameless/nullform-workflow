@@ -48,44 +48,54 @@ function isStrictlyInside(parent, child) {
   return Boolean(rel && !rel.startsWith("..") && !isAbsolute(rel));
 }
 
-function discoverCandidates({ userHome = homedir(), projectRoot, env = process.env, platform = process.platform } = {}) {
+/** Кандидаты без причин: тонкая обёртка над подробным детектом (single source of truth). */
+function discoverCandidates(options = {}) {
+  return discoverCandidatesDetailed(options).map((c) => c.harness);
+}
+
+/**
+ * Детект кандидатов с причинами: тот же обход, что `discoverCandidates`, но
+ * каждая находка объясняется. Нужен `nullform setup`: агент обязан показать
+ * план и причину выбора ДО любой записи (R06).
+ */
+function discoverCandidatesDetailed({ userHome = homedir(), projectRoot, env = process.env, platform = process.platform } = {}) {
   const isDefaultHome = resolve(userHome) === resolve(homedir());
-  const candidates = [];
+  const found = [];
   for (const h of CONCRETE_HARNESSES) {
-    let hasPresence = false;
+    const reasons = [];
+    let homePath = null;
     if (h === "cursor") {
       const cursorDir = projectRoot ? join(resolve(projectRoot), ".cursor") : join(process.cwd(), ".cursor");
-      if (existsSync(cursorDir)) hasPresence = true;
-      else {
-        const homePath = resolveHostHome({ harness: "cursor", userHome, env, platform }).path;
-        if (existsSync(homePath)) hasPresence = true;
-      }
+      if (existsSync(cursorDir)) reasons.push(`project marker ${cursorDir}`);
+      homePath = resolveHostHome({ harness: "cursor", userHome, env, platform }).path;
+      if (!reasons.length && existsSync(homePath)) reasons.push(`home dir ${homePath}`);
     } else if (h === "omp") {
       const ompDir = join(userHome, ".omp");
-      const agentDir = resolveHostHome({ harness: "omp", userHome, env, platform }).path;
-      if (existsSync(ompDir) || existsSync(agentDir)) hasPresence = true;
+      homePath = resolveHostHome({ harness: "omp", userHome, env, platform }).path;
+      if (existsSync(ompDir)) reasons.push(`home dir ${ompDir}`);
+      if (existsSync(homePath)) reasons.push(`home dir ${homePath}`);
     } else if (h === "openclaw") {
-      const homePath = resolveHostHome({ harness: "openclaw", userHome, env, platform }).path;
-      if (existsSync(join(homePath, "openclaw.json")) || existsSync(homePath)) hasPresence = true;
+      homePath = resolveHostHome({ harness: "openclaw", userHome, env, platform }).path;
+      if (existsSync(join(homePath, "openclaw.json"))) reasons.push(`home manifest ${join(homePath, "openclaw.json")}`);
+      else if (existsSync(homePath)) reasons.push(`home dir ${homePath}`);
     } else if (h === "hermes") {
-      const homePath = resolveHostHome({ harness: "hermes", userHome, env, platform }).path;
-      if (existsSync(join(homePath, "config.yaml")) || existsSync(homePath)) hasPresence = true;
+      homePath = resolveHostHome({ harness: "hermes", userHome, env, platform }).path;
+      if (existsSync(join(homePath, "config.yaml"))) reasons.push(`home manifest ${join(homePath, "config.yaml")}`);
+      else if (existsSync(homePath)) reasons.push(`home dir ${homePath}`);
     } else {
-      const homePath = resolveHostHome({ harness: h, userHome, env, platform }).path;
-      if (existsSync(homePath)) hasPresence = true;
+      homePath = resolveHostHome({ harness: h, userHome, env, platform }).path;
+      if (existsSync(homePath)) reasons.push(`home dir ${homePath}`);
     }
 
-    if (!hasPresence) {
+    if (!reasons.length) {
       const hasCmd = h === "openhuman"
         ? (isCommandInPath("openhuman", env, platform) || isCommandInPath("openhuman-core", env, platform))
         : isCommandInPath(h, env, platform);
-      if (hasCmd && (isDefaultHome || (env && (env.PATH || env.Path)))) {
-        hasPresence = true;
-      }
+      if (hasCmd && (isDefaultHome || (env && (env.PATH || env.Path)))) reasons.push(`command in PATH: ${h}`);
     }
-    if (hasPresence) candidates.push(h);
+    if (reasons.length) found.push({ harness: h, home: homePath, reasons });
   }
-  return candidates;
+  return found;
 }
 
 function detectHarness(options = {}) {
@@ -639,4 +649,4 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
   main();
 }
 
-export { installHarness, detectHarness, discoverCandidates, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath, detectInstall, suggestUpgrade, detectConflicts };
+export { installHarness, detectHarness, discoverCandidates, discoverCandidatesDetailed, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath, detectInstall, suggestUpgrade, detectConflicts };
