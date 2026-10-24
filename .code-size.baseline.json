@@ -62,8 +62,8 @@
       "reason": ""
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 1173,
-      "reason": "T1 recon acceptance-gate regressions (refuse file-list-only notes, reject at check time)"
+      "lines": 1222,
+      "reason": "Committed fixture grows (d8ccafb): recon note must name real files, interfaces must live inside the change, spec needs ADDED+Scenario \u2014 baseline had not followed the commit"
     },
     "tools/workflow.mjs": {
       "lines": 1680,
