@@ -10,6 +10,10 @@ extend-exclude = [
   "bench/**",
   "tests/**",
   "**/*.json",
+  # Recorded transcripts and evidence: they quote commands, hashes and raw output
+  # verbatim. Editing them would falsify the record.
+  "openspec/changes/**/evidence/**",
+  "context/**/*.srt",
   "package-lock.json",
   "skills/**/scripts/**",
   ".workflow/**",
@@ -46,7 +50,15 @@ canva = "canva"
 mis = "mis"
 # `grep -rin` flags recorded verbatim in an oracle transcript.
 rin = "rin"
-# `ba` appears inside a recorded evidence hash fragment.
-ba = "ba"
 # Product term (live-updating dashboard).
 livetime = "livetime"
+# Operational transform (realtime collaboration technique).
+OT = "OT"
+# Plural of PNG as written in prose: the dictionary reads it as "ON".
+PNGs = "PNGs"
+# Misspelling preserved verbatim inside a Whisper transcript fixture: transcripts
+# record what was said, not what should have been said.
+Resarch = "Resarch"
+# "unparseable" is a valid variant (un- + parseable); the dictionary prefers a
+# different spelling rather than rejecting this one.
+unparseable = "unparseable"
