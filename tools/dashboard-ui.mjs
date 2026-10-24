@@ -12,8 +12,21 @@
  * Вкладки: Обзор · Архитектура (майндкарта) · Логи сессии · Диффы · Критика · Долг · История.
  * Данные приходят из `/api/state` каждые 3 с и перерисовываются на месте.
  */
+export function esc(s) {
+  return String(s === null || s === undefined ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export function generateDashboardHtml(data, options = {}) {
   const isFrozen = Boolean(options.frozen);
+  const rawPollMs = Number(options.pollMs);
+  const pollMs = Number.isFinite(rawPollMs)
+    ? Math.min(3000, Math.max(1000, Math.round(rawPollMs)))
+    : 2000;
   const payload = JSON.stringify(data).replace(/</g, "\\u003c");
 
   return `<!DOCTYPE html>
@@ -21,7 +34,7 @@ export function generateDashboardHtml(data, options = {}) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nullform Console · ${data.project.name}</title>
+<title>Nullform Console · ${esc(data.project && data.project.name)}</title>
 <style>
   :root {
     --bg: #0b0e14; --panel: #11151f; --panel-2: #161b28; --line: #232a3a; --line-soft: #1a2030;
@@ -206,11 +219,18 @@ export function generateDashboardHtml(data, options = {}) {
   .run-hero.run-closed { background: #17864A; }
   .run-hero.run-failed { background: #C81E1E; }
   .run-hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  .run-hero-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .run-hero-badge { font-family: var(--mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,0.22); }
+  .run-wip-badge { font-family: var(--mono); font-size: 11px; font-weight: 800; letter-spacing: 0.8px; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,0.28); color: #fff; border: 1px solid rgba(255,255,255,0.4); }
   .run-hero-title { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
   .run-hero-sentence { font-size: 13.5px; opacity: 0.95; line-height: 1.4; margin-top: 6px; }
+  .run-hero-question { margin-top: 14px; padding: 12px 14px; background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 8px; display: flex; align-items: flex-start; gap: 10px; }
+  .run-question-badge { font-family: var(--mono); font-size: 13px; font-weight: 800; background: #fff; color: #FF6B35; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; line-height: 1; }
+  .run-question-content { flex: 1; min-width: 0; }
+  .run-question-label { font-family: var(--mono); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.85; margin-bottom: 2px; }
+  .run-question-text { font-size: 13px; font-weight: 600; line-height: 1.4; word-break: break-word; }
   .run-track { display: flex; align-items: center; gap: 4px; margin-bottom: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; overflow-x: auto; }
-  .run-step { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 130px; position: relative; }
+  .run-step { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 105px; position: relative; }
   .run-step-circle { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 700; background: var(--panel-2); border: 1px solid var(--line); color: var(--dim); flex: 0 0 auto; }
   .run-step.done .run-step-circle { background: color-mix(in srgb, var(--lime) 20%, transparent); border-color: var(--lime); color: var(--lime); }
   .run-step.in_progress .run-step-circle { background: #2F45E0; border-color: #6ea8fe; color: #fff; box-shadow: 0 0 0 3px rgba(47,69,224,0.3); }
@@ -218,7 +238,7 @@ export function generateDashboardHtml(data, options = {}) {
   .run-step-info { display: flex; flex-direction: column; overflow: hidden; }
   .run-step-name { font-size: 12px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
   .run-step-status { font-family: var(--mono); font-size: 10px; color: var(--dim); }
-  .run-step-arrow { color: var(--dim-2); font-size: 12px; margin-left: auto; padding-right: 4px; }
+  .run-step-arrow { color: var(--dim-2); font-size: 12px; margin-left: auto; padding-right: 4px; flex: 0 0 auto; }
   .run-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
   @media (max-width: 900px) { .run-tiles { grid-template-columns: 1fr; } }
   .run-tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; }
@@ -234,33 +254,61 @@ export function generateDashboardHtml(data, options = {}) {
   .run-gate.pass .run-gate-pill { background: color-mix(in srgb, var(--lime) 20%, transparent); color: var(--lime); border: 1px solid color-mix(in srgb, var(--lime) 40%, transparent); }
   .run-gate.open .run-gate-pill { background: var(--panel-2); color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); }
   .run-gate.fail .run-gate-pill { background: color-mix(in srgb, var(--red) 20%, transparent); color: var(--red); border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); }
+  .run-waves-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; margin-bottom: 16px; }
+  .run-wave-lane { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: var(--r); padding: 14px 16px; margin-bottom: 14px; }
+  .run-wave-lane:last-child { margin-bottom: 0; }
+  .run-wave-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+  .run-wave-bar { height: 6px; border-radius: 3px; background: var(--line); display: flex; overflow: hidden; margin-bottom: 12px; }
+  .run-wave-bar .bar-done { background: var(--lime); }
+  .run-wave-bar .bar-prog { background: #8b5cf6; }
+  .run-wave-bar .bar-wait { background: var(--amber); }
+  .run-tasks-matrix { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .run-task-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; transition: border-color .15s ease; position: relative; }
+  .run-task-card:hover { border-color: var(--dim-2); }
+  .run-task-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .run-task-id { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text); }
+  .run-task-title { font-size: 12.5px; font-weight: 600; color: var(--text); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .run-task-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; border-top: 1px solid var(--line-soft); font-size: 11px; }
+  .task-state-badge { font-family: var(--mono); font-size: 9.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .task-card-green { border-left: 3px solid #10b981; }
+  .task-card-green .task-state-badge { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35); }
+  .task-card-orange { border-left: 3px solid #f59e0b; }
+  .task-card-orange .task-state-badge { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.35); }
+  .task-card-purple { border-left: 3px solid #8b5cf6; }
+  .task-card-purple .task-state-badge { background: rgba(139, 92, 246, 0.15); color: #8b5cf6; border: 1px solid rgba(139, 92, 246, 0.35); }
+  .task-card-cyan { border-left: 3px solid #06b6d4; }
+  .task-card-cyan .task-state-badge { background: rgba(6, 182, 212, 0.15); color: #06b6d4; border: 1px solid rgba(6, 182, 212, 0.35); }
+  .task-card-white { border-left: 3px solid #94a3b8; }
+  .task-card-white .task-state-badge { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3); }
+  .run-task-repairs { font-family: var(--mono); font-size: 10px; color: var(--dim); padding: 1px 5px; border-radius: 4px; background: var(--panel-2); }
+  .run-task-repairs.has-repairs { color: #06b6d4; background: rgba(6, 182, 212, 0.15); font-weight: 700; }
   .run-words-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; margin-bottom: 16px; }
   .run-words-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
-  .run-filter-group { display: flex; gap: 6px; }
+  .run-filter-group { display: flex; gap: 6px; flex-wrap: wrap; }
   .run-filter-btn { font-family: var(--mono); font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: var(--dim); cursor: pointer; }
   .run-filter-btn:hover { color: var(--text); }
   .run-filter-btn.active { background: var(--lime); color: #0b0e14; font-weight: 700; border-color: var(--lime); }
-  .run-req-row { display: grid; grid-template-columns: 50px 75px 1fr; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
-  .run-req-row:last-child { border-bottom: 0; }
-  .run-req-id { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text); }
+  .run-words-list { display: flex; flex-direction: column; gap: 8px; }
+  .run-req-row { display: grid; grid-template-columns: 180px 1fr; gap: 12px; align-items: baseline; padding: 10px 12px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line-soft); font-size: 12.5px; }
+  @media (max-width: 760px) { .run-req-row { grid-template-columns: 1fr; gap: 6px; } }
+  .run-req-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .run-req-id { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: var(--text); }
+  .run-req-badge { font-family: var(--mono); font-size: 9.5px; font-weight: 800; padding: 1px 6px; border-radius: 4px; text-transform: uppercase; }
+  .req-badge-r { background: rgba(110, 168, 254, 0.18); color: #6ea8fe; border: 1px solid rgba(110, 168, 254, 0.4); }
+  .req-badge-ri { background: rgba(197, 143, 255, 0.18); color: #c58fff; border: 1px solid rgba(197, 143, 255, 0.4); }
+  .req-badge-g { background: rgba(184, 255, 46, 0.18); color: #b8ff2e; border: 1px solid rgba(184, 255, 46, 0.4); }
+  .req-badge-a { background: rgba(255, 181, 69, 0.18); color: #ffb545; border: 1px solid rgba(255, 181, 69, 0.4); }
+  .req-badge-d { background: rgba(255, 95, 86, 0.18); color: #ff5f56; border: 1px solid rgba(255, 95, 86, 0.4); }
   .run-req-status { font-family: var(--mono); font-size: 10px; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; text-align: center; }
   .run-req-status.done { background: color-mix(in srgb, var(--lime) 20%, transparent); color: var(--lime); }
   .run-req-status.open { background: color-mix(in srgb, var(--blue) 20%, transparent); color: var(--blue); }
-  .run-req-status.deferred { background: var(--panel-2); color: var(--dim-2); }
-  .run-req-text { font-style: italic; color: var(--text); line-height: 1.4; word-break: break-word; }
+  .run-req-status.in-spec { background: color-mix(in srgb, #8b5cf6 20%, transparent); color: #a78bfa; }
+  .run-req-status.deferred { background: var(--panel); color: var(--dim-2); }
+  .run-req-text { font-style: italic; color: var(--text); line-height: 1.45; word-break: break-word; }
   .run-feed-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; }
-  .run-feed-list { font-family: var(--mono); font-size: 11.5px; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
-  .run-feed-item { display: grid; grid-template-columns: 66px 85px 1fr; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line-soft); }
+  .run-feed-list { font-family: var(--mono); font-size: 11.5px; max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .run-feed-item { display: grid; grid-template-columns: 66px 90px 1fr; gap: 10px; padding: 6px 8px; border-radius: 4px; background: var(--panel-2); align-items: baseline; }
   .run-feed-item:last-child { border-bottom: 0; }
-  /* ---------- run waves (universal-1) ---------- */
-  .run-waves-section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; margin-bottom: 16px; }
-  .run-wave-card { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: var(--r); padding: 12px 14px; margin-bottom: 12px; }
-  .run-wave-card:last-child { margin-bottom: 0; }
-  .run-wave-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
-  .run-wave-bar { height: 6px; border-radius: 3px; background: var(--line); display: flex; overflow: hidden; margin-bottom: 10px; }
-  .run-wave-bar .bar-done { background: var(--lime); }
-  .run-wave-bar .bar-prog { background: var(--blue); }
-  .run-wave-bar .bar-wait { background: var(--amber); }
   .badge-offline { font-family: var(--mono); font-size: 11px; padding: 4px 10px; border-radius: 999px; background: #C81E1E; color: #fff; font-weight: 700; display: inline-flex; align-items: center; gap: 5px; }
 </style>
 </head>
@@ -302,7 +350,7 @@ export function generateDashboardHtml(data, options = {}) {
   window.NF_SNAPSHOT = ${payload};
   var DATA = window.NF_SNAPSHOT;
   var IS_FROZEN = ${isFrozen};
-  var POLL_MS = 3000;
+  var POLL_MS = ${pollMs};
   var savedTab = localStorage.getItem("nf-tab");
   var TAB = savedTab || ((DATA.run && DATA.run.open) ? "run" : "overview");
   if (!DATA.run && TAB === "run") TAB = "overview";
@@ -363,8 +411,11 @@ export function generateDashboardHtml(data, options = {}) {
       run: "Прогон",
       runHeroWorking: "В работе", runHeroWaiting: "Ожидание оператора", runHeroClosed: "Завершён", runHeroFailed: "Провал",
       runActiveTime: "Время работы", runWaitTime: "Время ожидания",
-      runSentenceOpen: "Пройдено стадий: {s}/6 · Выполнено требований: {r}/{t} ({pct}%)",
+      runSentenceOpen: "Пройдено стадий: {s}/8 · Выполнено требований: {r}/{t} ({pct}%)",
       runSentenceClosed: "Прогон закрыт · Вердикт оракула: {v} · Техдолг: {d}",
+      pendingQuestion: "Ожидание ответа:",
+      waitingForUser: "Ожидание подтверждения или ввода данных",
+      runFilterDeferred: "Отложено",
       runRequirements: "Требования (слова пользователя)", runGates: "Гейты качества", runFeed: "Лента событий",
       runFilterAll: "Все", runFilterDone: "Выполнены", runFilterOpen: "В работе",
       gateG1: "G1: Манифест записан", gateG2: "G2: OpenSpec валиден", gateG3: "G3: Интерфейсы записаны", gateG4: "G4: Приёмка Оракула",
@@ -423,8 +474,11 @@ export function generateDashboardHtml(data, options = {}) {
       runSentenceOpen: "Stages completed: {s}/6 · Requirements completed: {r}/{t} ({pct}%)",
       runSentenceClosed: "Run closed · Oracle verdict: {v} · Tech debt: {d}",
       runRequirements: "Requirements (user words)", runGates: "Quality gates", runFeed: "Activity feed",
-      runFilterAll: "All", runFilterDone: "Done", runFilterOpen: "Open",
-      gateG1: "G1: Manifest recorded", gateG2: "G2: OpenSpec valid", gateG3: "G3: Interfaces recorded", gateG4: "G4: Oracle acceptance",
+      runSentenceOpen: "Stages completed: {s}/8 · Requirements completed: {r}/{t} ({pct}%)",
+      runSentenceClosed: "Run closed · Oracle verdict: {v} · Tech debt: {d}",
+      pendingQuestion: "Pending question:",
+      waitingForUser: "Waiting for user confirmation or input",
+      runFilterDeferred: "Deferred",
       gatePass: "PASS", gateOpen: "OPEN", gateFail: "FAIL",
       offline: "OFFLINE", offlineBadge: "offline snapshot", noRun: "No active workflow run",
       runWaves: "Execution waves (SDD)",
@@ -438,7 +492,7 @@ export function generateDashboardHtml(data, options = {}) {
   };
   function t(k) { return (I18N[lang] && I18N[lang][k]) || (I18N.ru[k] || k); }
 
-  function esc(s) { return String(s === null || s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function esc(s) { return String(s === null || s === undefined ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
   function fmtDur(ms) {
     if (ms === null || ms === undefined || ms < 0) return "—";
     var s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -492,8 +546,100 @@ export function generateDashboardHtml(data, options = {}) {
   var currentRunRev = null;
   var runReqFilter = "all";
 
+  function getReqType(id) {
+    if (!id) return "R";
+    var s = String(id).trim();
+    if (/^R\d+i$/i.test(s) || (s.toLowerCase().startsWith("r") && s.toLowerCase().endsWith("i"))) return "Ri";
+    if (/^G\d+/i.test(s)) return "G";
+    if (/^A\d+/i.test(s)) return "A";
+    if (/^D\d+/i.test(s)) return "D";
+    if (/^R\d+/i.test(s)) return "R";
+    return "R";
+  }
+
+  function getTaskStateColor(st) {
+    var s = String(st || "").toLowerCase();
+    if (s === "done" || s === "closed" || s === "verified" || s === "pass" || s === "success") return "green";
+    if (s === "waiting" || s === "blocked" || s === "warning" || s === "fail" || s === "failed") return "orange";
+    if (s === "in_progress" || s === "running" || s === "active") return "purple";
+    if (s === "repair" || s === "retry" || s === "testing") return "cyan";
+    return "white";
+  }
+
+  function getTrackStages(runData) {
+    var stagesList = runData.stages || [];
+    var findS = function (id) {
+      return stagesList.find(function (s) { return s.id === id; });
+    };
+
+    var lane = findS("lane") || findS("preflight");
+    var recon = findS("recon") || findS("briefing");
+    var manifest = findS("manifest");
+    var spec = findS("openspec") || findS("spec");
+    var plan = findS("interfaces") || findS("plan");
+    var dev = findS("dev");
+    var review = findS("review");
+    var oracle = findS("oracle") || findS("accept");
+
+    var isClosed = runData.status === "closed";
+
+    var preflightStatus = lane ? lane.status : "done";
+    var manifestStatus = manifest ? manifest.status : (isClosed || (spec && spec.status === "done") ? "done" : "pending");
+    var briefingStatus = recon ? recon.status : (isClosed || (spec && (spec.status === "done" || spec.status === "in_progress")) ? "done" : "pending");
+    var specStatus = spec ? spec.status : (isClosed || (plan && (plan.status === "done" || plan.status === "in_progress")) ? "done" : "pending");
+    var planStatus = plan ? plan.status : (isClosed ? "done" : "pending");
+
+    var devStatus = "pending";
+    if (dev) {
+      devStatus = dev.status;
+    } else if (isClosed) {
+      devStatus = "done";
+    } else if (runData.waves && runData.waves.length > 0) {
+      var allTickets = [];
+      runData.waves.forEach(function (w) { (w.tickets || []).forEach(function (tk) { allTickets.push(tk); }); });
+      var anyActive = allTickets.some(function (tk) { return tk.status === "in_progress" || tk.status === "running" || tk.status === "active"; });
+      var allDone = allTickets.length > 0 && allTickets.every(function (tk) { return tk.status === "done" || tk.status === "closed" || tk.status === "verified"; });
+      if (allDone) devStatus = "done";
+      else if (anyActive) devStatus = "in_progress";
+      else if (planStatus === "done") devStatus = "in_progress";
+    } else if (planStatus === "done" && (!oracle || oracle.status !== "done")) {
+      devStatus = "in_progress";
+    }
+
+    var reviewStatus = "pending";
+    if (review) {
+      reviewStatus = review.status;
+    } else if (isClosed) {
+      reviewStatus = "done";
+    } else if (oracle && (oracle.status === "done" || oracle.status === "in_progress")) {
+      reviewStatus = "done";
+    } else if (devStatus === "done") {
+      reviewStatus = "in_progress";
+    }
+
+    var acceptStatus = "pending";
+    if (oracle) {
+      acceptStatus = oracle.status;
+    } else if (isClosed) {
+      acceptStatus = "done";
+    } else if (reviewStatus === "done") {
+      acceptStatus = "in_progress";
+    }
+
+    return [
+      { id: "preflight", name: "Preflight", status: preflightStatus },
+      { id: "manifest", name: "Manifest", status: manifestStatus },
+      { id: "briefing", name: "Briefing", status: briefingStatus },
+      { id: "spec", name: "Spec", status: specStatus },
+      { id: "plan", name: "Plan", status: planStatus },
+      { id: "dev", name: "Dev", status: devStatus },
+      { id: "review", name: "Review", status: reviewStatus },
+      { id: "accept", name: "Accept", status: acceptStatus },
+    ];
+  }
+
   function tickRun() {
-    if (!DATA || !DATA.run || DATA.run.status === "closed") return;
+    if (IS_FROZEN || !DATA || !DATA.run || DATA.run.status === "closed") return;
     if (DATA.run.status === "waiting") {
       DATA.run.waitMs = (DATA.run.waitMs || 0) + 1000;
     } else {
@@ -533,11 +679,13 @@ export function generateDashboardHtml(data, options = {}) {
     else if (r.status === "failed") heroCls = "run-failed";
     else if (r.status === "waiting") heroCls = "run-waiting";
 
-    var heroBadgeText = r.status === "closed" ? t("runHeroClosed") : r.status === "failed" ? t("runHeroFailed") : r.status === "waiting" ? t("runHeroWaiting") : t("runHeroWorking");
+    var heroBadgeText = r.status === "closed" ? t("runHeroClosed") : (r.status === "failed" ? t("runHeroFailed") : (r.status === "waiting" ? t("runHeroWaiting") : t("runHeroWorking")));
+    var wipBadgeHtml = r.status !== "closed" ? '<span class="run-hero-badge run-wip-badge">WIP</span>' : '';
 
-    var doneStages = (r.stages || []).filter(function (s) { return s.status === "done"; }).length;
+    var trackList = getTrackStages(r);
+    var doneStages = trackList.filter(function (s) { return s.status === "done"; }).length;
     var totalReqs = (r.requirements || []).length;
-    var doneReqs = (r.requirements || []).filter(function (req) { return req.status === "done"; }).length;
+    var doneReqs = (r.requirements || []).filter(function (req) { return req.status === "done" || req.status === "verified" || req.status === "closed"; }).length;
     var reqPct = totalReqs > 0 ? Math.round((doneReqs / totalReqs) * 100) : (r.status === "closed" ? 100 : 0);
 
     var sentence = "";
@@ -549,25 +697,40 @@ export function generateDashboardHtml(data, options = {}) {
       sentence = t("runSentenceOpen").replace("{s}", doneStages).replace("{r}", doneReqs).replace("{t}", totalReqs).replace("{pct}", reqPct);
     }
 
+    var questionHtml = "";
+    if (r.status === "waiting") {
+      var qText = r.pendingQuestion || r.question || (r.waiting && r.waiting.question) || (r.waits && r.waits.length ? r.waits[r.waits.length - 1].kind : "") || t("waitingForUser");
+      questionHtml = '<div class="run-hero-question">' +
+        '<span class="run-question-badge">?</span>' +
+        '<div class="run-question-content">' +
+          '<div class="run-question-label">' + esc(t("pendingQuestion")) + '</div>' +
+          '<div class="run-question-text">' + esc(qText) + '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
     var heroHtml = '<div class="run-hero ' + heroCls + '">' +
       '<div class="run-hero-top">' +
-        '<span class="run-hero-badge">' + esc(heroBadgeText) + '</span>' +
+        '<div class="run-hero-badges">' +
+          '<span class="run-hero-badge">' + esc(heroBadgeText) + '</span>' +
+          wipBadgeHtml +
+        '</div>' +
         '<span class="chip" style="background:rgba(255,255,255,0.2);color:#fff;border-color:transparent">' + esc(r.tier || "T1") + '</span>' +
       '</div>' +
       '<div class="run-hero-title">' + esc(r.task || ("Задача " + (r.tier || "T1"))) + '</div>' +
       '<div class="run-hero-sentence">' + esc(sentence) + '</div>' +
+      questionHtml +
     '</div>';
 
-    var stageOrder = ["lane", "recon", "manifest", "openspec", "interfaces", "oracle"];
-    var trackSteps = stageOrder.map(function (sid, idx) {
-      var stageObj = (r.stages || []).find(function (s) { return s.id === sid; }) || { id: sid, status: "pending" };
-      var sclsName = scls(stageObj.status);
-      var isLast = idx === stageOrder.length - 1;
+    var trackSteps = trackList.map(function (stObj, idx) {
+      var sclsName = scls(stObj.status);
+      var isLast = idx === trackList.length - 1;
+      var circleText = stObj.status === "done" ? "✓" : String(idx + 1);
       return '<div class="run-step ' + sclsName + '">' +
-        '<div class="run-step-circle">' + (stageObj.status === "done" ? "✓" : String(idx + 1)) + '</div>' +
+        '<div class="run-step-circle">' + circleText + '</div>' +
         '<div class="run-step-info">' +
-          '<div class="run-step-name">' + esc(stageName(stageObj)) + '</div>' +
-          '<div class="run-step-status">' + esc(t("st_" + stageObj.status) || stageObj.status) + '</div>' +
+          '<div class="run-step-name">' + esc(stObj.name) + '</div>' +
+          '<div class="run-step-status">' + esc(t("st_" + stObj.status) || stObj.status) + '</div>' +
         '</div>' +
         (!isLast ? '<span class="run-step-arrow">→</span>' : '') +
       '</div>';
@@ -578,6 +741,7 @@ export function generateDashboardHtml(data, options = {}) {
     var passGatesCount = 0;
     ["G1", "G2", "G3", "G4"].forEach(function (gk) { if (gatesObj[gk] && gatesObj[gk].ok) passGatesCount++; });
 
+    var beatsInfo = (r.beats && r.beats.length) ? (r.beats.length + " beats (≤45m)") : "beats ≤45m без пауз";
     var tilesHtml = '<div class="run-tiles">' +
       '<div class="run-tile">' +
         '<div class="label">' + esc(t("runRequirements")) + '</div>' +
@@ -603,15 +767,15 @@ export function generateDashboardHtml(data, options = {}) {
             '<span class="run-clock-val" id="run-clock-wait" style="color:var(--amber)">' + fmtDur(r.waitMs) + '</span>' +
           '</div>' +
         '</div>' +
-        '<div class="note">' + esc(t("elapsed")) + ': ' + fmtDur((r.activeMs || 0) + (r.waitMs || 0)) + '</div>' +
+        '<div class="note">' + esc(t("elapsed")) + ': ' + fmtDur((r.activeMs || 0) + (r.waitMs || 0)) + ' · ' + esc(beatsInfo) + '</div>' +
       '</div>' +
     '</div>';
 
     var gateKeys = ["G1", "G2", "G3", "G4"];
     var gatesHtml = '<div class="run-gates-grid">' + gateKeys.map(function (gk) {
       var g = gatesObj[gk] || { ok: null, status: "open", label: gk };
-      var gCls = g.ok === true ? "pass" : g.ok === false ? "fail" : "open";
-      var gText = g.ok === true ? t("gatePass") : g.ok === false ? t("gateFail") : t("gateOpen");
+      var gCls = g.ok === true ? "pass" : (g.ok === false ? "fail" : "open");
+      var gText = g.ok === true ? t("gatePass") : (g.ok === false ? t("gateFail") : t("gateOpen"));
       var gLabel = t("gate" + gk) || g.label || gk;
       return '<div class="run-gate ' + gCls + '">' +
         '<span class="run-gate-label">' + esc(gLabel) + '</span>' +
@@ -619,19 +783,103 @@ export function generateDashboardHtml(data, options = {}) {
       '</div>';
     }).join("") + '</div>';
 
+    var wavesList = r.waves || [];
+    var wavesHtml = "";
+    if (wavesList.length > 0) {
+      var lanesHtml = wavesList.map(function (w) {
+        var tList = w.tickets || [];
+        var doneCount = tList.filter(function (tk) { return tk.status === "done" || tk.status === "closed" || tk.status === "verified"; }).length;
+        var inProgCount = tList.filter(function (tk) { return tk.status === "in_progress" || tk.status === "running" || tk.status === "active"; }).length;
+        var pendingCount = Math.max(0, tList.length - doneCount - inProgCount);
+        var donePct = tList.length ? Math.round((doneCount / tList.length) * 100) : 0;
+        var inProgPct = tList.length ? Math.round((inProgCount / tList.length) * 100) : 0;
+        var pendingPct = Math.max(0, 100 - donePct - inProgPct);
+        var waveLines = tList.reduce(function (sum, tk) { return sum + (Number(tk.lines) || 0); }, 0);
+
+        var taskCards = tList.map(function (tk) {
+          var tLines = Number(tk.lines) || 0;
+          var color = getTaskStateColor(tk.status);
+          var repCount = Number(tk.repairs !== undefined ? tk.repairs : (tk.repairCount !== undefined ? tk.repairCount : (color === "cyan" ? 1 : 0))) || 0;
+
+          var tHint = tLines < 1500 ? "merge" : (tLines > 4500 ? "split" : "ok");
+          var hintBadge = "";
+          if (tHint === "merge") {
+            hintBadge = '<span class="pill" style="color:var(--amber);border-color:color-mix(in srgb, var(--amber) 40%, transparent)">' + esc(t("calibMerge")) + '</span>';
+          } else if (tHint === "split") {
+            hintBadge = '<span class="pill" style="color:var(--red);border-color:color-mix(in srgb, var(--red) 40%, transparent)">' + esc(t("calibSplit")) + '</span>';
+          } else if (tLines > 0) {
+            hintBadge = '<span class="pill" style="color:var(--dim)">' + esc(t("calibOk")) + '</span>';
+          }
+
+          return '<div class="run-task-card task-card-' + color + '">' +
+            '<div class="run-task-top">' +
+              '<span class="run-task-id">' + esc(tk.id) + '</span>' +
+              '<span class="task-state-badge">' + esc(tk.status) + '</span>' +
+            '</div>' +
+            '<div class="run-task-title">' + esc(tk.title || tk.id) + '</div>' +
+            '<div class="run-task-bottom">' +
+              '<span class="run-task-repairs ' + (repCount > 0 ? 'has-repairs' : '') + '">' + repCount + '/2 repairs</span>' +
+              '<div style="display:flex;align-items:center;gap:6px">' +
+                (tLines ? '<span class="mono" style="font-size:10.5px;color:var(--dim)">' + tLines + ' ' + esc(t("linesCount")) + '</span>' : '') +
+                hintBadge +
+              '</div>' +
+            '</div>' +
+          '</div>';
+        }).join("");
+
+        return '<div class="run-wave-lane">' +
+          '<div class="run-wave-header">' +
+            '<div style="display:flex;align-items:center;gap:8px">' +
+              '<span class="mono" style="font-weight:700;font-size:12.5px">' + esc(t("wave")) + " " + w.n + ' (Lane)</span>' +
+              '<span class="pill">' + tList.length + ' ' + esc(t("tickets")) + '</span>' +
+            '</div>' +
+            '<span class="mono" style="font-size:11px;color:var(--dim)">' + waveLines + ' ' + esc(t("linesCount")) + '</span>' +
+          '</div>' +
+          '<div class="run-wave-bar">' +
+            '<div class="bar-done" style="width:' + donePct + '%"></div>' +
+            '<div class="bar-prog" style="width:' + inProgPct + '%"></div>' +
+            '<div class="bar-wait" style="width:' + pendingPct + '%"></div>' +
+          '</div>' +
+          '<div class="run-tasks-matrix">' + taskCards + '</div>' +
+        '</div>';
+      }).join("");
+
+      wavesHtml = '<div class="run-waves-section">' +
+        '<div class="run-words-header">' +
+          '<div class="label" style="margin-bottom:0">' + esc(t("runWaves")) + ' (' + wavesList.length + ')' + '</div>' +
+          '<span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t("calibrationTarget")) + '</span>' +
+        '</div>' +
+        '<div class="run-waves-list">' + lanesHtml + '</div>' +
+      '</div>';
+    } else {
+      wavesHtml = '<div class="run-waves-section">' +
+        '<div class="label">' + esc(t("runWaves")) + '</div>' +
+        '<div class="empty">' + esc(t("noData")) + '</div>' +
+      '</div>';
+    }
+
     var filteredReqs = (r.requirements || []).filter(function (req) {
+      var s = String(req.status || "").toLowerCase();
       if (runReqFilter === "all") return true;
-      if (runReqFilter === "done") return req.status === "done";
-      if (runReqFilter === "open") return req.status === "open" || req.status === "in-spec";
+      if (runReqFilter === "done") return s === "done" || s === "verified" || s === "closed";
+      if (runReqFilter === "open") return s === "open";
+      if (runReqFilter === "in-spec") return s === "in-spec" || s === "inspec";
+      if (runReqFilter === "deferred") return s === "deferred" || s === "dropped" || s === "placeholder";
       return true;
     });
 
     var reqRows = filteredReqs.length ? filteredReqs.map(function (req) {
-      var stCls = req.status === "done" ? "done" : req.status === "deferred" ? "deferred" : "open";
-      var stLabel = req.status === "done" ? t("st_done") : req.status === "deferred" ? t("st_skipped") : t("st_in_progress");
+      var type = getReqType(req.id);
+      var s = String(req.status || "").toLowerCase();
+      var stCls = (s === "done" || s === "verified" || s === "closed") ? "done" : ((s === "in-spec" || s === "inspec") ? "in-spec" : ((s === "deferred" || s === "dropped") ? "deferred" : "open"));
+      var stLabel = s === "done" ? t("st_done") : (s === "in-spec" ? "in-spec" : (s === "deferred" ? t("st_skipped") : t("st_in_progress")));
+
       return '<div class="run-req-row">' +
-        '<span class="run-req-id">' + esc(req.id) + '</span>' +
-        '<span class="run-req-status ' + stCls + '">' + esc(stLabel) + '</span>' +
+        '<div class="run-req-meta">' +
+          '<span class="run-req-badge req-badge-' + type.toLowerCase() + '">' + esc(type) + '</span>' +
+          '<span class="run-req-id">' + esc(req.id) + '</span>' +
+          '<span class="run-req-status ' + stCls + '">' + esc(stLabel) + '</span>' +
+        '</div>' +
         '<span class="run-req-text">“' + esc(req.text) + '”</span>' +
       '</div>';
     }).join("") : '<div class="empty">' + esc(t("noData")) + '</div>';
@@ -643,80 +891,12 @@ export function generateDashboardHtml(data, options = {}) {
           '<button class="run-filter-btn ' + (runReqFilter === "all" ? "active" : "") + '" data-filter="all">' + esc(t("runFilterAll")) + '</button>' +
           '<button class="run-filter-btn ' + (runReqFilter === "done" ? "active" : "") + '" data-filter="done">' + esc(t("runFilterDone")) + '</button>' +
           '<button class="run-filter-btn ' + (runReqFilter === "open" ? "active" : "") + '" data-filter="open">' + esc(t("runFilterOpen")) + '</button>' +
+          '<button class="run-filter-btn ' + (runReqFilter === "in-spec" ? "active" : "") + '" data-filter="in-spec">In-Spec</button>' +
+          '<button class="run-filter-btn ' + (runReqFilter === "deferred" ? "active" : "") + '" data-filter="deferred">' + esc(t("runFilterDeferred")) + '</button>' +
         '</div>' +
       '</div>' +
       '<div class="run-words-list">' + reqRows + '</div>' +
     '</div>';
-    var wavesList = r.waves || [];
-    var wavesCards = "";
-    if (wavesList.length > 0) {
-      wavesCards = wavesList.map(function (w) {
-        var tList = w.tickets || [];
-        var doneCount = tList.filter(function (t) { return t.status === "done" || t.status === "closed" || t.status === "verified"; }).length;
-        var inProgCount = tList.filter(function (t) { return t.status === "in_progress" || t.status === "running" || t.status === "active"; }).length;
-        var pendingCount = Math.max(0, tList.length - doneCount - inProgCount);
-        var donePct = tList.length ? Math.round((doneCount / tList.length) * 100) : 0;
-        var inProgPct = tList.length ? Math.round((inProgCount / tList.length) * 100) : 0;
-        var pendingPct = Math.max(0, 100 - donePct - inProgPct);
-        var waveLines = tList.reduce(function (sum, t) { return sum + (Number(t.lines) || 0); }, 0);
-
-        var tRows = tList.map(function (t) {
-          var tLines = Number(t.lines) || 0;
-          var tHint = tLines < 1500 ? "merge" : (tLines > 4500 ? "split" : "ok");
-          var hintBadge = "";
-          if (tHint === "merge") {
-            hintBadge = '<span class="pill" style="color:var(--amber);border-color:color-mix(in srgb, var(--amber) 40%, transparent)">' + esc(t("calibMerge")) + '</span>';
-          } else if (tHint === "split") {
-            hintBadge = '<span class="pill" style="color:var(--red);border-color:color-mix(in srgb, var(--red) 40%, transparent)">' + esc(t("calibSplit")) + '</span>';
-          } else if (tLines > 0) {
-            hintBadge = '<span class="pill" style="color:var(--dim)">' + esc(t("calibOk")) + '</span>';
-          }
-          var isDone = t.status === "done" || t.status === "closed" || t.status === "verified";
-          var isProg = t.status === "in_progress" || t.status === "running" || t.status === "active";
-          var stCls = isDone ? "done" : (isProg ? "open" : "deferred");
-          var stLabel = isDone ? t("st_done") : (isProg ? t("st_in_progress") : t("st_pending"));
-
-          return '<div class="run-req-row">' +
-            '<span class="run-req-id">' + esc(t.id) + '</span>' +
-            '<span class="run-req-status ' + stCls + '">' + esc(stLabel) + '</span>' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;overflow:hidden;flex:1">' +
-              '<span style="color:var(--text);font-weight:600;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">' + esc(t.title || t.id) + '</span>' +
-              '<div style="display:flex;align-items:center;gap:6px;flex:0 0 auto">' +
-                (tLines ? '<span class="mono" style="font-size:11px;color:var(--dim)">' + tLines + ' ' + esc(t("linesCount")) + '</span>' : '') +
-                hintBadge +
-              '</div>' +
-            '</div>' +
-          '</div>';
-        }).join("");
-
-        return '<div class="run-wave-card">' +
-          '<div class="run-wave-header">' +
-            '<div style="display:flex;align-items:center;gap:8px">' +
-              '<span class="mono" style="font-weight:700;font-size:12px">' + esc(t("wave")) + " " + w.n + '</span>' +
-              '<span class="pill">' + tList.length + ' ' + esc(t("tickets")) + '</span>' +
-            '</div>' +
-            '<span class="mono" style="font-size:11px;color:var(--dim)">' + waveLines + ' ' + esc(t("linesCount")) + '</span>' +
-          '</div>' +
-          '<div class="run-wave-bar">' +
-            '<div class="bar-done" style="width:' + donePct + '%"></div>' +
-            '<div class="bar-prog" style="width:' + inProgPct + '%"></div>' +
-            '<div class="bar-wait" style="width:' + pendingPct + '%"></div>' +
-          '</div>' +
-          '<div class="run-wave-tickets">' + tRows + '</div>' +
-        '</div>';
-      }).join("");
-    } else {
-      wavesCards = '<div class="empty">' + esc(t("noData")) + '</div>';
-    }
-
-    var wavesHtml = '<div class="run-waves-section">' +
-      '<div class="run-words-header">' +
-        '<div class="label" style="margin-bottom:0">' + esc(t("runWaves")) + (wavesList.length ? ' (' + wavesList.length + ')' : '') + '</div>' +
-        '<span class="mono" style="font-size:11px;color:var(--dim)">' + esc(t("calibrationTarget")) + '</span>' +
-      '</div>' +
-      '<div class="run-waves-list">' + wavesCards + '</div>' +
-    '</div>';
-
 
     var feedItems = (r.feed || []).slice(-50).reverse();
     var feedRows = feedItems.length ? feedItems.map(function (item) {
@@ -739,6 +919,7 @@ export function generateDashboardHtml(data, options = {}) {
       });
     });
   }
+
   function showTab(id) {
     TAB = id; localStorage.setItem("nf-tab", id);
     document.querySelectorAll(".tab").forEach(function (s) { s.classList.toggle("active", s.id === "tab-" + id); });
@@ -1171,13 +1352,18 @@ export function generateDashboardHtml(data, options = {}) {
   }
   if (localStorage.getItem("nf-theme") === "light") document.body.classList.add("light");
 
-  var startMs = DATA.task.startedAt ? new Date(DATA.task.startedAt).getTime() : Date.now();
+  if (!IS_FROZEN) {
+    var startMs = DATA.task.startedAt ? new Date(DATA.task.startedAt).getTime() : Date.now();
   setInterval(function () {
-    if (DATA.task.status === "closed") return;
+    if (IS_FROZEN || DATA.task.status === "closed") return;
     var el = document.getElementById("elapsed");
     if (el) el.textContent = fmtDur(Math.max(0, Date.now() - startMs));
   }, 1000);
-  setInterval(tickRun, 1000);
+  setInterval(function () {
+    if (IS_FROZEN) return;
+    tickRun();
+  }, 1000);
+  }
 
   function setOffline(on) {
     var offEl = document.getElementById("offline-badge");
@@ -1211,6 +1397,7 @@ export function generateDashboardHtml(data, options = {}) {
     fingerprint = f;
   }
   function refreshNow() {
+    if (IS_FROZEN) return;
     fetch("/api/state", { cache: "no-store" })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -1264,8 +1451,10 @@ export function generateDashboardHtml(data, options = {}) {
     }
   }
   boot();
-  refreshNow();
-  setInterval(refreshNow, POLL_MS);
+  if (!IS_FROZEN) {
+    refreshNow();
+    setInterval(refreshNow, POLL_MS);
+  }
 </script>
 </body>
 </html>`;

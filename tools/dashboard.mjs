@@ -33,7 +33,7 @@ export {
   computeGates, isAllowedHost, isCompatibleDashboard, parseManifestRequirements,
   projectToken, scanModules,
 } from "./dashboard-collectors.mjs";
-export { generateDashboardHtml } from "./dashboard-ui.mjs";
+export { generateDashboardHtml, esc } from "./dashboard-ui.mjs";
 
 /* ------------------------------------------------------------------ */
 /*  Server, runtime file, auto-launch                                  */
@@ -155,9 +155,9 @@ export function openInBrowser(url) {
 }
 
 /** Попытка занять порт; null — порт занят. */
-function tryListen(port, absRoot, session = null) {
+function tryListen(port, absRoot, session = null, options = {}) {
   return new Promise((resolvePort) => {
-    const server = createServer((req, res) => handleRequest(req, res, absRoot, session));
+    const server = createServer((req, res) => handleRequest(req, res, absRoot, session, options));
     server.once("error", () => resolvePort(null));
     server.once("listening", () => resolvePort({ server, port }));
     server.listen(port, "127.0.0.1");
@@ -514,6 +514,7 @@ export function sanitizeHttpState(data) {
         text: redactSecrets(String(f?.text || "")).replace(/[A-Za-z0-9_-]*SECRET[A-Za-z0-9_-]*/gi, "[REDACTED]").slice(0, 200),
       })),
       rev: String(data.run.rev || ""),
+      pendingQuestion: data.run.pendingQuestion ? redactSecrets(String(data.run.pendingQuestion)).slice(0, 300) : (data.run.question ? redactSecrets(String(data.run.question)).slice(0, 300) : ""),
     };
   }
 
@@ -566,7 +567,7 @@ export function sanitizeHttpState(data) {
 }
 
 /** HTTP-обработчик: страница, /api/state, /api/diff, /api/health. */
-function handleRequest(req, res, absRoot, session = null) {
+function handleRequest(req, res, absRoot, session = null, options = {}) {
   const host = req.headers.host;
   if (!isAllowedHost(host)) {
     res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
@@ -679,15 +680,15 @@ function handleRequest(req, res, absRoot, session = null) {
 
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
   const raw = collectDashboardData(absRoot, { session: currentSession });
-  res.end(generateDashboardHtml(sanitizeHttpState(raw)));
+  res.end(generateDashboardHtml(sanitizeHttpState(raw), options));
 }
 
 /** Запустить сервер дашборда на первом свободном порту. */
-export async function startLiveServer(root, port = 4200, { maxAttempts = 64, session = null } = {}) {
+export async function startLiveServer(root, port = 4200, { maxAttempts = 64, session = null, pollMs = 2000 } = {}) {
   const absRoot = resolve(root);
   const activeSession = sessionKey(session || SERVER_SESSION);
   for (let p = port; p < port + maxAttempts; p++) {
-    const bound = await tryListen(p, absRoot, activeSession);
+    const bound = await tryListen(p, absRoot, activeSession, { pollMs });
     if (bound) return bound;
   }
   throw new Error(`нет свободного порта в диапазоне ${port}..${port + maxAttempts - 1}`);
@@ -698,13 +699,33 @@ export async function startLiveServer(root, port = 4200, { maxAttempts = 64, ses
  * иначе поднимаем фоновый процесс и (опционально) открываем браузер.
  * Никогда не бросает: дашборд — наблюдаемость, а не условие работы.
  */
+const ensureDashboardInFlight = new Map();
+
 export async function ensureDashboard(root, { open = true, port = null, session = null } = {}) {
   const absRoot = resolve(root);
   const key = sessionKey(session);
+  const flightKey = `${absRoot}::${key}`;
+
+  if (ensureDashboardInFlight.has(flightKey)) {
+    return ensureDashboardInFlight.get(flightKey);
+  }
+
+  const promise = (async () => {
+    try {
+      return await _ensureDashboardImpl(absRoot, key, { open, port });
+    } finally {
+      ensureDashboardInFlight.delete(flightKey);
+    }
+  })();
+
+  ensureDashboardInFlight.set(flightKey, promise);
+  return promise;
+}
+
+async function _ensureDashboardImpl(absRoot, key, { open = true, port = null } = {}) {
   const chosenPort = port || portForSession(key);
   // В Paseo системный браузер не открываем: страницу показывает встроенный браузер IDE (browser_new_tab).
   const openSystem = Boolean(open) && !isPaseoWorkspace() && process.env.NF_NO_OPEN !== "1";
-
   // 1. Рантайм-файл: быстрый путь.
   const existing = readRuntime(absRoot, key);
   if (existing) {
@@ -770,7 +791,7 @@ export function embedSnapshot(html, state) {
     throw new TypeError('html must be a string');
   }
   const jsonStr = JSON.stringify(state ?? {}).replace(/<\//g, '<\\/');
-  const payload = `\nwindow.STATE = ${jsonStr};\n`;
+  const payload = `\nwindow.NF_SNAPSHOT = ${jsonStr};\nwindow.STATE = window.NF_SNAPSHOT;\n`;
 
   const markerRegex = /(\/\*STATE-BEGIN\*\/)[\s\S]*?(\/\*STATE-END\*\/)/;
   if (markerRegex.test(html)) {
@@ -883,10 +904,11 @@ export function parseArgs(argv = []) {
     list: false,
     session: null,
     freeze: false,
+    pollMs: 2000,
     help: false,
     errors: [],
   };
-  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "list", "session", "help", "freeze"]);
+  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "list", "session", "help", "freeze", "poll", "poll-ms"]);
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -900,6 +922,15 @@ export function parseArgs(argv = []) {
     else if (arg === "--url") options.url = true;
     else if (arg === "--freeze") options.freeze = true;
     else if (arg === "--list") options.list = true;
+    else if (arg === "--poll" || arg.startsWith("--poll=") || arg === "--poll-ms" || arg.startsWith("--poll-ms=")) {
+      const raw = (arg.startsWith("--poll=") || arg.startsWith("--poll-ms=")) ? arg.slice(arg.indexOf("=") + 1) : argv[++i];
+      const p = Number.parseInt(raw, 10);
+      if (!Number.isFinite(p) || p < 1000 || p > 3000) {
+        options.errors.push(`--poll требует интервал от 1000 до 3000 мс (получено: ${JSON.stringify(raw)})`);
+      } else {
+        options.pollMs = p;
+      }
+    }
     else if (arg === "--session" || arg.startsWith("--session=")) {
       const raw = arg.startsWith("--session=") ? arg.slice("--session=".length) : argv[++i];
       try {
@@ -949,6 +980,7 @@ export async function main(argv = process.argv.slice(2)) {
   --url             Напечатать адрес живого дашборда и выйти (для агентов)
   --checks          Прогнать быстрые гейты (auto-review, prompt-lint) и закэшировать
   --port <n>        Порт сервера (по умолчанию: 4200)
+  --poll <ms>       Интервал опроса 1000–3000 мс (по умолчанию: 2000)
   --json            Вывести агрегированные метрики в JSON
   --freeze          Создать автономный HTML со снапшотом (dashboard-frozen.html)
   -h, --help        Показать эту справку
@@ -1015,7 +1047,7 @@ export async function main(argv = process.argv.slice(2)) {
     const outPath = opts.output ? resolve(opts.output) : join(absRoot, "dashboard-frozen.html");
     const dir = dirname(outPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(outPath, generateDashboardHtml(sanitized, { frozen: true }), "utf8");
+    writeFileSync(outPath, generateDashboardHtml(sanitized, { frozen: true, pollMs: opts.pollMs }), "utf8");
     process.stdout.write(`Автономный дашборд сгенерирован: ${outPath}\n`);
     return 0;
   }
@@ -1031,12 +1063,12 @@ export async function main(argv = process.argv.slice(2)) {
   const dir = dirname(outPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  writeFileSync(outPath, generateDashboardHtml(sanitizeHttpState(data)), "utf8");
+  writeFileSync(outPath, generateDashboardHtml(sanitizeHttpState(data), { pollMs: opts.pollMs }), "utf8");
   process.stdout.write(`Дашборд сгенерирован: ${outPath}\n`);
 
   if (opts.serve) {
     SERVER_SESSION = key;
-    const bound = await startLiveServer(absRoot, opts.port, { session: key });
+    const bound = await startLiveServer(absRoot, opts.port, { session: key, pollMs: opts.pollMs });
     const url = `http://localhost:${bound.port}`;
     writeRuntime(absRoot, { key,
       pid: process.pid,

@@ -85,10 +85,15 @@ export function doctorLite(root = ".") {
 
     const checker = (!process.versions.bun && process.execPath) || "node";
     const syntaxErrors = [];
+    const skippedFiles = [];
 
-    for (const file of ordered) {
+    for (let i = 0; i < ordered.length; i++) {
+      const file = ordered[i];
       // Stay well within 2000ms budget
-      if (performance.now() - start > 1500) break;
+      if (performance.now() - start > 1500) {
+        skippedFiles.push(...ordered.slice(i));
+        break;
+      }
 
       const fullPath = join(toolsDir, file);
       try {
@@ -107,6 +112,9 @@ export function doctorLite(root = ".") {
 
     if (syntaxErrors.length > 0) {
       warns.push(`Синтаксические ошибки в: ${syntaxErrors.join(", ")}`);
+    }
+    if (skippedFiles.length > 0) {
+      warns.push(`Проверка синтаксиса прервана по таймауту (>1500мс), пропущены файлы: ${skippedFiles.join(", ")}`);
     }
   }
 

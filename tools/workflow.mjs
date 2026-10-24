@@ -39,16 +39,17 @@
 import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, lstatSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join, dirname, resolve, basename, relative } from "node:path";
+import { join, dirname, resolve, basename } from "node:path";
 import { readJsonlSafe } from "./session-log.mjs";
 import {
   validateOracleArtifact,
-  getPorcelainStatusRaw,
   validateReviewEvidence,
   runReviewRecord,
   recordStageB,
 } from "./review/evidence.mjs";
-import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
+import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
+export { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
+import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
 import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
 import { runWorkspaceCommand } from "./workflow/workspaces.mjs";
 import { runClaimCommand } from "./workflow/claims.mjs";
@@ -769,33 +770,6 @@ function printRemainingArtifacts(tier, st) {
 }
 
 
-function findGitRoot(startDir) {
-  let curr = resolve(startDir);
-  while (true) {
-    if (existsSync(join(curr, ".git"))) {
-      return curr;
-    }
-    const parent = dirname(curr);
-    if (parent === curr) break;
-    curr = parent;
-  }
-  return null;
-}
-
-export function isInsideGitRepo(root) {
-  if (findGitRoot(root)) return true;
-  try {
-    const res = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
-      cwd: root, encoding: "utf8", windowsHide: true, timeout: 5000
-    }).trim();
-    return res === "true";
-  } catch {
-    return false;
-  }
-}
-
-
-export const isWorkflowPath = (p) => String(p || "").replace(/\\/g, "/").split("/").includes(".workflow");
 
 function parseRenamePaths(filePath) {
   const norm = String(filePath || "").replace(/\\/g, "/");
@@ -942,6 +916,16 @@ function cmdArtifact(root, flags) {
             console.error(`workflow: ${kind} -> entry '${entryPath}' real path must stay inside project root.`);
             return 1;
           }
+        }
+        const propPath = join(fullPath, "proposal.md");
+        if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) {
+          console.error(`workflow: ${kind} -> missing non-empty proposal.md in '${path}'.`);
+          return 1;
+        }
+        const specsPath = join(fullPath, "specs");
+        if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) {
+          console.error(`workflow: ${kind} -> missing non-empty specs/ directory in '${path}'.`);
+          return 1;
         }
       } else {
         if (!stFile.isFile()) {
@@ -1244,45 +1228,6 @@ function cmdCheckBudget(root, flags = {}) {
 }
 
 
-/**
- * Acceptance staleness: verifies full tree content state (tracked + untracked)
- * recorded at acceptance against current tree using SHA-256 content hashes,
- * timestamps, and file existence. Detects modified files even with matching
- * mtime/size or restored timestamps, deleted files, and newly added untracked files.
- */
-export function getPorcelainEntries(root) {
-  try {
-    let prefix = "";
-    try {
-      prefix = execFileSync("git", ["rev-parse", "--show-prefix"], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 5000
-      }).trim().replace(/\\/g, "/");
-    } catch {}
-
-    const statusOut = getPorcelainStatusRaw(root);
-    if (statusOut === null) return null;
-    const rawItems = statusOut.split("\0");
-    const entries = [];
-    for (let i = 0; i < rawItems.length; i++) {
-      const item = rawItems[i];
-      if (!item) continue;
-      const code = item.slice(0, 2);
-      let rel = item.slice(3);
-      if ((code[0] === "R" || code[0] === "C") && i + 1 < rawItems.length) {
-        i++;
-      }
-      if (prefix && rel.startsWith(prefix)) {
-        rel = rel.slice(prefix.length);
-      }
-      rel = rel.replace(/\\/g, "/");
-      if (!rel || isWorkflowPath(rel) || isStructuralExcludedPath(rel)) continue;
-      entries.push({ code, rel });
-    }
-    return entries;
-  } catch {
-    return null;
-  }
-}
 
 function findAcceptanceStaleness(root, st) {
   const oracleArtifact = st.artifacts?.oracle;
@@ -1575,6 +1520,7 @@ function cmdClose(root, flags) {
       deviation.missing ? `missing ${deviation.missing.join(", ")}` : null,
       deviation.staleAcceptance ? "stale acceptance" : null,
     ].filter(Boolean).join(" + ");
+    logEvent(root, "close", `${st.tier} — ${st.task} (force: ${deviation.reason})`, { forced: true });
     console.log(`workflow: closed with DEVIATION — ${what} (${deviation.reason})`);
   } else {
     logEvent(root, "close", `${st.tier} — ${st.task}`);

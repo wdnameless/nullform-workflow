@@ -15,7 +15,7 @@ import {
   normalizePath, stripBom, isRepoTree, discoverRepoClone, roleNamesIn,
   missingRequiredRoles, compareAgentDefs, unpackBuiltinAgents, parseRoleModels,
   runOmp, CORE_TOOLS, REQUIRED_ROLES,
-} from "./doctor.mjs";
+} from "./doctor-shared.mjs";
 
 function resolveSyntaxChecker() {
   if (!process.versions.bun) return process.execPath;
@@ -625,7 +625,7 @@ export function checkConfigs(ctx) {
     } else if (reported.length > 0) {
       checks.push({ id, status: "pass", detail: `Конфигурационные файлы: ${reported.join(", ")}` });
     } else {
-      checks.push({ id, status: "pass", detail: "Конфигурационные файлы в agent-dir отсутствуют (не настроены)" });
+      checks.push({ id, status: "skip", detail: "Конфигурационные файлы в agent-dir отсутствуют (не настроены)" });
     }
   }
 

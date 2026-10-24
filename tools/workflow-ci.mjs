@@ -16,7 +16,7 @@ import {
   isSupersededOracleArtifact,
 } from "./review/evidence.mjs";
 import { isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath } from "./worktree-snapshot.mjs";
-import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow.mjs";
+import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 
 export function resolveChangedFilesAgainstBase(root, baseRef) {
   try {

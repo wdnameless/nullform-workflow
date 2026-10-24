@@ -18,6 +18,8 @@ import {
   missingRequiredRoles,
 } from "../doctor.mjs";
 
+import { checkConfigs } from "../doctor-checks.mjs";
+import { doctorLite } from "../doctor-lite.mjs";
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const DOCTOR_PATH = resolve(REPO_ROOT, "tools/doctor.mjs");
 
@@ -1495,6 +1497,43 @@ test("doctor tools-syntax never executes tools under a Bun caller", (t) => {
     assert.equal(existsSync(sentinel), false, "bun --check must never execute a tool");
     const json = JSON.parse(res.stdout);
     assert.equal(checkOf(json, "tools-syntax").status, "pass", checkOf(json, "tools-syntax").detail);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("F01 (9): doctorLite при превышении лимита времени добавляет warn с именами пропущенных файлов", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-lite-abort-"));
+  const origNow = globalThis.performance.now;
+  try {
+    const toolsDir = join(tmp, "tools");
+    mkdirSync(toolsDir, { recursive: true });
+    writeFileSync(join(toolsDir, "a-tool.mjs"), "export const a = 1;\n", "utf8");
+    writeFileSync(join(toolsDir, "b-tool.mjs"), "export const b = 2;\n", "utf8");
+
+    let count = 0;
+    globalThis.performance.now = () => {
+      count++;
+      return count > 2 ? 1600 : 0;
+    };
+
+    const res = doctorLite(tmp);
+    assert.equal(res.ok, false, "res.ok должен быть false при пропуске файлов");
+    assert.ok(res.warns.some(w => w.includes("пропущены файлы") && (w.includes("a-tool.mjs") || w.includes("b-tool.mjs"))));
+  } finally {
+    globalThis.performance.now = origNow;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("F01 (10): checkConfigs возвращает skip, а не pass, когда в agent-dir ноль конфигураций", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "doctor-zero-configs-"));
+  try {
+    const checks = [];
+    checkConfigs({ checks, agentDir: tmp, options: {} });
+    const cfgCheck = checks.find(c => c.id === "configs");
+    assert.ok(cfgCheck, "checkConfigs должен добавить проверку с id configs");
+    assert.equal(cfgCheck.status, "skip", "при 0 конфигураций статус должен быть skip, а не pass");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

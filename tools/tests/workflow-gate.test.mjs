@@ -624,6 +624,7 @@ test("local T2: refuses while proposal/tasks/specs/oracle file are absent", () =
     writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nAll passed.\n", "utf8");
     writeFileSync(join(changeDir, "manifest.md"), "| R01 | quote |\n", "utf8");
     writeValidEvidence(root, changeDir, "align-feat");
+    cmdArtifact(root, { kind: "openspec", path: "openspec/changes/align-feat", detail: "change proposal scaffolded and validated" });
     cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against brief, no gaps found" });
     assert.equal(cmdCheck(root), 0, "all required evidence present: passes check");
     assert.equal(cmdClose(root, {}), 0, "all required evidence present: passes close");
@@ -1081,6 +1082,56 @@ test("check-ci: R07 dirty-check uses NUL porcelain and exact .workflow segment f
         rmSync(join(root, "untracked\nfile.txt"), { force: true });
       } catch {}
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F01 (7): cmdClose с флагом --force записывает событие close в events.jsonl", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-force-close-"));
+  try {
+    cmdStart(root, { tier: "T1", task: "test-force-close" });
+    const code = cmdClose(root, { force: true, reason: "testing force event log" });
+    assert.equal(code, 0);
+    const eventsFile = join(root, ".workflow", "events.jsonl");
+    assert.ok(existsSync(eventsFile), "events.jsonl должен существовать");
+    const lines = readFileSync(eventsFile, "utf8").trim().split("\n").map(l => JSON.parse(l));
+    const closeEvent = lines.find(e => e.kind === "close");
+    assert.ok(closeEvent, "событие kind: 'close' должно присутствовать в events.jsonl");
+    assert.ok(closeEvent.forced, "событие должно быть помечено как forced");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F01 (8): cmdArtifact openspec требует непустые proposal.md и specs/", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-openspec-art-"));
+  try {
+    cmdStart(root, { tier: "T2", task: "test-openspec-validation" });
+    const changeDir = join(root, "openspec", "changes", "test-change");
+    mkdirSync(changeDir, { recursive: true });
+
+    // 1. Папка без proposal.md/specs/ -> отказ
+    writeFileSync(join(changeDir, "dummy.txt"), "hello", "utf8");
+    let res = cmdArtifact(root, { kind: "openspec", path: "openspec/changes/test-change", detail: "test" });
+    assert.equal(res, 1, "папка openspec без proposal.md и specs/ должна отклоняться");
+
+    // 2. Только proposal.md, нет specs/ -> отказ
+    writeFileSync(join(changeDir, "proposal.md"), "# Proposal\n", "utf8");
+    res = cmdArtifact(root, { kind: "openspec", path: "openspec/changes/test-change", detail: "test" });
+    assert.equal(res, 1, "openspec без specs/ должен отклоняться");
+
+    // 3. proposal.md пустой -> отказ
+    mkdirSync(join(changeDir, "specs"), { recursive: true });
+    writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\n", "utf8");
+    writeFileSync(join(changeDir, "proposal.md"), "   \n", "utf8");
+    res = cmdArtifact(root, { kind: "openspec", path: "openspec/changes/test-change", detail: "test" });
+    assert.equal(res, 1, "openspec с пустым proposal.md должен отклоняться");
+
+    // 4. proposal.md и specs/ непустые -> успех
+    writeFileSync(join(changeDir, "proposal.md"), "# Proposal\nValid proposal text\n", "utf8");
+    res = cmdArtifact(root, { kind: "openspec", path: "openspec/changes/test-change", detail: "test" });
+    assert.equal(res, 0, "openspec с валидными proposal.md и specs/ должен регистрироваться");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
