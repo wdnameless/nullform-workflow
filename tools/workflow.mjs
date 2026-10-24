@@ -1235,34 +1235,47 @@ function loadSoftBudgets(root, tier = null) {
  * (91M tokens / 494 calls measured) and refused every close, including in tests that
  * only ran ten tool calls. Consumption is a property of the lane, not of the shell.
  */
+/** Event time, or NaN when the transcript carries none. */
+function eventTimeMs(ev) {
+  const at = ev.timestamp || ev.at || ev.time || ev.message?.timestamp;
+  const t = at ? new Date(at).getTime() : NaN;
+  return Number.isFinite(t) ? t : NaN;
+}
+
+/** Context size recorded on one event. `totalTokens` is the context size AT that
+ * message, not what it spent: summing it over 457 events gave 97M for a session whose
+ * real output was 343K. The budget is a context ceiling, so the metric is the max. */
+function eventContextSize(ev) {
+  const u = ev.message?.usage || ev.data?.usage || ev.usage;
+  if (!u) return 0;
+  return typeof u.totalTokens === "number"
+    ? u.totalTokens
+    : (u.input || 0) + (u.cacheRead || 0) + (u.output || 0);
+}
+
+function isToolCallEvent(ev) {
+  return ev.type === "toolCall" || ev.type === "tool_call" || ev.type === "tool_use";
+}
+
+/** Tool calls carried on one event, from any of the shapes a transcript uses. */
+function eventToolCalls(ev) {
+  if (isToolCallEvent(ev)) return 1;
+  if (Array.isArray(ev.message?.tool_calls)) return ev.message.tool_calls.length;
+  const blk = Array.isArray(ev.message?.content) ? ev.message.content : Array.isArray(ev.content) ? ev.content : null;
+  return blk ? blk.filter((b) => b && (b.type === "toolCall" || b.type === "tool_call" || b.type === "tool_use")).length : 0;
+}
+
 function parseSessionUsage(filePath, sinceMs = 0) {
-  // `tokens` is the CONTEXT SIZE reached in the window, not a sum over turns: the budget
-  // is "session context exceeds ~200K" (AGENTS.md), and summing every turn's prompt gave
-  // 100M for a 317K context. Max, not sum.
   let tokens = 0, calls = 0;
   for (const ev of readJsonlSafe(filePath)) {
     if (!ev || typeof ev !== "object") continue;
     if (sinceMs > 0) {
-      const at = ev.timestamp || ev.at || ev.time || ev.message?.timestamp;
-      const t = at ? new Date(at).getTime() : NaN;
+      const t = eventTimeMs(ev);
       if (Number.isFinite(t) && t < sinceMs) continue;
     }
-    const u = ev.message?.usage || ev.data?.usage || ev.usage;
-    // `totalTokens` is the context size AT that message, not what the message spent:
-    // summing it over 457 events gave 97M for a session whose actual output was 343K.
-    // Tokens spent are input (incl. cache reads) + output, added per event.
-    if (u) {
-      const size = typeof u.totalTokens === "number"
-        ? u.totalTokens
-        : (u.input || 0) + (u.cacheRead || 0) + (u.output || 0);
-      if (size > tokens) tokens = size;
-    }
-    if (ev.type === "toolCall" || ev.type === "tool_call" || ev.type === "tool_use") calls++;
-    else if (Array.isArray(ev.message?.tool_calls)) calls += ev.message.tool_calls.length;
-    else {
-      const blk = Array.isArray(ev.message?.content) ? ev.message.content : Array.isArray(ev.content) ? ev.content : null;
-      if (blk) for (const b of blk) if (b && (b.type === "toolCall" || b.type === "tool_call" || b.type === "tool_use")) calls++;
-    }
+    const size = eventContextSize(ev);
+    if (size > tokens) tokens = size;
+    calls += eventToolCalls(ev);
   }
   return { tokens, calls };
 }
@@ -1313,31 +1326,33 @@ function sessionFileForRoot(root) {
   return null;
 }
 
+/** Which transcript to read, in order of authority: an explicit --sessions path, the
+ * runtime's own file if it belongs to this project, then project-local dirs.
+ *
+ * The global fallback (homedir/.omp/agent/sessions) is deliberately absent: it picked the
+ * newest session of ANY project, so a fresh T0 in a temp dir inherited this repository's
+ * 300K-token context and could not close. Another project's history is not this lane's
+ * consumption.
+ */
+function resolveSessionFile(root, flags = {}) {
+  if (flags.sessions) {
+    const found = findNewestSessionJsonl(resolve(root, String(flags.sessions)));
+    if (found) return found;
+  }
+  const own = sessionFileForRoot(root);
+  if (own) return own;
+  for (const d of [join(root, DIR, "sessions"), join(root, "agent", "sessions"), join(root, "sessions")]) {
+    const found = findNewestSessionJsonl(d);
+    if (found) return found;
+  }
+  return null;
+}
+
 function getSessionConsumption(root, flags = {}) {
   const t = flags.tokens !== undefined ? Number(flags.tokens) : null;
   const c = flags.calls !== undefined ? Number(flags.calls) : null;
   if (t !== null && !Number.isNaN(t) && c !== null && !Number.isNaN(c)) return { tokens: t, calls: c };
-  let sf = null;
-  if (flags.sessions) {
-    const raw = resolve(root, String(flags.sessions));
-    sf = findNewestSessionJsonl(raw);
-  }
-  if (!sf) sf = sessionFileForRoot(root);
-  if (!sf) {
-    // Project-local transcripts only. The global fallback (homedir/.omp/agent/sessions)
-    // picked the newest session of ANY project: a fresh T0 in a temp dir inherited this
-    // repository's 300K-token context and could not close. Global history is not this
-    // lane's consumption.
-    const candidateDirs = [
-      join(root, DIR, "sessions"),
-      join(root, "agent", "sessions"),
-      join(root, "sessions"),
-    ];
-    for (const d of candidateDirs) {
-      const found = findNewestSessionJsonl(d);
-      if (found) { sf = found; break; }
-    }
-  }
+  const sf = resolveSessionFile(root, flags);
   const sinceMs = flags.sinceMs ? Number(flags.sinceMs) : 0;
   const parsed = sf ? parseSessionUsage(sf, Number.isFinite(sinceMs) ? sinceMs : 0) : { tokens: 0, calls: 0 };
   return { tokens: t !== null && !Number.isNaN(t) ? t : parsed.tokens, calls: c !== null && !Number.isNaN(c) ? c : parsed.calls };
