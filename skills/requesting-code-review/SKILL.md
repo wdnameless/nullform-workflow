@@ -105,6 +105,13 @@ evidence protocol (`agent/agents/oracle.md` § EVIDENCE PROTOCOL).
 - **Auditable native provenance**: Review records verify native session execution, nonzero model usage, git revision binding, and manifest hash; they provide auditable execution receipts, not cryptographic attestation or sandbox isolation.
 - **Read-only role**: The reviewer inspects diffs and codebase files using read-only tools; it never applies edits or triggers destructive git actions.
 
+### Trust inversion (agent-PR > hand-PR)
+
+Hand edits bypassing the agent get STRICTER review (30x look per video 52:26–53:11):
+- Hand-authored PRs must strictly follow `.github/pull_request_template.md` including runtime Evidence.
+- A hand-PR without runtime evidence is an automatic **P1** finding (blocking).
+- Never hand-patch typos or code directly without extending the automated check net (e.g. `typos.yml`).
+
 ## Red Flags
 
 **Never:**

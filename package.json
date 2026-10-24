@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wdnameless/nullform-workflow.git"
+    "url": "git+https://github.com/wdnameless/nullform-workflow.git"
   },
   "homepage": "https://github.com/wdnameless/nullform-workflow#readme",
   "bugs": {
@@ -15,6 +15,9 @@
   "bin": {
     "nullform": "bin/nullform.mjs"
   },
+  "scripts": {
+    "lint": "eslint tools/ bin/ bench/checks/"
+  },
   "engines": {
     "node": ">=18.19.0"
   },
@@ -22,6 +25,11 @@
     "json5": "2.2.3",
     "jsonc-parser": "3.3.1",
     "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.21.0",
+    "eslint": "^9.21.0",
+    "globals": "^14.0.0"
   },
   "files": [
     "VERSION",

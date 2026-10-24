@@ -337,6 +337,9 @@ jobs:
         run: |
           node tools/code-size.mjs check --root .
 
+      - name: ESLint strict gate
+        run: npm run lint
+
       - name: Prompt surfaces & cache safety checks
         run: |
           node tools/prompt-lint.mjs scan --root .

@@ -57,3 +57,10 @@ Read when relevant to the task (via `rule://...` / `skill://...` where supported
 - `skill://diagnosing-bugs` — reproducible failure before editing.
 - `skill://codemap` — hierarchical repository cartography (`tools/codemap.mjs`).
 - Tool routing: `codebase-context` / `grep` for discovery; `lsp` for symbols and diagnostics; `context7` for external library docs; `dap-debugger` for interactive debugging.
+
+## 9. CHANGE DISCIPLINE (agent-driven development)
+- Every change starts from an issue/ticket with WHY; PR links it; never reopen a closed issue — open a new one.
+- Red master first: if master/main is red, fix it before starting any feature; never branch from red.
+- Commit per increment: hundreds of tiny commits per day, each green-step documented.
+- No hand edits bypassing the agent: even a typo goes through the agent and gets a checker added (typos.yml exists; extend the net, don't hand-patch).
+- PR body follows `.github/pull_request_template.md` including runtime Evidence.

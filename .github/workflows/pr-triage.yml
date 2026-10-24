@@ -1,0 +1,231 @@
+# Adapted from Yegor Bugayenko's stream (34:04-35:28):
+# automated PR triage policy.
+# Bugfixes (T0/T1) with green checks auto-merge;
+# all feature/heavy PRs hold for review.
+# Conservative triage: dry-run by default,
+# minimal permissions, no reviewer spam.
+---
+# yamllint disable rule:line-length
+name: pr-triage
+
+'on':
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode (log decisions without executing merge or review requests)'
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  contents: read
+
+env:
+  # Set to 'false' to enable autonomous auto-squash merge during scheduled 06:00 UTC runs.
+  # Defaults to 'true' (safe dry-run) until maintainers flip it after observing triage logs.
+  SCHEDULE_DRY_RUN: 'true'
+
+jobs:
+  pr-triage:
+    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Evaluate and Triage PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || env.SCHEDULE_DRY_RUN }}
+        run: |
+          node << 'EOF'
+          const { execFileSync } = require('child_process');
+          const fs = require('fs');
+
+          const isDryRun = String(process.env.INPUT_DRY_RUN).toLowerCase() !== 'false';
+          const repo = process.env.GH_REPO || '';
+          console.log(`Starting PR triage (dry_run: ${isDryRun}, repo: ${repo || 'auto'})...`);
+
+          const ghArgs = ['pr', 'list', '--json', 'number,labels,mergeable,mergeStateStatus,statusCheckRollup,isDraft'];
+          if (repo) {
+            ghArgs.push('--repo', repo);
+          }
+
+          let prs = [];
+          try {
+            const raw = execFileSync('gh', ghArgs, { encoding: 'utf8' });
+            prs = JSON.parse(raw);
+          } catch (err) {
+            console.error(`Failed to list pull requests: ${err.message}`);
+            process.exit(1);
+          }
+
+          console.log(`Discovered ${prs.length} open pull request(s).`);
+
+          const rows = [];
+          for (const pr of prs) {
+            const labelNames = (pr.labels || []).map(l => (typeof l === 'string' ? l : l.name || '')).map(s => s.trim());
+            const hasBugfix = labelNames.some(l => /^bugfix$/i.test(l));
+            const hasTierT0T1 = labelNames.some(l => /^workflow:T[01]$/i.test(l));
+            const hasHoldLabel = labelNames.some(l => /^(hold|do-not-merge|wip)$/i.test(l));
+            const needsHuman = labelNames.some(l => /^needs-human$/i.test(l));
+            const isDraft = Boolean(pr.isDraft) || pr.mergeStateStatus === 'DRAFT';
+
+            const rollup = pr.statusCheckRollup || [];
+            let checksGreen = false;
+            let checksReason = '';
+
+            if (rollup.length === 0) {
+              if (pr.mergeStateStatus === 'CLEAN') {
+                checksGreen = true;
+              } else {
+                checksGreen = false;
+                checksReason = `no completed checks (${pr.mergeStateStatus || 'UNKNOWN'})`;
+              }
+            } else {
+              const failed = [];
+              const pending = [];
+              for (const c of rollup) {
+                const type = c.__typename || '';
+                if (type === 'CheckRun') {
+                  const status = c.status || '';
+                  const conclusion = (c.conclusion || '').toUpperCase();
+                  if (status !== 'COMPLETED') {
+                    pending.push(c.name || 'check');
+                  } else if (!['SUCCESS', 'SKIPPED', 'NEUTRAL'].includes(conclusion)) {
+                    failed.push(`${c.name || 'check'} (${conclusion})`);
+                  }
+                } else if (type === 'StatusContext') {
+                  const state = (c.state || '').toUpperCase();
+                  if (['PENDING', 'EXPECTED'].includes(state)) {
+                    pending.push(c.context || 'context');
+                  } else if (state !== 'SUCCESS') {
+                    failed.push(`${c.context || 'context'} (${state})`);
+                  }
+                }
+              }
+
+              if (failed.length > 0) {
+                checksGreen = false;
+                checksReason = `checks failing: ${failed.slice(0, 2).join(', ')}${failed.length > 2 ? '...' : ''}`;
+              } else if (pending.length > 0) {
+                checksGreen = false;
+                checksReason = `checks pending: ${pending.slice(0, 2).join(', ')}${pending.length > 2 ? '...' : ''}`;
+              } else if (pr.mergeable === 'CONFLICTING' || pr.mergeStateStatus === 'DIRTY') {
+                checksGreen = false;
+                checksReason = 'merge conflicts';
+              } else {
+                checksGreen = true;
+              }
+            }
+
+            const holdReasons = [];
+            if (!hasBugfix) holdReasons.push("missing 'bugfix' label (features hold for review)");
+            if (!hasTierT0T1) holdReasons.push("requires 'workflow:T0' or 'workflow:T1' label");
+            if (hasHoldLabel) holdReasons.push("has hold/do-not-merge label");
+            if (isDraft) holdReasons.push("draft PR");
+            if (!checksGreen) holdReasons.push(checksReason || "checks not green");
+            if (pr.mergeable === 'CONFLICTING') holdReasons.push("merge conflicts");
+
+            if (holdReasons.length === 0) {
+              const decision = isDryRun ? 'WOULD_MERGE' : 'AUTO_MERGED';
+              const reason = 'bugfix (T0/T1) with green checks';
+              rows.push({ pr: `#${pr.number}`, decision, reason });
+
+              if (isDryRun) {
+                console.log(`[DRY RUN] Would execute: gh pr merge ${pr.number} --auto --squash`);
+              } else {
+                try {
+                  const mergeArgs = ['pr', 'merge', String(pr.number), '--auto', '--squash'];
+                  if (repo) mergeArgs.push('--repo', repo);
+                  execFileSync('gh', mergeArgs, { stdio: 'inherit' });
+                  console.log(`Triggered auto-squash merge for PR #${pr.number}`);
+                } catch (err) {
+                  console.error(`Failed to merge PR #${pr.number}: ${err.message}`);
+                }
+              }
+            } else {
+              const decision = 'HOLD';
+              const reason = holdReasons.join('; ');
+              rows.push({ pr: `#${pr.number}`, decision, reason });
+
+              if (isDryRun) {
+                console.log(`[DRY RUN] PR #${pr.number} held: ${reason}`);
+                if (needsHuman) {
+                  console.log(`[DRY RUN] PR #${pr.number} has 'needs-human'; would request review / assign maintainer.`);
+                }
+              } else {
+                // Request review or assign maintainer only if explicitly marked needs-human
+                if (needsHuman) {
+                  try {
+                    const owner = repo ? repo.split('/')[0] : '';
+                    if (owner) {
+                      const editArgs = ['pr', 'edit', String(pr.number), '--add-assignee', owner];
+                      if (repo) editArgs.push('--repo', repo);
+                      execFileSync('gh', editArgs, { stdio: 'inherit' });
+                      console.log(`Assigned maintainer (${owner}) to PR #${pr.number} (needs-human)`);
+                    }
+                  } catch (err) {
+                    console.warn(`Could not add assignee for PR #${pr.number}: ${err.message}`);
+                  }
+                }
+
+                // Check existing comments to avoid repeating hold comments
+                try {
+                  const viewArgs = ['pr', 'view', String(pr.number), '--json', 'comments', '--jq', '.comments[].body'];
+                  if (repo) viewArgs.push('--repo', repo);
+                  const commentsRaw = execFileSync('gh', viewArgs, { encoding: 'utf8' });
+                  if (commentsRaw.includes('<!-- pr-triage -->')) {
+                    console.log(`Skipping triage comment for PR #${pr.number} (comment already exists)`);
+                  } else {
+                    const commentBody = [
+                      '<!-- pr-triage -->',
+                      '### 🤖 Automated PR Triage',
+                      '',
+                      'This pull request is currently on **HOLD**:',
+                      ...holdReasons.map(r => `- ${r}`),
+                      '',
+                      '*Policy: Only green bugfix PRs (`workflow:T0` / `workflow:T1`) are auto-merged. Features and heavier changes hold for human review.*'
+                    ].join('\n');
+                    const commentArgs = ['pr', 'comment', String(pr.number), '--body', commentBody];
+                    if (repo) commentArgs.push('--repo', repo);
+                    execFileSync('gh', commentArgs, { stdio: 'inherit' });
+                    console.log(`Posted triage hold comment on PR #${pr.number}`);
+                  }
+                } catch (err) {
+                  console.warn(`Could not process comment for PR #${pr.number}: ${err.message}`);
+                }
+              }
+            }
+          }
+
+          // Build markdown table for step summary
+          let summaryMarkdown = `### PR Triage Decisions\n\n> Mode: **${isDryRun ? 'Dry Run' : 'Live Run'}**\n\n`;
+          if (rows.length === 0) {
+            summaryMarkdown += 'No open pull requests found.\n';
+          } else {
+            summaryMarkdown += '| PR | Decision | Reason |\n| --- | --- | --- |\n';
+            for (const r of rows) {
+              summaryMarkdown += `| ${r.pr} | **${r.decision}** | ${r.reason} |\n`;
+            }
+          }
+
+          console.log('\nDecision Summary:');
+          console.table(rows);
+
+          const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+          if (summaryFile) {
+            try {
+              fs.appendFileSync(summaryFile, summaryMarkdown + '\n', 'utf8');
+              console.log('Appended decision summary to $GITHUB_STEP_SUMMARY.');
+            } catch (err) {
+              console.warn(`Could not write to GITHUB_STEP_SUMMARY: ${err.message}`);
+            }
+          }
+          EOF
