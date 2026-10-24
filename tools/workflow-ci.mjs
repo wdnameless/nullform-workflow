@@ -90,7 +90,7 @@ function validateCheckCiT1(root, flags, baseRef) {
   return 0;
 }
 
-export function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
+export function validateCheckCiGit(root, oracleRelForCommit, baseRef, relChangeScope = null) {
   const hasGit = isInsideGitRepo(root);
   if (!hasGit) {
     console.log("workflow check-ci: non-git repository; skipping git verification.");
@@ -137,6 +137,12 @@ export function validateCheckCiGit(root, oracleRelForCommit, baseRef) {
         let changedFiles = postOracleDiff.split("\n")
           .map((f) => f.trim().replace(/\\/g, "/"))
           .filter((f) => f && !isWorkflowPath(f));
+        // Only files belonging to THIS change can taint its own acceptance. A later
+        // commit touching unrelated changes or sources is a different change's
+        // business; comparing against HEAD made archived acceptances permanently red
+        // exactly like the evidence hashes did (W01/R03).
+        const relScope = String(relChangeScope || "").replace(/\\/g, "/");
+        if (relScope) changedFiles = changedFiles.filter((f) => f === relScope || f.startsWith(`${relScope}/`));
         if (baseRef) {
           const res = resolveChangedFilesAgainstBase(root, baseRef);
           if (res.ok) changedFiles = changedFiles.filter((f) => new Set(res.changedFiles).has(f));
@@ -688,7 +694,16 @@ export function cmdCheckCi(root, flags = {}) {
   // already walks commit history from the oracle acceptance commit forward,
   // so a second call on review-evidence.json only repeats subprocess work
   // and fails spuriously on sequential oracle commits.
-  const gitCode = validateCheckCiGit(root, oracleRelForCommit || join(relChangeDir, "review-evidence.json"), baseRef);
+  // When evidence is validated at a historical revision (push gate), the
+  // "modified after acceptance" scan is scoped to this change's own directory:
+  // a later commit touching unrelated files cannot taint an archived acceptance.
+  const evidenceRevision = flags['evidence-revision'] ? String(flags['evidence-revision']) : null;
+  const gitCode = validateCheckCiGit(
+    root,
+    oracleRelForCommit || join(relChangeDir, "review-evidence.json"),
+    baseRef,
+    evidenceRevision ? relChangeDir : null,
+  );
   if (gitCode !== 0) return gitCode;
   if (!flags["skip-quality"] && !flags.skipQuality) {
     const qg = checkQualityGates(root, flags);
