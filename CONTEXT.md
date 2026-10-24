@@ -153,6 +153,16 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Disabled skill** — a skill named in `~/.agents/.skills-disabled.json` (an operator's stop-list). `tools/skills-doctor.mjs` reports it as `disabled by operator` and excludes it from orphan/parity problems. Distinct from a *dropped* skill, which the registry discards by accident.
 - **Prune** — `tools/sync.ps1 -Prune` / `tools/sync.sh --prune`: lists harness files absent from the repo within manifest-covered directories (dry-run by default), deleting only with `-Confirm` / `--confirm`; never touches `.prompt-lint`, `.workflow`, `node_modules`, `worktrees`, session or config files.
 - **Code-size gate** — `tools/code-size.mjs check` limits growth beyond the committed `.code-size.baseline.json`; new oversize files/functions fail, while a `defer:` marker in the header is an explicit, reported exemption. It measures line count, not coupling or cognitive complexity.
+- **Quality gate** — `tools/quality.mjs`, also `nullform quality`. Picks a static
+  analyzer from `.quality/stacks.json` by stack markers and holds cognitive complexity
+  (COCO) at `.quality-baseline.json`. Distinct from the *code-size gate*: that counts
+  lines, this counts nesting-weighted control flow, and neither substitutes for the other.
+  A recorded COCO value may only fall (`baseline` re-seeds with the lower of the two); an
+  analyzer that did not run is reported `unverified`, never `pass`.
+- **Proxy metric** — a stack row whose analyzer does not compute Sonar-style COCO
+  (RuboCop `PerceivedComplexity`, SwiftLint `cyclomatic_complexity`). Declared
+  `coco: "proxy"` with the real metric named; its numbers are never compared with a
+  `native` stack's, and only violation counts travel between stacks.
 - **Glossary tool** — `tools/glossary.mjs`. Drafts `CONTEXT.md` from real symbols
   and measures which public symbols are still undocumented. Never invents a
   definition; `--scope` keeps vendored tooling out of the project's glossary.

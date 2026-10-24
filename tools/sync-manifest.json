@@ -307,5 +307,14 @@
   },
   {
     "rel": "tools/run-skill-benefit-eval.mjs"
+  },
+  {
+    "rel": "tools/quality.mjs"
+  },
+  {
+    "rel": "tools/quality/parsers.mjs"
+  },
+  {
+    "rel": "tools/quality/stacks.json"
   }
 ]

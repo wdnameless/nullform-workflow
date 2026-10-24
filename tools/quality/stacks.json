@@ -1,0 +1,371 @@
+{
+  "_schema": {
+    "id": "adapter identity, also the --stack value",
+    "markers": "project-relative globs; the first match is quoted as evidence by detect",
+    "coco": "native = Sonar-style cognitive complexity; proxy = a DIFFERENT metric, scores not comparable; none = absent",
+    "metric": "the honest name of what coco actually measures",
+    "threshold": "default limit; the ratchet baseline is separate, in .quality-baseline.json",
+    "run.argv": "tokens {root} {quality} {python} {files...}; {files...} means the analyzer accepts a file list (needed by check --changed)",
+    "run.parser": "key into tools/quality/parsers.mjs PARSERS",
+    "install": "argv run by `quality install` to add the analyzer; whenPresent.marker + argv keeps an existing peer tool untouched (a project on eslint 8 must not be forced onto 9)",
+    "configs": "sidecar files written under .quality/<id>/ - harness-owned; the project's own config is never rewritten",
+    "env": "extra environment for run.argv, {quality} substitued",
+    "verifiedOn": "version actually executed while building this adapter; null = unproven on the development host",
+    "install.requiresVenv": "true = never install into the host interpreter; the gate reports what to run instead when no project venv exists"
+  },
+  "schemaVersion": 1,
+  "defaults": {
+    "baselineFile": ".quality-baseline.json",
+    "sidecarDir": ".quality"
+  },
+  "stacks": [
+    {
+      "id": "node",
+      "display": "JavaScript / TypeScript",
+      "markers": [
+        "package.json",
+        "tsconfig.json",
+        "*.tsx",
+        "*.jsx",
+        "*.cjs",
+        "*.mjs"
+      ],
+      "coco": "native",
+      "metric": "SonarSource cognitive complexity (eslint-plugin-sonarjs)",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "node_modules/eslint/bin/eslint.js",
+          "--no-config-lookup",
+          "-c",
+          "{quality}/node/eslint.config.mjs",
+          "-f",
+          "json",
+          "{files...}"
+        ],
+        "parser": "eslint-json"
+      },
+      "install": {
+        "argv": [
+          "npm",
+          "install",
+          "--save-dev",
+          "eslint@9.39.5",
+          "eslint-plugin-sonarjs@4.2.2"
+        ],
+        "whenPresent": {
+          "marker": "node_modules/eslint",
+          "argv": [
+            "npm",
+            "install",
+            "--save-dev",
+            "eslint-plugin-sonarjs@4.2.2"
+          ]
+        }
+      },
+      "configs": {
+        "node/eslint.config.mjs": "eslint-sonarjs"
+      },
+      "verifiedOn": "eslint 9.39.5 + eslint-plugin-sonarjs 4.2.2"
+    },
+    {
+      "id": "python",
+      "display": "Python",
+      "markers": [
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "requirements.txt",
+        "*.py"
+      ],
+      "coco": "native",
+      "metric": "SonarSource cognitive complexity (pylint-cognitive-complexity R7001)",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "{python}",
+          "-m",
+          "pylint",
+          "--rcfile",
+          "{quality}/python/pylintrc",
+          "--load-plugins=pylint_cognitive_complexity",
+          "--disable=all",
+          "--enable=too-cognitively-complex",
+          "--output-format=json",
+          "{files...}"
+        ],
+        "parser": "pylint-json"
+      },
+      "install": {
+        "argv": [
+          "{python}",
+          "-m",
+          "pip",
+          "install",
+          "pylint==4.1.3",
+          "pylint-cognitive-complexity==0.1.1"
+        ],
+        "requiresVenv": true
+      },
+      "configs": {
+        "python/pylintrc": "pylint-coco"
+      },
+      "verifiedOn": "pylint 4.1.3 + pylint-cognitive-complexity 0.1.1"
+    },
+    {
+      "id": "rust",
+      "display": "Rust",
+      "markers": [
+        "Cargo.toml"
+      ],
+      "coco": "native",
+      "metric": "clippy::cognitive_complexity (allow-by-default restriction lint)",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "cargo",
+          "clippy",
+          "--quiet",
+          "--message-format",
+          "json",
+          "--",
+          "-W",
+          "clippy::cognitive_complexity"
+        ],
+        "parser": "cargo-json"
+      },
+      "install": null,
+      "configs": {
+        "rust/clippy.toml": "clippy-threshold"
+      },
+      "env": {
+        "CLIPPY_CONF_DIR": "{quality}/rust"
+      },
+      "verifiedOn": "cargo/clippy 1.98.0"
+    },
+    {
+      "id": "go",
+      "display": "Go",
+      "markers": [
+        "go.mod"
+      ],
+      "coco": "native",
+      "metric": "gocognit (via golangci-lint)",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "golangci-lint",
+          "run",
+          "-c",
+          "{quality}/go/.golangci.yml",
+          "--output.json.path",
+          "stdout"
+        ],
+        "parser": "golangci-json"
+      },
+      "install": {
+        "argv": [
+          "go",
+          "install",
+          "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6"
+        ]
+      },
+      "configs": {
+        "go/.golangci.yml": "golangci-gocognit"
+      },
+      "verifiedOn": null
+    },
+    {
+      "id": "java",
+      "display": "Java",
+      "markers": [
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts"
+      ],
+      "coco": "native",
+      "metric": "PMD CognitiveComplexity (Java rule since 6.35.0)",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "pmd",
+          "check",
+          "-d",
+          "{root}",
+          "-R",
+          "{quality}/java/ruleset.xml",
+          "-f",
+          "sarif",
+          "-r",
+          "-"
+        ],
+        "parser": "sarif"
+      },
+      "install": null,
+      "configs": {
+        "java/ruleset.xml": "pmd-ruleset"
+      },
+      "verifiedOn": null
+    },
+    {
+      "id": "kotlin",
+      "display": "Kotlin",
+      "markers": [
+        "build.gradle.kts",
+        "settings.gradle.kts"
+      ],
+      "coco": "native",
+      "metric": "detekt CognitiveComplexMethod",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "detekt",
+          "--input",
+          "{root}",
+          "--config",
+          "{quality}/kotlin/detekt.yml",
+          "--report",
+          "sarif:{quality}/kotlin/report.sarif"
+        ],
+        "parser": "sarif"
+      },
+      "install": null,
+      "configs": {
+        "kotlin/detekt.yml": "detekt-coco"
+      },
+      "verifiedOn": null
+    },
+    {
+      "id": "csharp",
+      "display": "C# / .NET",
+      "markers": [
+        "*.csproj",
+        "*.sln",
+        "Directory.Build.props"
+      ],
+      "coco": "native",
+      "metric": "SonarAnalyzer.CSharp S3776",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "dotnet",
+          "build",
+          "-t:Rebuild",
+          "-v",
+          "quiet",
+          "--nologo"
+        ],
+        "parser": "dotnet-text"
+      },
+      "install": {
+        "argv": [
+          "dotnet",
+          "add",
+          "package",
+          "SonarAnalyzer.CSharp",
+          "--version",
+          "10.35.0.4138"
+        ]
+      },
+      "configs": {
+        "csharp/.editorconfig": "editorconfig-s3776"
+      },
+      "managedBlock": ".editorconfig",
+      "verifiedOn": "SonarAnalyzer.CSharp 10.35.0.4138 / .NET SDK 8.0.416"
+    },
+    {
+      "id": "php",
+      "display": "PHP",
+      "markers": [
+        "composer.json"
+      ],
+      "coco": "native",
+      "metric": "TomasVotruba/cognitive-complexity (PHPStan rule) — PHPMD has no COCO rule",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "vendor/bin/phpstan",
+          "analyse",
+          "-c",
+          "{quality}/php/phpstan.neon",
+          "--error-format=json",
+          "{root}"
+        ],
+        "parser": "phpstan-json"
+      },
+      "install": {
+        "argv": [
+          "composer",
+          "require",
+          "--dev",
+          "phpstan/phpstan",
+          "tomasvotruba/cognitive-complexity"
+        ]
+      },
+      "configs": {
+        "php/phpstan.neon": "phpstan-coco"
+      },
+      "verifiedOn": null
+    },
+    {
+      "id": "ruby",
+      "display": "Ruby",
+      "markers": [
+        "Gemfile",
+        "*.gemspec",
+        "Rakefile"
+      ],
+      "coco": "proxy",
+      "metric": "RuboCop Metrics/PerceivedComplexity — PERCEIVED, not Sonar COCO",
+      "threshold": 15,
+      "run": {
+        "argv": [
+          "bundle",
+          "exec",
+          "rubocop",
+          "-c",
+          "{quality}/ruby/.rubocop.yml",
+          "--format",
+          "json",
+          "--only",
+          "Metrics/PerceivedComplexity",
+          "{files...}"
+        ],
+        "parser": "rubocop-json"
+      },
+      "install": null,
+      "configs": {
+        "ruby/.rubocop.yml": "rubocop-perceived"
+      },
+      "verifiedOn": null
+    },
+    {
+      "id": "swift",
+      "display": "Swift",
+      "markers": [
+        "Package.swift",
+        "*.xcodeproj"
+      ],
+      "coco": "proxy",
+      "metric": "SwiftLint cyclomatic_complexity — CYCLOMATIC, not cognitive",
+      "threshold": 20,
+      "run": {
+        "argv": [
+          "swiftlint",
+          "lint",
+          "--config",
+          "{quality}/swift/.swiftlint.yml",
+          "--reporter",
+          "json",
+          "--quiet"
+        ],
+        "parser": "swiftlint-json"
+      },
+      "install": null,
+      "configs": {
+        "swift/.swiftlint.yml": "swiftlint-cyclomatic"
+      },
+      "verifiedOn": null
+    }
+  ]
+}

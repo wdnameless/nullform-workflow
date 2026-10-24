@@ -344,6 +344,23 @@ jobs:
       - name: ESLint strict gate
         run: npm run lint
 
+      - name: Cognitive complexity ratchet
+        # The Node analyzer is a devDependency, so `npm ci` already provides it. The Python
+        # rows need pylint + the COCO plugin, which are NOT harness dependencies: install
+        # them into a throwaway venv on this disposable runner (never into a developer
+        # machine — that is what --allow-host-install exists for and why it is explicit).
+        #
+        # Only GROWTH past a baselined COCO, or a NEW offender above the threshold, fails.
+        # An analyzer that cannot run exits 1 as "unverified", never 0.
+        run: |
+          if [ ! -f .quality-baseline.json ]; then
+            echo "no .quality-baseline.json: quality gate not opted in, skipping"
+            exit 0
+          fi
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --quiet pylint==4.1.3 pylint-cognitive-complexity==0.1.1
+          QUALITY_PYTHON=.venv/bin/python node tools/quality.mjs check --root .
+
       - name: Agent definition lint
         # Replaces agnix: it validated tool names against the Claude convention while
         # this harness's canon is the OMP vocabulary (read/bash), so it reported

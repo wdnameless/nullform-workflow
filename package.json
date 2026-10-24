@@ -16,7 +16,9 @@
     "nullform": "bin/nullform.mjs"
   },
   "scripts": {
-    "lint": "eslint tools/ bin/ bench/checks/"
+    "lint": "eslint tools/ bin/ bench/checks/",
+    "quality": "node tools/quality.mjs check",
+    "quality:baseline": "node tools/quality.mjs baseline"
   },
   "engines": {
     "node": ">=18.19.0"
@@ -29,6 +31,7 @@
   "devDependencies": {
     "@eslint/js": "^9.21.0",
     "eslint": "^9.21.0",
+    "eslint-plugin-sonarjs": "^4.2.2",
     "globals": "^14.0.0"
   },
   "files": [
@@ -64,6 +67,7 @@
     "tools/review/**",
     "tools/installation/**",
     "tools/workflow/**",
+    "tools/quality/**",
     "!tools/**/tests/**",
     "tools/sync-manifest.json",
     "!tools/npm-smoke.mjs",
