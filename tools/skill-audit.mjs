@@ -13,6 +13,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname, relative } from "node:path";
 
+const ENTRY_POINT_EXT = new Set([".py", ".cjs", ".mjs", ".js", ".sh", ".ps1", ".ts"]);
+
 /**
  * Extracts Markdown body excluding YAML frontmatter.
  * Normalizes Windows CRLF and strips optional UTF-8 BOM.
@@ -148,6 +150,59 @@ function hasNavigableHeadingIndex(content) {
   }
   const internalAnchorLinks = clean.match(/\[[^\]]+\]\(#[a-zA-Z0-9_-]+\)/g);
   return Boolean(internalAnchorLinks && internalAnchorLinks.length >= 2);
+}
+
+/**
+ * True when `relPath` (skill-relative) is reachable from the entry point: named
+ * directly, named by basename, or listed by a catalog INDEX the body points at.
+ * A directory mention alone is not enough — an index that mentions the folder but
+ * omits the file lists nothing the reader can act on.
+ *
+ * Skills address their own files two ways: `[x](references/y.md)` and
+ * `` `references/y.md` `` in a "load this first" line or a command. Counting only
+ * markdown links made 121 of 123 shipped reference files look unreachable.
+ */
+export function isPathReachable(body, relPath, { indexText = null } = {}) {
+  const clean = stripFencedBlocks(body);
+  const slash = relPath.lastIndexOf("/");
+  const dir = slash === -1 ? "" : relPath.slice(0, slash + 1);
+  const base = relPath.slice(slash + 1);
+  if (clean.includes(relPath)) return true;
+  if (base && clean.includes(base)) return true;
+  if (!indexText || !dir) return false;
+  if (!clean.includes(dir)) return false;
+  return indexText.includes(base);
+}
+
+/**
+ * Every regular file under `dir`, optionally filtered by extension. Skips
+ * `__pycache__` and dotfiles: those are build residue, not skill resources.
+ */
+function collectFiles(dir, ext) {
+  const out = [];
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "__pycache__" || entry.name.startsWith(".")) continue;
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (ext && !entry.name.endsWith(ext)) continue;
+      out.push(full);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+function readTextOrNull(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -334,26 +389,68 @@ export function auditSkillFile(skillDir, options = {}) {
   }
 
   // Check 5: Direct resource discovery for files in references/
+  // Recursive: nested catalogs (references/verbs/, references/style-recipes/) are real
+  // resources, and the old flat scan never saw them at all.
   const referencesDir = join(skillDir, "references");
   if (existsSync(referencesDir) && statSync(referencesDir).isDirectory()) {
     try {
-      const dirEntries = readdirSync(referencesDir, { withFileTypes: true });
-      for (const ent of dirEntries) {
-        if (ent.isFile() && ent.name.endsWith(".md")) {
-          const fullPath = resolve(referencesDir, ent.name);
-          if (!directReferences.has(fullPath)) {
-            findings.push({
-              skill: skillName,
-              file: fullPath,
-              type: "recommendation",
-              rule: "resource-discovery",
-              message: `Reference file 'references/${ent.name}' is not directly referenced from SKILL.md`,
-            });
-          }
-        }
+      for (const fullPath of collectFiles(referencesDir, ".md")) {
+        const relPath = relative(skillDir, fullPath).replace(/\\/g, "/");
+        const dirRel = `${relPath.slice(0, relPath.lastIndexOf("/"))}/`;
+        const indexText = ["INDEX.md", "README.md"]
+          .map((name) => readTextOrNull(join(skillDir, dirRel, name)))
+          .filter(Boolean)
+          .join("\n");
+        if (isPathReachable(rawContent, relPath, { indexText: indexText || null })) continue;
+        findings.push({
+          skill: skillName,
+          file: fullPath,
+          type: "recommendation",
+          rule: "resource-discovery",
+          message: `Reference file '${relPath}' is not referenced from SKILL.md (by path, basename, or a listing index)`,
+        });
       }
     } catch {
       // Ignore unreadable references dir
+    }
+  }
+
+  // Check 6: scripts/ and assets/ entry points nobody names. A script shipped in a
+  // skill but mentioned in no file of that skill cannot be reached by a prompt, so
+  // it is dead weight the registry still carries. Test files, fixtures and dependency
+  // manifests are not prompt resources — flagging them buries the real orphans.
+  for (const dirName of ["scripts", "assets"]) {
+    const dir = join(skillDir, dirName);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
+    let corpus = rawContent;
+    try {
+      for (const f of collectFiles(skillDir, null)) {
+        if (f === skillFile) continue;
+        if (statSync(f).size > 512 * 1024) continue;
+        try { corpus += `\n${readFileSync(f, "utf8")}`; } catch { /* binary or unreadable */ }
+      }
+    } catch { /* keep SKILL body only */ }
+    for (const fullPath of collectFiles(dir, null)) {
+      const relPath = relative(skillDir, fullPath).replace(/\\/g, "/");
+      const name = relPath.slice(relPath.lastIndexOf("/") + 1);
+      if (name.startsWith("_") || name.startsWith(".")) continue;
+      if (!ENTRY_POINT_EXT.has(name.slice(name.lastIndexOf(".")))) continue;
+      if (relPath.split("/").some((part) => part === "tests" || part === "fixtures")) continue;
+      const self = readTextOrNull(fullPath);
+      if (self === null) continue;
+      // Subtract the file's own text: a script naming itself is not discovery.
+      const mentioned = [corpus, ...[]].some((text) => {
+        const withoutSelf = text.replace(self, "");
+        return withoutSelf.includes(relPath) || withoutSelf.includes(name);
+      });
+      if (mentioned) continue;
+      findings.push({
+        skill: skillName,
+        file: fullPath,
+        type: "recommendation",
+        rule: "resource-discovery",
+        message: `File '${relPath}' is not named by any file in this skill`,
+      });
     }
   }
 
@@ -429,7 +526,9 @@ export function auditSkills(root, options = {}) {
 /**
  * CLI command runner for prompt-lint skills command.
  */
-export function cmdSkills(root, home, asJson, checkMode) {
+export function cmdSkills(root, asJson, checkMode) {
+  // `home` used to sit in this signature and was never read: the audit is scoped to
+  // the repository's own skills, and installed-copy health is skills-doctor's job.
   const res = auditSkills(root);
 
   if (asJson) {

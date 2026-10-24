@@ -666,7 +666,7 @@ function main(argv = process.argv.slice(2)) {
     case "check":       return cmdCheck(root, home);
     case "fingerprint": return cmdFingerprint(root, home, args.json);
     case "sizes":       return cmdSizes(root, home, args.json, args.check);
-    case "skills":      return cmdSkills(root, home, args.json, args.check);
+    case "skills":      return cmdSkills(root, args.json, args.check);
     case undefined:     printUsage();
                         return 0;
     default:

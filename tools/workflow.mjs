@@ -70,6 +70,10 @@ const DEFAULT_BUDGETS = { T0: 10, T1: 25, T2: 45, T3: 45 };
 const BUDGET_WARN_RATIO = 0.8;
 const BUDGET_WARN_DEFAULT_TOKENS = 200_000;
 const BUDGET_WARN_DEFAULT_CALLS = 45;
+// Acceptance vocabulary for a lane whose label promises an "acceptance check".
+// Deliberately narrow to evidence words, not intent words like "plan"/"map":
+// 39 of 65 historical recon notes named files and never said how done is proven.
+const ACCEPTANCE_RE = /(accept|verif|check|prove|proof|proven|test(?:s|ed)?\b|pass(?:es|ed)?\b|green|criteria|criterion|exit\s*code|repro|assert|smoke|suite|\d+\s*\/\s*\d+|провер|приёмк|приемк|критери|тест|готов)/i;
 
 
 // Ordered: each tier inherits every requirement below it.
@@ -82,7 +86,10 @@ const REQUIREMENTS = {
   T1: [
     // minDetail: a one-word "done" is what makes a gate decorative. The floor is
     // low on purpose - enough that the field cannot be satisfied by accident.
-    { kind: "recon", label: "recon notes: files touched + acceptance check", path: null, minDetail: 20 },
+    // detailMustContain: the label promises an acceptance check, and length alone
+    // accepted "recon done: mapped boundaries and files" - a note that says where
+    // you looked and never how you would know the work finished.
+    { kind: "recon", label: "recon notes: files touched + acceptance check", path: null, minDetail: 20, detailMustContain: ACCEPTANCE_RE },
   ],
   T2: [
     { kind: "manifest", label: "manifest.md with R## rows + verbatim user quotes", path: "openspec/changes/<name>/manifest.md", requiresPath: true, mustContain: /R\d\d/ },
@@ -394,6 +401,28 @@ function cmdMetrics(root) {
   console.log(`Медианная длительность: ${medMs} мс`);
   console.log(`Force-закрытий: ${forcedCount}`);
   console.log(`Авто-режимов: ${autoCount}`);
+
+  // Without this list the only durable record of WHY a lane was force-closed was
+  // state.json, which the next `start` overwrites. Repeating a shortcut three times
+  // therefore never surfaced as "fix the playbook" — it just looked like normal work.
+  const forced = list.filter((m) => m.forced);
+  if (forced.length) {
+    const byReason = new Map();
+    for (const m of forced) {
+      const reason = String(m.reason || "(reason not recorded)").trim();
+      byReason.set(reason, (byReason.get(reason) || 0) + 1);
+    }
+    const ranked = [...byReason.entries()].sort((a, b) => b[1] - a[1]);
+    console.log("Причины force-закрытий:");
+    for (const [reason, count] of ranked.slice(0, 10)) {
+      console.log(`  ${count}x ${reason.length > 120 ? `${reason.slice(0, 117)}...` : reason}`);
+    }
+    const repeated = ranked.filter(([, count]) => count > 1);
+    if (repeated.length) {
+      console.log(`  повторяются: ${repeated.map(([r, c]) => `${c}x "${r.length > 60 ? `${r.slice(0, 57)}...` : r}"`).join("; ")}`);
+      console.log("  повтор — сигнал править skill/rule, а не закрывать заново");
+    }
+  }
   return 0;
 }
 /* ------------------------------------------------------------------- suggest */
@@ -832,6 +861,14 @@ function validateArtifacts(root, st) {
       continue;
     }
 
+    // A note-only artifact has no file to test, so `check` is the only place its
+    // contract can be enforced. Recording without re-validating made the gate
+    // decorative again for any state written by hand or by an older build.
+    if (r.detailMustContain && !r.detailMustContain.test(String(a.detail || ""))) {
+      invalid.push(`${r.kind}: note records no acceptance evidence (expected ${r.detailMustContain})`);
+      continue;
+    }
+
     if (r.requiresPath || a.path) {
       if (!a.path) {
         invalid.push(`${r.kind}: missing required file path`);
@@ -988,6 +1025,14 @@ function cmdArtifact(root, flags) {
     if (req.minDetail && detail && req.mustContain && /ACCEPT|REJECT/i.test(String(req.mustContain)) && !req.mustContain.test(detail)) {
       console.error(`workflow: ${kind} must state the outcome — expected ${req.mustContain}.`);
       console.error(`  e.g. --detail "ACCEPT: verified X and Y, no gaps"`);
+      return 1;
+    }
+    // For a note whose contract is "acceptance check", the free text IS the artifact:
+    // there is no file to test. 39 of 65 historical recon notes listed files and never
+    // said how completion would be proven, which is what made the T1 gate decorative.
+    if (req.detailMustContain && detail && !req.detailMustContain.test(detail)) {
+      console.error(`workflow: ${kind} must name how the work is checked — got no acceptance evidence.`);
+      console.error(`  e.g. --detail "files a.mjs,b.mjs; acceptance: node --test tools/tests/x.test.mjs passes"`);
       return 1;
     }
 

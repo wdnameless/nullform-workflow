@@ -337,3 +337,51 @@ test("concurrency: 2 processes recording artifacts concurrently do not overwrite
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("forced close records why, and metrics surfaces repeated reasons", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-test-reason-"));
+  try {
+    // The reason used to live only in state.json, which the next `start` replaces.
+    // A shortcut repeated three times then left no trace to correct the playbook from.
+    for (const task of ["first", "second"]) {
+      assert.equal(cmdStart(tmp, { tier: "T2", task }), 0);
+      assert.equal(cmdClose(tmp, { force: true, reason: "docs not written yet" }), 0);
+    }
+    assert.equal(cmdStart(tmp, { tier: "T1", task: "replaced" }), 0);
+    assert.equal(cmdStart(tmp, { tier: "T1", task: "replacement", force: true, reason: "lane abandoned by a dead session" }), 0);
+
+    const records = loadMetrics(tmp);
+    assert.equal(records.length, 2, "an unfinished replacement writes no terminal metric");
+    assert.equal(records[0].reason, "docs not written yet");
+    assert.equal(records[0].deviationKind, "incomplete-close");
+    assert.equal(records[1].reason, "docs not written yet");
+
+    const logs = [];
+    const origLog = console.log;
+    console.log = (...args) => logs.push(args.join(" "));
+    try {
+      assert.equal(cmdMetrics(tmp), 0);
+    } finally {
+      console.log = origLog;
+    }
+    const output = logs.join("\n");
+    assert.match(output, /Причины force-закрытий:/);
+    assert.match(output, /2x docs not written yet/, "identical reasons must aggregate, not repeat as separate rows");
+    assert.match(output, /повторяются/, "a repeated reason must be called out as a playbook signal");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("honest closes carry no reason field", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "wf-test-noreason-"));
+  try {
+    assert.equal(cmdStart(tmp, { tier: "T0", task: "clean" }), 0);
+    assert.equal(cmdClose(tmp, {}), 0);
+    const rec = loadMetrics(tmp)[0];
+    assert.equal(rec.forced, false);
+    assert.equal("reason" in rec, false, "an honest close must not invent a deviation reason");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

@@ -17,6 +17,7 @@ import {
   cmdClose,
   cmdCheckCi,
   load,
+  save,
 } from "../workflow.mjs";
 import { writeEvidence as writeValidEvidence, prepareEvidence } from "./fixtures/review-execution.mjs";
 
@@ -86,7 +87,7 @@ test("gate: shared validator ensures cmdCheck and cmdClose agree when manifest i
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "empty-manifest" });
 
-    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" }), 0);
     assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
     assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
     assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
@@ -109,7 +110,7 @@ test("gate: T2 rejects negative oracle verdict at close", () => {
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "negative-oracle" });
 
-    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" }), 0);
     assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
     assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
     assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
@@ -134,7 +135,7 @@ test("gate: retained evidence check refuses close if artifact file is deleted be
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "deleted-artifact" });
 
-    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" }), 0);
     assert.equal(cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" }), 0);
     assert.equal(cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" }), 0);
     assert.equal(cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" }), 0);
@@ -380,7 +381,7 @@ test("escalate: monotonic tier escalation preserves task identity, start time, a
   const root = mkdtempSync(join(tmpdir(), "wf-gate-escalate-"));
   try {
     cmdStart(root, { tier: "T1", task: "investigate module" });
-    assert.equal(cmdArtifact(root, { kind: "recon", detail: "detailed recon of module dependencies" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "detailed recon of module dependencies; acceptance: escalation keeps prior evidence" }), 0);
 
     const initialSt = load(root);
     assert.equal(initialSt.tier, "T1");
@@ -395,7 +396,7 @@ test("escalate: monotonic tier escalation preserves task identity, start time, a
     assert.equal(escalatedSt.task, "investigate module", "task identity must be preserved");
     assert.equal(escalatedSt.startedAt, initialSt.startedAt, "start time must be preserved");
     assert.ok(escalatedSt.artifacts.recon, "prior recon evidence must be retained");
-    assert.equal(escalatedSt.artifacts.recon.detail, "detailed recon of module dependencies");
+    assert.equal(escalatedSt.artifacts.recon.detail, "detailed recon of module dependencies; acceptance: escalation keeps prior evidence");
 
     // Monotonic check: escalating to lower or same tier must be rejected
     assert.equal(cmdEscalate(root, { tier: "T1" }), 1, "escalating down to T1 must be rejected");
@@ -607,7 +608,7 @@ test("local T2: refuses while proposal/tasks/specs/oracle file are absent", () =
     writeFileSync(join(root, "manifest.md"), "| R01 | quote |\n", "utf8");
     writeFileSync(join(root, "interfaces.md"), "# Interfaces\n- fn(): void\n", "utf8");
     cmdStart(root, { tier: "T2", task: "align-t2-test" });
-    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" });
+    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" });
     cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from brief" });
     cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/align-feat", detail: "change proposal scaffolded and validated" });
@@ -692,7 +693,7 @@ test("gate: local check/close refuse when explicit oracle ACCEPT has sibling REJ
   try {
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "sibling-reject" });
-    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" });
+    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" });
     cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" });
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" });
     cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
@@ -737,7 +738,7 @@ test("gate: local check/close refuse borrowing positive oracle --path from anoth
   try {
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "borrow-accept" });
-    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" });
+    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" });
     cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" });
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" });
     cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
@@ -889,7 +890,7 @@ test("gate: local check/close and CI refuse Markdown-bold **Verdict:** REJECT si
     git("init", "-q", ".");
     setupT2(root);
     cmdStart(root, { tier: "T2", task: "bold-reject-test" });
-    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files" });
+    cmdArtifact(root, { kind: "recon", detail: "recon finished: mapped boundaries and files; acceptance: focused suite passes" });
     cmdArtifact(root, { kind: "manifest", path: "manifest.md", detail: "captured R01 verbatim from the brief" });
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal scaffolded and validated" });
     cmdArtifact(root, { kind: "interfaces", path: "interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
@@ -1137,3 +1138,35 @@ test("F01 (8): cmdArtifact openspec требует непустые proposal.md 
   }
 });
 
+
+test("T1 recon: an acceptance check is required, not just a file list", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-recon-accept-"));
+  try {
+    cmdStart(root, { tier: "T1", task: "recon acceptance" });
+
+    // Historical notes looked like this: where the agent looked, never how completion
+    // would be proven. Length alone accepted it, so the T1 gate recorded nothing useful.
+    assert.equal(
+      cmdArtifact(root, { kind: "recon", detail: "Files touched: tools/workflow.mjs and tools/sync.mjs" }),
+      1,
+      "a file list without acceptance evidence must be refused",
+    );
+    assert.equal(load(root).artifacts.recon, undefined, "refused recon must not be recorded");
+    assert.equal(cmdCheck(root), 1, "T1 stays incomplete without recon");
+
+    assert.equal(
+      cmdArtifact(root, { kind: "recon", detail: "Files: tools/workflow.mjs; acceptance: node --test tools/tests/workflow-metrics.test.mjs passes" }),
+      0,
+      "recon naming its acceptance check must record",
+    );
+    assert.equal(cmdCheck(root), 0, "T1 is complete once recon carries acceptance evidence");
+
+    // A state written by hand or by an older build must not pass the gate either.
+    const st = load(root);
+    st.artifacts.recon.detail = "Files touched: a.mjs, b.mjs";
+    save(root, st);
+    assert.equal(cmdCheck(root), 1, "check must reject a recon note without acceptance evidence");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

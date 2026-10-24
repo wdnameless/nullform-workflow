@@ -62,8 +62,8 @@
       "reason": ""
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 1140,
-      "reason": "Same-commit oracle, binary/rename numstat, NUL dirty-check regressions (R03-R05, R07)"
+      "lines": 1173,
+      "reason": "T1 recon acceptance-gate regressions (refuse file-list-only notes, reject at check time)"
     },
     "tools/workflow.mjs": {
       "lines": 1680,

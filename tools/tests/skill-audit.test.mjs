@@ -375,3 +375,79 @@ test("all four assigned restructured skills have body lines < 500 lines and vali
     );
   }
 });
+
+test("inline-code references count as discovery: backticked and fenced command paths", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "discovery-inline-"));
+  try {
+    const skillDir = join(tmp, "inline-skill");
+    mkdirSync(join(skillDir, "references"), { recursive: true });
+    writeFileSync(join(skillDir, "references", "linked.md"), "# Linked\n", "utf8");
+    writeFileSync(join(skillDir, "references", "backticked.md"), "# Backticked\n", "utf8");
+
+    // Real skill bodies address files this way: "Load `references/backticked.md` first".
+    // Only markdown links were counted, so shipped files looked unreachable.
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      `---\nname: inline-skill\ndescription: Inline discovery\n---\n# Skill\nSee [Linked](references/linked.md).\nLoad \`references/backticked.md\` first.\n`,
+      "utf8",
+    );
+
+    const audit = auditSkillFile(skillDir, { root: tmp });
+    const discovery = audit.findings.filter((f) => f.rule === "resource-discovery");
+    assert.equal(discovery.length, 0, `expected no discovery findings, got ${JSON.stringify(discovery)}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("nested references are audited, and an indexed directory is a real discovery path", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "discovery-nested-"));
+  try {
+    const skillDir = join(tmp, "nested-skill");
+    mkdirSync(join(skillDir, "references", "catalog"), { recursive: true });
+    writeFileSync(join(skillDir, "references", "catalog", "INDEX.md"), "# Index\n- one.md\n", "utf8");
+    writeFileSync(join(skillDir, "references", "catalog", "one.md"), "# One\n", "utf8");
+    writeFileSync(join(skillDir, "references", "catalog", "orphan.md"), "# Orphan\n", "utf8");
+
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      `---\nname: nested-skill\ndescription: Nested discovery\n---\n# Skill\nBrowse \`references/catalog/\` via its INDEX.\n`,
+      "utf8",
+    );
+
+    const audit = auditSkillFile(skillDir, { root: tmp });
+    const flagged = audit.findings.filter((f) => f.rule === "resource-discovery").map((f) => f.file.replace(/\\/g, "/"));
+    assert.ok(flagged.some((f) => f.endsWith("orphan.md")), "unlisted catalog member must be flagged");
+    assert.ok(!flagged.some((f) => f.endsWith("one.md")), "indexed catalog member must not be flagged");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("scripts nobody names are flagged; a self-mentioning script is not evidence", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "discovery-scripts-"));
+  try {
+    const skillDir = join(tmp, "scripts-skill");
+    mkdirSync(join(skillDir, "scripts"), { recursive: true });
+    writeFileSync(join(skillDir, "scripts", "used.py"), '"""used helper"""\n', "utf8");
+    writeFileSync(join(skillDir, "scripts", "orphan.py"), '"""orphan helper"""\n', "utf8");
+    writeFileSync(join(skillDir, "scripts", "selfonly.py"), 'NAME = "scripts/selfonly.py"\n', "utf8");
+    mkdirSync(join(skillDir, "scripts", "__pycache__"), { recursive: true });
+    writeFileSync(join(skillDir, "scripts", "__pycache__", "junk.py"), "x\n", "utf8");
+
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      `---\nname: scripts-skill\ndescription: Script discovery\n---\n# Skill\nRun \`python scripts/used.py\`.\n`,
+      "utf8",
+    );
+
+    const audit = auditSkillFile(skillDir, { root: tmp });
+    const flagged = audit.findings.filter((f) => f.rule === "resource-discovery").map((f) => f.file.replace(/\\/g, "/"));
+    assert.ok(!flagged.some((f) => f.endsWith("used.py")), "named script must not be flagged");
+    assert.ok(flagged.some((f) => f.endsWith("orphan.py")), "unnamed script must be flagged");
+    assert.ok(flagged.some((f) => f.endsWith("selfonly.py")), "a script naming itself must still be flagged");
+    assert.ok(!flagged.some((f) => f.includes("__pycache__")), "build residue is not a skill resource");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
