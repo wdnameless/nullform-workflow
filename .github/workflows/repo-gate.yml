@@ -54,7 +54,7 @@ jobs:
             echo "Expected package .tmp/${EXPECTED_NAME} not found"
             exit 1
           fi
-          MATCH_COUNT=$(ls -1 .tmp/nullform-workflow-*.tgz | wc -l)
+          MATCH_COUNT=$(find .tmp -maxdepth 1 -name 'nullform-workflow-*.tgz' -type f | wc -l)
           if [ "$MATCH_COUNT" -ne 1 ]; then
             echo "Expected exactly one candidate tarball, found $MATCH_COUNT"
             exit 1
@@ -343,6 +343,12 @@ jobs:
 
       - name: ESLint strict gate
         run: npm run lint
+
+      - name: Agent definition lint
+        # Replaces agnix: it validated tool names against the Claude convention while
+        # this harness's canon is the OMP vocabulary (read/bash), so it reported
+        # defects that did not exist. agent-lint encodes our own contract.
+        run: node tools/agent-lint.mjs --check
 
       - name: Prompt surfaces & cache safety checks
         run: |

@@ -56,7 +56,7 @@ class TestLuminance(unittest.TestCase):
         self.assertAlmostEqual(_relative_luminance("#000000"), 0.0, places=6)
         self.assertAlmostEqual(_relative_luminance("#FFF"), 1.0, places=6)
 
-    def test_returns_none_for_unparseable(self):
+    def test_returns_none_for_unparsable(self):
         for value in ("", "nope", "#12", "#GGGGGG", None):
             self.assertIsNone(_relative_luminance(value))
 
