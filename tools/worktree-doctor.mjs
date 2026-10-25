@@ -126,19 +126,23 @@ export function auditWorktrees(root = ".", { base = DEFAULT_BASE } = {}) {
   return { ok: true, base, entries, stale: entries.filter((e) => e.prunable), total: entries.length };
 }
 
+/** One worktree's status line: identity, dirt, merge state, age, and removability. */
+function describeEntry(e) {
+  return [
+    e.main ? "main" : e.detached ? "detached" : `branch=${e.branch}`,
+    e.exists ? `${e.dirty} dirty` : "MISSING DIR",
+    e.merged ? "merged" : null,
+    e.ageDays !== null ? `${e.ageDays}d` : null,
+    e.prunable ? "PRUNABLE" : null,
+    e.locked ? "locked" : null,
+  ].filter(Boolean).join(" · ");
+}
+
 function formatAudit(result) {
   if (!result.ok) return `worktree-doctor: cannot read worktrees — ${result.error}\n`;
   const lines = [`worktrees: ${result.total} (base ${result.base})`];
   for (const e of result.entries) {
-    const flags = [
-      e.main ? "main" : e.detached ? "detached" : `branch=${e.branch}`,
-      e.exists ? `${e.dirty} dirty` : "MISSING DIR",
-      e.merged ? "merged" : null,
-      e.ageDays !== null ? `${e.ageDays}d` : null,
-      e.prunable ? "PRUNABLE" : null,
-      e.locked ? "locked" : null,
-    ].filter(Boolean);
-    lines.push(`  ${e.path}\n      ${flags.join(" · ")}`);
+    lines.push(`  ${e.path}\n      ${describeEntry(e)}`);
   }
   const stale = result.stale.length;
   lines.push(stale
@@ -196,6 +200,17 @@ work. Anything holding local changes is reported and left alone.
 Exit: 0 nothing to prune · 1 stale worktrees · 2 cannot run
 `;
 
+/** Render an audit or prune outcome for the terminal (or JSON when asked). */
+function formatResult(result, args) {
+  if (args.json) return JSON.stringify(result, null, 2) + "\n";
+  if (!args.prune) return formatAudit(result);
+  const lines = [
+    ...result.removed.map((r) => `removed ${r.path}${r.dryRun ? " (dry-run)" : ""}`),
+    ...result.refused.map((r) => `refused ${r.path} — ${r.reason}`),
+  ];
+  return (lines.length ? lines.join("\n") : "nothing to prune.") + "\n";
+}
+
 export function runWorktreeDoctor(argv = process.argv.slice(2), io = {}) {
   const out = io.stdout || process.stdout;
   const err = io.stderr || process.stderr;
@@ -211,15 +226,7 @@ export function runWorktreeDoctor(argv = process.argv.slice(2), io = {}) {
 
   if (!result.ok) { err.write(`worktree-doctor: ${result.error}\n`); return 2; }
 
-  if (args.json) {
-    out.write(JSON.stringify(result, null, 2) + "\n");
-  } else if (args.prune) {
-    for (const r of result.removed) out.write(`removed ${r.path}${r.dryRun ? " (dry-run)" : ""}\n`);
-    for (const r of result.refused) out.write(`refused ${r.path} — ${r.reason}\n`);
-    if (!result.removed.length && !result.refused.length) out.write("nothing to prune.\n");
-  } else {
-    out.write(formatAudit(result));
-  }
+  out.write(formatResult(result, args));
   return args.prune ? 0 : result.stale.length > 0 ? 1 : 0;
 }
 

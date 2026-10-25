@@ -161,12 +161,7 @@ function formatAuditTable(results) {
   return out;
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
-  const opts = parseArgs(argv);
-
-  if (opts.help) {
-    console.log(`Usage: node tools/verify.mjs [options]
+const USAGE = `Usage: node tools/verify.mjs [options]
 
 Options:
   --profile verify|audit   Profile to run (default: verify)
@@ -176,7 +171,72 @@ Options:
   --user-home <path>       Override user home directory
   --json                   Output results as JSON
   --help, -h               Show this help message
-`);
+`;
+
+/** Run the selected profile, or null when the name is unknown. */
+async function runProfile(profile, ctx) {
+  if (profile === "audit") return runAuditProfile(ctx);
+  if (profile === "verify") return runVerifyProfile(ctx);
+  return null;
+}
+
+/** Print the run and return its exit code.
+ *
+ * A check that could not decide is not a pass: counting only FAIL as red let an UNVERIFIED
+ * row disappear from the tally while the run still exited 0.
+ */
+function reportResults(results, opts, ctx) {
+  const counts = {
+    fail: results.filter((r) => r.status === "FAIL").length,
+    setup: results.filter((r) => r.status === "SETUP").length,
+    pass: results.filter((r) => r.status === "PASS").length,
+    unverified: results.filter((r) => r.status === "UNVERIFIED").length,
+    total: results.length,
+  };
+
+  if (opts.json) {
+    console.log(JSON.stringify({
+      results,
+      findings: results.filter((r) => r.status === "FAIL").map((r) => r.label),
+      ok: counts.fail === 0 && counts.unverified === 0,
+      passed: counts.pass,
+      unverified: counts.unverified,
+      total: counts.total,
+    }, null, 2));
+  } else if (opts.profile === "audit") {
+    printAuditReport(results, counts);
+  } else {
+    printVerifyReport(results, counts, ctx);
+  }
+  return counts.fail > 0 || counts.unverified > 0 ? 1 : 0;
+}
+
+function printAuditReport(results, counts) {
+  console.log("\n=== Harness audit ===\n");
+  console.log(formatAuditTable(results));
+  console.log("");
+  console.log(counts.fail === 0 && counts.unverified === 0
+    ? `all ${counts.total} checks clean\n`
+    : `${counts.fail} check(s) failed, ${counts.unverified} unverified\n`);
+}
+
+function printVerifyReport(results, counts, ctx) {
+  console.log("\n=== Workflow harness verification ===");
+  console.log(`  harness : ${ctx.harnessRoot}`);
+  console.log(`  agent   : ${ctx.agentDir}\n`);
+  console.log(formatVerifyTable(results));
+  console.log(`\n${counts.total - counts.fail - counts.setup - counts.unverified}/${counts.total} checks passed`);
+  if (counts.unverified > 0) console.log(`${counts.unverified} could not be verified - see the UNVERIFIED rows above.`);
+  if (counts.setup > 0) console.log(`${counts.setup} awaiting configuration - see the SETUP rows above.`);
+  console.log("");
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const opts = parseArgs(argv);
+
+  if (opts.help) {
+    console.log(USAGE);
     process.exit(0);
   }
 
@@ -190,62 +250,16 @@ Options:
     process.exit(2);
   }
 
-  let results = [];
-  if (opts.profile === "audit") {
-    results = await runAuditProfile(ctx);
-  } else if (opts.profile === "verify") {
-    results = await runVerifyProfile(ctx);
-  } else {
+  const results = await runProfile(opts.profile, ctx);
+  if (!results) {
     console.error(`Unknown profile: ${opts.profile}. Supported: verify, audit.`);
     process.exit(2);
   }
 
-  const failCount = results.filter((r) => r.status === "FAIL").length;
-  const setupCount = results.filter((r) => r.status === "SETUP").length;
-  const passCount = results.filter((r) => r.status === "PASS").length;
-  // A check that could not decide is not a pass: reporting only FAIL as red let an
-  // UNVERIFIED row disappear from the tally while the run still exited 0.
-  const unverifiedCount = results.filter((r) => r.status === "UNVERIFIED").length;
-  const total = results.length;
-
-  if (opts.json) {
-    const output = {
-      results,
-      findings: results.filter((r) => r.status === "FAIL").map((r) => r.label),
-      ok: failCount === 0 && unverifiedCount === 0,
-      passed: passCount,
-      unverified: unverifiedCount,
-      total,
-    };
-    console.log(JSON.stringify(output, null, 2));
-  } else if (opts.profile === "audit") {
-    console.log("\n=== Harness audit ===\n");
-    console.log(formatAuditTable(results));
-    console.log("");
-    if (failCount === 0 && unverifiedCount === 0) {
-      console.log(`all ${total} checks clean\n`);
-    } else {
-      console.log(`${failCount} check(s) failed, ${unverifiedCount} unverified\n`);
-    }
-  } else {
-    console.log("\n=== Workflow harness verification ===");
-    console.log(`  harness : ${ctx.harnessRoot}`);
-    console.log(`  agent   : ${ctx.agentDir}\n`);
-    console.log(formatVerifyTable(results));
-    console.log(`\n${total - failCount - setupCount - unverifiedCount}/${total} checks passed`);
-    if (unverifiedCount > 0) {
-      console.log(`${unverifiedCount} could not be verified - see the UNVERIFIED rows above.`);
-    }
-    if (setupCount > 0) {
-      console.log(`${setupCount} awaiting configuration - see the SETUP rows above.`);
-    }
-    console.log("");
-  }
-
-  // process.exit() discards stdout/stderr still queued on a pipe, which on
-  // macOS truncates the JSON document mid-object (seen in CI: a parse error at
-  // an arbitrary offset). Set the code and let Node flush before exiting.
-  process.exitCode = failCount > 0 || unverifiedCount > 0 ? 1 : 0;
+  // process.exit() discards stdout/stderr still queued on a pipe, which on macOS
+  // truncates the JSON document mid-object (seen in CI: a parse error at an arbitrary
+  // offset). Set the code and let Node flush before exiting.
+  process.exitCode = reportResults(results, opts, ctx);
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {

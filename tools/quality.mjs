@@ -44,9 +44,13 @@ export const SIDECAR_DIR = ".quality";
 // Deliberately NOT listing "bin": in this repo (and in most Node/Python projects) it is
 // source. It came from code-size's build-output list and silently dropped 7 baselined
 // functions from coverage — the gate went green by measuring less.
+// `runs` matters most on a machine that has executed benchmarks: bench/runs holds full
+// repository copies per run, and grading them reported 2646 findings from archived code
+// nobody can act on. `_archive` and backup dirs are the same class.
 const SKIP_DIRS = new Set([
-  "node_modules", ".git", "vendor", "target", "dist", "build", "obj",
+  "node_modules", ".git", "vendor", "target", "dist", "build", "obj", "runs",
   ".tmp", ".quality", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+  "_archive", "migration-backup",
 ]);
 
 export function loadStacks(file = STACKS_FILE) {
@@ -215,6 +219,34 @@ function sidecarPresent(root, stack, qualityDir) {
   return Object.keys(stack.configs || {}).every((rel) => existsSync(join(root, qualityDir, rel)));
 }
 
+/** Split a file-list argv into batches that fit a platform command line.
+ *
+ * `{files...}` expands to every project source; on a large tree that exceeds the Windows
+ * ~32K limit and the spawn fails before the analyzer runs. Only the trailing file list is
+ * split, so the flags in front stay with each batch.
+ */
+export function batchArgv(argv, files, limit = 6000) {
+  if (!Array.isArray(files) || files.length === 0) return [argv];
+  const firstFile = argv.length - files.length;
+  if (firstFile < 0) return [argv];
+  const head = argv.slice(0, firstFile);
+  const headLen = head.reduce((n, a) => n + a.length + 1, 0);
+  const batches = [];
+  let current = [];
+  let size = headLen;
+  for (const file of files) {
+    if (current.length && size + file.length + 1 > limit) {
+      batches.push([...head, ...current]);
+      current = [];
+      size = headLen;
+    }
+    current.push(file);
+    size += file.length + 1;
+  }
+  if (current.length) batches.push([...head, ...current]);
+  return batches.length ? batches : [argv];
+}
+
 /* ---------------------------------------------------------------------- run one */
 
 /** Run one stack's analyzer and return parsed rows plus how they were obtained. */
@@ -235,23 +267,31 @@ export function runStack(stack, { root, qualityDir, files }) {
   const env = stack.env
     ? Object.fromEntries(Object.entries(stack.env).map(([k, v]) => [k, v.replace(/\{quality\}/g, qualityDir)]))
     : null;
-  const res = spawnArgv(argv, root, env);
-  if (res.error) return { rows: [], status: "cannot-run", detail: String(res.error.message || res.error), argv };
-  const stdout = res.stdout || "";
-  const stderr = res.stderr || "";
-  // An analyzer that produced no report at all (module missing, config rejected,
-  // build failed) must not be read as "no violations": there is nothing to parse.
-  if (!stdout.trim()) {
-    const detail = stderr.trim().split(/\r?\n/).slice(-3).join(" | ") || `exit ${res.status}`;
-    return { rows: [], status: "tool-error", detail, argv, exitCode: res.status };
+  // Windows caps a command line at ~32K characters; 226 source paths exceeded it and
+  // spawnSync failed with ENAMETOOLONG, which reported as "cannot-run" on a tree that was
+  // fine. Batch the file list and merge the reports so the gate works at any tree size.
+  const batches = batchArgv(argv, resolvedFiles);
+  const rows = [];
+  let stderrAll = "";
+  for (const batch of batches) {
+    const res = spawnArgv(batch, root, env);
+    if (res.error) return { rows: [], status: "cannot-run", detail: String(res.error.message || res.error), argv: batch };
+    const stdout = res.stdout || "";
+    const stderr = res.stderr || "";
+    stderrAll += stderr;
+    // An analyzer that produced no report at all (module missing, config rejected,
+    // build failed) must not be read as "no violations": there is nothing to parse.
+    if (!stdout.trim()) {
+      const detail = stderr.trim().split(/\r?\n/).slice(-3).join(" | ") || `exit ${res.status}`;
+      return { rows: [], status: "tool-error", detail, argv: batch, exitCode: res.status };
+    }
+    try {
+      rows.push(...(PARSERS[run.parser] || (() => []))(stdout));
+    } catch (err) {
+      return { rows: [], status: "unparsable", detail: String(err.message || err), argv: batch, stderr: stderr.slice(0, 400) };
+    }
   }
-  let rows;
-  try {
-    rows = (PARSERS[run.parser] || (() => []))(stdout);
-  } catch (err) {
-    return { rows: [], status: "unparsable", detail: String(err.message || err), argv, stderr: stderr.slice(0, 400) };
-  }
-  return { rows, status: "ran", argv, exitCode: res.status };
+  return { rows, status: "ran", argv, exitCode: 0, stderr: stderrAll.slice(0, 400) };
 }
 
 /* -------------------------------------------------------------------- baseline */

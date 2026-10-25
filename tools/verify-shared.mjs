@@ -141,34 +141,34 @@ export function testTierGate(harnessRoot, strict = true) {
   }
 }
 
+/** Map a check's return value to a status.
+ *
+ * A check that returned nothing conclusive is UNVERIFIED, not passed: the previous default
+ * (`res.status || "PASS"`) meant a forgotten verdict, `{}` or `{ok: undefined}` all counted
+ * as a pass, so a runner that decides nothing reported agreement.
+ */
+export function classifyResult(res) {
+  if (typeof res === "string") return { status: "PASS", detail: res };
+  if (typeof res === "boolean") return { status: res ? "PASS" : "FAIL", detail: res ? "True" : "False" };
+  if (!res || typeof res !== "object") return { status: "UNVERIFIED", detail: "" };
+  const detail = res.detail ?? "";
+  if (res.ok === true) return { status: "PASS", detail };
+  if (res.ok === false) return { status: "FAIL", detail };
+  if (typeof res.status === "string" && res.status.trim()) return { status: res.status, detail };
+  return { status: "UNVERIFIED", detail };
+}
+
 export async function executeCheck(id, label, fn) {
   const start = Date.now();
   try {
     const res = await fn();
-    const ms = Date.now() - start;
-    let detail = "";
-    // A check that returned nothing conclusive is UNVERIFIED, not passed. The previous
-    // default (`res.status || "PASS"`) meant a check that forgot to set a verdict — or
-    // returned `{}` — silently counted as a pass; `{ok: undefined}` did too.
-    let status = "UNVERIFIED";
-    if (typeof res === "string") {
-      detail = res;
-      status = "PASS";
-    } else if (typeof res === "boolean") {
-      detail = res ? "True" : "False";
-      status = res ? "PASS" : "FAIL";
-    } else if (res && typeof res === "object") {
-      if (res.ok === true) status = "PASS";
-      else if (res.ok === false) status = "FAIL";
-      else if (typeof res.status === "string" && res.status.trim()) status = res.status;
-      detail = res.detail ?? "";
-    }
+    const { status, detail } = classifyResult(res);
     return {
       id,
       label,
       status,
       detail,
-      ms,
+      ms: Date.now() - start,
     };
   } catch (err) {
     const ms = Date.now() - start;
