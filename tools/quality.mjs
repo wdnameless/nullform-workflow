@@ -20,7 +20,7 @@
  *   node tools/quality.mjs plan    [--root <dir>] [--stack <id>] [--json]
  *   node tools/quality.mjs install [--root <dir>] [--stack <id>] [--dry-run] [--json]
  *   node tools/quality.mjs check   [--root <dir>] [--stack <id>] [--changed] [--json]
- *   node tools/quality.mjs baseline [--root <dir>] [--stack <id>] [--dry-run] [--json]
+ *   node tools/quality.mjs baseline [--root <dir>] [--stack <id>] [--dry-run] [--prune] [--json]
  *
  * defer: stack matrix + ratchet in one module | ceiling: 700 lines | upgrade: split CLI and engine if adapters grow per-stack logic
  */
@@ -304,6 +304,29 @@ export function applyRatchet(rows, stackBaseline, threshold) {
   return { failures, kept };
 }
 
+/** Merge one run's offenders into the recorded baseline.
+ *
+ * A key recorded before but absent now is either a deleted function or a RENAMED one.
+ * Dropping it silently let `rename + baseline` erase a ceiling: the renamed function then
+ * read as "new" and was re-baselined at today's number. Orphans are carried forward unless
+ * `prune` is explicitly requested.
+ */
+export function mergeBaselineEntries(previous, rows, { prune = false } = {}) {
+  const functions = {};
+  const seen = new Set();
+  let lowered = 0;
+  for (const row of rows) {
+    const prev = previous[row.key];
+    const value = prev === undefined ? row.coco : Math.min(prev, row.coco);
+    if (prev !== undefined && value < prev) lowered++;
+    functions[row.key] = value;
+    seen.add(row.key);
+  }
+  const orphans = Object.keys(previous).filter((k) => !seen.has(k));
+  if (!prune) for (const k of orphans) functions[k] = previous[k];
+  return { functions, lowered, orphans: prune ? 0 : orphans.length, pruned: prune ? orphans.length : 0 };
+}
+
 /** Files a `--changed` run should analyze: tracked modifications plus untracked
  * files (a brand-new 400-line function is exactly what the ratchet must see).
  * Extensions come from the stack's own `*.ext` markers, so adapters stay data-only. */
@@ -492,7 +515,7 @@ export function writeConfigs(root, stack, doc, { onlyMissing = false } = {}) {
 /* ------------------------------------------------------------------------- CLI */
 
 export function parseArgs(argv) {
-  const args = { _: [], root: ".", stack: null, json: false, dryRun: false, changed: false, help: false, baseline: null, allowHostInstall: false, errors: [] };
+  const args = { _: [], root: ".", stack: null, json: false, dryRun: false, changed: false, help: false, baseline: null, allowHostInstall: false, prune: false, errors: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "-h" || arg === "--help") args.help = true;
@@ -502,6 +525,8 @@ export function parseArgs(argv) {
     // An explicit flag keeps the default safe and the exception visible in the workflow.
     else if (arg === "--allow-host-install") args.allowHostInstall = true;
     else if (arg === "--changed") args.changed = true;
+    // Explicit opt-in to dropping baseline entries whose function no longer exists.
+    else if (arg === "--prune") args.prune = true;
     else if (arg === "--root") args.root = argv[++i] || ".";
     else if (arg === "--stack") args.stack = argv[++i] || "";
     else if (arg === "--baseline") args.baseline = argv[++i] || "";
@@ -630,21 +655,13 @@ function cmdBaseline(ctx) {
     const result = runStack(stack, { root, qualityDir, files: null });
     if (result.status !== "ran") return { id: s.id, status: result.status };
     const previous = baseline.stacks[s.id]?.functions || {};
-    const next = {};
-    let lowered = 0;
-    for (const row of disambiguate(nameRows(root, s.id, result.rows))) {
-      if (row.coco <= stack.threshold) continue;
-      const prev = previous[row.key];
-      // Ratchet: a re-seed never raises a recorded value.
-      const value = prev === undefined ? row.coco : Math.min(prev, row.coco);
-      if (prev !== undefined && value < prev) lowered++;
-      next[row.key] = value;
-    }
-    baseline.stacks[s.id] = { threshold: stack.threshold, seeded: true, functions: next };
-    return { id: s.id, offenders: Object.keys(next).length, lowered };
+    const rows = disambiguate(nameRows(root, s.id, result.rows)).filter((r) => r.coco > stack.threshold);
+    const merged = mergeBaselineEntries(previous, rows, { prune: args.prune });
+    baseline.stacks[s.id] = { threshold: stack.threshold, seeded: true, functions: merged.functions };
+    return { id: s.id, offenders: Object.keys(merged.functions).length, lowered: merged.lowered, orphans: merged.orphans, pruned: merged.pruned };
   });
   if (!args.dryRun) saveBaseline(root, baseline, baselineFile);
-  emit({ ok: true, root, report, dryRun: args.dryRun }, report.map((r) => `${r.id}: ${r.offenders ?? "-"} baselined, ${r.lowered ?? 0} lowered${r.status ? ` (${r.status})` : ""}\n`).join("") + (args.dryRun ? "dry-run: nothing written\n" : `updated ${baselineFile}\n`));
+  emit({ ok: true, root, report, dryRun: args.dryRun }, report.map((r) => `${r.id}: ${r.offenders ?? "-"} baselined, ${r.lowered ?? 0} lowered${r.orphans ? `, ${r.orphans} kept without a current match (rename? use --prune to drop)` : ""}${r.pruned ? `, ${r.pruned} pruned` : ""}${r.status ? ` (${r.status})` : ""}\n`).join("") + (args.dryRun ? "dry-run: nothing written\n" : `updated ${baselineFile}\n`));
   return 0;
 }
 

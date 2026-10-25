@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 
 import {
   loadStacks, detectStacks, applyRatchet, expandArgv, baselineKey,
-  loadBaseline, saveBaseline, runQualityCli, sourceFiles, normalizeFile,
+  loadBaseline, saveBaseline, runQualityCli, sourceFiles, normalizeFile, mergeBaselineEntries,
 } from "../quality.mjs";
 import {
   parseEslintJson, parsePylintJson, parseCargoJson, parseDotnetText,
@@ -334,5 +334,32 @@ test("an unseeded baseline is reported as a setup gap, not as dozens of findings
     const { code, text } = cli(root, ["check", "--stack", "node"]);
     assert.equal(code, 1);
     assert.match(text, /unseeded|unverified|tool-error/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a rename cannot launder a recorded ceiling through `baseline`", () => {
+  // Measured hole: `baseline` rebuilt its map from current rows only, so renaming a
+  // function dropped its recorded value. The rename then read as "new" and was
+  // re-baselined at today's number — growth laundered by a rename.
+  // Asserted on the pure merge: a CLI call would need an analyzer in the sandbox and
+  // would return before reaching this decision.
+  const merged = mergeBaselineEntries({ "a.mjs:oldName": 40 }, [{ key: "a.mjs:newName", coco: 60 }], { prune: false });
+  assert.equal(merged.functions["a.mjs:oldName"], 40, "an entry with no current match must survive a re-seed");
+  assert.equal(merged.functions["a.mjs:newName"], 60, "the renamed function is recorded too");
+  assert.equal(merged.orphans, 1, "the orphan is reported so a reviewer sees the rename");
+});
+
+test("`baseline --prune` is the explicit way to drop an orphaned entry", () => {
+  // The sandbox has no analyzer, so the CLI never reaches the prune branch; this asserts
+  // the decision itself. A sandbox with eslint would test the wiring instead.
+  const root = sandbox({ "a.mjs": "export function renamed() {\n  return 1;\n}\n" });
+  try {
+    saveBaseline(root, { version: 1, stacks: { node: { threshold: 15, seeded: true, functions: { "a.mjs:oldName": 40 } } } });
+    const merged = mergeBaselineEntries({ "a.mjs:oldName": 40 }, [], { prune: false });
+    assert.equal(merged.functions["a.mjs:oldName"], 40, "default keeps the orphan");
+    assert.equal(merged.orphans, 1);
+    const pruned = mergeBaselineEntries({ "a.mjs:oldName": 40 }, [], { prune: true });
+    assert.equal(pruned.functions["a.mjs:oldName"], undefined, "pruning must be possible, but only when asked for");
+    assert.equal(pruned.pruned, 1);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

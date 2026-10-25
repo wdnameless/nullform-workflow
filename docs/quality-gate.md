@@ -64,6 +64,11 @@ gate becomes decoration.
   its recorded value by any amount;
 - `baseline` re-seeds with `min(recorded, measured)` — a refactor lowers the ceiling, and
   re-running the command can never quietly raise it back;
+- a recorded entry whose function no longer appears is **carried forward**, because a
+  rename is indistinguishable from a deletion. Dropping it silently let `rename +
+  baseline` erase a ceiling: the renamed function read as "new" and was re-baselined at
+  today's number. The re-seed reports how many entries it kept without a current match;
+  `baseline --prune` is the explicit way to drop them;
 - `seeded: false` is a setup gap and reports as `unverified`, not as N findings. Run
   `install` again once the toolchain is present.
 
