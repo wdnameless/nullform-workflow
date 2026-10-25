@@ -147,14 +147,20 @@ export async function executeCheck(id, label, fn) {
     const res = await fn();
     const ms = Date.now() - start;
     let detail = "";
-    let status = "PASS";
+    // A check that returned nothing conclusive is UNVERIFIED, not passed. The previous
+    // default (`res.status || "PASS"`) meant a check that forgot to set a verdict — or
+    // returned `{}` — silently counted as a pass; `{ok: undefined}` did too.
+    let status = "UNVERIFIED";
     if (typeof res === "string") {
       detail = res;
+      status = "PASS";
     } else if (typeof res === "boolean") {
       detail = res ? "True" : "False";
       status = res ? "PASS" : "FAIL";
     } else if (res && typeof res === "object") {
-      status = res.ok === false ? "FAIL" : (res.status || "PASS");
+      if (res.ok === true) status = "PASS";
+      else if (res.ok === false) status = "FAIL";
+      else if (typeof res.status === "string" && res.status.trim()) status = res.status;
       detail = res.detail ?? "";
     }
     return {

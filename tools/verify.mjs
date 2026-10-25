@@ -203,14 +203,18 @@ Options:
   const failCount = results.filter((r) => r.status === "FAIL").length;
   const setupCount = results.filter((r) => r.status === "SETUP").length;
   const passCount = results.filter((r) => r.status === "PASS").length;
+  // A check that could not decide is not a pass: reporting only FAIL as red let an
+  // UNVERIFIED row disappear from the tally while the run still exited 0.
+  const unverifiedCount = results.filter((r) => r.status === "UNVERIFIED").length;
   const total = results.length;
 
   if (opts.json) {
     const output = {
       results,
       findings: results.filter((r) => r.status === "FAIL").map((r) => r.label),
-      ok: failCount === 0,
+      ok: failCount === 0 && unverifiedCount === 0,
       passed: passCount,
+      unverified: unverifiedCount,
       total,
     };
     console.log(JSON.stringify(output, null, 2));
@@ -218,17 +222,20 @@ Options:
     console.log("\n=== Harness audit ===\n");
     console.log(formatAuditTable(results));
     console.log("");
-    if (failCount === 0) {
+    if (failCount === 0 && unverifiedCount === 0) {
       console.log(`all ${total} checks clean\n`);
     } else {
-      console.log(`${failCount} check(s) failed\n`);
+      console.log(`${failCount} check(s) failed, ${unverifiedCount} unverified\n`);
     }
   } else {
     console.log("\n=== Workflow harness verification ===");
     console.log(`  harness : ${ctx.harnessRoot}`);
     console.log(`  agent   : ${ctx.agentDir}\n`);
     console.log(formatVerifyTable(results));
-    console.log(`\n${total - failCount - setupCount}/${total} checks passed`);
+    console.log(`\n${total - failCount - setupCount - unverifiedCount}/${total} checks passed`);
+    if (unverifiedCount > 0) {
+      console.log(`${unverifiedCount} could not be verified - see the UNVERIFIED rows above.`);
+    }
     if (setupCount > 0) {
       console.log(`${setupCount} awaiting configuration - see the SETUP rows above.`);
     }
@@ -238,7 +245,7 @@ Options:
   // process.exit() discards stdout/stderr still queued on a pipe, which on
   // macOS truncates the JSON document mid-object (seen in CI: a parse error at
   // an arbitrary offset). Set the code and let Node flush before exiting.
-  process.exitCode = failCount > 0 ? 1 : 0;
+  process.exitCode = failCount > 0 || unverifiedCount > 0 ? 1 : 0;
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
