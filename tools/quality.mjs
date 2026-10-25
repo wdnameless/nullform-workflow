@@ -20,7 +20,7 @@
  *   node tools/quality.mjs plan    [--root <dir>] [--stack <id>] [--json]
  *   node tools/quality.mjs install [--root <dir>] [--stack <id>] [--dry-run] [--json]
  *   node tools/quality.mjs check   [--root <dir>] [--stack <id>] [--changed] [--json]
- *   node tools/quality.mjs baseline [--root <dir>] [--stack <id>] [--dry-run] [--json]
+ *   node tools/quality.mjs baseline [--root <dir>] [--stack <id>] [--dry-run] [--prune] [--json]
  *
  * defer: stack matrix + ratchet in one module | ceiling: 700 lines | upgrade: split CLI and engine if adapters grow per-stack logic
  */
@@ -44,9 +44,13 @@ export const SIDECAR_DIR = ".quality";
 // Deliberately NOT listing "bin": in this repo (and in most Node/Python projects) it is
 // source. It came from code-size's build-output list and silently dropped 7 baselined
 // functions from coverage — the gate went green by measuring less.
+// `runs` matters most on a machine that has executed benchmarks: bench/runs holds full
+// repository copies per run, and grading them reported 2646 findings from archived code
+// nobody can act on. `_archive` and backup dirs are the same class.
 const SKIP_DIRS = new Set([
-  "node_modules", ".git", "vendor", "target", "dist", "build", "obj",
+  "node_modules", ".git", "vendor", "target", "dist", "build", "obj", "runs",
   ".tmp", ".quality", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+  "_archive", "migration-backup",
 ]);
 
 export function loadStacks(file = STACKS_FILE) {
@@ -215,6 +219,34 @@ function sidecarPresent(root, stack, qualityDir) {
   return Object.keys(stack.configs || {}).every((rel) => existsSync(join(root, qualityDir, rel)));
 }
 
+/** Split a file-list argv into batches that fit a platform command line.
+ *
+ * `{files...}` expands to every project source; on a large tree that exceeds the Windows
+ * ~32K limit and the spawn fails before the analyzer runs. Only the trailing file list is
+ * split, so the flags in front stay with each batch.
+ */
+export function batchArgv(argv, files, limit = 6000) {
+  if (!Array.isArray(files) || files.length === 0) return [argv];
+  const firstFile = argv.length - files.length;
+  if (firstFile < 0) return [argv];
+  const head = argv.slice(0, firstFile);
+  const headLen = head.reduce((n, a) => n + a.length + 1, 0);
+  const batches = [];
+  let current = [];
+  let size = headLen;
+  for (const file of files) {
+    if (current.length && size + file.length + 1 > limit) {
+      batches.push([...head, ...current]);
+      current = [];
+      size = headLen;
+    }
+    current.push(file);
+    size += file.length + 1;
+  }
+  if (current.length) batches.push([...head, ...current]);
+  return batches.length ? batches : [argv];
+}
+
 /* ---------------------------------------------------------------------- run one */
 
 /** Run one stack's analyzer and return parsed rows plus how they were obtained. */
@@ -235,23 +267,31 @@ export function runStack(stack, { root, qualityDir, files }) {
   const env = stack.env
     ? Object.fromEntries(Object.entries(stack.env).map(([k, v]) => [k, v.replace(/\{quality\}/g, qualityDir)]))
     : null;
-  const res = spawnArgv(argv, root, env);
-  if (res.error) return { rows: [], status: "cannot-run", detail: String(res.error.message || res.error), argv };
-  const stdout = res.stdout || "";
-  const stderr = res.stderr || "";
-  // An analyzer that produced no report at all (module missing, config rejected,
-  // build failed) must not be read as "no violations": there is nothing to parse.
-  if (!stdout.trim()) {
-    const detail = stderr.trim().split(/\r?\n/).slice(-3).join(" | ") || `exit ${res.status}`;
-    return { rows: [], status: "tool-error", detail, argv, exitCode: res.status };
+  // Windows caps a command line at ~32K characters; 226 source paths exceeded it and
+  // spawnSync failed with ENAMETOOLONG, which reported as "cannot-run" on a tree that was
+  // fine. Batch the file list and merge the reports so the gate works at any tree size.
+  const batches = batchArgv(argv, resolvedFiles);
+  const rows = [];
+  let stderrAll = "";
+  for (const batch of batches) {
+    const res = spawnArgv(batch, root, env);
+    if (res.error) return { rows: [], status: "cannot-run", detail: String(res.error.message || res.error), argv: batch };
+    const stdout = res.stdout || "";
+    const stderr = res.stderr || "";
+    stderrAll += stderr;
+    // An analyzer that produced no report at all (module missing, config rejected,
+    // build failed) must not be read as "no violations": there is nothing to parse.
+    if (!stdout.trim()) {
+      const detail = stderr.trim().split(/\r?\n/).slice(-3).join(" | ") || `exit ${res.status}`;
+      return { rows: [], status: "tool-error", detail, argv: batch, exitCode: res.status };
+    }
+    try {
+      rows.push(...(PARSERS[run.parser] || (() => []))(stdout));
+    } catch (err) {
+      return { rows: [], status: "unparsable", detail: String(err.message || err), argv: batch, stderr: stderr.slice(0, 400) };
+    }
   }
-  let rows;
-  try {
-    rows = (PARSERS[run.parser] || (() => []))(stdout);
-  } catch (err) {
-    return { rows: [], status: "unparsable", detail: String(err.message || err), argv, stderr: stderr.slice(0, 400) };
-  }
-  return { rows, status: "ran", argv, exitCode: res.status };
+  return { rows, status: "ran", argv, exitCode: 0, stderr: stderrAll.slice(0, 400) };
 }
 
 /* -------------------------------------------------------------------- baseline */
@@ -302,6 +342,29 @@ export function applyRatchet(rows, stackBaseline, threshold) {
     }
   }
   return { failures, kept };
+}
+
+/** Merge one run's offenders into the recorded baseline.
+ *
+ * A key recorded before but absent now is either a deleted function or a RENAMED one.
+ * Dropping it silently let `rename + baseline` erase a ceiling: the renamed function then
+ * read as "new" and was re-baselined at today's number. Orphans are carried forward unless
+ * `prune` is explicitly requested.
+ */
+export function mergeBaselineEntries(previous, rows, { prune = false } = {}) {
+  const functions = {};
+  const seen = new Set();
+  let lowered = 0;
+  for (const row of rows) {
+    const prev = previous[row.key];
+    const value = prev === undefined ? row.coco : Math.min(prev, row.coco);
+    if (prev !== undefined && value < prev) lowered++;
+    functions[row.key] = value;
+    seen.add(row.key);
+  }
+  const orphans = Object.keys(previous).filter((k) => !seen.has(k));
+  if (!prune) for (const k of orphans) functions[k] = previous[k];
+  return { functions, lowered, orphans: prune ? 0 : orphans.length, pruned: prune ? orphans.length : 0 };
 }
 
 /** Files a `--changed` run should analyze: tracked modifications plus untracked
@@ -492,7 +555,7 @@ export function writeConfigs(root, stack, doc, { onlyMissing = false } = {}) {
 /* ------------------------------------------------------------------------- CLI */
 
 export function parseArgs(argv) {
-  const args = { _: [], root: ".", stack: null, json: false, dryRun: false, changed: false, help: false, baseline: null, allowHostInstall: false, errors: [] };
+  const args = { _: [], root: ".", stack: null, json: false, dryRun: false, changed: false, help: false, baseline: null, allowHostInstall: false, prune: false, errors: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "-h" || arg === "--help") args.help = true;
@@ -502,6 +565,8 @@ export function parseArgs(argv) {
     // An explicit flag keeps the default safe and the exception visible in the workflow.
     else if (arg === "--allow-host-install") args.allowHostInstall = true;
     else if (arg === "--changed") args.changed = true;
+    // Explicit opt-in to dropping baseline entries whose function no longer exists.
+    else if (arg === "--prune") args.prune = true;
     else if (arg === "--root") args.root = argv[++i] || ".";
     else if (arg === "--stack") args.stack = argv[++i] || "";
     else if (arg === "--baseline") args.baseline = argv[++i] || "";
@@ -630,21 +695,13 @@ function cmdBaseline(ctx) {
     const result = runStack(stack, { root, qualityDir, files: null });
     if (result.status !== "ran") return { id: s.id, status: result.status };
     const previous = baseline.stacks[s.id]?.functions || {};
-    const next = {};
-    let lowered = 0;
-    for (const row of disambiguate(nameRows(root, s.id, result.rows))) {
-      if (row.coco <= stack.threshold) continue;
-      const prev = previous[row.key];
-      // Ratchet: a re-seed never raises a recorded value.
-      const value = prev === undefined ? row.coco : Math.min(prev, row.coco);
-      if (prev !== undefined && value < prev) lowered++;
-      next[row.key] = value;
-    }
-    baseline.stacks[s.id] = { threshold: stack.threshold, seeded: true, functions: next };
-    return { id: s.id, offenders: Object.keys(next).length, lowered };
+    const rows = disambiguate(nameRows(root, s.id, result.rows)).filter((r) => r.coco > stack.threshold);
+    const merged = mergeBaselineEntries(previous, rows, { prune: args.prune });
+    baseline.stacks[s.id] = { threshold: stack.threshold, seeded: true, functions: merged.functions };
+    return { id: s.id, offenders: Object.keys(merged.functions).length, lowered: merged.lowered, orphans: merged.orphans, pruned: merged.pruned };
   });
   if (!args.dryRun) saveBaseline(root, baseline, baselineFile);
-  emit({ ok: true, root, report, dryRun: args.dryRun }, report.map((r) => `${r.id}: ${r.offenders ?? "-"} baselined, ${r.lowered ?? 0} lowered${r.status ? ` (${r.status})` : ""}\n`).join("") + (args.dryRun ? "dry-run: nothing written\n" : `updated ${baselineFile}\n`));
+  emit({ ok: true, root, report, dryRun: args.dryRun }, report.map((r) => `${r.id}: ${r.offenders ?? "-"} baselined, ${r.lowered ?? 0} lowered${r.orphans ? `, ${r.orphans} kept without a current match (rename? use --prune to drop)` : ""}${r.pruned ? `, ${r.pruned} pruned` : ""}${r.status ? ` (${r.status})` : ""}\n`).join("") + (args.dryRun ? "dry-run: nothing written\n" : `updated ${baselineFile}\n`));
   return 0;
 }
 
