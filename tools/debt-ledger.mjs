@@ -39,6 +39,12 @@ export const IGNORE_DIRS = new Set([
   ".venv",
   ".archmap",
   "target",
+  // Scratch trees: worktrees, benchmark archives and probe sandboxes hold full repository
+  // COPIES, so scanning them reported the same `defer:` markers dozens of times (measured:
+  // 17 hits from .tmp/clone2 and friends) and buried the real ledger.
+  ".tmp",
+  "runs",
+  "worktrees",
 ]);
 
 // Текстовые расширения исходного кода (markdown .md исключен намеренно!)
