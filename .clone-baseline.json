@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "thresholds": {
+    "minLines": 10,
+    "failLines": 35
+  },
+  "clones": [
+    {
+      "hash": "862a2c2db914a36c",
+      "kind": "T2",
+      "lines": 36,
+      "occurrences": [
+        {
+          "file": "skills/tastemaker/scripts/anti_slop_scan.py",
+          "line": 138
+        },
+        {
+          "file": "skills/tastemaker/scripts/anti_slop_scan.py",
+          "line": 147
+        },
+        {
+          "file": "skills/tastemaker/scripts/audit_motion.py",
+          "line": 108
+        }
+      ]
+    },
+    {
+      "hash": "9a69ba6d74e7bd5c",
+      "kind": "T2",
+      "lines": 49,
+      "occurrences": [
+        {
+          "file": "skills/tastemaker/scripts/anti_slop_scan.py",
+          "line": 74
+        },
+        {
+          "file": "skills/tastemaker/scripts/audit_motion.py",
+          "line": 53
+        }
+      ]
+    },
+    {
+      "hash": "04a69172edfeab39",
+      "kind": "T2",
+      "lines": 47,
+      "occurrences": [
+        {
+          "file": "tools/tests/benchmark.test.mjs",
+          "line": 1209
+        },
+        {
+          "file": "tools/tests/lm-replay.test.mjs",
+          "line": 204
+        }
+      ]
+    }
+  ]
+}

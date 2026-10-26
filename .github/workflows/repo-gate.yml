@@ -341,6 +341,13 @@ jobs:
         run: |
           node tools/code-size.mjs check --root .
 
+      - name: Clone coverage gate
+        # Stops copy-paste cloning (SQM 11/24): Type-1/2 duplicates only.
+        # Baseline records today's >=35-line offenders; only GROWTH or a NEW
+        # offender fails. Ratchet: lower failLines 35→30→25→…→10 via tickets.
+        run: |
+          node tools/clone-coverage.mjs check --root .
+
       - name: ESLint strict gate
         run: npm run lint
 
