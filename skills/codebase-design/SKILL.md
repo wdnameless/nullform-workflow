@@ -22,6 +22,7 @@ To verify if a module or abstraction earns its place:
 - **Consumer-Defined Interfaces**: Interfaces belong to the consumer package/module that uses them, not to the provider that implements them.
 - Inject dependencies across seams to allow fast, isolated deterministic tests.
 - **Composition over implementation inheritance**: reuse through `extends` (except `Error`) drags the parent in as many directions as it has children — cohesion of the reused class degrades (Bieman & Kang 1995, confirmed opposite of their hypothesis). In review, an `extends` is a question, not a pattern; subtyping (interface refines interface) is exempt.
+- **Registry contract**: a module past ~25 exported functions is a registry or dispatcher by contract, not a unit — name the contract (what independence buys the callers), or split. Past the line without a named contract is a `split:` finding.
 
 ## 4. Cohesion: why a module's parts belong together
 
