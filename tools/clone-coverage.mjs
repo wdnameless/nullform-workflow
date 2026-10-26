@@ -187,101 +187,7 @@ export function scanClonesWithDetails(root, options = {}) {
 
   function scanPass(isT1) {
     const keyProp = isT1 ? "normLines" : "blindLines";
-    const winIndex = new Map();
-
-    for (const [rel, data] of fileData) {
-      const lines = data[keyProp];
-      const norm = data.normLines;
-      for (let i = 0; i <= lines.length - minLines; i++) {
-        const wNorm = norm.slice(i, i + minLines);
-        if (wNorm.every((l) => l === "")) continue; // игнорируем окна из пустых/комментариев
-        const h = hashString(lines.slice(i, i + minLines).join("\n"));
-        if (!winIndex.has(h)) winIndex.set(h, []);
-        winIndex.get(h).push({ file: rel, lineIdx: i });
-      }
-    }
-
-    const visited = new Set();
-    const pairBlocks = [];
-    for (const [, occs] of winIndex) {
-      if (occs.length < 2) continue;
-      for (let i = 0; i < occs.length; i++) {
-        for (let j = i + 1; j < occs.length; j++) {
-          const o1 = occs[i];
-          const o2 = occs[j];
-          if (o1.file === o2.file && o1.lineIdx === o2.lineIdx) continue;
-          const [first, second] = (o1.file < o2.file || (o1.file === o2.file && o1.lineIdx < o2.lineIdx))
-            ? [o1, o2]
-            : [o2, o1];
-
-          const pairKey = `${first.file}<=>${second.file}`;
-          const winKey = `${pairKey}:${first.lineIdx}:${second.lineIdx}`;
-          if (visited.has(winKey)) continue;
-
-          let s1 = first.lineIdx;
-          let s2 = second.lineIdx;
-          const lines1 = fileData.get(first.file)[keyProp];
-          const lines2 = fileData.get(second.file)[keyProp];
-          const norm1 = fileData.get(first.file).normLines;
-          const norm2 = fileData.get(second.file).normLines;
-
-          // Расширение назад
-          while (
-            s1 > 0 &&
-            s2 > 0 &&
-            lines1[s1 - 1] === lines2[s2 - 1] &&
-            (first.file !== second.file || s1 - 1 !== s2 - 1)
-          ) {
-            s1--;
-            s2--;
-          }
-
-          // Расширение вперёд
-          let len = 0;
-          let isExact = true;
-          while (
-            s1 + len < lines1.length &&
-            s2 + len < lines2.length &&
-            lines1[s1 + len] === lines2[s2 + len]
-          ) {
-            if (first.file === second.file && s1 + len >= s2) break;
-            if (norm1[s1 + len] !== norm2[s2 + len]) isExact = false;
-            len++;
-          }
-
-          while (len > 0 && (norm1[s1] === "" || norm2[s2] === "")) {
-            s1++;
-            s2++;
-            len--;
-          }
-          while (len > 0 && (norm1[s1 + len - 1] === "" || norm2[s2 + len - 1] === "")) {
-            len--;
-          }
-
-          if (len >= minLines) {
-            for (let k = 0; k <= len - minLines; k++) {
-              visited.add(`${pairKey}:${s1 + k}:${s2 + k}`);
-            }
-
-            if (!isT1 && isExact) continue;
-
-            const kind = isT1 ? "T1" : "T2";
-            const blockText = (isT1 ? norm1 : lines1).slice(s1, s1 + len).join("\n");
-            const blockHash = hashString(blockText);
-            pairBlocks.push({
-              file1: first.file,
-              start1: s1 + 1,
-              file2: second.file,
-              start2: s2 + 1,
-              len,
-              kind,
-              hash: blockHash,
-            });
-          }
-        }
-      }
-    }
-    return pairBlocks;
+    return scanPairBlocks(fileData, keyProp, minLines, isT1);
   }
 
   const allPairBlocks = [...scanPass(true), ...scanPass(false)];
@@ -338,6 +244,111 @@ export function scanClonesWithDetails(root, options = {}) {
  */
 export function scanClones(root, options = {}) {
   return scanClonesWithDetails(root, options).clones;
+}
+
+/** Индекс скользящих окон minLines: hash -> вхождения. */
+function indexWindows(fileData, keyProp, minLines) {
+  const winIndex = new Map();
+  for (const [rel, data] of fileData) {
+    const lines = data[keyProp];
+    const norm = data.normLines;
+    for (let i = 0; i <= lines.length - minLines; i++) {
+      const wNorm = norm.slice(i, i + minLines);
+      if (wNorm.every((l) => l === "")) continue; // игнорируем окна из пустых/комментариев
+      const h = hashString(lines.slice(i, i + minLines).join("\n"));
+      if (!winIndex.has(h)) winIndex.set(h, []);
+      winIndex.get(h).push({ file: rel, lineIdx: i });
+    }
+  }
+  return winIndex;
+}
+
+/** Упорядочить пару вхождений для детерминированного ключа. */
+function orderPair(o1, o2) {
+  return (o1.file < o2.file || (o1.file === o2.file && o1.lineIdx < o2.lineIdx)) ? [o1, o2] : [o2, o1];
+}
+
+/** Совпадают ли строки назад от позиции (с защитой от самопересечения в одном файле). */
+function matchBackward(lines1, lines2, s1, s2, sameFile) {
+  return s1 > 0 && s2 > 0 && lines1[s1 - 1] === lines2[s2 - 1] && (!sameFile || s1 - 1 !== s2 - 1);
+}
+
+/** Совпадают ли строки вперёд от позиции. */
+function matchForward(lines1, lines2, s1, s2, len) {
+  return s1 + len < lines1.length && s2 + len < lines2.length && lines1[s1 + len] === lines2[s2 + len];
+}
+
+/** Срезать пустые/комментарные строки с краёв блока. */
+function trimBlankEdges(norm1, norm2, s1, s2, len) {
+  while (len > 0 && (norm1[s1] === "" || norm2[s2] === "")) { s1++; s2++; len--; }
+  while (len > 0 && (norm1[s1 + len - 1] === "" || norm2[s2 + len - 1] === "")) { len--; }
+  return { s1, s2, len };
+}
+
+/** Расширить совпавшее окно до максимального блока; null если короче minLines или точный дубль в T2-проходе. */
+function extendPairBlock(fileData, keyProp, minLines, first, second, isT1) {
+  const lines1 = fileData.get(first.file)[keyProp];
+  const lines2 = fileData.get(second.file)[keyProp];
+  const norm1 = fileData.get(first.file).normLines;
+  const norm2 = fileData.get(second.file).normLines;
+  const sameFile = first.file === second.file;
+  let s1 = first.lineIdx;
+  let s2 = second.lineIdx;
+  while (matchBackward(lines1, lines2, s1, s2, sameFile)) { s1--; s2--; }
+  const fwd = extendForward(lines1, lines2, norm1, norm2, s1, s2, sameFile);
+  const t = trimBlankEdges(norm1, norm2, s1, s2, fwd.len);
+  if (t.len < minLines) return null;
+  if (!isT1 && fwd.isExact) return null;
+  const kind = isT1 ? "T1" : "T2";
+  const blockText = (isT1 ? norm1 : lines1).slice(t.s1, t.s1 + t.len).join("\n");
+  return { file1: first.file, start1: t.s1 + 1, file2: second.file, start2: t.s2 + 1, len: t.len, kind, hash: hashString(blockText) };
+}
+
+/** Расширение вперёд с флагом точного совпадения нормализованных строк. */
+function extendForward(lines1, lines2, norm1, norm2, s1, s2, sameFile) {
+  let len = 0;
+  let isExact = true;
+  while (matchForward(lines1, lines2, s1, s2, len)) {
+    if (sameFile && s1 + len >= s2) break;
+    if (norm1[s1 + len] !== norm2[s2 + len]) isExact = false;
+    len++;
+  }
+  return { len, isExact };
+}
+
+/** Все попарные блоки одного прохода (T1 или T2). */
+function scanPairBlocks(fileData, keyProp, minLines, isT1) {
+  const winIndex = indexWindows(fileData, keyProp, minLines);
+  const visited = new Set();
+  const pairBlocks = [];
+  for (const [, occs] of winIndex) {
+    collectOccPairs(fileData, keyProp, minLines, isT1, occs, visited, pairBlocks);
+  }
+  return pairBlocks;
+}
+
+/** Пары одного хеша: расширить, пометить посещёнными, собрать блоки. */
+function collectOccPairs(fileData, keyProp, minLines, isT1, occs, visited, pairBlocks) {
+  if (occs.length < 2) return;
+  for (let i = 0; i < occs.length; i++) {
+    for (let j = i + 1; j < occs.length; j++) {
+      tryOccPair(fileData, keyProp, minLines, isT1, occs[i], occs[j], visited, pairBlocks);
+    }
+  }
+}
+
+/** Одна пара вхождений: расширить в блок или пропустить. */
+function tryOccPair(fileData, keyProp, minLines, isT1, a, b, visited, pairBlocks) {
+  const [first, second] = orderPair(a, b);
+  if (first.file === second.file && first.lineIdx === second.lineIdx) return;
+  const pairKey = `${first.file}<=>${second.file}`;
+  if (visited.has(`${pairKey}:${first.lineIdx}:${second.lineIdx}`)) return;
+  const block = extendPairBlock(fileData, keyProp, minLines, first, second, isT1);
+  if (!block) return;
+  for (let k = 0; k <= block.len - minLines; k++) {
+    visited.add(`${pairKey}:${block.start1 - 1 + k}:${block.start2 - 1 + k}`);
+  }
+  pairBlocks.push(block);
 }
 
 function checkExempt(clone, _root, fileData) {
@@ -508,106 +519,93 @@ export function main(argv = process.argv.slice(2)) {
     printUsage();
     return 2;
   }
-  if (args.help) {
-    printUsage();
-    return 0;
-  }
-
+  if (args.help) { printUsage(); return 0; }
   const root = args.root ? resolve(args.root) : process.cwd();
   if (!existsSync(root) || !statSync(root).isDirectory()) {
     console.error(`clone-coverage: каталог --root '${root}' не существует`);
     return 2;
   }
-
   const baselinePath = args.baseline ? resolve(args.baseline) : join(root, DEFAULT_BASELINE_FILE);
   const command = args._[0];
-  if (!command) {
-    printUsage();
-    return 0;
-  }
-
-  if (command === "baseline") {
-    try {
-      const data = buildBaseline(root, { baselinePath });
-      writeFileSync(baselinePath, JSON.stringify(data, null, 2) + "\n", "utf8");
-      const cloneCount = data.clones.length;
-      const rel = relative(root, baselinePath).replace(/\\/g, "/") || baselinePath;
-
-      if (args.json) {
-        console.log(JSON.stringify({ ok: true, baseline: rel, clones: cloneCount }, null, 2));
-      } else {
-        console.log(`clone-coverage: baseline сохранён в ${rel} (зафиксировано нарушителей: ${cloneCount}).`);
-      }
-      return 0;
-    } catch (err) {
-      console.error(`clone-coverage: ошибка создания baseline: ${err.message}`);
-      return 2;
-    }
-  }
-
-  if (command === "check") {
-    let result;
-    try {
-      result = checkClones(root, { baselinePath });
-    } catch (err) {
-      console.error(`clone-coverage: ${err.message}`);
-      return 2;
-    }
-
-    if (args.json) {
-      console.log(JSON.stringify(result, null, 2));
-    } else {
-      const exemptClones = result.clones.filter((x) => x.exempt);
-      for (const ex of exemptClones) {
-        console.log(`  [EXEMPT] ${ex.key} (${ex.lines} строк) — ${ex.reason}`);
-      }
-      if (result.failures.length > 0) {
-        console.error("clone-coverage: ОБНАРУЖЕНЫ НАРУШЕНИЯ ДУБЛИРОВАНИЯ КОДА\n");
-        for (const f of result.failures) {
-          console.error(`  [FAIL] ${f.message}`);
-        }
-        console.error(`\nclone-coverage: FAIL — ${result.failures.length} нарушений. Зафиксируйте \`baseline\` или устраните дублирование.`);
-      } else {
-        const exemptNotes = result.stats.exempt > 0 ? ` (${result.stats.exempt} exempt)` : "";
-        console.log(
-          `clone-coverage: PASS — нарушений нет${exemptNotes} (coverage: ${(result.coverage * 100).toFixed(1)}%). ` +
-          `Проверено ${result.stats.scannedFiles} файлов, найдено ${result.stats.clonesCount} клонов.`
-        );
-      }
-    }
-    return result.ok ? 0 : 1;
-  }
-
-  if (command === "scan") {
-    let details;
-    try {
-      details = scanClonesWithDetails(root);
-    } catch (err) {
-      console.error(`clone-coverage: ${err.message}`);
-      return 2;
-    }
-    const ratio = coverage(details.clones, details.totalLines);
-
-    if (args.json) {
-      console.log(JSON.stringify({ ok: true, clones: details.clones, coverage: ratio, totalLines: details.totalLines }, null, 2));
-    } else {
-      console.log(
-        `clone-coverage: найдено ${details.clones.length} клонов ` +
-        `(minLines: ${DEFAULT_THRESHOLDS.minLines}, failLines: ${DEFAULT_THRESHOLDS.failLines}, coverage: ${(ratio * 100).toFixed(1)}%):\n`
-      );
-      for (const c of details.clones) {
-        console.log(`  [${c.kind}] ${c.lines} строк (hash: ${c.hash})`);
-        for (const occ of c.occurrences) {
-          console.log(`      ${occ.file}:${occ.line}`);
-        }
-      }
-    }
-    return 0;
-  }
-
+  if (!command) { printUsage(); return 0; }
+  if (command === "baseline") return runBaselineCommand(root, baselinePath, args);
+  if (command === "check") return runCheckCommand(root, baselinePath, args);
+  if (command === "scan") return runScanCommand(root, args);
   console.error(`clone-coverage: неизвестная команда '${command}'`);
   printUsage();
   return 2;
+}
+
+/** Команда baseline: зафиксировать текущих нарушителей. */
+function runBaselineCommand(root, baselinePath, args) {
+  try {
+    const data = buildBaseline(root, { baselinePath });
+    writeFileSync(baselinePath, JSON.stringify(data, null, 2) + "\n", "utf8");
+    const rel = relative(root, baselinePath).replace(/\\/g, "/") || baselinePath;
+    if (args.json) console.log(JSON.stringify({ ok: true, baseline: rel, clones: data.clones.length }, null, 2));
+    else console.log(`clone-coverage: baseline сохранён в ${rel} (зафиксировано нарушителей: ${data.clones.length}).`);
+    return 0;
+  } catch (err) {
+    console.error(`clone-coverage: ошибка создания baseline: ${err.message}`);
+    return 2;
+  }
+}
+
+/** Команда check: сверка с baseline, печать нарушений. */
+function runCheckCommand(root, baselinePath, args) {
+  let result;
+  try {
+    result = checkClones(root, { baselinePath });
+  } catch (err) {
+    console.error(`clone-coverage: ${err.message}`);
+    return 2;
+  }
+  if (args.json) console.log(JSON.stringify(result, null, 2));
+  else printCheckResult(result);
+  return result.ok ? 0 : 1;
+}
+
+/** Человекочитаемая печать результата check. */
+function printCheckResult(result) {
+  for (const ex of result.clones.filter((x) => x.exempt)) {
+    console.log(`  [EXEMPT] ${ex.key} (${ex.lines} строк) — ${ex.reason}`);
+  }
+  if (result.failures.length > 0) {
+    console.error("clone-coverage: ОБНАРУЖЕНЫ НАРУШЕНИЯ ДУБЛИРОВАНИЯ КОДА\n");
+    for (const f of result.failures) console.error(`  [FAIL] ${f.message}`);
+    console.error(`\nclone-coverage: FAIL — ${result.failures.length} нарушений. Зафиксируйте \`baseline\` или устраните дублирование.`);
+  } else {
+    const exemptNotes = result.stats.exempt > 0 ? ` (${result.stats.exempt} exempt)` : "";
+    console.log(
+      `clone-coverage: PASS — нарушений нет${exemptNotes} (coverage: ${(result.coverage * 100).toFixed(1)}%). ` +
+      `Проверено ${result.stats.scannedFiles} файлов, найдено ${result.stats.clonesCount} клонов.`
+    );
+  }
+}
+
+/** Команда scan: список клонов без сверки. */
+function runScanCommand(root, args) {
+  let details;
+  try {
+    details = scanClonesWithDetails(root);
+  } catch (err) {
+    console.error(`clone-coverage: ${err.message}`);
+    return 2;
+  }
+  const ratio = coverage(details.clones, details.totalLines);
+  if (args.json) {
+    console.log(JSON.stringify({ ok: true, clones: details.clones, coverage: ratio, totalLines: details.totalLines }, null, 2));
+    return 0;
+  }
+  console.log(
+    `clone-coverage: найдено ${details.clones.length} клонов ` +
+    `(minLines: ${DEFAULT_THRESHOLDS.minLines}, failLines: ${DEFAULT_THRESHOLDS.failLines}, coverage: ${(ratio * 100).toFixed(1)}%):\n`
+  );
+  for (const c of details.clones) {
+    console.log(`  [${c.kind}] ${c.lines} строк (hash: ${c.hash})`);
+    for (const occ of c.occurrences) console.log(`      ${occ.file}:${occ.line}`);
+  }
+  return 0;
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
