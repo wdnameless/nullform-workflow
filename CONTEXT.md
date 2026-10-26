@@ -78,6 +78,9 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Solution ladder** — the ordered preference for resolving implementation needs (reuse > stdlib > platform > installed dep > one-line > minimum) evaluated after understanding the task. Never applied at the expense of security, validation at boundaries, error handling with data loss risk, or accessibility.
 - **Defer marker** — a single-line code comment documenting an intentional simplification ceiling: `defer: <what> | ceiling: <limit> | upgrade: <trigger>`. Recognized only when `defer:` starts the comment body immediately after the comment prefix (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`) and optional whitespace. Enables deliberate debt with an explicit boundary and upgrade trigger.
 - **Debt ledger** — the registry and audit report of all active defer markers, generated and verified by `tools/debt-ledger.mjs`.
+- **No validation padding** — responses open with analysis or critique, never with praise, agreement, or filler ("great idea", "you're right"). Sycophancy degrades truth-seeking (Sharma et al., arXiv:2310.13548).
+- **Premise falsification** — before implementing a user's architectural proposal, actively attempt to falsify it: name 1–3 failure modes, edge cases, bottlenecks, or risks first. Multi-agent debate improves factuality over single-pass agreement (Du et al., arXiv:2305.14325).
+- **Unverified assumption** — a claim in the prompt that cannot be checked against context, code, or docs, tagged `[UNVERIFIED ASSUMPTION]` and tested before dependent code is written. Silence never confirms it.
 
 ## Roles
 
