@@ -130,6 +130,21 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
   spreading across callers, it was a shallow wrapper.
 - **Seam** — a place where behaviour can be altered without editing the consuming
   source. Interfaces belong to the consumer, not the provider.
+- **Cohesion** — why the parts of one module belong together, the counterpart of
+  coupling. Six named levels, weakest first: *coincidental* (nothing but proximity —
+  `helpers/`, `utils/`), *logical* (shared theme, no shared data), *temporal* (invoked
+  at the same moment), *communicational* (same input/output data), *sequential* (one's
+  output is the next one's input), *functional* (all parts serve one function). Only
+  the last survives review; `split:` names a unit stuck at the first two.
+- **LCOM4** — the one cohesion metric worth quoting: nodes are methods and attributes,
+  an edge is "method reads attribute" or "method calls method", and the score is the
+  number of connected components. `1` is good. A **diagnostic that starts a
+  conversation**, never a gate: the score moves with the edge definition, so a
+  threshold would turn one arbitrary choice into a build failure.
+- **Split / merge** — the two `@reviewer` tags that move module boundaries in opposite
+  directions. `split:` extracts a unit whose parts share only a name, type, or topic;
+  `merge:` collapses two units always called or always changed together. Without the
+  pair, every Stage-B pass pushes toward fewer, larger modules until `utils` returns.
 - **Expand–Contract** — the protocol for a wide refactor (>3 files or a shared
   contract): expand the new form beside the old, migrate callers in batches,
   contract the old form only when nothing references it.

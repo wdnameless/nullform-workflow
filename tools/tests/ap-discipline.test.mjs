@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateWorkerReport } from '../worker-contract.mjs';
+import { validateReturnContract } from '../return-contract.mjs';
 import {
   DEPTH_DIMENSIONS,
   ADVERSARIAL_QUESTIONS,
@@ -13,75 +13,55 @@ import {
   repairBudget,
 } from '../review/arbitrate.mjs';
 
-test('contract valid: accepts compliant report with REDPROOF and mandatory sections', () => {
+test('contract valid: accepts a compliant report with mandatory sections', () => {
   const validReport = [
     'STATUS: DONE',
-    'FILES: tools/worker-contract.mjs, tools/checklists.mjs',
-    'TESTS: node --test tools/tests/ap-discipline.test.mjs -> было 0 -> стало 6',
-    'INTERFACES: validateWorkerReport, depthChecklist, adversarialPass, scoreReview, consolidateF1, repairBudget',
+    'FILES: tools/return-contract.mjs, tools/checklists.mjs',
+    'TESTS: было 6 → стало 6',
+    'INTERFACES: validateReturnContract, depthChecklist, adversarialPass',
     'REQUIREMENTS: R04, R08, R09',
     'CONCERNS: none',
-    'REDPROOF: node --test tools/tests/ap-discipline.test.mjs failed with ERR_MODULE_NOT_FOUND',
   ].join('\n');
-
-  const res = validateWorkerReport(validReport);
-  assert.equal(res.ok, true);
-  assert.deepEqual(res.violations, []);
+  const res = validateReturnContract(validReport);
+  assert.equal(res.valid, true, JSON.stringify(res.errors));
 });
 
-test('contract invalid: rejects missing REDPROOF line and missing sections naming violations', () => {
-  const missingRedproof = [
+test('contract invalid: rejects missing sections, prose FILES and non-numeric TESTS', () => {
+  const missing = ['STATUS: DONE', 'CONCERNS: none'].join('\n');
+  const res1 = validateReturnContract(missing);
+  assert.equal(res1.valid, false);
+  assert.ok(res1.errors.some((e) => /FILES|TESTS|INTERFACES|REQUIREMENTS/i.test(e)));
+
+  // The deleted worker-contract copy accepted this: prose in FILES and a free-text
+  // TESTS value passed its section-only check.
+  const weak = [
     'STATUS: DONE',
-    'FILES: tools/worker-contract.mjs',
-    'TESTS: node --test',
-    'INTERFACES: validateWorkerReport',
-    'REQUIREMENTS: R04',
+    'FILES: some prose describing things',
+    'TESTS: whatever',
+    'INTERFACES: none',
+    'REQUIREMENTS: R01',
     'CONCERNS: none',
   ].join('\n');
-
-  const res1 = validateWorkerReport(missingRedproof);
-  assert.equal(res1.ok, false);
-  assert.ok(res1.violations.some(v => /REDPROOF/i.test(v)));
-
-  const missingSections = [
-    'STATUS: DONE',
-    'FILES: tools/worker-contract.mjs',
-    'REDPROOF: test failed as expected',
-  ].join('\n');
-
-  const res2 = validateWorkerReport(missingSections);
-  assert.equal(res2.ok, false);
-  assert.ok(res2.violations.some(v => /TESTS/i.test(v)));
-  assert.ok(res2.violations.some(v => /INTERFACES/i.test(v)));
-  assert.ok(res2.violations.some(v => /REQUIREMENTS/i.test(v)));
-  assert.ok(res2.violations.some(v => /CONCERNS/i.test(v)));
-
-  const nonString = validateWorkerReport(null);
-  assert.equal(nonString.ok, false);
-  assert.ok(nonString.violations.length > 0);
+  const res2 = validateReturnContract(weak);
+  assert.equal(res2.valid, false, 'prose FILES must be refused');
+  assert.ok(res2.errors.some((e) => /FILES/i.test(e)));
+  assert.ok(res2.errors.some((e) => /TESTS/i.test(e)));
 });
 
-test('contract oversize: rejects reports exceeding 25 non-empty lines naming violation', () => {
+test('contract oversize: rejects reports exceeding 25 lines', () => {
   const lines = [
     'STATUS: DONE',
-    'FILES: tools/worker-contract.mjs',
-    'TESTS: node --test',
-    'INTERFACES: validateWorkerReport',
+    'FILES: tools/return-contract.mjs',
+    'TESTS: было 1 → стало 2',
+    'INTERFACES: validateReturnContract',
     'REQUIREMENTS: R04',
     'CONCERNS: none',
-    'REDPROOF: test failed',
   ];
-  for (let i = 1; i <= 20; i++) {
-    lines.push(`Extra comment line ${i}`);
-  }
-  // Total non-empty lines: 7 + 20 = 27 (> 25)
-  const oversizeReport = lines.join('\n');
-
-  const res = validateWorkerReport(oversizeReport);
-  assert.equal(res.ok, false);
-  assert.ok(res.violations.some(v => /oversize|exceeds/i.test(v)));
+  for (let i = 1; i <= 20; i++) lines.push(`Extra line ${i}`);
+  const res = validateReturnContract(lines.join('\n'));
+  assert.equal(res.valid, false);
+  assert.ok(res.errors.some((e) => /25|строк/i.test(e)));
 });
-
 test('depth missing names: reports missing depth dimensions keyword-anchored', () => {
   assert.equal(DEPTH_DIMENSIONS.length, 8);
 
@@ -170,19 +150,19 @@ test('F1 merges: consolidates branch blockers into single F1 ticket', () => {
   ]);
 });
 
-test('budget allows/refuses: allows within budget, throws when repairs>2, retries>2, reReviews>1', () => {
+test('budget allows/refuses: allows within budget, throws when repairs>2, retries>2, reReviews>2', () => {
   // Allow cases
   const allowance0 = repairBudget({ repairs: 0, retries: 0, reReviews: 0 });
-  assert.deepEqual(allowance0, { repairs: 2, retries: 2, reReviews: 1 });
+  assert.deepEqual(allowance0, { repairs: 2, retries: 2, reReviews: 2 });
 
-  const allowanceMax = repairBudget({ repairs: 2, retries: 2, reReviews: 1 });
+  const allowanceMax = repairBudget({ repairs: 2, retries: 2, reReviews: 2 });
   assert.deepEqual(allowanceMax, { repairs: 0, retries: 0, reReviews: 0 });
 
-  const allowancePartial = repairBudget({ repairs: 1, retries: 1, reReviews: 0 });
+  const allowancePartial = repairBudget({ repairs: 1, retries: 1, reReviews: 1 });
   assert.deepEqual(allowancePartial, { repairs: 1, retries: 1, reReviews: 1 });
 
   // Default empty state
-  assert.deepEqual(repairBudget(), { repairs: 2, retries: 2, reReviews: 1 });
+  assert.deepEqual(repairBudget(), { repairs: 2, retries: 2, reReviews: 2 });
 
   // Refuse cases: repairs > 2
   assert.throws(
@@ -206,13 +186,13 @@ test('budget allows/refuses: allows within budget, throws when repairs>2, retrie
     }
   );
 
-  // Refuse cases: reReviews > 1
+  // Refuse cases: reReviews > 2 (CONTEXT.md: one initial review + at most two re-reviews)
   assert.throws(
-    () => repairBudget({ repairs: 0, retries: 0, reReviews: 2 }),
+    () => repairBudget({ repairs: 0, retries: 0, reReviews: 3 }),
     (err) => {
       assert.ok(err instanceof Error);
       assert.match(err.message, /reReview/i);
-      assert.match(err.message, /1/);
+      assert.match(err.message, /2/);
       return true;
     }
   );

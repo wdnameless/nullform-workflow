@@ -4,6 +4,7 @@ import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:pat
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { authorize } from './gatekeeper.mjs';
 import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot, isPathInsideRoot, validateRootPath, validatePathWithinScope, cleanGitEnv } from '../worktree-snapshot.mjs';
 import { sanitizeError } from '../installation/state.mjs';
 import { admitSession, holdReservation, inspectAdmission, nanoUsdToUsd, PINNED_CONTEXT_TOKENS, settleReservation, validatePolicy, EXECUTOR, redactSecret } from './budget.mjs';
@@ -444,6 +445,12 @@ export function runReviewRecord(options) {
   if (options.prompt !== undefined) throw new Error('--prompt bypass is forbidden; roles and manifest are mandatory');
   if (!ompRunner && !httpExecutor && (typeof model !== 'string' || !/^[^/\s]+\/\S+$/.test(model))) throw new Error('Exact --model provider/model selector required');
   if (productCommand !== null && (!Array.isArray(productCommand) || !productCommand.length || productCommand.some(p => typeof p !== 'string' || p.includes('\0')) || !productCommand[0].trim())) throw new Error('product-command must be a JSON argv array');
+  // Product commands run an operator binary; send them through the same pre-call
+  // authorization as every other tool, so a shell/network argv is a recorded refusal.
+  if (productCommand?.length) {
+    const decision = authorize(productCommand[0], productCommand.slice(1));
+    if (!decision.ok) throw new Error(`product-command refused by gatekeeper (${decision.rule})`);
+  }
   if (role === 'oracle' && !ompRunner && !productCommand) throw new Error('Oracle requires --product-command JSON argv to exercise product');
   if (resumeSessionDir !== null && (typeof resumeSessionDir !== 'string' || !resumeSessionDir || redo)) throw new Error('Explicit resume-session directory required; resume is not --redo');
   // Resuming already-paid work reuses the original captured contract and needs no key.

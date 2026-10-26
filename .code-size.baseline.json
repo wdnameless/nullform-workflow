@@ -22,8 +22,8 @@
       "reason": ""
     },
     "tools/dashboard-collectors.mjs": {
-      "lines": 1673,
-      "reason": ""
+      "lines": 1697,
+      "reason": "G4 by evidence chain; trajectory loop detection; hud-status contract emitted from values already computed"
     },
     "tools/dashboard-ui.mjs": {
       "lines": 1564,
@@ -63,11 +63,19 @@
     },
     "tools/tests/workflow-gate.test.mjs": {
       "lines": 1222,
-      "reason": "Committed fixture grows (d8ccafb): recon note must name real files, interfaces must live inside the change, spec needs ADDED+Scenario \u2014 baseline had not followed the commit"
+      "reason": "Committed fixture grows (d8ccafb): recon note must name real files, interfaces must live inside the change, spec needs ADDED+Scenario — baseline had not followed the commit"
     },
     "tools/workflow.mjs": {
       "lines": 1680,
       "reason": "Autopilot parity (R01): mode/depth dials in cmdStart + state"
+    },
+    "tools/workflow-ci.mjs": {
+      "lines": 707,
+      "reason": "Per-tier changed-LINE ceiling wired from tripwire (file count cannot see a large single-file edit)"
+    },
+    "tools/review/evidence.mjs": {
+      "lines": 704,
+      "reason": "product-command goes through the gatekeeper pre-call authorization"
     }
   },
   "functions": {
@@ -121,7 +129,7 @@
       "reason": ""
     },
     "tools/dashboard-collectors.mjs:collectRunState": {
-      "lines": 159,
+      "lines": 160,
       "file": "tools/dashboard-collectors.mjs",
       "name": "collectRunState",
       "line": 647,

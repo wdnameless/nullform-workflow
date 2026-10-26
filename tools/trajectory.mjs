@@ -65,3 +65,42 @@ export function observeTrajectory(events, { maxSteps = 200, loopWindow = 5 } = {
 
   return { loops };
 }
+
+/**
+ * Parse tool calls from a session transcript and flag repetition loops.
+ *
+ * Same transcript the caller already reads, so no extra IO: one JSONL pass.
+ * @param {string} content - Raw transcript text.
+ * @returns {{ loops: string[] }} Loops (empty when unparseable).
+ */
+/** Tool calls from one transcript line; [] when the line is not a tool_use carrier. */
+function callsOfLine(line) {
+  if (!line.includes('"name"')) return [];
+  try {
+    const obj = JSON.parse(line);
+    const fromMsg = obj?.message?.content;
+    let blocks = [];
+    if (Array.isArray(fromMsg)) blocks = fromMsg;
+    else if (Array.isArray(obj?.content)) blocks = obj.content;
+    const out = [];
+    for (const b of blocks) {
+      if (b && typeof b.name === "string" && b.type === "tool_use") out.push({ tool: b.name, input: b.input });
+    }
+    return out;
+  } catch { return []; }
+}
+
+/**
+ * Parse tool calls from a session transcript and flag repetition loops.
+ *
+ * Same transcript the caller already reads, so no extra IO: one JSONL pass.
+ * @param {string} content - Raw transcript text.
+ * @returns {{ loops: string[] }} Loops (empty when unparseable).
+ */
+export function loopsOfTranscript(content) {
+  const calls = [];
+  for (const line of String(content || "").split("\n")) calls.push(...callsOfLine(line));
+  if (calls.length === 0) return { loops: [] };
+  try { return { loops: observeTrajectory(calls, { maxSteps: 5000, loopWindow: 5 }).loops }; }
+  catch { return { loops: [] }; }
+}

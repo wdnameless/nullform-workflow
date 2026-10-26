@@ -2,7 +2,15 @@
 /**
  * tools/dashboard-ui.mjs — HTML-шаблон дашборда (выделен из dashboard.mjs 1:1).
  * Чистая функция data -> html, без node-зависимостей.
+ *
+ * Клиентский режим «эскиз архитектуры» (код, CSS, подписи) живёт в
+ * dashboard-arch-client.mjs и вставляется сюда четырьмя врезками: +6 строк сверх
+ * baseline — цена того, что страницу по-прежнему собирает один шаблон.
+ *
+ * defer: page assembly in one template | ceiling: 1570 lines (baseline 1564 + 6 injection lines) | upgrade: move the arch tab markup into the client module once a second tab moves the same way
  */
+import { SKETCH_CLIENT_JS, SKETCH_CSS, SKETCH_I18N_RU, SKETCH_I18N_EN } from "./dashboard-arch-client.mjs";
+import { SHELL_CLIENT_JS, SHELL_CSS, SHELL_I18N_RU, SHELL_I18N_EN } from "./dashboard-shell-client.mjs";
 
 /**
  * Автономная страница «Nullform Console»: серверный каркас + клиентский рендер.
@@ -201,6 +209,8 @@ export function generateDashboardHtml(data, options = {}) {
   .map .edge { fill: none; stroke: var(--dim-2); opacity: .55; }
   .map .edge.hot { stroke: var(--lime); opacity: 1; }
   .map .edge-w { fill: var(--dim-2); font-family: var(--mono); font-size: 9.5px; text-anchor: middle; }
+${SKETCH_CSS}
+${SHELL_CSS}
   .row.sel { background: var(--panel-2); }
   .wave-agents { margin: 4px 0 0 27px; display: flex; gap: 6px; flex-wrap: wrap; }
 
@@ -363,7 +373,9 @@ export function generateDashboardHtml(data, options = {}) {
 </div>
 
 <script>
+  /*STATE-BEGIN*/
   window.NF_SNAPSHOT = ${payload};
+  /*STATE-END*/
   var DATA = window.NF_SNAPSHOT;
   var IS_FROZEN = ${isFrozen};
   var POLL_MS = ${pollMs};
@@ -407,6 +419,8 @@ export function generateDashboardHtml(data, options = {}) {
       topFiles: "Крупнейшие файлы", noDeps: "связей нет", selectNode: "Выберите узел, чтобы увидеть детали",
       kindCode: "код", kindLaw: "законы", kindSkills: "навыки", kindTests: "тесты", kindSpec: "спеки", kindOther: "прочее", kindRoot: "проект",
       depImport: "импорт", depRef: "ссылка",
+${SKETCH_I18N_RU}
+${SHELL_I18N_RU}
       // логи
       wfEvents: "События воркфлоу", agentSession: "Сессия агента", noEvents: "Событий пока нет — они появятся после start/artifact/close",
       noTranscript: "Транскрипт сессии не найден",
@@ -477,6 +491,8 @@ export function generateDashboardHtml(data, options = {}) {
       topFiles: "Largest files", noDeps: "no links", selectNode: "Select a node to see details",
       kindCode: "code", kindLaw: "law", kindSkills: "skills", kindTests: "tests", kindSpec: "specs", kindOther: "other", kindRoot: "project",
       depImport: "import", depRef: "reference",
+${SKETCH_I18N_EN}
+${SHELL_I18N_EN}
       wfEvents: "Workflow events", agentSession: "Agent session", noEvents: "No events yet — they appear after start/artifact/close",
       noTranscript: "Session transcript not found",
       diffHint: "Git diffs — click a file to open the diff", cleanTree: "Working tree is clean",
@@ -515,7 +531,7 @@ export function generateDashboardHtml(data, options = {}) {
       runZoneOrange: "Orange",
       runZoneRed: "Red",
       offline: "OFFLINE", offlineBadge: "offline snapshot", noRun: "No active workflow run",
-    }
+    },
   };
   function t(k) { return (I18N[lang] && I18N[lang][k]) || (I18N.ru[k] || k); }
 
@@ -1009,7 +1025,17 @@ export function generateDashboardHtml(data, options = {}) {
       '<div class="run-feed-list">' + feedRows + '</div>' +
     '</div>';
 
-    host.innerHTML = heroHtml + trackHtml + tilesHtml + gatesHtml + wavesHtml + wordsHtml + feedHtml;
+    // Три карточки-оболочки: их содержимое рисует SHELL_CLIENT_JS из тех же данных,
+    // поэтому разметка здесь остаётся пустой рамкой, а логика — в одном модуле.
+    var neededHtml = '<div class="card" id="shell-needed" style="margin-bottom:16px"></div>';
+    var blindHtml = '<div class="card" id="shell-blind" style="margin-bottom:16px"></div>';
+
+    host.innerHTML = heroHtml + trackHtml + tilesHtml + gatesHtml +
+      '<div id="shell-checks-age" style="margin-bottom:12px"></div>' +
+      neededHtml + blindHtml + wavesHtml + wordsHtml + feedHtml;
+    renderNeeded(d);
+    renderBlind(d);
+    renderChecksAge(d);
     host.querySelectorAll(".run-filter-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
         setRunFilter(btn.getAttribute("data-filter"));
@@ -1103,6 +1129,7 @@ export function generateDashboardHtml(data, options = {}) {
 
   function renderArch() {
     var host = document.getElementById("tab-arch");
+    if (ARCH_MODE === "sketch") { renderSketchTab(host); return; }
     var modes = [["tree", t("viewTree")], ["graph", t("viewGraph")], ["table", t("viewTable")]];
     host.innerHTML =
       '<div class="map-tools">' +
@@ -1136,6 +1163,8 @@ export function generateDashboardHtml(data, options = {}) {
   function setArchMode(m) { ARCH_MODE = m; localStorage.setItem("nf-arch-mode", m); renderArch(); }
   function setZoom(z) { zoom = Math.max(0.4, Math.min(2.5, z)); var el = document.getElementById("zoom-val"); if (el) el.textContent = Math.round(zoom * 100) + "%"; drawGraph(); }
   function drawArch() { if (TAB === "arch") renderArch(); }
+${SKETCH_CLIENT_JS}
+${SHELL_CLIENT_JS}
 
   /* --- режим 1: схема (дерево) --- */
   function visibleTree(node) {
@@ -1535,7 +1564,7 @@ export function generateDashboardHtml(data, options = {}) {
       .catch(function () { document.getElementById("modal-body").textContent = "Дифф доступен только в живом режиме"; });
   }
   function closeModal() { document.getElementById("modal").classList.remove("open"); }
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
+  document.addEventListener("keydown", function (e) { onEscape(e); });
 
   function boot() {
     try {

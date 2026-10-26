@@ -24,6 +24,74 @@ import {
   invokeDoctor
 } from "./verify-shared.mjs";
 
+/** Last actionable line of a failed subprocess, so audit and verify explain the
+ *  same failure the same way instead of a generic message. */
+/** Codemap drift, read through the tool's documented JSON contract. A gate that
+ *  regexed the human sentence broke the moment its spacing changed. */
+function codemapCurrency(repoRoot, harnessRoot) {
+  if (!existsSync(join(repoRoot, ".codemap", "state.json"))) return { ok: true, detail: "not initialised (optional)" };
+  // The repository's own copy: the gate must test the code under review, not the
+  // installed harness tree.
+  const cm = join(existsSync(join(repoRoot, "tools", "codemap.mjs")) ? repoRoot : harnessRoot, "tools", "codemap.mjs");
+  const r = runProc(process.execPath, [cm, "changes", "--root", repoRoot, "--json"]);
+  if (r.status !== 0 || r.error) return { ok: false, detail: commandFailure(r, "codemap") };
+  const counts = parseJsonOrNull(r.stdout)?.counts;
+  if (!counts) return { ok: false, detail: "codemap did not return the documented JSON contract" };
+  const n = counts.added + counts.modified + counts.removed;
+  // Stale is stale: an ok:true with a "may be stale" note made a drifted map look clean.
+  return { ok: n === 0, detail: n === 0 ? "current" : `${n} file(s) changed - CODEMAP.md is stale` };
+}
+
+/**
+ * Coupling stability over local ESM imports: I = fanOut / (fanOut + fanIn).
+ * A module many others depend on must stay stable (low I): if it also imports
+ * widely, every consumer ends up re-implementing part of it. Fan-in 0 / fan-out 0
+ * modules are isolated, not stable, and are reported separately.
+ */
+function couplingStability(repoRoot) {
+  const root = join(repoRoot, "tools");
+  if (!existsSync(root)) return { ok: true, detail: "n/a (no tools directory)" };
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) { if (!["node_modules", "tests"].includes(entry.name)) walk(join(dir, entry.name)); continue; }
+      if (entry.name.endsWith(".mjs")) files.push(join(dir, entry.name).replace(/\\/g, "/"));
+    }
+  };
+  walk(root);
+  const out = new Map(), inc = new Map();
+  for (const f of files) {
+    const deps = new Set();
+    for (const m of readFileSync(f, "utf8").matchAll(/from\s+["'](\.[^"']+)["']/g)) deps.add(join(f, "..", m[1]).replace(/\\/g, "/"));
+    out.set(f, deps);
+    for (const d of deps) inc.set(d, (inc.get(d) || 0) + 1);
+  }
+  const hubs = [];
+  for (const f of files) {
+    const o = out.get(f).size, i = inc.get(f) || 0;
+    if (i < 3 || o + i === 0) continue;
+    const instability = o / (o + i);
+    if (instability > 0.4) hubs.push({ f, o, i, instability: Number(instability.toFixed(2)) });
+  }
+  const isolated = files.filter((f) => (inc.get(f) || 0) === 0 && out.get(f).size === 0).length;
+  const note = `${isolated} isolated module(s) with no consumer`;
+  if (!hubs.length) return { ok: true, detail: `no unstable hub (${note})` };
+  const worst = hubs.sort((a, b) => b.instability - a.instability).slice(0, 4)
+    .map((h) => `${h.f.split("/").pop()} I=${h.instability} in=${h.i} out=${h.o}`).join(" | ");
+  return { ok: false, detail: `${hubs.length} unstable hub(s): ${worst} (${note})` };
+}
+
+function commandFailure(result, what) {
+  const out = `${result?.stdout || ""}${result?.stderr || ""}`.trim();
+  const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return lines.slice(-4).join(" | ") || `${what} failed (exit ${result?.status ?? "error"})`;
+}
+
+/** Parsed JSON or null: a broken report must not be read as a clean result. */
+function parseJsonOrNull(text) {
+  try { return JSON.parse(text || "{}"); } catch { return null; }
+}
+
 export async function runAuditProfile(ctx) {
   const { harnessRoot, repoRoot, userHome, agentDir, scope } = ctx;
   const results = [];
@@ -169,20 +237,7 @@ export async function runAuditProfile(ctx) {
   // 10 codemap currency
   results.push(
     await executeCheck(10, "codemap currency", () => {
-      const state = join(repoRoot, ".codemap", "state.json");
-      if (!existsSync(state)) return { ok: true, detail: "not initialised (optional)" };
-      const cm = join(harnessRoot, "tools", "codemap.mjs");
-      const r = runProc(process.execPath, [cm, "changes", "--root", repoRoot]);
-      const text = (r.stdout || "") + (r.stderr || "");
-      const m = text.match(/changes:\s*\+(\d+)\s*~(\d+)\s*-(\d+)/);
-      if (!m) return { ok: true, detail: "no change data" };
-      const n = parseInt(m[1], 10) + parseInt(m[2], 10) + parseInt(m[3], 10);
-      return {
-        // Stale is stale: reporting ok:true with a "may be stale" note made the audit
-        // list a drifted map as clean.
-        ok: n === 0,
-        detail: n === 0 ? "current" : `${n} file(s) changed - CODEMAP.md is stale`,
-      };
+      return codemapCurrency(repoRoot, harnessRoot);
     })
   );
 
@@ -246,6 +301,13 @@ export async function runAuditProfile(ctx) {
       }
       return { ok: true, detail: "within budget" };
     })
+  );
+
+
+  // 15 coupling stability: a hub that depends on as much as it is depended on cannot
+  // be changed safely, and every consumer copy of its logic drifts.
+  results.push(
+    await executeCheck(15, "coupling stability (unstable hubs)", () => couplingStability(repoRoot))
   );
 
   return results;

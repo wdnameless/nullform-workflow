@@ -11,7 +11,11 @@ import { fileURLToPath } from "node:url";
 import { scanRepo } from "./debt-ledger.mjs";
 import { redactSecrets } from "./brief.mjs";
 import { readJsonlSafe, resolveLogFile } from "./session-log.mjs";
-export function projectToken(absPath) {
+import { isPositiveOracleVerdict, isNegativeOracleVerdict, validateReviewEvidence } from "./review/evidence.mjs";
+import { loopsOfTranscript } from "./trajectory.mjs";
+import { emitHudStatus } from "./hud-status.mjs";
+import { isBinaryName, collectArchDrill } from "./arch-drill.mjs";
+import { collectHumanGap, checksAge, runStatusOf } from "./dashboard-needed.mjs";export function projectToken(absPath) {
   return createHash("sha256").update(resolve(absPath)).digest("hex").slice(0, 16);
 }
 function computeDashboardBuild() {
@@ -101,9 +105,6 @@ export function buildWaves(stages, fleet) {
 /*  Data collection                                                    */
 /* ------------------------------------------------------------------ */
 
-/** Расширения, которые не считаем исходником: шрифты, медиа, архивы, замки. */
-const BINARY_EXT = /\.(ttf|otf|woff2?|eot|png|jpe?g|gif|webp|svgz?|ico|bmp|mp[34]|wav|ogg|pdf|zip|gz|tar|7z|rar|xz|exe|dll|so|dylib|bin|wasm|db|sqlite3?|lock)$/i;
-const isBinaryName = (name) => BINARY_EXT.test(name);
 /** TTL-кэш для тяжёлых сборщиков: ограничивает пересчёт, не мешая свежести. */
 const TTL_CACHE = new Map();
 
@@ -530,6 +531,29 @@ export function collectWaves(root = ".") {
  * G3: interfaces записан
  * G4: oracle ACCEPT
  */
+/** G4, judged by the review-evidence chain — never by prose alone. */
+function resolveOracleGate(run, artifacts, change, changeDir, root) {
+  const artifact = artifacts.oracle;
+  if (!artifact) return { ok: null, status: "open", label: "Oracle ACCEPT" };
+  const file = artifact.path ? join(root, artifact.path) : changeDir ? join(changeDir, "oracle-verdict.md") : null;
+  let text = "";
+  try { if (file && existsSync(file)) text = readFileSync(file, "utf8"); } catch { text = ""; }
+  const detail = String(artifact.detail || "");
+  const ok = judgeOracle(run, change, root, detail, text);
+  return { ok, status: ok ? "pass" : "fail", label: ok ? "Oracle ACCEPT" : "Oracle ACCEPT (evidence incomplete)" };
+}
+
+/** Verdict precedence: explicit REJECT wins, then ACCEPT, then the evidence chain. */
+function judgeOracle(run, change, root, detail, text) {
+  if (isNegativeOracleVerdict(detail) || isNegativeOracleVerdict(text)) return false;
+  if (!isPositiveOracleVerdict(detail) && !isPositiveOracleVerdict(text)) return false;
+  if (run?.tier !== "T2" && run?.tier !== "T3") return true;
+  if (!change) return false;
+  const evidence = validateReviewEvidence({ root, changeId: change, tier: run.tier });
+  if (!evidence.ok) console.log(`G4 not accepted: ${evidence.errors[0] || "review evidence incomplete"}`);
+  return evidence.ok;
+}
+
 export function computeGates(run) {
   const artifacts = run?.artifacts || {};
   const root = run?.root || "";
@@ -604,37 +628,10 @@ export function computeGates(run) {
     label: "Interfaces recorded",
   };
 
-  // G4: oracle ACCEPT
-  const g4Artifact = artifacts.oracle;
-  let g4Ok = null;
-  if (g4Artifact) {
-    const detail = String(g4Artifact.detail || "");
-    if (/ACCEPT/i.test(detail) && !/REJECT/i.test(detail)) {
-      g4Ok = true;
-    } else if (/REJECT/i.test(detail)) {
-      g4Ok = false;
-    } else if (g4Artifact.path && existsSync(join(root, g4Artifact.path))) {
-      try {
-        const txt = readFileSync(join(root, g4Artifact.path), "utf8");
-        if (/Verdict:\s*ACCEPT|ACCEPT:/i.test(txt)) g4Ok = true;
-        else if (/Verdict:\s*REJECT|REJECT:/i.test(txt)) g4Ok = false;
-      } catch {}
-    } else if (changeDir && existsSync(join(changeDir, "oracle-verdict.md"))) {
-      try {
-        const txt = readFileSync(join(changeDir, "oracle-verdict.md"), "utf8");
-        if (/Verdict:\s*ACCEPT|ACCEPT:/i.test(txt)) g4Ok = true;
-        else if (/Verdict:\s*REJECT|REJECT:/i.test(txt)) g4Ok = false;
-      } catch {}
-    }
-    if (g4Ok === null) {
-      g4Ok = false;
-    }
-  }
-  const G4 = {
-    ok: g4Ok,
-    status: g4Ok === true ? "pass" : g4Ok === false ? "fail" : "open",
-    label: "Oracle ACCEPT",
-  };
+  // G4: oracle acceptance, judged by the same evidence chain `workflow check` uses.
+  // A regex over the artifact's free-text detail showed a green gate while check
+  // refused the same task for missing or stale review evidence.
+  const G4 = resolveOracleGate(run, artifacts, change, changeDir, root);
 
   return { G1, G2, G3, G4 };
 }
@@ -782,7 +779,7 @@ export function collectRunState(root = ".", _session = null) {
 
   return {
     open: state.status === "open",
-    status: state.status || "open",
+    status: runStatusOf(state),
     tier: state.tier || "T1",
     task: state.task ? redactSecrets(state.task).replace(/[A-Za-z0-9_-]*SECRET[A-Za-z0-9_-]*/gi, "[REDACTED]") : "",
     change,
@@ -801,7 +798,15 @@ export function collectRunState(root = ".", _session = null) {
     waitMs,
     feed,
     rev,
+    hud: hudPayload(state, waits, tokens),
   };
+}
+
+/** Documented hud-status contract from values this collector already computed. */
+function hudPayload(state, waits, tokens) {
+  const st = state.status === "closed" ? "idle" : state.waiting ? "blocked" : "working";
+  try { return emitHudStatus({ state: st, waits: waits.length, costs: { total: Number(tokens?.costUsd || 0) } }); }
+  catch { return null; }
 }
 
 /** Критика: вердикты оракула из openspec/changes/*\/oracle*.md + кэш автопроверок. */
@@ -859,7 +864,7 @@ export function collectCritique(absRoot) {
     } catch {}
   }
 
-  return { verdicts: verdicts.slice(0, 20), checks };
+  return { verdicts: verdicts.slice(0, 20), checks, checksAge: checksAge(checks) };
 }
 
 /** История: metrics.jsonl — сколько работаем, медианы, последние задачи. */
@@ -945,7 +950,7 @@ export function runChecks(absRoot) {
   return out;
 }
 
-/** Тайминги этапов из меток артефактов. */
+/** Длительности этапов: разница между отметками артефактов и закрытием. */
 function stageTimings(state) {
   const marks = [];
   const a = state?.artifacts || {};
@@ -962,7 +967,6 @@ function stageTimings(state) {
   return durations;
 }
 
-/** Полный агрегат данных дашборда. */
 export function collectDashboardData(root = ".", options = {}) {
   const absRoot = resolve(root);
   const wfDir = join(absRoot, ".workflow");
@@ -1064,6 +1068,7 @@ export function collectDashboardData(root = ".", options = {}) {
   const requirements = cached(`reqs:${absRoot}`, 30000, () => collectRequirements(absRoot));
   const debt = cached(`debt:${absRoot}`, 30000, () => collectDebt(absRoot));
   const critique = cached(`critique:${absRoot}`, 30000, () => collectCritique(absRoot));
+  const gap = collectHumanGap(absRoot, artifacts, { cached, collectRunState, join });
 
   const reqDone = (requirements.byStatus["done"] || 0) + (requirements.byStatus["in-spec"] || 0) + (requirements.byStatus["implemented"] || 0);
   const briefCoverage = requirements.total > 0 ? Math.round((reqDone / requirements.total) * 100) : artifacts.oracle ? 100 : 0;
@@ -1121,6 +1126,7 @@ export function collectDashboardData(root = ".", options = {}) {
     events: cached(`events:${absRoot}`, 2000, () => collectEvents(absRoot, 60)),
     log: cached(`log:${absRoot}`, 5000, () => collectSessionLog(absRoot, 80)),
     arch: cached(`arch:${absRoot}`, 60000, () => collectArchTree(absRoot, modules)),
+    archDrill: cached(`archDrill:${absRoot}`, 60000, () => collectArchDrill(absRoot, modules)),
     archGraph: cached(`graph:${absRoot}`, 60000, () => collectDependencyGraph(absRoot, modules)),
     project: {
       name: absRoot.split(/[\\/]/).pop() || "project",
@@ -1157,6 +1163,7 @@ export function collectDashboardData(root = ".", options = {}) {
       debt,
       memory,
       checks: critique.checks,
+      checksAge: critique.checksAge, needed: gap.needed, blind: gap.blind, // дата обязательна: зелёное без неё — тишина
     },
     waves: buildWaves(stages, fleet),
     git,
@@ -1164,7 +1171,7 @@ export function collectDashboardData(root = ".", options = {}) {
     critique: critique.verdicts,
     history,
     fleet,
-    run: cached(`run:${absRoot}`, 1000, () => collectRunState(absRoot, session)),
+    run: gap.runRef,
   };
 }
 
@@ -1327,7 +1334,7 @@ export function readSessionTokensFromTranscript(jsonlPath) {
         }
       } catch {}
     }
-    return { inputTokens, outputTokens, cachedTokens, costUsd: Number(costUsd.toFixed(4)) };
+    return { inputTokens, outputTokens, cachedTokens, costUsd: Number(costUsd.toFixed(4)), ...loopsOfTranscript(content) };
   } catch {
     return null;
   }

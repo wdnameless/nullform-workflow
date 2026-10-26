@@ -1,39 +1,36 @@
 # <root>/
 
 ## Responsibility
-Workflow harness, one-command installer, and distributed npm package (`nullform-workflow`) for AI coding agents. Root `package.json` defines package metadata, versioning, dependencies, and executable bin entries; `bin/` serves as the CLI entry folder (separate map owner) exposing the `nullform` binary. Coordinates configuration templating (`agent/`), standalone CLI governance tools (`tools/`), Claude Code / Paseo integrations (`jev/`, `paseo/`), and cross-platform verification suites (`tests/`).
+Root repository boundary, orchestration harness coordinator, and distributed npm package (`nullform-workflow`) for AI coding agents. Declares package metadata, runtime dependencies (`json5`, `jsonc-parser`, `yaml`), dev tooling (`eslint`, `@eslint/js`, `eslint-plugin-sonarjs`, `@fission-ai/openspec`, `globals`), and executable binary mapping (`bin.nullform -> bin/nullform.mjs`) in `package.json`. Houses OS bootstrap installers (`install.ps1`, `install.sh`), verification harnesses (`verify.ps1`, `verify.sh`), and audit entrypoints (`tools/audit.ps1`, `tools/audit.sh`). Governs repository-wide code quality and prose hygiene via flat ESLint config (`eslint.config.mjs`) and typos rules (`_typos.toml`), while securing skill registry integrity through cryptographic checksums in `skills-lock.json`. Coordinates the integration of primary subsystems: `tools/`, `agent/`, `skills/`, `bench/`, `core/`, `paseo/`, `jev/`, `openspec/`, and `tests/`.
 
 ## Design Patterns
-- **Layered Plugin Harness**: Separates platform-agnostic tools (`tools/`) from runtime adapters (`agent/`, `jev/`, `paseo/`).
-- **Template Method**: Hydrates parameterized blueprints (`.example`) with environment secrets during installation.
-- **Finite State Machine**: Manages T0–T3 SDD task lifecycles through deterministic gate transitions (`workflow.mjs`).
-- **Interceptor & Strategy**: Employs lifecycle hooks (`before_agent_start`, `UserPromptSubmit`) for policy checks and skill routing.
+- **Layered Plugin Harness**: Isolates platform-agnostic tools (`tools/`) and portable contracts (`core/`) from runtime adapters (`agent/`, `jev/`, `paseo/`) and specification tracks (`openspec/`).
+- **Facade & Forwarding CLI**: `bin/nullform.mjs` acts as a unified command dispatcher (wiring `init`, `doctor`, `update`, `workflow`, `quality`, `evidence`, `inspect`), while shell wrappers (`install.ps1`/`install.sh`, `verify.ps1`/`verify.sh`, `tools/audit.ps1`/`tools/audit.sh`) forward execution to underlying Node scripts (`tools/install-harness.mjs`, `tools/verify.mjs`).
+- **Cryptographic Lockfile Pinning**: `skills-lock.json` (alongside `package-lock.json`) enforces tamper-evident reproducibility by tracking `computedHash` and `folderHash` for external and repository skills.
+- **Ratchet & Exemption Quality Filters**: `eslint.config.mjs` enforces core JavaScript invariants and complexity caps (`complexity: 200`) with relaxed rules for ratchet refactoring, while `_typos.toml` exempts hashes, transcripts, and code to protect evidence integrity.
+- **Template Method**: Hydrates blueprint configurations (`secrets.example.env`, `agent/*.example*`) with local paths and credentials during setup.
+- **Finite State Machine**: Enforces deterministic T0–T3 SDD transitions through `tools/workflow.mjs` backed by `.workflow/state.json`.
 
 ## Data & Control Flow
-1. **Bootstrap & Distribution**: Consumed either via npm package install (`npm install -g nullform-workflow` routing through `bin/nullform.mjs` defined in `package.json`) or direct checkout installation (`install.ps1`/`install.sh`), hydrating agent templates and provisioning host profiles (`~/.omp`, `~/.paseo`). `bin/` acts as the external CLI entry routing subcommands into underlying tools.
-2. **Governance**: Agents trigger `tools/workflow.mjs` (directly or via `nullform workflow`) to transition tasks across T0–T3 states in `.workflow/state.json`.
-3. **Interception**: Host sessions trigger extension hooks (`agent/extensions/`, `jev/hooks/`) to inject evaluated skill recommendations.
-4. **Verification**: CI suites (`verify.ps1`, `tools/verify.mjs`, `tests/`) validate invariants and audit configuration drift.
+1. **Package Consumption & CLI Wiring**: The package is consumed either via npm (`npm install -g nullform-workflow`) or git checkout. `package.json` maps the executable `nullform` binary to `bin/nullform.mjs`, which exposes CLI subcommands (`workflow`, `quality`, `init`, `setup`, `heal`, `inspect`, `doctor`, `update`, `capabilities`, `evidence`) delegating directly to `tools/`.
+2. **Bootstrap & Installation**: Installation begins via `install.ps1` (PowerShell) or `install.sh` (POSIX shell), invoking `tools/install-harness.mjs`. It hydrates templates, provisions host directories (`~/.omp`, `~/.paseo`, `~/.agents`), installs dependencies, runs `tools/fix-plugin-windows.cjs` (on Windows), and executes `tools/doctor.mjs` verification.
+3. **Verification & Audit Lifecycle**: One-command verification runs through `verify.ps1` or `verify.sh` (forwarding to `node tools/verify.mjs --profile verify`). Harness auditing runs through `tools/audit.ps1` or `tools/audit.sh` (forwarding to `node tools/verify.mjs --profile audit` and `tools/audit-profile.mjs`), validating profile configurations, file integrity, and test invariants.
+4. **Linting & Code Hygiene**: Static analysis runs via `npm run lint` driven by `eslint.config.mjs` across `tools/`, `bin/`, and `bench/checks/`. Prose spellchecking runs through typos guided by `_typos.toml`. Code complexity and AST metrics are checked via `npm run quality` against `.quality-baseline.json`.
+5. **Skill Resolution & Governance**: Agent capabilities in `skills/` are validated against `skills-lock.json` hash trees before execution. Agent workflows progress under `tools/workflow.mjs` lifecycle state transitions in `.workflow/state.json`.
 
 ## Integration Points
-- **Package Distribution & CLI**: Root `package.json` defines package identity, versions, dependencies (`yaml`, `json5`, `jsonc-parser`), and bin mappings (`bin/nullform.mjs`), enabling distribution as an npm package alongside source checkouts.
-- **Harness Hosts**: Oh My Pi (`@oh-my-pi/pi-coding-agent`), Paseo daemon, Claude Code CLI, and generic agents.
-- **External Services**: OpenRouter / TypeSafe inference APIs, npm registries (for releases and updates), and local MCP stdio servers (`codebase-index`, `context7`, `dap-debugger`).
-- **Shared State**: `.workflow/state.json`, `.codemap/state.json`, `sync-manifest.json`, and `agent/models.yml`.
-
-## Repository Directory Map
-| Directory | Responsibility | Detailed Map link |
-|---|---|---|
-| `agent/` | Configuration templates, subagent personas, and runtime profile specs | [./agent/CODEMAP.md](./agent/CODEMAP.md) |
-| `agent/extensions/` | OMP lifecycle extension middleware for JEV skill suggestions | [./agent/extensions/CODEMAP.md](./agent/extensions/CODEMAP.md) |
-| `bench/checks/` | Deterministic verification and evaluation assertion checks for benchmarks | [./bench/checks/CODEMAP.md](./bench/checks/CODEMAP.md) |
-| `bench/fixtures/` | Reproducible benchmark task fixtures, setup scripts, and baseline outputs | [./bench/fixtures/CODEMAP.md](./bench/fixtures/CODEMAP.md) |
-| `jev/` | Claude Code plugin marketplace distribution bundle and catalog root | [./jev/CODEMAP.md](./jev/CODEMAP.md) |
-| `jev/plugins/` | Claude Code plugin container and namespace root | [./jev/plugins/CODEMAP.md](./jev/plugins/CODEMAP.md) |
-| `jev/plugins/jev/` | JEV classification engine, model router, and evaluation toolchain | [./jev/plugins/jev/CODEMAP.md](./jev/plugins/jev/CODEMAP.md) |
-| `jev/plugins/jev/hooks/` | Prompt submission event middleware injecting routing context | [./jev/plugins/jev/hooks/CODEMAP.md](./jev/plugins/jev/hooks/CODEMAP.md) |
-| `jev/plugins/jev/scripts/` | CLI evaluation scripts and HTTP client facade for JEV APIs | [./jev/plugins/jev/scripts/CODEMAP.md](./jev/plugins/jev/scripts/CODEMAP.md) |
-| `paseo/` | Workspace profile provisioning for external Paseo daemons | [./paseo/CODEMAP.md](./paseo/CODEMAP.md) |
-| `tests/` | Sandbox CI integration test harness and immutable installer suites | [./tests/CODEMAP.md](./tests/CODEMAP.md) |
-| `tools/` | CLI toolchain, T0–T3 workflow engine, sync, and diagnostic probes | [./tools/CODEMAP.md](./tools/CODEMAP.md) |
-| `tools/tests/` | Unit and subprocess integration tests for tools and JEV policy suites | [./tools/tests/CODEMAP.md](./tools/tests/CODEMAP.md) |
+- **Package Distribution & Bin Wiring**: `package.json` defines package metadata, npm distribution allowlist (`files`), dependencies (`json5`, `jsonc-parser`, `yaml`), and binary entrypoint `bin/nullform.mjs`.
+- **Install & Verification Wrappers**: Root entrypoints `install.ps1`, `install.sh`, `verify.ps1`, and `verify.sh`, alongside `tools/audit.ps1` and `tools/audit.sh`, forward platform CLI invocations to Node implementations in `tools/`.
+- **Quality & Hygiene Configurations**: `eslint.config.mjs` (ESLint flat config with Node 2024 globals and complexity ceilings) and `_typos.toml` (prose spellchecking exclusions and dictionary extensions) establish automated linting boundaries.
+- **Skill Integrity Registry**: `skills-lock.json` stores skill provenance, source repositories, and SHA-256 folder hashes for pinned skills in `skills/`.
+- **Top-Level Subsystems**:
+  - `tools/`: CLI toolchain, T0–T3 workflow engine (`workflow.mjs`), verification (`verify.mjs`), quality gate (`quality.mjs`), install drivers (`tools/installation/`), review gates (`tools/review/`), and diagnostics (`doctor.mjs`).
+  - `agent/`: Agent persona specifications (`agent/agents/`), plugin manifests (`agent/plugins.json`), model blueprints (`agent/models.yml.example`), and OMP extension hooks (`agent/extensions/`).
+  - `skills/`: Discoverable agent capability packages and tool implementations, referenced by lockfile hashes.
+  - `bench/`: Evaluation framework comprising assertion checks (`bench/checks/`), task fixtures (`bench/fixtures/`), and benchmark runners.
+  - `core/`: Host-agnostic workflow specifications, lifecycle contracts, and invariant definitions codified in `core/PORTABLE.md`.
+  - `paseo/`: Workspace profile provisioning and setup scripts (`paseo/setup-paseo.ps1`) for external Paseo agent daemons.
+  - `jev/`: Claude Code plugin distribution bundle, marketplace metadata, hooks, and JEV model routing/evaluation toolchain.
+  - `openspec/`: OpenSpec change proposals, task breakdowns, architecture specifications, and legacy acceptance contracts (`openspec/changes/`).
+  - `tests/`: Integration test suites and sandbox validation harnesses ensuring installer and toolchain stability.
+- **Runtime Hosts & Services**: Coordinates Oh My Pi (`@oh-my-pi/pi-coding-agent`), Paseo daemons, Claude Code CLI, and local MCP servers (`codebase-index`, `context7`, `dap-debugger`).

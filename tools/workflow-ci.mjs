@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { checkCodeSize, loadConfig as loadCodeSizeConfig } from "./code-size.mjs";
+import { checkTripwire } from "./tripwire.mjs";
 import { scanRepo } from "./debt-ledger.mjs";
 import {
   NEGATIVE_VERDICT_RE,
@@ -21,34 +22,47 @@ import { isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath } from
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries, gitIgnoredPaths, lastTouchingRevision, hasReconEvidence } from "./workflow-shared.mjs";
 
 export function resolveChangedFilesAgainstBase(root, baseRef) {
+  const run = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000 });
   try {
-    let diffOut = "";
+    let diffOut;
+    try { diffOut = run(["diff", "--name-only", `${baseRef}...HEAD`]); }
+    catch { diffOut = run(["diff", "--name-only", `${baseRef}..HEAD`]); }
+    const changedFiles = diffOut.split("\n").map((f) => f.trim()).filter((f) => f && !isStructuralExcludedPath(f));
+    // Changed LINES, from the same diff: a file count cannot see a 2000-line edit
+    // inside one file, which is exactly what the per-tier ceiling is about.
+    let changedLines = 0;
     try {
-      diffOut = execFileSync("git", ["diff", "--name-only", `${baseRef}...HEAD`], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-      });
-    } catch {
-      diffOut = execFileSync("git", ["diff", "--name-only", `${baseRef}..HEAD`], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000
-      });
-    }
-    const changedFiles = diffOut.split("\n")
-      .map((f) => f.trim())
-      .filter((f) => f && !isStructuralExcludedPath(f));
-    return { ok: true, changedFiles };
+      for (const row of run(["diff", "--numstat", `${baseRef}...HEAD`]).split("\n")) {
+        const [added, deleted] = row.trim().split(/\s+/);
+        if (!added || added === "-" || deleted === "-") continue;
+        changedLines += (Number(added) || 0) + (Number(deleted) || 0);
+      }
+    } catch { changedLines = null; }
+    return { ok: true, changedFiles, changedLines };
   } catch (err) {
     return { ok: false, error: err.message };
   }
 }
-function getBaseDiffFiles(root, baseRef) {
-  if (!baseRef) return null;
+/** Resolve the diff once and enforce the tier ceiling; null means the gate must stop. */
+function guardDiffBudget(root, baseRef, tier) {
   const res = resolveChangedFilesAgainstBase(root, baseRef);
   if (!res.ok) {
     console.error(`workflow check-ci: failed to resolve base ref '${baseRef}': ${res.error}`);
     return null;
   }
+  // The per-tier ceiling is on changed LINES: a file count cannot see a 2000-line
+  // edit inside one file, which is exactly the change a lane should refuse.
+  if (tier && res.changedLines !== null) {
+    try { checkTripwire(res.changedLines, tier); }
+    catch (err) {
+      console.error(`workflow check-ci: ${err.message}`);
+      console.error("  upgrade the tier, or split the change so it fits its lane.");
+      return null;
+    }
+  }
   return res.changedFiles;
 }
+
 
 function validateCheckCiT1(root, flags, baseRef) {
   const reconFlag = flags.recon ? String(flags.recon).trim() : null;
@@ -77,7 +91,7 @@ function validateCheckCiT1(root, flags, baseRef) {
   }
 
   if (baseRef) {
-    const changedFiles = getBaseDiffFiles(root, baseRef);
+    const changedFiles = guardDiffBudget(root, baseRef, "T1");
     if (!changedFiles) return 1;
     if (changedFiles.length < 3) {
       console.error(`workflow check-ci: tier T1 requires 3–9 changed files; detected ${changedFiles.length} (<=2 belongs in T0).`);
@@ -206,7 +220,7 @@ export function checkPushEvidence(root, flags) {
     console.error('workflow check-ci: push requires a resolvable previous commit in --base-ref; use a reviewed PR to initialize the branch.');
     return 1;
   }
-  const changedFiles = getBaseDiffFiles(root, baseRef);
+  const changedFiles = guardDiffBudget(root, baseRef, null);
   if (!changedFiles) return 1;
   const changes = [...new Set(changedFiles.map(path => /^openspec\/changes\/([A-Za-z0-9_-]+)\//.exec(path)?.[1]).filter(Boolean))]
     // `archive/` is a retired-change container, not a change: it owns no manifest.
@@ -533,7 +547,7 @@ export function cmdCheckCi(root, flags = {}) {
 
   if (tier === "T0") {
     if (baseRef) {
-      const changedFiles = getBaseDiffFiles(root, baseRef);
+      const changedFiles = guardDiffBudget(root, baseRef, tier);
       if (!changedFiles) return 1;
       if (changedFiles.length > 2) {
         const hasApprovedOverride = Boolean(flags.override || (flags.force && flags.reason));

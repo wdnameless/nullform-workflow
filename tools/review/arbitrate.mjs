@@ -74,11 +74,12 @@ export function consolidateF1(blockers = []) {
 }
 
 /**
- * Enforces repair budget allowances: <=2 repairs, <=2 retries, <=1 re-review.
+ * Enforces repair budget allowances: <=2 repairs, <=2 retries, <=2 re-reviews
  * Throws when limits are exceeded, naming the exceeded limit.
  * Otherwise returns remaining allowances.
  *
  * @param {{ repairs?: number, retries?: number, reReviews?: number }} [state]
+ * state that a gate gets one initial review plus at most two re-reviews.
  * @returns {{ repairs: number, retries: number, reReviews: number }}
  */
 export function repairBudget(state = {}) {
@@ -90,13 +91,13 @@ export function repairBudget(state = {}) {
   if (retries > 2) {
     throw new Error(`Retry budget exhausted: retries (${retries}) exceeds limit of 2`);
   }
-  if (reReviews > 1) {
-    throw new Error(`Re-review budget exhausted: reReviews (${reReviews}) exceeds limit of 1`);
+  if (reReviews > 2) {
+    throw new Error(`Re-review budget exhausted: reReviews (${reReviews}) exceeds limit of 2`);
   }
 
   return {
     repairs: 2 - repairs,
     retries: 2 - retries,
-    reReviews: 1 - reReviews,
+    reReviews: 2 - reReviews,
   };
 }

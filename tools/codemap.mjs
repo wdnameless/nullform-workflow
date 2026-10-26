@@ -4,7 +4,7 @@
  *
  * Subcommands:
  *   init     --root <dir> [--include <glob>...] [--exclude <glob>...]
- *   changes  --root <dir>
+ *   changes  --root <dir> [--json]
  *   update   --root <dir>
  *
  * State lives in <root>/.codemap/state.json (hashes per file + folder).
@@ -27,12 +27,13 @@ const DEFAULT_EXCLUDES = [
 ];
 
 function parseArgs(argv) {
-  const out = { _: [], include: [], exclude: [] };
+  const out = { _: [], include: [], exclude: [], json: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--root") out.root = argv[++i];
     else if (a === "--include") out.include.push(argv[++i]);
     else if (a === "--exclude") out.exclude.push(argv[++i]);
+    else if (a === "--json") out.json = true;
     else out._.push(a);
   }
   out.root = out.root || process.cwd();
@@ -184,6 +185,16 @@ function cmdChanges(root, args) {
     const dir = dirname(f).split(sep).join("/");
     affected.add(dir === "." || dir === "" ? "<root>" : dir);
   }
+  // Machine consumer (audit-profile) used to regex this sentence. A contract is
+  // structured output, not a substring of a human sentence: pass --json.
+  if (args.json) {
+    console.log(JSON.stringify({
+      added, modified, removed,
+      counts: { added: added.length, modified: modified.length, removed: removed.length },
+      affectedFolders: [...affected].sort(),
+    }, null, 2));
+    return;
+  }
   console.log(`changes: +${added.length} ~${modified.length} -${removed.length}`);
   if (added.length) console.log("  added:\n" + added.map((f) => "    " + f).join("\n"));
   if (modified.length) console.log("  modified:\n" + modified.map((f) => "    " + f).join("\n"));
@@ -207,6 +218,6 @@ else if (cmd === "update") cmdUpdate(args.root, args);
 else {
   console.log("codemap.mjs — hierarchical repository cartography\n");
   console.log("  node codemap.mjs init --root . --include 'src/**/*.ts' --exclude 'dist/**'");
-  console.log("  node codemap.mjs changes --root .");
+  console.log("  node codemap.mjs changes --root . [--json]");
   console.log("  node codemap.mjs update --root .");
 }

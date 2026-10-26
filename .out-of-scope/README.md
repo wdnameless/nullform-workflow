@@ -33,3 +33,5 @@ Rejected: YYYY-MM-DD
 
 - [Model-invocation flip for the skill catalogue](./model-invocation-flip.md) — 61 of 72
   skills have no other pointer; flipping them makes them unreachable.
+- [LCOM4 as a quality gate](./lcom4-gate.md) — the score moves with the edge definition
+  (median 2 → 4 components on one added rule), so a threshold gates an arbitrary choice.

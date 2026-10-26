@@ -23,7 +23,7 @@ When active, lead with the lane verdict as the first line of responses:
   - Create requirements manifest (`openspec/changes/<name>/manifest.md`) atomizing user words into `R01`..`Rnn` with verbatim quotes and observable acceptance.
 - **Wave 2 (OpenSpec Planning)**:
   - Run `openspec new change <name>`.
-  - Author human-readable `proposal.md`, dependency graph `tasks.md` with blocking edges, and deep modules in `interfaces.md` (seams on consumer side; Austerhout's rule). Expand-Contract for wide refactors (>3 files).
+  - Author human-readable `proposal.md`, dependency graph `tasks.md` with blocking edges, and deep modules in `interfaces.md` (seams on consumer side; Ousterhout's rule). Derive the module list from the functions first, never from a target count; a `shared`/`helpers` zone is a finding. Expand-Contract for wide refactors (>3 files).
 - **Wave 3 (Subagent Spawning)**:
   - Native `task()` batches along ready frontiers.
   - `@designer` for UI/design pipeline; `@fixer` for logic/TDD (failing test first).

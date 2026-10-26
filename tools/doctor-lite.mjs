@@ -6,7 +6,8 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { verifySkillsLock } from "./carry.mjs";
@@ -25,6 +26,18 @@ const PRIORITY_TOOLS = [
  * @param {string} root - Path to repository or harness root (default ".")
  * @returns {{ ok: boolean, warns: string[], ms: number }}
  */
+/** Harness files live next to this tool, never in the project root. */
+function missingHarnessFiles() {
+  const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const missing = [];
+  if (!existsSync(join(harnessRoot, "agent", "AGENTS.md")) && !existsSync(join(harnessRoot, "AGENTS.md")) && !existsSync(join(harnessRoot, "CLAUDE.md"))) missing.push("agent/AGENTS.md");
+  if (!existsSync(join(harnessRoot, "rules", "enterprise-directives.md"))) missing.push("rules/enterprise-directives.md");
+  if (!existsSync(join(harnessRoot, "core", "PORTABLE.md"))) missing.push("core/PORTABLE.md");
+  if (!existsSync(join(harnessRoot, "CONTEXT.md"))) missing.push("CONTEXT.md");
+  if (!existsSync(join(harnessRoot, "README.md"))) missing.push("README.md");
+  return missing;
+}
+
 export function doctorLite(root = ".") {
   const start = performance.now();
   const targetRoot = resolve(root);
@@ -37,28 +50,12 @@ export function doctorLite(root = ".") {
   }
 
   // 2. check 'harness-files'
-  const missing = [];
-  const hasAgents =
-    existsSync(join(targetRoot, "agent", "AGENTS.md")) ||
-    existsSync(join(targetRoot, "AGENTS.md")) ||
-    existsSync(join(targetRoot, "CLAUDE.md"));
-  if (!hasAgents) missing.push("agent/AGENTS.md");
+  // These are HARNESS files, not project files: checking them against the project
+  // root made every `workflow start --root <project>` report missing harness files
+  // about a directory that is not supposed to contain them.
+  const missingHarness = missingHarnessFiles();
+  if (missingHarness.length) warns.push(`Harness files missing: ${missingHarness.join(", ")}`);
 
-  const edFile = join(targetRoot, "rules", "enterprise-directives.md");
-  if (!existsSync(edFile)) missing.push("rules/enterprise-directives.md");
-
-  const portableFile = join(targetRoot, "core", "PORTABLE.md");
-  if (!existsSync(portableFile)) missing.push("core/PORTABLE.md");
-
-  const contextMd = join(targetRoot, "CONTEXT.md");
-  if (!existsSync(contextMd)) missing.push("CONTEXT.md");
-
-  const readmeMd = join(targetRoot, "README.md");
-  if (!existsSync(readmeMd)) missing.push("README.md");
-
-  if (missing.length > 0) {
-    warns.push(`Отсутствуют обязательные файлы харнесса: ${missing.join(", ")}`);
-  }
 
   // 3. check 'tools-syntax'
   const toolsDir = join(targetRoot, "tools");

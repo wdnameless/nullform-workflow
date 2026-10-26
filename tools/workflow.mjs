@@ -49,6 +49,8 @@ import {
 } from "./review/evidence.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { parseRequirement } from "./requirements.mjs";
+import { checkPlan } from "./plan-check.mjs";
+import { repairBudget } from "./review/arbitrate.mjs";
 export { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
 import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
@@ -172,6 +174,28 @@ function save(root, st) {
   assertWorkflowDirOwned(root);
   writeFileSync(tmp, JSON.stringify(st, null, 2));
   renameSync(tmp, target);
+  refreshSnapshot(root);
+}
+
+/**
+ * Свежий снимок дашборда при каждом событии воркфлоу.
+ *
+ * Страница живёт своей жизнью: опрашивает state.js, пока сервер есть, и показывает
+ * снимок, когда его нет. Если писать снимок только при старте сервера, вкладка,
+ * открытая неделю назад, лжёт — был зафиксирован прогон на странице, который
+ * давно закрыт. Вызов асинхронен и best-effort: сбор состояния никогда не должен
+ * тормозить или ронять команду воркфлоу.
+ *
+ * Импорт ленивый и по кругу быть не может: dashboard.mjs не импортирует workflow.mjs.
+ */
+function refreshSnapshot(root) {
+  if (process.env.NF_NO_DASHBOARD === "1") return;
+  import("./dashboard.mjs").then((dash) => {
+    try {
+      const data = dash.collectDashboardState ? dash.collectDashboardState(root) : null;
+      if (data) dash.writeSnapshot(root, data);
+    } catch {}
+  }).catch(() => {});
 }
 
 // S5: .workflow must be a real directory, never a planted symlink.
@@ -798,12 +822,9 @@ function cmdStart(root, flags) {
       st.deviation = {
         forced: true,
         reason: String(flags.reason),
-        replacedTask: {
-          task: prev.task,
-          tier: prev.tier,
-          startedAt: prev.startedAt,
-        },
+        replacedTask: { task: prev.task, tier: prev.tier, startedAt: prev.startedAt },
       };
+      recordAbandonedLane(root, prev, st, flags.reason);
       logEvent(root, "replace", `${tier} — ${st.task} (replaced '${prev.task}': ${flags.reason})`);
       console.log(`workflow: replaced active task '${prev.task}' with DEVIATION (${flags.reason})`);
     }
@@ -818,6 +839,27 @@ function cmdStart(root, flags) {
     return 0;
   });
 }
+/**
+ * Terminal metric for a lane replaced by `start --force`. Without it the replaced
+ * lane vanished: state was overwritten and no metric row written, leaving started
+ * lanes with no counterpart and no visible record that work was abandoned.
+ */
+function recordAbandonedLane(root, prev, next, reason) {
+  const closedAt = new Date();
+  appendMetric(root, {
+    task: prev.task || "(untitled)",
+    tier: prev.tier,
+    startedAt: prev.startedAt || closedAt.toISOString(),
+    closedAt: closedAt.toISOString(),
+    durationMs: Math.max(0, closedAt.getTime() - new Date(prev.startedAt || closedAt).getTime()),
+    forced: true,
+    auto: prev.auto ?? null,
+    artifactsCount: prev.artifacts ? Object.keys(prev.artifacts).length : 0,
+    reason: `replaced by '${next.task}': ${reason}`,
+    deviationKind: "abandoned-lane",
+  });
+}
+
 function printRemainingArtifacts(tier, st) {
   const reqs = requiredFor(tier).filter((r) => !st.artifacts[r.kind]);
   if (reqs.length) {
@@ -850,6 +892,12 @@ function validateOpenspecArtifact(root, a, fullPath, invalid) {
   if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) invalid.push(`openspec: missing proposal.md in '${a.path}'`);
   if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) invalid.push(`openspec: missing tasks.md in '${a.path}'`);
   if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) invalid.push(`openspec: missing specs/ directory in '${a.path}'`);
+  // A plan whose dependencies loop or name missing tickets can never finish; that is
+  // visible from tasks.md alone, without pretending to verify requirement coverage.
+  if (existsSync(tasksPath)) {
+    const planProblem = validatePlanCoverage(readFileSync(tasksPath, "utf8"));
+    if (planProblem) invalid.push(`openspec: tasks.md ${planProblem}`);
+  }
   if (invalid.length) return;
   // File presence is not validation: a specs/spec.md at the capability root is
   // silently ignored on archive, and only `openspec validate` reports that. The
@@ -893,6 +941,51 @@ function changeDirOf(st) {
  *
  * Returns a problem description, or null when the rows are usable.
  */
+/**
+ * Cross-checks the ticket list in tasks.md against the manifest.
+ * The real format is a checkbox list (`- [ ] **T-01 (Z1)** ... Blocked-by: T-02`),
+ * not a table: a table parser found nothing in every shipped change and would have
+ * been dead code. Tickets are optional; when present they must cover the manifest,
+ * carry a wave, and not declare a blocked-by cycle.
+ * Returns null when there is nothing to check, or a problem summary.
+ */
+/**
+ * Checks the ticket list in tasks.md for an unstartable plan.
+ * The real format is `- [ ] **T-01 (Z1)** ... Blocked-by: T-02`, not a table. Tickets
+ * rarely name R##, so requirement coverage is NOT verified here — claiming it would
+ * repeat the empty-gate defect this audit exists to fix. What is verifiable: every
+ * declared dependency must name a ticket that exists, and dependencies must not loop.
+ * Returns null when there is nothing to check or the plan is sound.
+ */
+function validatePlanCoverage(tasksBody) {
+  const lines = String(tasksBody || "").split(/\r?\n/);
+  const tickets = new Map();
+  for (const line of lines) {
+    const m = /^\s*-\s*\[[ xX]\]\s*\**(T-\d+)\**/i.exec(line);
+    if (!m) continue;
+    const id = m[1].toUpperCase();
+    const deps = /Blocked-by:\s*(.*)$/i.exec(line);
+    const raw = deps ? deps[1] : "";
+    const blockedBy = (raw.match(/T-\d+/gi) || []).map((d) => d.toUpperCase());
+    tickets.set(id, blockedBy);
+  }
+  if (tickets.size === 0) return null;
+  for (const [id, deps] of tickets) {
+    for (const dep of deps) if (!tickets.has(dep)) return `${id} is blocked by ${dep}, which is not in this plan`;
+  }
+  for (const id of tickets.keys()) {
+    const seen = new Set([id]);
+    const stack = [...(tickets.get(id) || [])];
+    while (stack.length) {
+      const next = stack.pop();
+      if (next === id) return `blocked-by cycle: ${id} cannot start`;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      stack.push(...(tickets.get(next) || []));
+    }
+  }
+  return null;
+}
 function validateManifestRows(body) {
   const rows = String(body || "").split(/\r?\n/).filter((line) => /^\s*\|/.test(line));
   const parsed = rows.map(parseRequirement).filter(Boolean);
@@ -1406,6 +1499,76 @@ function checkHandoffFile(root, startedAt) {
   } catch (err) { return { exists: true, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: err.message }; }
 }
 
+/** Kinds the dashboard colours; anything else is a typo, not a new state. */
+const WAIT_KINDS = ["briefing", "spec", "plan", "action", "stop"];
+
+/**
+ * Открыть ожидание пользователя: раунд брифинга, ручной гейт, вопрос перед
+ * необратимым шагом, условие остановки.
+ *
+ * Почему это команда, а не догадка агента: дашборд читает `state.waiting` и по нему
+ * останавливает счётчик рабочего времени. Без писателя оранжевое состояние и вычет
+ * ожидания были недостижимы — поле читалось и никогда не заполнялось.
+ */
+function cmdAsk(root, flags, positional = []) {
+  return withStateLock(root, () => {
+    const st = load(root);
+    if (!st || st.status !== "open") {
+      console.error("workflow: no open task to wait on. Run `start` first.");
+      return 2;
+    }
+    const kind = String(positional[0] || "").trim();
+    if (!WAIT_KINDS.includes(kind)) {
+      console.error(`workflow: ask <${WAIT_KINDS.join("|")}> --note "что ждём, одной строкой"`);
+      return 2;
+    }
+    const note = flags.note ? String(flags.note).trim() : "";
+    const nowIso = new Date().toISOString();
+
+    if (!Array.isArray(st.waits)) st.waits = [];
+    const open = st.waiting && st.waiting.from ? st.waiting : null;
+    if (open && open.kind !== kind) {
+      // Смена вида ожидания закрывает прежний интервал: иначе один вопрос
+      // поглотил бы другой и вычет времени посчитался бы дважды.
+      const ms = Math.max(0, new Date(nowIso).getTime() - new Date(open.from).getTime());
+      st.waits.push({ kind: open.kind, from: open.from, to: nowIso, durationMs: ms });
+    }
+    // Повторный ask того же вида идемпотентен: `from` не сбрасывается, иначе
+    // повторное сообщение обнуляло бы время, которое человек уже думает.
+    st.waiting = { kind, from: open && open.kind === kind ? open.from : nowIso, note };
+    save(root, st);
+    logEvent(root, "ask", `${kind}${note ? ": " + note.slice(0, 120) : ""}`);
+    console.log(`workflow: waiting for the user (${kind})${note ? ` — ${note}` : ""}`);
+    return 0;
+  });
+}
+
+/** Ответ пришёл: закрыть ожидание и записать интервал в waits. */
+function cmdAnswered(root) {
+  return withStateLock(root, () => {
+    const st = load(root);
+    if (!st) {
+      console.error("workflow: no task state. Run `start` first.");
+      return 2;
+    }
+    const open = st.waiting && st.waiting.from ? st.waiting : null;
+    if (!open) {
+      // Ответ без открытого ожидания — не ошибка: агент может перестраховаться.
+      console.log("workflow: nothing was waiting.");
+      return 0;
+    }
+    const nowIso = new Date().toISOString();
+    if (!Array.isArray(st.waits)) st.waits = [];
+    const ms = Math.max(0, new Date(nowIso).getTime() - new Date(open.from).getTime());
+    st.waits.push({ kind: open.kind, from: open.from, to: nowIso, durationMs: ms });
+    delete st.waiting;
+    save(root, st);
+    logEvent(root, "answered", `${open.kind} after ${Math.round(ms / 1000)}s`);
+    console.log(`workflow: answered — ${open.kind} took ${Math.round(ms / 1000)}s of waiting`);
+    return 0;
+  });
+}
+
 function cmdStatus(root, flags = {}) {
   const st = load(root);
   if (!st) { console.log("workflow: no active task."); return 0; }
@@ -1847,11 +2010,29 @@ function cmdClose(root, flags) {
 import { cmdCheckCi } from "./workflow-ci.mjs";
 export { checkQualityGates } from "./workflow-ci.mjs";
 
+/** Review attempts already recorded for this change: prior cycles in history + the live one. */
+function reviewAttempts(root, changeId) {
+  if (!changeId) return { repairs: 0, retries: 0, reReviews: 0 };
+  const dir = join(root, "openspec", "changes", changeId);
+  const file = join(dir, "review-evidence.json");
+  if (!existsSync(file)) return { repairs: 0, retries: 0, reReviews: 0 };
+  try {
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    const cycles = Array.isArray(data.history) ? data.history.length : 0;
+    return { repairs: 0, retries: 0, reReviews: cycles };
+  } catch { return { repairs: 0, retries: 0, reReviews: 0 }; }
+}
+
 function cmdReviewRun(root, flags, positionals = 0) {
   try {
     const { redo, dryRun } = assertReviewRunFlags(flags, positionals);
     const gate = validateReviewCapability(flags.harness, { dryRun: true, userHome: flags["user-home"] });
     if (!gate.ok) throw new Error(gate.error);
+    // The re-review ceiling from CONTEXT.md ("one initial review plus two re-reviews")
+    // was a documented rule with no enforcement: the attempt count is already in the
+    // evidence history, so it is counted here instead of being asserted in prose.
+    const attempts = reviewAttempts(root, flags.change);
+    repairBudget(attempts);
     const productCommand = flags["product-command"] ? JSON.parse(flags["product-command"]) : null;
     let policy = null, httpExecutor = null;
     if (!dryRun && !flags["resume-session"]) {
@@ -1958,6 +2139,8 @@ export function runWorkflowCli(argv = [], options = {}) {
     case "artifact":     code = cmdArtifact(root, args.flags); break;
     case "check":        code = cmdCheck(root); break;
     case "status":       code = cmdStatus(root, args.flags); break;
+    case "ask":          code = cmdAsk(root, args.flags, args._.slice(1)); break;
+    case "answered":     code = cmdAnswered(root, args.flags); break;
     case "check-budget": code = cmdCheckBudget(root, args.flags); break;
     case "close":        code = cmdClose(root, args.flags); break;
     case "escalate":     code = cmdEscalate(root, args.flags); break;

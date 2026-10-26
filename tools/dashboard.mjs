@@ -14,10 +14,10 @@
  *   --help, -h        Справка
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, renameSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
-import { resolve, join, dirname, relative, isAbsolute } from "node:path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, rmSync, realpathSync } from "node:fs";
+import { resolve, join, dirname, isAbsolute } from "node:path";
 import { createServer } from "node:http";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { redactSecrets } from "./brief.mjs";
 import {
@@ -26,6 +26,8 @@ import {
   DASHBOARD_BUILD, DASHBOARD_PROTOCOL, DASHBOARD_PROTOCOL_VERSION, CHECKS_CACHE,
 } from "./dashboard-collectors.mjs";
 import { generateDashboardHtml } from "./dashboard-ui.mjs";
+import { serveArchRoute, serveDiffRoute, sanitizeArchState } from "./dashboard-routes.mjs";
+import { stopDashboardServer, killProjectOrphans, isOwnServerCommand, readProcessCmdline, STOP_DELAY_S, stopLater, runLifecycleCommand, runtimePath, readRuntime, writeRuntime, RUNTIME_FILE } from "./dashboard-routes.mjs";
 export {
   DASHBOARD_BUILD, DASHBOARD_PROTOCOL, DASHBOARD_PROTOCOL_VERSION,
   REQUIRED_ARTIFACTS_BY_TIER, calibrationHint, collectCritique, collectDashboardData,
@@ -33,82 +35,15 @@ export {
   computeGates, isAllowedHost, isCompatibleDashboard, parseManifestRequirements,
   projectToken, scanModules,
 } from "./dashboard-collectors.mjs";
+export { collectArchDrill, collectSymbolInventory, isBinaryName } from "./arch-drill.mjs";
+export { sanitizeArchDrill, sanitizeArchState, serveArchRoute, serveDiffRoute, stopDashboardServer, killProjectOrphans, isOwnServerCommand, readProcessCmdline, STOP_DELAY_S, stopLater, runLifecycleCommand, runtimePath, readRuntime, writeRuntime, RUNTIME_FILE } from "./dashboard-routes.mjs";
 export { generateDashboardHtml, esc } from "./dashboard-ui.mjs";
+export { buildSketch, toExcalidraw, layoutSketch, sketchBoxPath, sketchEdgePath, seedOf } from "./dashboard-sketch.mjs";
 
 /* ------------------------------------------------------------------ */
 /*  Server, runtime file, auto-launch                                  */
 /* ------------------------------------------------------------------ */
-
-/** Файл рантайма: порт и pid живого сервера дашборда. */
 let SERVER_SESSION = null;
-
-export const RUNTIME_FILE = ".workflow/dashboard.json"; // обратная совместимость (последняя сессия)
-
-/** Рантайм-файл конкретной сессии: .workflow/dashboards/<key>.json */
-export function runtimePath(root, key = null) {
-  const absRoot = resolve(root);
-  if (key === null || key === undefined) {
-    const target = resolve(absRoot, RUNTIME_FILE);
-    const rel = relative(absRoot, target);
-    if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`Целевой путь рантайма "${target}" выходит за пределы каталога проекта`);
-    return target;
-  }
-  validateSessionKey(key);
-  const dashboardsDir = resolve(absRoot, DASHBOARDS_DIR);
-  const target = resolve(dashboardsDir, key + ".json");
-  const rel = relative(dashboardsDir, target);
-  if (rel.startsWith("..") || isAbsolute(rel) || dirname(target) !== dashboardsDir) {
-    throw new Error(`Целевой путь рантайма "${target}" выходит за пределы каталога рантайма`);
-  }
-  return target;
-}
-
-/** Все известные дашборды проекта: [{key, port, url, pid}] — для --list. */
-export function listDashboards(root) {
-  const dir = join(resolve(root), DASHBOARDS_DIR);
-  if (!existsSync(dir)) return [];
-  const out = [];
-  try {
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith(".json") || f.endsWith(".usage.json")) continue;
-      try {
-        const j = JSON.parse(readFileSync(join(dir, f), "utf8"));
-        out.push({ key: f.replace(/\.json$/, ""), port: j.port, url: j.url, pid: j.pid, startedAt: j.startedAt });
-      } catch {}
-    }
-  } catch {}
-  return out;
-}
-
-/** Прочитать рантайм-файл дашборда (или null). */
-export function readRuntime(root, key = null) {
-  const p = runtimePath(root, key);
-  if (!existsSync(p)) return null;
-  try {
-    const data = JSON.parse(readFileSync(p, "utf8"));
-    return data && typeof data.port === "number" ? data : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Записать рантайм-файл (порт/pid/url/время старта). */
-export function writeRuntime(root, info) {
-  const absRoot = resolve(root);
-  const key = info && "key" in info && info.key !== null && info.key !== undefined ? info.key : null;
-  const p = runtimePath(absRoot, key);
-  const dir = dirname(p);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const text = JSON.stringify(info, null, 2);
-  const writeAtomic = (target) => {
-    const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
-    writeFileSync(tmp, text, "utf8");
-    renameSync(tmp, target);
-  };
-  writeAtomic(p);
-  if (key) writeAtomic(runtimePath(absRoot));
-  return p;
-}
 
 /** Живой ли дашборд на порту (быстрый health-пинг). */
 export async function isServerAlive(port, timeoutMs = 900, absRoot = null, session = null) {
@@ -135,6 +70,9 @@ export async function probeDashboard(port, timeoutMs = 900) {
   }
 }
 
+/** Период в секундах, который страница получает на то, чтобы дочитать финальное
+ * состояние, прежде чем сервер погаснет. Ровно как в autopilot: их поллинг —
+ * 10 с; наш — 2 с, поэтому 12 с с запасом покрывают 6 опросов. */
 /** Мы внутри рабочего пространства Paseo? */
 export function isPaseoWorkspace() {
   return Boolean(process.env.PASEO_AGENT_ID || process.env.PASEO_HOME || process.env.PASEO_CLI);
@@ -170,6 +108,57 @@ function tryListen(port, absRoot, session = null, options = {}) {
  * текст задач, произвольные детали оракула, патчи, пути файлов), сохраняя
  * структурные ключи, статусы, тайминги и счётчики для рендера.
  */
+/** Три поля «глазами человека» одним вызовом: сборщик от них не растёт. */
+function sanitizeHumanGap(metrics) {
+  return {
+    checksAge: sanitizeChecksAge(metrics?.checksAge),
+    needed: sanitizeNeeded(metrics?.needed),
+    blind: sanitizeBlind(metrics?.blind),
+  };
+}
+
+/** Возраст автопроверок: дни и признак устаревания. */
+function sanitizeChecksAge(raw) {
+  if (!raw) return null;
+  return { days: raw.days === null ? null : Math.max(0, Number(raw.days) || 0), stale: Boolean(raw.stale) };
+}
+
+/** «Понадобится от тебя»: только имена и координаты, значения не проходят. */
+function sanitizeNeeded(raw) {
+  if (!raw) return null;
+  const list = (arr, n, map) => (Array.isArray(arr) ? arr.slice(0, n).map(map) : []);
+  return {
+    envKeys: list(raw.envKeys, 40, (k) => String(k).replace(/[^A-Z0-9_]/g, "").slice(0, 60)),
+    placeholders: list(raw.placeholders, 40, (p) => ({
+      file: String(p?.file || "").replace(/[^a-zA-Z0-9._/-]/g, "").slice(0, 120),
+      line: Math.max(0, Number(p?.line) || 0),
+      text: redactSecrets(String(p?.text || "")).slice(0, 120),
+    })),
+    assumptions: list(raw.assumptions, 20, (a) => String(a).slice(0, 180)),
+  };
+}
+
+/** Слепая приёмка: два числа и расхождения. */
+function sanitizeBlind(raw) {
+  if (!raw) return null;
+  return {
+    checked: Math.max(0, Number(raw.checked) || 0),
+    matched: Math.max(0, Number(raw.matched) || 0),
+    disagreements: (Array.isArray(raw.disagreements) ? raw.disagreements : []).slice(0, 12).map((d) => String(d).slice(0, 180)),
+    source: raw.source ? String(raw.source).replace(/[^a-zA-Z0-9._/-]/g, "").slice(0, 120) : null,
+  };
+}
+
+/**
+ * Строки критики: коллектор отдаёт `{ verdicts, checks, checksAge }`, а не массив.
+ * До этого `.map` у объекта не существовал, и в браузер уходил пустой список —
+ * карточка критики была недостижима.
+ */
+function critiqueRows(raw) {
+  if (Array.isArray(raw)) return raw;
+  return Array.isArray(raw?.verdicts) ? raw.verdicts : [];
+}
+
 export function sanitizeHttpState(data) {
   if (!data) return data;
 
@@ -310,8 +299,12 @@ export function sanitizeHttpState(data) {
     },
     checks: null,
   };
+  Object.assign(metrics, sanitizeHumanGap(data.metrics));
 
-  const critique = (data.critique || []).map((c) => {
+  // Коллектор отдаёт объект `{ verdicts, checks, checksAge }`, а не массив: до этой
+  // правки `.map` у объекта не существовал, и в браузер уходил пустой список —
+  // карточка критики и возраст кэша проверок были недостижимы.
+  const critique = critiqueRows(data.critique).map((c) => {
     const verdict = c?.verdict === "accept" || c?.verdict === "reject" || c?.verdict === "mixed" ? c.verdict : "unknown";
     return {
       change: String(c?.change || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50),
@@ -411,36 +404,8 @@ export function sanitizeHttpState(data) {
     })),
   }));
 
-  function cleanArchNode(node) {
-    if (!node) return null;
-    const isFile = node.kind === "file";
-    const files = typeof node.files === "number" ? Math.max(0, node.files) : (Array.isArray(node.children) ? node.children.length : 0);
-    return {
-      name: String(node.name || ""),
-      kind: isFile ? "file" : (node.kind === "root" ? "root" : (node.kind || "dir")),
-      lines: Number(node.lines) || 0,
-      files: isFile ? undefined : files,
-      path: node.path ? String(node.path).replace(/\\/g, "/") : undefined,
-      children: Array.isArray(node.children) ? node.children.map(cleanArchNode).filter(Boolean) : undefined,
-    };
-  }
-  const arch = cleanArchNode(data.arch) || { name: "project", kind: "dir", lines: 0, files: 0, children: [] };
+  const { arch, archDrill, archGraph } = sanitizeArchState(data);
 
-  const archGraph = {
-    nodes: (data.archGraph?.nodes || []).map((n) => ({
-      id: String(n.id || ""),
-      files: Number(n.files) || 0,
-      lines: Number(n.lines) || 0,
-      external: Number(n.external) || 0,
-      topFiles: Array.isArray(n.topFiles) ? n.topFiles.map((tf) => String(tf).replace(/\\/g, "/")) : [],
-    })),
-    edges: (data.archGraph?.edges || []).map((e) => ({
-      from: String(e.from || ""),
-      to: String(e.to || ""),
-      weight: Number(e.weight) || 0,
-      kinds: Array.isArray(e.kinds) ? e.kinds.map(String) : [],
-    })),
-  };
   let run = null;
   if (data.run && typeof data.run === "object") {
     const ALLOWED_RUN_STATUSES = new Set(["open", "waiting", "closed", "failed", "working"]);
@@ -525,6 +490,7 @@ export function sanitizeHttpState(data) {
     events,
     log: { file: data.log?.file ? "активна" : null, entries: logEntries },
     arch,
+    archDrill,
     archGraph,
     project: {
       name: String(data.project?.name || "project"),
@@ -599,82 +565,19 @@ function handleRequest(req, res, absRoot, session = null, options = {}) {
     return;
   }
 
-  if (url.pathname === "/api/diff") {
-    const file = url.searchParams.get("file") || "";
-    const safe = file.replace(/\.\./g, "").replace(/^[/\\]+/, "");
-    let added = 0;
-    let deleted = 0;
-    let found = false;
+  if (url.pathname === "/api/diff" && serveDiffRoute({ res, absRoot, file: url.searchParams.get("file") || "" })) {
+    return;
+  }
 
-    if (safe) {
-      const statRes = spawnSync("git", ["diff", "HEAD", "--numstat", "--", safe], {
-        cwd: absRoot,
-        encoding: "utf8",
-        timeout: 15000,
-        shell: false,
-        windowsHide: true,
-      });
-      const statLines = (statRes.stdout || "").trim().split("\n").filter(Boolean);
-      for (const line of statLines) {
-        const parts = line.split("\t");
-        if (parts.length >= 2) {
-          found = true;
-          added += parts[0] === "-" ? 0 : parseInt(parts[0], 10) || 0;
-          deleted += parts[1] === "-" ? 0 : parseInt(parts[1], 10) || 0;
-        }
-      }
-      if (!found) {
-        const statusRes = spawnSync("git", ["status", "--porcelain", "--", safe], {
-          cwd: absRoot,
-          encoding: "utf8",
-          timeout: 15000,
-          shell: false,
-          windowsHide: true,
-        });
-        const st = (statusRes.stdout || "").trim();
-        if (st.startsWith("??")) {
-          found = true;
-          let fd = null;
-          try {
-            const full = realpathSync(join(absRoot, safe));
-            const rel = relative(absRoot, full);
-            if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("diff path escapes root");
-            fd = openSync(full, "r");
-            const buf = Buffer.alloc(65536);
-            let n = 0, nl = 0;
-            while ((n = readSync(fd, buf, 0, buf.length, null)) > 0) {
-              for (let i = 0; i < n; i++) if (buf[i] === 10) nl++;
-            }
-            added = nl + 1;
-          } catch {
-            added = 0;
-          } finally {
-            if (fd !== null) {
-              try { closeSync(fd); } catch {}
-            }
-          }
-        }
-      }
-    }
-
-    let responseText = "";
-    if (!found) {
-      responseText = [
-        "+ добавлено строк: 0",
-        "- удалено строк: 0",
-        "(Метаданные: изменений не обнаружено)",
-      ].join("\n");
-    } else {
-      responseText = [
-        `+ добавлено строк: ${added}`,
-        `- удалено строк: ${deleted}`,
-        `Сводка: ${added + deleted} изменённых строк`,
-        "(Метаданные: исходный патч скрыт политикой безопасности R05)",
-      ].join("\n");
-    }
-
-    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end(responseText);
+  if (url.pathname === "/api/arch.sketch" || url.pathname === "/api/arch.excalidraw") {
+    serveArchRoute({
+      res,
+      pathname: url.pathname,
+      searchParams: url.searchParams,
+      absRoot,
+      collectState: () => collectDashboardData(absRoot, { session: currentSession }),
+      projectToken,
+    });
     return;
   }
 
@@ -889,6 +792,20 @@ export function detectCollision(dir) {
   return false;
 }
 
+/** Простой флаг без значения: установить options[key] и вернуть true. */
+const FLAG_ARGS = new Set(["--open", "--serve", "--ensure", "--no-open", "--checks", "--json", "--url", "--up", "--stop", "--stop-now", "--freeze", "--list"]);
+const FLAG_KEYS = { "--open": "open", "--serve": "serve", "--ensure": "ensure", "--no-open": "noOpen", "--checks": "checks", "--json": "json", "--url": "url", "--up": "up", "--stop": "stop", "--stop-now": "stopNow", "--freeze": "freeze", "--list": "list" };
+
+/** Числовой параметр с диапазоном: положить значение или ошибку в options. */
+function takeRangedNumber(argv, i, rawArg, names, min, max, apply, errText) {
+  const eq = rawArg.includes("=");
+  const raw = eq ? rawArg.slice(rawArg.indexOf("=") + 1) : argv[i[0] + 1];
+  if (!eq) i[0]++;
+  const p = Number.parseInt(raw, 10);
+  if (!Number.isFinite(p) || p < min || p > max) apply.errors.push(errText(raw));
+  else apply.set(p);
+}
+
 export function parseArgs(argv = []) {
   const options = {
     root: ".",
@@ -905,31 +822,23 @@ export function parseArgs(argv = []) {
     session: null,
     freeze: false,
     pollMs: 2000,
-    help: false,
+    up: false,
+    stop: false,
+    stopNow: false,
     errors: [],
   };
-  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "list", "session", "help", "freeze", "poll", "poll-ms"]);
+  const KNOWN = new Set(["root", "output", "open", "serve", "ensure", "no-open", "checks", "port", "json", "url", "list", "session", "help", "freeze", "poll", "poll-ms", "up", "stop", "stop-now"]);
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "-h" || arg === "--help") options.help = true;
-    else if (arg === "--open") options.open = true;
-    else if (arg === "--serve") options.serve = true;
-    else if (arg === "--ensure") options.ensure = true;
-    else if (arg === "--no-open") options.noOpen = true;
-    else if (arg === "--checks") options.checks = true;
-    else if (arg === "--json") options.json = true;
-    else if (arg === "--url") options.url = true;
-    else if (arg === "--freeze") options.freeze = true;
-    else if (arg === "--list") options.list = true;
+    else if (FLAG_ARGS.has(arg)) options[FLAG_KEYS[arg]] = true;
     else if (arg === "--poll" || arg.startsWith("--poll=") || arg === "--poll-ms" || arg.startsWith("--poll-ms=")) {
-      const raw = (arg.startsWith("--poll=") || arg.startsWith("--poll-ms=")) ? arg.slice(arg.indexOf("=") + 1) : argv[++i];
-      const p = Number.parseInt(raw, 10);
-      if (!Number.isFinite(p) || p < 1000 || p > 3000) {
-        options.errors.push(`--poll требует интервал от 1000 до 3000 мс (получено: ${JSON.stringify(raw)})`);
-      } else {
-        options.pollMs = p;
-      }
+      const idx = [i];
+      takeRangedNumber(argv, idx, arg, null, 1000, 3000,
+        { errors: options.errors, set: (v) => { options.pollMs = v; } },
+        (raw) => `--poll требует интервал от 1000 до 3000 мс (получено: ${JSON.stringify(raw)})`);
+      i = idx[0];
     }
     else if (arg === "--session" || arg.startsWith("--session=")) {
       const raw = arg.startsWith("--session=") ? arg.slice("--session=".length) : argv[++i];
@@ -945,13 +854,11 @@ export function parseArgs(argv = []) {
     else if (arg === "--output" || arg.startsWith("--output="))
       options.output = arg.startsWith("--output=") ? arg.slice("--output=".length) : argv[++i];
     else if (arg === "--port" || arg.startsWith("--port=")) {
-      const raw = arg.startsWith("--port=") ? arg.slice("--port=".length) : argv[++i];
-      const p = Number.parseInt(raw, 10);
-      if (!Number.isFinite(p) || p < 1 || p > 65535) {
-        options.errors.push(`--port требует валидный номер порта (получено: ${JSON.stringify(raw)})`);
-      } else {
-        options.port = p;
-      }
+      const idx = [i];
+      takeRangedNumber(argv, idx, arg, null, 1, 65535,
+        { errors: options.errors, set: (v) => { options.port = v; } },
+        (raw) => `--port требует валидный номер порта (получено: ${JSON.stringify(raw)})`);
+      i = idx[0];
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2).split("=")[0];
       if (!KNOWN.has(name)) options.errors.push(`неизвестный параметр: ${arg}`);
@@ -959,6 +866,23 @@ export function parseArgs(argv = []) {
   }
 
   return options;
+}
+
+/** Печать списка дашбордов проекта с честной пометкой мёртвых записей. */
+async function printDashboardList(absRoot, opts) {
+  const rows = listDashboards(absRoot);
+  // Мёртвые записи (процесс упал, рантайм-файл остался) честно помечаем.
+  for (const r of rows) r.alive = r.port ? await isServerAlive(r.port, 900, absRoot) : false;
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+  } else if (!rows.length) {
+    process.stdout.write("Дашбордов нет — запустите workflow.mjs start или dashboard.mjs --ensure\n");
+  } else {
+    for (const r of rows) {
+      process.stdout.write(`${r.key.padEnd(22)} ${(r.alive ? r.url || "" : "— мёртв").padEnd(28)} pid ${r.pid} с ${r.startedAt || "?"}\n`);
+    }
+  }
+  return 0;
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -976,6 +900,8 @@ export async function main(argv = process.argv.slice(2)) {
   --open            Открыть дашборд в браузере
   --serve           Локальный сервер (авто-обновление, /api/state, /api/diff)
   --ensure          Поднять фоновый сервер, если его нет, и открыть дашборд (автозапуск)
+  --up              Поднять дашборд одной командой (сервер + страница), убрав чужих сирот
+  --stop            Остановить дашборд этой сессии (через 12 с, чтобы страница дочитала финал)
   --no-open         Не открывать браузер (для фонового демона)
   --url             Напечатать адрес живого дашборда и выйти (для агентов)
   --checks          Прогнать быстрые гейты (auto-review, prompt-lint) и закэшировать
@@ -1003,21 +929,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   // --list: какие дашборды уже подняты для проекта (по сессиям).
-  if (opts.list) {
-    const rows = listDashboards(absRoot);
-    // Мёртвые записи (процесс упал, рантайм-файл остался) честно помечаем.
-    for (const r of rows) r.alive = r.port ? await isServerAlive(r.port, 900, absRoot) : false;
-    if (opts.json) {
-      process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
-    } else if (!rows.length) {
-      process.stdout.write("Дашбордов нет — запустите workflow.mjs start или dashboard.mjs --ensure\n");
-    } else {
-      for (const r of rows) {
-        process.stdout.write(`${r.key.padEnd(22)} ${(r.alive ? r.url || "" : "— мёртв").padEnd(28)} pid ${r.pid} с ${r.startedAt || "?"}\n`);
-      }
-    }
-    return 0;
-  }
+  if (opts.list) return await printDashboardList(absRoot, opts);
 
   // --url: только адрес живого дашборда (для агентов и скриптов).
   if (opts.url) {
@@ -1040,6 +952,9 @@ export async function main(argv = process.argv.slice(2)) {
     process.stderr.write(`dashboard: ${info.error || "не удалось запустить"}\n`);
     return 1;
   }
+
+  const life = await runLifecycleCommand({ root: absRoot, opts, ensure: ensureDashboard });
+  if (life !== null) return life;
 
   if (opts.freeze) {
     const data = collectDashboardData(absRoot, { session: opts.session });

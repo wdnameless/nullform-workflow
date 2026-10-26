@@ -351,10 +351,15 @@ test("forced close records why, and metrics surfaces repeated reasons", () => {
     assert.equal(cmdStart(tmp, { tier: "T1", task: "replacement", force: true, reason: "lane abandoned by a dead session" }), 0);
 
     const records = loadMetrics(tmp);
-    assert.equal(records.length, 2, "an unfinished replacement writes no terminal metric");
+    // The replaced lane is no longer invisible: `start --force` writes its terminal
+    // metric before overwriting state, so an abandoned lane still counts as work.
+    assert.equal(records.length, 3, "the replaced lane must leave a terminal record");
     assert.equal(records[0].reason, "docs not written yet");
     assert.equal(records[0].deviationKind, "incomplete-close");
     assert.equal(records[1].reason, "docs not written yet");
+    assert.equal(records[2].task, "replaced");
+    assert.equal(records[2].deviationKind, "abandoned-lane");
+    assert.match(records[2].reason, /lane abandoned by a dead session/);
 
     const logs = [];
     const origLog = console.log;

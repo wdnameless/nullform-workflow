@@ -153,6 +153,18 @@
     "rel": "tools/dashboard.mjs"
   },
   {
+    "rel": "tools/dashboard-sketch.mjs"
+  },
+  {
+    "rel": "tools/dashboard-arch-client.mjs"
+  },
+  {
+    "rel": "tools/dashboard-routes.mjs"
+  },
+  {
+    "rel": "tools/arch-drill.mjs"
+  },
+  {
     "rel": "tools/jev-assist.mjs"
   },
   {
