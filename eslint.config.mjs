@@ -6,7 +6,7 @@
  * Rules relaxed/deferred to achieve a clean 0-error baseline on the existing tree:
  * defer: eqeqeq | ceiling: off | upgrade: enforce strict equality (===) once loose comparisons in tools/ are refactored
  * defer: prefer-const | ceiling: off | upgrade: convert un-reassigned let bindings to const across tools/
- * defer: no-unused-vars | ceiling: off | upgrade: remove unused declarations and parameters across tools/ and bin/
+ * (burned down 2026-10-26: 123 findings in 57 files → 0; facade re-exports use export-from, not import+export)
  * defer: no-undef | ceiling: off | upgrade: fix undeclared variables (e.g. FALLBACK_MODEL in oracle-model.mjs)
  * defer: complexity | ceiling: 200 | upgrade: ratchet max function complexity down towards 20 as high-complexity functions are decomposed
  * defer: no-empty | ceiling: off | upgrade: remove empty blocks and busy-wait while loops (tools/workflow.mjs)
@@ -69,7 +69,7 @@ export default [
       // Deferred core rules (tuned to reach 0 errors on existing codebase)
       "eqeqeq": "off",
       "prefer-const": "off",
-      "no-unused-vars": "off",
+      "no-unused-vars": ["error", { "varsIgnorePattern": "^_", "argsIgnorePattern": "^_", "caughtErrors": "none" }],
       "no-undef": "off",
 
       // Deferred recommended rules (tuned to reach 0 errors on existing codebase)

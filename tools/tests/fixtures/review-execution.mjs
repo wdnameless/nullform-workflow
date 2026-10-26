@@ -30,7 +30,7 @@ export function nativeRunner(sessionId = randomUUID(), usage = { input: 100, out
     return { status: extra.status ?? 0, stdout: entries.map(e => JSON.stringify(e)).join('\n') };
   };
 }
-export function prepareEvidence(root, changeId) {
+export function prepareEvidence(root, _changeId) {
   const agents = join(root, 'agent', 'agents');
   mkdirSync(agents, { recursive: true });
   for (const role of ['reviewer', 'oracle']) if (!existsSync(join(agents, `${role}.md`))) writeFileSync(join(agents, `${role}.md`), `# ${role}\n`);

@@ -24,7 +24,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, realpathSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CATEGORIES = ["design", "architecture", "domain", "product", "ops", "other"];

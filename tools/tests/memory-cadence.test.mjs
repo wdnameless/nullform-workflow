@@ -12,8 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -24,7 +23,6 @@ import {
   recordCadenceReview,
   checkCadenceStatus,
   formatCadenceReport,
-  parseArgs,
 } from "../memory-cadence.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../memory-cadence.mjs", import.meta.url)));

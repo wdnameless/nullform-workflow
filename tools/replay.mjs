@@ -31,7 +31,7 @@ import { request as httpsRequest } from "node:https";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { gunzipSync, brotliDecompressSync, inflateSync } from "node:zlib";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /* --------------------------------------------------------------- normalising */

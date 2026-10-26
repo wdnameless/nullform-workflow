@@ -257,10 +257,10 @@ test("decide: timer covers response body read and caller abort listener is clean
   const trackedSignal = {
     aborted: false,
     reason: undefined,
-    addEventListener(event, fn) {
+    addEventListener(event, _fn) {
       if (event === "abort") listenerCount++;
     },
-    removeEventListener(event, fn) {
+    removeEventListener(event, _fn) {
       if (event === "abort") listenerCount--;
     },
   };

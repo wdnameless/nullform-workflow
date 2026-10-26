@@ -3,7 +3,7 @@
  * atomic identity, and scoped backup/rollback.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync, lstatSync, readlinkSync, symlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync, lstatSync, readlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { resolve, join, dirname, isAbsolute, basename } from "node:path";
 import { hashContent } from "./config.mjs";
 import { writeInstallationState, readInstallationState } from "./state.mjs";

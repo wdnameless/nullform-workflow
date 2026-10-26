@@ -18,7 +18,7 @@
  * Zero dependencies. Node 18+ / Bun.
  */
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
-import { join, relative, sep, dirname, basename, extname } from "node:path";
+import { join, relative, sep, dirname, extname } from "node:path";
 
 /* --------------------------------------------------------------- extraction */
 

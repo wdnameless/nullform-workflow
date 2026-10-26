@@ -11,7 +11,6 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   cmdStart,
-  cmdStatus,
   cmdCheckBudget,
   BUDGET_WARN_RATIO,
   BUDGET_WARN_DEFAULT_TOKENS,

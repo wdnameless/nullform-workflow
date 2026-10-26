@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cmdStart, load } from "../workflow.mjs";
 import { redactSecrets, freezeBrief, oracleInput } from "../brief.mjs";
-import { parseRequirement, recount, ALLOWED_TYPES, ALLOWED_STATUSES } from "../requirements.mjs";
+import { parseRequirement, recount, ALLOWED_STATUSES } from "../requirements.mjs";
 
 function withTmpDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "ap-run-test-"));

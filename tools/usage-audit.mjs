@@ -1,5 +1,5 @@
 import { readdirSync, statSync, readFileSync, existsSync, realpathSync } from "node:fs";
-import { join, resolve, basename, extname } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { parseArgs as utilParseArgs } from "node:util";
 import { fileURLToPath } from "node:url";

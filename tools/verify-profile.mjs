@@ -10,9 +10,8 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
-  realpathSync
 } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {

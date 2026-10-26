@@ -7,7 +7,6 @@ import {
   compareFingerprints,
   formatRuReport,
   CAUSE_CODES,
-  CAUSE_EXPLANATIONS_RU,
 } from '../cache-doctor.mjs';
 
 const __filename = fileURLToPath(import.meta.url);

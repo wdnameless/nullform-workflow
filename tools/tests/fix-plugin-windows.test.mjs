@@ -11,7 +11,6 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const MOD = await import("../fix-plugin-windows.mjs").catch(() => null);
 
 /* Патчер распространяется как .cjs-скрипт; для тестов переиспользуем его ядро
    через прямой импорт функций, если модуль экспортирует их, иначе — через
@@ -108,7 +107,7 @@ test("fix-plugin-windows: правка, ломающая синтаксис, о�
   const root = fixture({ "pi-lens/dist/clients/installer/index.js": src });
   try {
     const before = src;
-    const res = spawnSync(process.execPath, [CLI], {
+    spawnSync(process.execPath, [CLI], {
       encoding: "utf8",
       env: { ...process.env, USERPROFILE: root, HOME: root },
     });

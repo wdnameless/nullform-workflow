@@ -35,7 +35,7 @@ export async function executeChatCall({
   model,
   messages,
   maxTokens = 1024,
-  ratesTable = OPENROUTER_FALLBACK_RATES,
+  ratesTable: _ratesTable = OPENROUTER_FALLBACK_RATES,
   fetchImpl = fetch,
 }) {
   const start = performance.now();

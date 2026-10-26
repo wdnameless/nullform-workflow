@@ -79,17 +79,6 @@ test("R08: skills-doctor validates nullform skill package with 0 problems and ve
 
 /* ----------------------------------------------------------------- R09 tests */
 
-function createMockOpenSpecChange(root, changeId) {
-  const changeDir = join(root, "openspec", "changes", changeId);
-  mkdirSync(join(changeDir, "specs"), { recursive: true });
-  writeFileSync(join(changeDir, "manifest.md"), "# Manifest\n| R01 | requirement | acceptance |\n", "utf8");
-  writeFileSync(join(changeDir, "proposal.md"), "# Proposal\nClean proposal\n", "utf8");
-  writeFileSync(join(changeDir, "tasks.md"), "# Tasks\n- [x] Task 1\n", "utf8");
-  writeFileSync(join(changeDir, "specs", "spec.md"), "# Spec\nSpecification\n", "utf8");
-  writeFileSync(join(changeDir, "interfaces.md"), "# Interfaces\nexport function test(): void\n", "utf8");
-  writeFileSync(join(changeDir, "oracle.md"), "# Oracle\nVerdict: ACCEPT\nEvidence: all tests pass\n", "utf8");
-  return changeDir;
-}
 
 test("R09: checkQualityGates passes all gates on clean fixture", () => {
   const tmp = mkdtempSync(join(tmpdir(), "u-quality-clean-"));

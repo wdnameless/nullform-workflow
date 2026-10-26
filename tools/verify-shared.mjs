@@ -4,15 +4,10 @@
  */
 import {
   existsSync,
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  mkdirSync,
   mkdtempSync,
   rmSync,
-  realpathSync
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 

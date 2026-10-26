@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, existsSync, statSync, readdirSync, realpathSync, lstatSync } from 'node:fs';
+import { readFileSync, statSync, readdirSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute, basename, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 

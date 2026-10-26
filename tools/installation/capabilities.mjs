@@ -71,7 +71,7 @@ export function getCapabilitiesInfo({ userHome = homedir(), env = process.env, h
   };
 }
 
-export function validateReviewCapability(targetHarness, { dryRun = false, userHome = null } = {}) {
+export function validateReviewCapability(targetHarness, { dryRun: _dryRun = false, userHome = null } = {}) {
   let norm = targetHarness ? String(targetHarness).trim().toLowerCase() : null;
   if (!norm && userHome) {
     try {

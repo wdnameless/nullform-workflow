@@ -24,14 +24,11 @@ import { fileURLToPath } from "node:url";
 
 import {
   DEFAULT_THRESHOLDS,
-  DEFAULT_SCOPE,
   globToRegex,
   hasHeaderDeferMarker,
   scanFunctions,
-  scanFile,
   buildBaseline,
   checkCodeSize,
-  main,
 } from "../code-size.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../code-size.mjs", import.meta.url));

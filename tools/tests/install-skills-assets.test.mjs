@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { createTempDir } from "./test-helpers.mjs";
 import { installHarness } from "../install-harness.mjs";
@@ -13,7 +13,6 @@ import { deriveHigherVersion } from "../package-archive.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
-const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 
 
 function copyPublicPackageFixture(dest) {

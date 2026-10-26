@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { verifyReleasePreflight, executePublish, REQUIRED_MATRIX_CELLS } from "../publish-release.mjs";
+import { verifyReleasePreflight, executePublish } from "../publish-release.mjs";
 import { getGitCommit } from "../certify-package.mjs";
 import { sourceDigest } from "../worktree-snapshot.mjs";
 import { computeFileDigests, ALL_8_HARNESSES, createArchive } from "../package-archive.mjs";

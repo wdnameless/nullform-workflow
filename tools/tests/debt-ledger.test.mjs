@@ -16,7 +16,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -27,9 +27,7 @@ import {
   scanText,
   scanRepo,
   formatLedger,
-  formatMarkdownLedger,
   parseArgs,
-  main,
 } from "../debt-ledger.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../debt-ledger.mjs", import.meta.url));

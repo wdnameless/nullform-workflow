@@ -5,12 +5,7 @@
 import {
   existsSync,
   readFileSync,
-  writeFileSync,
-  readdirSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  realpathSync
+  readdirSync
 } from "node:fs";
 import { join } from "node:path";
 import {

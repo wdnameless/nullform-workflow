@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runBriefRounds, appendAddenda } from '../brief-rounds.mjs';
 import { cmdBrief, runWorkflowCli } from '../workflow.mjs';
 import { freezeBrief } from '../brief.mjs';
-import { recount, parseRequirement } from '../requirements.mjs';
+import { recount } from '../requirements.mjs';
 
 async function withTmpDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'u-brief-test-'));

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { resolve, join, dirname, basename } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { sourceDigest } from "./worktree-snapshot.mjs";
@@ -17,7 +17,6 @@ import {
   inspectArchiveContents,
   getGitCommit,
   loadCertificates,
-  assertCleanWorkingTree,
 } from "./package-archive.mjs";
 
 export { REQUIRED_MATRIX_CELLS, loadCertificates };
@@ -357,7 +356,6 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   let tarballPath = null;
   let certsOption = null;
   let userConfigOption = null;
-  const checkOnly = process.argv.includes("--check-only");
   const asJson = process.argv.includes("--json");
   const doPublish = process.argv.includes("--publish");
   const diagnosticOnly = process.argv.includes("--diagnostic-only");

@@ -10,18 +10,17 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
-import { installHarness, SUPPORTED_HARNESSES, loadHostManifest, discoverCandidates } from "../tools/install-harness.mjs";
+import { installHarness, loadHostManifest, discoverCandidates } from "../tools/install-harness.mjs";
 import { getDefaultRoot } from '../tools/installation/state.mjs';
 import { runDoctor, printHumanReport } from "../tools/doctor.mjs";
 import { runWorkflowCli } from "../tools/workflow.mjs";
-import { acquireDeploymentLock, releaseDeploymentLock, DeploymentJournal } from "../tools/installation/journal.mjs";
+import { acquireDeploymentLock, DeploymentJournal } from "../tools/installation/journal.mjs";
 import { getCapabilitiesInfo, checkVersionAlignment } from "../tools/installation/capabilities.mjs";
 import { inspectHarness, resolveHostHome } from "../tools/installation/profiles.mjs";
 import { runSetup, runHeal } from "../tools/harness-setup.mjs";
 import {
   PACKAGE_NAME,
   HARNESS_CHOICES,
-  readLocalVersion,
   validateSafePath,
   getStateFilePath,
   validateInstallationState,

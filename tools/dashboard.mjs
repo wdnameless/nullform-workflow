@@ -15,19 +15,18 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, rmSync, realpathSync } from "node:fs";
-import { resolve, join, dirname, isAbsolute } from "node:path";
+import { resolve, join, dirname } from "node:path";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { redactSecrets } from "./brief.mjs";
 import {
   projectToken, isAllowedHost, isCompatibleDashboard, buildWaves, calibrationHint,
-  runChecks, collectDashboardData, validateSessionKey, sessionKey, portForSession, DASHBOARDS_DIR,
+  runChecks, collectDashboardData, validateSessionKey, sessionKey, portForSession,
   DASHBOARD_BUILD, DASHBOARD_PROTOCOL, DASHBOARD_PROTOCOL_VERSION, CHECKS_CACHE,
 } from "./dashboard-collectors.mjs";
 import { generateDashboardHtml } from "./dashboard-ui.mjs";
-import { serveArchRoute, serveDiffRoute, sanitizeArchState } from "./dashboard-routes.mjs";
-import { stopDashboardServer, killProjectOrphans, isOwnServerCommand, readProcessCmdline, STOP_DELAY_S, stopLater, runLifecycleCommand, runtimePath, readRuntime, writeRuntime, RUNTIME_FILE } from "./dashboard-routes.mjs";
+import { serveArchRoute, serveDiffRoute, sanitizeArchState, runLifecycleCommand, runtimePath, readRuntime, writeRuntime } from "./dashboard-routes.mjs";
 export {
   DASHBOARD_BUILD, DASHBOARD_PROTOCOL, DASHBOARD_PROTOCOL_VERSION,
   REQUIRED_ARTIFACTS_BY_TIER, calibrationHint, collectCritique, collectDashboardData,
@@ -797,7 +796,7 @@ const FLAG_ARGS = new Set(["--open", "--serve", "--ensure", "--no-open", "--chec
 const FLAG_KEYS = { "--open": "open", "--serve": "serve", "--ensure": "ensure", "--no-open": "noOpen", "--checks": "checks", "--json": "json", "--url": "url", "--up": "up", "--stop": "stop", "--stop-now": "stopNow", "--freeze": "freeze", "--list": "list" };
 
 /** Числовой параметр с диапазоном: положить значение или ошибку в options. */
-function takeRangedNumber(argv, i, rawArg, names, min, max, apply, errText) {
+function takeRangedNumber(argv, i, rawArg, min, max, apply, errText) {
   const eq = rawArg.includes("=");
   const raw = eq ? rawArg.slice(rawArg.indexOf("=") + 1) : argv[i[0] + 1];
   if (!eq) i[0]++;
@@ -835,7 +834,7 @@ export function parseArgs(argv = []) {
     else if (FLAG_ARGS.has(arg)) options[FLAG_KEYS[arg]] = true;
     else if (arg === "--poll" || arg.startsWith("--poll=") || arg === "--poll-ms" || arg.startsWith("--poll-ms=")) {
       const idx = [i];
-      takeRangedNumber(argv, idx, arg, null, 1000, 3000,
+      takeRangedNumber(argv, idx, arg, 1000, 3000,
         { errors: options.errors, set: (v) => { options.pollMs = v; } },
         (raw) => `--poll требует интервал от 1000 до 3000 мс (получено: ${JSON.stringify(raw)})`);
       i = idx[0];
@@ -855,7 +854,7 @@ export function parseArgs(argv = []) {
       options.output = arg.startsWith("--output=") ? arg.slice("--output=".length) : argv[++i];
     else if (arg === "--port" || arg.startsWith("--port=")) {
       const idx = [i];
-      takeRangedNumber(argv, idx, arg, null, 1, 65535,
+      takeRangedNumber(argv, idx, arg, 1, 65535,
         { errors: options.errors, set: (v) => { options.port = v; } },
         (raw) => `--port требует валидный номер порта (получено: ${JSON.stringify(raw)})`);
       i = idx[0];

@@ -277,10 +277,8 @@ test("R07 withBreaker: opens after threshold consecutive retryable failures, rou
 });
 
 test("R07 withBreaker: non-retryable errors pass through without tripping breaker", async () => {
-  let primaryCalls = 0;
 
   const primary = async () => {
-    primaryCalls++;
     const err = new Error("Bad Request");
     err.status = 400;
     throw err;

@@ -19,7 +19,7 @@
  */
 
 import { existsSync, statSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";

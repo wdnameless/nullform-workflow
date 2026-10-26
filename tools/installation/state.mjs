@@ -2,11 +2,11 @@
  * tools/installation/state.mjs — Installation identity, deployment preflight, npm transport, and SemVer utilities.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, lstatSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { resolve, join, dirname, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from 'node:child_process';
-import { validatePathWithinScope, isInsideOrEqual, resolveRealPath, getCanonicalPath } from '../worktree-snapshot.mjs';
+import { validatePathWithinScope, isInsideOrEqual, getCanonicalPath } from '../worktree-snapshot.mjs';
 import { RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, resolveOpencodeConfigPaths } from './config.mjs';
 import { resolveHostHome, validateHostManifest } from './profiles.mjs';
 
@@ -295,7 +295,7 @@ export function preflightFilesystemConfinement({
   targetRoot,
   projectRoot,
   userHome,
-  agentsHome,
+  agentsHome: _agentsHome,
   shouldWriteHome,
   hostHomes = {},
   hostManifest,

@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
-import { EXECUTOR, PINNED_CONTEXT_TOKENS, PINNED_PROVIDER, recordRequest, redactSecret, validatePolicy } from './budget.mjs';
+import { EXECUTOR, PINNED_CONTEXT_TOKENS, recordRequest, redactSecret, validatePolicy } from './budget.mjs';
 import { inspectProduct, readProductPage } from './native-tools.mjs';
 import { isPathInsideRoot, validateRootPath, validatePathWithinScope } from '../worktree-snapshot.mjs';
 export { validatePolicy };

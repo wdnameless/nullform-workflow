@@ -400,15 +400,6 @@ function deriveModelFamily(modelId) {
 }
 
 /**
- * Assign a checker (reviewer/oracle) enforcing model diversity.
- * Returns the first candidate whose derived family differs from writerFamily.
- * Throws naming the conflicting family when none qualifies.
- */
-function assignChecker({ writerFamily, candidates = [] } = {}) {
-  return resolveOracleModel({ writerFamily, candidates });
-}
-
-/**
  * Resolve oracle model:
  * 1. resolveOracleModel({ builderFamily/writerFamily, candidates })
  *    Derives family deterministically from the model id string.

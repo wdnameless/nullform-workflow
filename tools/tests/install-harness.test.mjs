@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { join, resolve, dirname, basename } from "node:path";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(__dirname, "../..");
@@ -11,7 +11,7 @@ const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 const SH_PATH = resolve(REPO_ROOT, "install.sh");
 import { createTempDir } from "./test-helpers.mjs";
 import { detectHarness } from "../install-harness.mjs";
-import { preflightJson5Config, preflightJsoncConfig, applyManagedSection, loadYaml } from "../installation/config.mjs";
+import { preflightJson5Config, preflightJsoncConfig, loadYaml } from "../installation/config.mjs";
 import { resolveHostHome } from "../installation/profiles.mjs";
 function getBashPath() {
   const candidates = process.platform === "win32"

@@ -99,7 +99,7 @@ Report only issues meeting ALL:
 Mandatory lenses to evaluate on every review:
 - **Simplest solution (Ponytail / Lean lens)**:
   Flag over-engineering, dead code, and redundant indirection using tagged prefixes:
-  - `delete:` dead code or unused flexibility (suggested replacement: "nothing")
+  - `delete:` dead code or unused flexibility (suggested replacement: "nothing"). Commented-out code and parking-lot directories are categorically forbidden — history, not comments, keeps the past.
   - `stdlib:` replace bespoke helper with standard library (MUST name stdlib function)
   - `native:` replace library/wrapper with platform feature (MUST name native feature)
   - `yagni:` abstraction with single implementation that adds no information-hiding, invariant protection, or test seam value (suggest replacement). A single-implementation interface that isolates a database, network call, clock, or complex validation logic is NOT yagni — it is a load-bearing boundary. LOC/diff counts are advisory, not quality verdicts.

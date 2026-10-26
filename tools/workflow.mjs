@@ -49,7 +49,6 @@ import {
 } from "./review/evidence.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { parseRequirement } from "./requirements.mjs";
-import { checkPlan } from "./plan-check.mjs";
 import { repairBudget } from "./review/arbitrate.mjs";
 export { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";

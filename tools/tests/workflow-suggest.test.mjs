@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,7 +20,6 @@ import {
   loadBudgets,
   DEFAULT_BUDGETS,
   cmdStart,
-  cmdStatus,
   cmdClose,
   load,
 } from "../workflow.mjs";

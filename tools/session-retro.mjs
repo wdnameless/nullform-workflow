@@ -26,7 +26,7 @@
 
 import { readdirSync, statSync, readFileSync, existsSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 export const DEFAULT_SESSIONS_DIR = join(homedir(), ".omp", "agent", "sessions");

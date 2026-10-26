@@ -21,9 +21,7 @@ import { fileURLToPath } from "node:url";
 import {
   extractSkillBody,
   parseSkillFrontmatter,
-  checkMarkdownReferences,
   auditSkillFile,
-  auditSkills,
 } from "../skill-audit.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../prompt-lint.mjs", import.meta.url));

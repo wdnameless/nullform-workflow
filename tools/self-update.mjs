@@ -4,7 +4,7 @@
  */
 
 import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
-import { resolve, join, dirname, isAbsolute } from "node:path";
+import { resolve, join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveNpmRunner, spawnAsync, spawnSafe } from './installation/state.mjs';
 import { fileURLToPath } from "node:url";

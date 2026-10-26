@@ -8,8 +8,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
-  DEFAULT_TIER_CEILINGS_NANO_USD,
-  SPEND_LEDGER_FILE,
   admit,
   loadSpendLedger,
   recordReceipt,
@@ -21,7 +19,6 @@ import {
   DANGEROUS_NETWORK_TOOLS,
   DANGEROUS_WRITE_TOOLS,
   authorize,
-  clearAuditLog,
   configureGatekeeper,
   getAuditLog,
   resetGatekeeper,

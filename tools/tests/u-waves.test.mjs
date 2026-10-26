@@ -21,8 +21,7 @@ import {
   sanitizeHttpState,
   generateDashboardHtml,
 } from "../dashboard.mjs";
-import { runBenchmark, CANONICAL_BENCHMARK } from "../benchmark-run.mjs";
-import { normalizedCost } from "../cost-snapshot.mjs";
+import { runBenchmark } from "../benchmark-run.mjs";
 
 function withTmpDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "u-waves-test-"));

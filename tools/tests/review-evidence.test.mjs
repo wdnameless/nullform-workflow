@@ -14,12 +14,6 @@ import {
   recordStageB,
   validateReviewEvidence,
   loadReviewEvidence,
-  computeFileHash,
-  computeSourceDigest,
-  computeRolePromptHash,
-  computeTestFilesHash,
-  countSourceChanges,
-  isFlashOrFallback,
   EVIDENCE_FILE,
 } from "../review/evidence.mjs";
 import { nativeRunner, prepareEvidence } from "./fixtures/review-execution.mjs";
@@ -88,7 +82,7 @@ test("review-evidence: review-run rejects failed process exit code", () => {
 test("review-evidence: reviewer + stage-b + oracle end-to-end recording", () => {
   const root = mkdtempSync(join(tmpdir(), "rev-ev-e2e-"));
   try {
-    const { changeDir } = setupMockProject(root, "feat-e2e");
+    setupMockProject(root, "feat-e2e");
     const revRunner = makeMockOmpRunner("sess-rev-1", { input: 200, output: 80 }, "correct");
     const oraRunner = makeMockOmpRunner("sess-ora-1", { input: 300, output: 90 }, "correct", { text: "ACCEPT: all requirements verified." });
 
