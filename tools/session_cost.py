@@ -12,10 +12,62 @@ from collections import defaultdict
 from datetime import datetime, timezone
 import json
 import os
+import re
 import sys
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+
+W_OUT = 5.0
+W_WRITE = 1.25
+W_READ = 0.1
+
+ROLE_REGEX_TABLE: List[Tuple[str, re.Pattern]] = [
+    (
+        "executor",
+        re.compile(
+            r"executor|fixer|designer|explorer|librarian|sonic|writer|worker|subagent|task|scout",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "reviewer",
+        re.compile(r"reviewer|review", re.IGNORECASE),
+    ),
+    (
+        "oracle",
+        re.compile(r"oracle|acceptance|verifier", re.IGNORECASE),
+    ),
+    (
+        "other",
+        re.compile(r".*", re.IGNORECASE),
+    ),
+]
+
+
+def role_of(agent_name: str) -> str:
+    """Map agent or session name to orchestrator/executor/reviewer/oracle/other."""
+    if not agent_name or not isinstance(agent_name, str):
+        return "other"
+    name = agent_name.strip()
+    if name.lower() in ("orchestrator", "@orchestrator"):
+        return "orchestrator"
+    for role, pattern in ROLE_REGEX_TABLE:
+        if pattern.search(name):
+            return role
+    return "other"
+
+
+def empty_role_metrics() -> Dict[str, Any]:
+    return {
+        "steps": 0,
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": defaultdict(float),
+    }
 
 def parse_timestamp_to_utc_date(ts: Union[int, float, str, None]) -> str:
     """Convert epoch seconds, milliseconds, or ISO string to UTC date YYYY-MM-DD."""
@@ -141,10 +193,12 @@ def parse_and_aggregate(
     paths: List[str],
     cache_report: bool = False,
     include_cache_report: bool = False,
+    by_role: bool = False,
 ) -> Dict[str, Any]:
     do_cache = cache_report or include_cache_report
     per_agent: Dict[str, Dict[str, Any]] = defaultdict(empty_metrics)
     per_day: Dict[str, Dict[str, Any]] = defaultdict(empty_metrics)
+    per_role: Dict[str, Dict[str, Any]] = defaultdict(empty_role_metrics)
     total_metrics = empty_metrics()
 
     for path in paths:
@@ -152,6 +206,7 @@ def parse_and_aggregate(
             continue
         try:
             current_model: Optional[str] = None
+            current_session_agent: Optional[str] = None
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
                     line = line.strip()
@@ -167,6 +222,16 @@ def parse_and_aggregate(
 
                     event_type = event.get("type")
 
+                    if event_type == "session":
+                        current_session_agent = (
+                            event.get("agent")
+                            or event.get("agent_name")
+                            or event.get("role")
+                            or event.get("session")
+                            or event.get("id")
+                            or event.get("name")
+                        )
+                        continue
                     # Parse model_change events
                     if event_type == "model_change":
                         raw_model = event.get("model") or event.get("to")
@@ -254,6 +319,18 @@ def parse_and_aggregate(
                     if current_model is None:
                         current_model = agent_key
 
+                    agent_identifier = (
+                        event.get("agent")
+                        or msg.get("agent")
+                        or event.get("agent_name")
+                        or msg.get("agent_name")
+                        or event.get("session")
+                        or msg.get("session")
+                        or (event.get("role") if event.get("role") != "assistant" else None)
+                        or current_session_agent
+                        or agent_key
+                    )
+                    role = role_of(agent_identifier)
                     # Timestamp can be on message or top-level event
                     ts = msg.get("timestamp")
                     if ts is None:
@@ -298,6 +375,10 @@ def parse_and_aggregate(
                     add_metrics(per_agent[agent_key], u_copy)
                     add_metrics(per_day[day_key], u_copy)
                     add_metrics(total_metrics, u_copy)
+
+                    role_m = per_role[role]
+                    role_m["steps"] += 1
+                    add_metrics(role_m, u_copy)
         except Exception:
             continue
 
@@ -313,10 +394,48 @@ def parse_and_aggregate(
     if do_cache:
         result["per_model"] = out_per_agent
 
+    if by_role:
+        total_units = round(
+            total_metrics["output"] * W_OUT
+            + total_metrics["cacheWrite"] * W_WRITE
+            + total_metrics["cacheRead"] * W_READ,
+            4,
+        )
+        out_per_role = {}
+        for role_key, rm in sorted(per_role.items()):
+            role_units = round(
+                rm["output"] * W_OUT
+                + rm["cacheWrite"] * W_WRITE
+                + rm["cacheRead"] * W_READ,
+                4,
+            )
+            share = round(role_units / total_units, 4) if total_units > 0 else 0.0
+            cost_dict = dict(rm["cost"])
+            if "total" not in cost_dict and cost_dict:
+                cost_dict["total"] = sum(cost_dict.values())
+            elif not cost_dict:
+                cost_dict = {"total": 0.0}
+            clean_cost = {k: (round(v, 6) if isinstance(v, float) else v) for k, v in cost_dict.items()}
+
+            out_per_role[role_key] = {
+                "steps": rm["steps"],
+                "input": rm["input"],
+                "output": rm["output"],
+                "cacheRead": rm["cacheRead"],
+                "cacheWrite": rm["cacheWrite"],
+                "totalTokens": rm["totalTokens"],
+                "cost": clean_cost,
+                "normalizedUnits": role_units,
+                "share": share,
+                "sharePercent": round(share * 100.0, 2),
+            }
+        result["per_role"] = out_per_role
+        result["total"]["normalizedUnits"] = total_units
+
     return result
 
 
-def format_table(data: Dict[str, Any], cache_report: bool = False) -> str:
+def format_table(data: Dict[str, Any], cache_report: bool = False, by_role: bool = False) -> str:
     lines: List[str] = []
 
     def format_row(name: str, m: Dict[str, Any], width: int = 30) -> str:
@@ -351,6 +470,20 @@ def format_table(data: Dict[str, Any], cache_report: bool = False) -> str:
             lines.append(format_row(day, m, width=15))
     else:
         lines.append("  (none)")
+    if by_role or "per_role" in data:
+        lines.append("")
+        lines.append("=== PER ROLE ===")
+        per_role = data.get("per_role", {})
+        if per_role:
+            for role, r in sorted(per_role.items()):
+                steps = r.get("steps", 0)
+                units = r.get("normalizedUnits", 0.0)
+                share = r.get("share", 0.0)
+                share_str = f"{share:.1%}" if share is not None else "0.0%"
+                units_str = f"{units:,.2f}"
+                lines.append(f"  {role:<15} | steps={steps:<5} | units={units_str:>12} | share={share_str:>7}")
+        else:
+            lines.append("  (none)")
 
     lines.append("")
     tot = data["total"]
@@ -489,7 +622,7 @@ def run_selftest() -> None:
     # All imported modules in standard library
     import sys
     stdlib_names = sys.stdlib_module_names
-    for mod in ("argparse", "collections", "datetime", "json", "os", "sys", "tempfile", "typing"):
+    for mod in ("argparse", "collections", "datetime", "json", "os", "re", "sys", "tempfile", "typing"):
         assert mod in stdlib_names, f"{mod} not in stdlib"
     print("  [PASS] Scenario: dependencies (stdlib only)")
 
@@ -502,6 +635,7 @@ def main() -> None:
     parser.add_argument("--json", dest="as_json", action="store_true", help="Output JSON object only")
     parser.add_argument("--cache-report", dest="cache_report", action="store_true", help="Include neural prompt cache metrics")
     parser.add_argument("--selftest", action="store_true", help="Run self-tests and exit")
+    parser.add_argument("--by-role", dest="by_role", action="store_true", help="Aggregate usage by role with normalized cost units")
 
     args = parser.parse_args()
 
@@ -510,7 +644,7 @@ def main() -> None:
             # Check standard library modules before running
             import sys
             stdlib_names = sys.stdlib_module_names
-            for mod in ("argparse", "collections", "datetime", "json", "os", "sys", "tempfile", "typing"):
+            for mod in ("argparse", "collections", "datetime", "json", "os", "re", "sys", "tempfile", "typing"):
                 assert mod in stdlib_names, f"{mod} not in stdlib"
             run_selftest()
             sys.exit(0)
@@ -522,12 +656,12 @@ def main() -> None:
         parser.print_help(sys.stderr)
         sys.exit(1)
 
-    result = parse_and_aggregate(args.paths, cache_report=args.cache_report)
+    result = parse_and_aggregate(args.paths, cache_report=args.cache_report, by_role=args.by_role)
 
     if args.as_json:
         print(json.dumps(result, indent=2))
     else:
-        print(format_table(result, cache_report=args.cache_report))
+        print(format_table(result, cache_report=args.cache_report, by_role=args.by_role))
 
 if __name__ == "__main__":
     main()

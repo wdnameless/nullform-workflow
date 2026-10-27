@@ -115,6 +115,7 @@ Mandatory lenses to evaluate on every review:
   Merge danger → Blast radius). Missing evidence, evidence older than the diff,
   or a one-way door declared two-way = finding (P1 minimum). A claim without
   a pasted command + raw output is not evidence.
+  A new gate/skill/rule owes one measured run proving it fires and what it costs — else finding (P1 minimum).
 </lenses>
 
 <cross-boundary>

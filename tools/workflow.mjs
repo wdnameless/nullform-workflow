@@ -164,6 +164,15 @@ function load(root) {
 }
 
 function save(root, st) {
+  // Tool-written beat: every state mutation is a clock tick for honestTime.
+  // Best-effort (observability, never a gate); cap mirrors journal.mjs.
+  try {
+    if (st && typeof st === "object") {
+      if (!Array.isArray(st.beats)) st.beats = [];
+      st.beats.push(new Date().toISOString());
+      if (st.beats.length > 2000) st.beats.splice(0, st.beats.length - 2000);
+    }
+  } catch {}
   // Atomic write: a crash mid-write must never leave a truncated state.json.
   const target = statePath(root);
   // Уникальное имя временного файла: два агента в одном проекте не должны

@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 TOOLS_DIR = ROOT_DIR / "tools"
 FIXTURES_DIR = TOOLS_DIR / "tests" / "fixtures" / "cache"
+BY_ROLE_FIXTURE = TOOLS_DIR / "tests" / "fixtures" / "by-role.jsonl"
 sys.path.insert(0, str(TOOLS_DIR))
 
 import session_cost
@@ -198,6 +199,126 @@ class TestSessionCostCacheReport(unittest.TestCase):
         finally:
             os.remove(tf_path)
 
+
+class TestSessionCostByRole(unittest.TestCase):
+    """Verify --by-role flag, role_of mapping, normalized units, and share summation."""
+
+    def test_by_role_role_of_mapping(self):
+        """role_of must match orchestrator exact first, then regex table for roles."""
+        # Orchestrator exact-match first
+        self.assertEqual(session_cost.role_of("orchestrator"), "orchestrator")
+        self.assertEqual(session_cost.role_of("@orchestrator"), "orchestrator")
+        self.assertEqual(session_cost.role_of("ORCHESTRATOR"), "orchestrator")
+        self.assertEqual(session_cost.role_of("  orchestrator  "), "orchestrator")
+
+        # Executor regex table
+        self.assertEqual(session_cost.role_of("executor"), "executor")
+        self.assertEqual(session_cost.role_of("fixer"), "executor")
+        self.assertEqual(session_cost.role_of("designer"), "executor")
+        self.assertEqual(session_cost.role_of("explorer"), "executor")
+        self.assertEqual(session_cost.role_of("librarian"), "executor")
+        self.assertEqual(session_cost.role_of("sonic"), "executor")
+        self.assertEqual(session_cost.role_of("writer-1"), "executor")
+        self.assertEqual(session_cost.role_of("worker_subagent"), "executor")
+        self.assertEqual(session_cost.role_of("task"), "executor")
+        self.assertEqual(session_cost.role_of("scout"), "executor")
+
+        # Reviewer regex table
+        self.assertEqual(session_cost.role_of("reviewer"), "reviewer")
+        self.assertEqual(session_cost.role_of("security-reviewer"), "reviewer")
+        self.assertEqual(session_cost.role_of("code-review"), "reviewer")
+
+        # Oracle regex table
+        self.assertEqual(session_cost.role_of("oracle"), "oracle")
+        self.assertEqual(session_cost.role_of("OracleU19"), "oracle")
+        self.assertEqual(session_cost.role_of("acceptance-tester"), "oracle")
+        self.assertEqual(session_cost.role_of("blind-verifier"), "oracle")
+
+        # Other / fallback
+        self.assertEqual(session_cost.role_of("unknown"), "other")
+        self.assertEqual(session_cost.role_of("anthropic/claude-3-5-sonnet"), "other")
+        self.assertEqual(session_cost.role_of(""), "other")
+        self.assertEqual(session_cost.role_of(None), "other")
+
+    def test_by_role_fixture_grouping_and_shares(self):
+        """Grouping on synthetic fixture must calculate correct units and shares summing to total."""
+        self.assertTrue(BY_ROLE_FIXTURE.exists(), f"Fixture {BY_ROLE_FIXTURE} must exist")
+        res = session_cost.parse_and_aggregate([str(BY_ROLE_FIXTURE)], by_role=True)
+
+        self.assertIn("per_role", res)
+        per_role = res["per_role"]
+        self.assertEqual(set(per_role.keys()), {"orchestrator", "executor", "reviewer", "oracle"})
+
+        # Orchestrator: 50 out * 5 + 100 cw * 1.25 + 250 cr * 0.1 = 250 + 125 + 25 = 400.0
+        orch = per_role["orchestrator"]
+        self.assertEqual(orch["steps"], 1)
+        self.assertEqual(orch["normalizedUnits"], 400.0)
+
+        # Executor: 2 turns (fixer: 150 out, 200 cw, 500 cr; executor: 100 out, 100 cw, 250 cr)
+        # total exec: 250 out * 5 + 300 cw * 1.25 + 750 cr * 0.1 = 1250 + 375 + 75 = 1700.0
+        exec_role = per_role["executor"]
+        self.assertEqual(exec_role["steps"], 2)
+        self.assertEqual(exec_role["normalizedUnits"], 1700.0)
+
+        # Reviewer: 40 out * 5 + 50 cw * 1.25 + 75 cr * 0.1 = 200 + 62.5 + 7.5 = 270.0
+        rev = per_role["reviewer"]
+        self.assertEqual(rev["steps"], 1)
+        self.assertEqual(rev["normalizedUnits"], 270.0)
+
+        # Oracle: 20 out * 5 + 20 cw * 1.25 + 50 cr * 0.1 = 100 + 25 + 5 = 130.0
+        ora = per_role["oracle"]
+        self.assertEqual(ora["steps"], 1)
+        self.assertEqual(ora["normalizedUnits"], 130.0)
+
+        # Sum of role normalized units must equal total normalized units
+        total_units = res["total"]["normalizedUnits"]
+        self.assertEqual(total_units, 2500.0)
+        self.assertEqual(sum(r["normalizedUnits"] for r in per_role.values()), total_units)
+
+        # Shares must sum to 1.0 (100%)
+        shares_sum = sum(r["share"] for r in per_role.values())
+        self.assertAlmostEqual(shares_sum, 1.0, places=4)
+        self.assertAlmostEqual(sum(r["sharePercent"] for r in per_role.values()), 100.0, places=1)
+
+    def test_by_role_default_output_byte_identical(self):
+        """When --by-role is not passed, output is byte-identical and per_role key is omitted."""
+        res_default = session_cost.parse_and_aggregate([str(BY_ROLE_FIXTURE)], by_role=False)
+        res_unspecified = session_cost.parse_and_aggregate([str(BY_ROLE_FIXTURE)])
+        self.assertEqual(res_default, res_unspecified)
+        self.assertNotIn("per_role", res_default)
+        self.assertNotIn("normalizedUnits", res_default["total"])
+
+        table_default = session_cost.format_table(res_default, by_role=False)
+        self.assertNotIn("=== PER ROLE ===", table_default)
+
+        res_role = session_cost.parse_and_aggregate([str(BY_ROLE_FIXTURE)], by_role=True)
+        table_role = session_cost.format_table(res_role, by_role=True)
+        self.assertIn("=== PER ROLE ===", table_role)
+        self.assertIn("steps=1", table_role)
+        self.assertIn("units=    1,700.00", table_role)
+        self.assertIn("share=  68.0%", table_role)
+
+        # Total line must be identical
+        total_line = "TOTAL: in=580 out=360 total=940 (cacheR=1,125 cacheW=470) | cost=$0.0350"
+        self.assertIn(total_line, table_default)
+        self.assertIn(total_line, table_role)
+
+    def test_by_role_cli_invocation(self):
+        """CLI with --by-role prints the per-role table to stdout."""
+        buf = io.StringIO()
+        orig_argv = sys.argv
+        try:
+            sys.argv = ["session_cost.py", "--by-role", str(BY_ROLE_FIXTURE)]
+            with redirect_stdout(buf):
+                session_cost.main()
+            output = buf.getvalue()
+            self.assertIn("=== PER ROLE ===", output)
+            self.assertIn("orchestrator", output)
+            self.assertIn("executor", output)
+            self.assertIn("reviewer", output)
+            self.assertIn("oracle", output)
+        finally:
+            sys.argv = orig_argv
 
 if __name__ == "__main__":
     unittest.main()
