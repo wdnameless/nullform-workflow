@@ -1,5 +1,7 @@
 # Oracle verdict — cli-anything-routing (Wave 4, blind)
 
+Verdict: ACCEPT
+
 **ACCEPT** (agent CliSkillOracle, blind vs manifest.md + SKILL.md only).
 
 Per-requirement (each with file:line evidence):
