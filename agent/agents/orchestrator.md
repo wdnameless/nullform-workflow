@@ -66,9 +66,9 @@ Full details in `<HARNESS>/core/PORTABLE.md`:
 
 ## 5. OBSERVABILITY & REVIEW EVIDENCE
 - **Observability Dashboard**: `start` auto-opens the dashboard by default; pass `--no-dashboard` (or `NF_NO_DASHBOARD=1`) for headless/lean runs.
-- **Review Evidence**: New automated review execution requires controlled Node transport `nullform-http-v1` (pinned `openai/gpt-4o-mini-2024-07-18`, `--admission-policy <path>`, budget ceiling, authorized `OPENAI_API_KEY`). Historical native OMP evidence is readable/verified from session events, but no monetarily-enforced native SDK dispatch is enabled in CLI.
+- **Review Evidence**: New automated review execution requires controlled Node transport `nullform-http-v1` (`--admission-policy <path>` naming provider/model/endpoint/tariffs and the credential env var, budget ceiling). The model is user-configured — whatever the admission policy admits. Historical native OMP evidence is readable/verified from session events, but no monetarily-enforced native SDK dispatch is enabled in CLI.
   ```bash
-  node tools/workflow.mjs review-run --role reviewer --change <name> --model openai/gpt-4o-mini-2024-07-18 --base-ref <base> --admission-policy <policy-path>
-  node tools/workflow.mjs review-run --role oracle --change <name> --model openai/gpt-4o-mini-2024-07-18 --base-ref <base> --admission-policy <policy-path> --product-command '["node","product-entry.mjs"]'
+  node tools/workflow.mjs review-run --role reviewer --change <name> --model <provider>/<model> --base-ref <base> --admission-policy <policy-path>
+  node tools/workflow.mjs review-run --role oracle --change <name> --model <provider>/<model> --base-ref <base> --admission-policy <policy-path> --product-command '["node","product-entry.mjs"]'
   ```
 - Strict evidence gates (`workflow.mjs check-ci`) require real receipts: no source-hash exemptions, no fixture-as-release, no static-ACCEPT bypass.

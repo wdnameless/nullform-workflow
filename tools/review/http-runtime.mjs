@@ -21,9 +21,12 @@ export { validatePolicy };
 export { EXECUTOR };
 export const PROVIDER_CREDENTIAL_ENV = 'OPENAI_API_KEY';
 export const GATEWAY_CREDENTIAL_ENV = 'NULLFORM_GATEWAY_API_KEY';
-export function credentialEnvForProvider(provider) {
+export function credentialEnvForProvider(provider, policy = null) {
   if (provider === 'nullform-gateway') return GATEWAY_CREDENTIAL_ENV;
-  return PROVIDER_CREDENTIAL_ENV;
+  if (provider === 'openai') return PROVIDER_CREDENTIAL_ENV;
+  const named = policy && typeof policy.credentialEnv === 'string' ? policy.credentialEnv : '';
+  if (!/^[A-Z][A-Z0-9_]{2,63}$/.test(named)) throw new Error(`Policy credentialEnv must name the credential env var (got '${named}')`);
+  return named;
 }
 export const EXECUTION_FILE = 'execution.jsonl';
 const USER_AGENT = 'nullform-controlled-review/1';
@@ -188,7 +191,7 @@ export async function runHttpReview(invocation, { approveEndpoint, expectedProve
   if (expectedProvenanceHash !== null && expectedProvenanceHash !== provenanceHash) throw new Error('Execution provenance differs from the parent-authorized contract; refusing to dispatch');
   // One explicit stdlib sender per call; there is no injectable HTTP client to bypass.
   const directory = executionDirectory(root, sessionDir);
-  const credentialEnv = credentialEnvForProvider(policy.provider);
+  const credentialEnv = credentialEnvForProvider(policy.provider, policy);
   const credential = process.env[credentialEnv];
   if (typeof credential !== 'string' || !credential) throw new Error(`${credentialEnv} is required at the dispatch boundary; no credential means no dispatch`);
 

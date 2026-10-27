@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isRealPathInsideRoot } from '../worktree-snapshot.mjs';
-import { EXECUTOR, PINNED_PROVIDER, PINNED_MAX_OUTPUT_TOKENS, EVIDENCE_CLASSES, nanoUsdToUsd, pinnedTariffsNanoPerToken, usageCostNanoUsd, redactSecret } from './budget.mjs';
+import { EXECUTOR, PINNED_PROVIDER, PINNED_MAX_OUTPUT_TOKENS, EVIDENCE_CLASSES, nanoUsdToUsd, pinnedTariffsNanoPerToken, usageCostNanoUsd, redactPolicySecrets } from './budget.mjs';
 import { assertProductExecutionInvariant } from './native-tools.mjs';
 import { normalizeUsage } from './http-runtime.mjs';
 
@@ -66,8 +66,8 @@ function parseEnvelope(text) {
  * Re-derive the full execution from the retained log and raw provider responses.
  * Returns the projected parts; the caller wraps them with the identity fields.
  */
-export function reprojectHttpExecution({ envelope, provenance, role, executorBranded, root }) {
-  if (envelope.status !== 0) throw new Error(redactSecret(String(envelope.reason || 'Controlled execution did not complete successfully'), process.env.OPENAI_API_KEY));
+export function reprojectHttpExecution({ envelope, provenance, role, executorBranded, root, policy = null }) {
+  if (envelope.status !== 0) throw new Error(redactPolicySecrets(String(envelope.reason || 'Controlled execution did not complete successfully'), policy));
   if (envelope.executor !== EXECUTOR) throw new Error(`Unexpected controlled executor '${envelope.executor}'`);
   if (!Array.isArray(envelope.events) || !envelope.events.length) throw new Error('Controlled execution retained no engine events');
 
@@ -98,8 +98,9 @@ export function reprojectHttpExecution({ envelope, provenance, role, executorBra
   const evidenceClass = executorBranded ? original.evidenceClass : 'transport-fixture';
   if (!EVIDENCE_CLASSES.includes(evidenceClass)) throw new Error(`Unknown evidence class '${evidenceClass}'`);
 
-  // The provider echoes the BARE model snapshot ('gpt-4o-mini-2024-07-18'); the dispatched
-  // contract carries the provider/model SELECTOR ('openai/<snapshot>'). There is no
+  // The provider echoes the BARE model snapshot (e.g. 'gpt-4o-mini-2024-07-18' for
+  // the pinned route, or the policy model for a user-configured route); the dispatched
+  // contract carries the provider/model SELECTOR ('<provider>/<snapshot>'). There is no
   // separate response field for the provider id, so only the snapshot part of the single
   // approved selector may match — no additional tolerance is introduced.
   const approvedModel = typeof original.model === 'string' && original.model.includes('/')

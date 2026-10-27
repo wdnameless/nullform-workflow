@@ -50,10 +50,10 @@ nullform workflow close
 
 ## 3. REVIEW EVIDENCE & SAFETY BOUNDARIES
 - Strict gates (`workflow.mjs check-ci`) validate `review-evidence.json` with actual execution receipts.
-- New automated review runs require controlled Node transport `nullform-http-v1` with `--admission-policy <path>`, exact model `openai/gpt-4o-mini-2024-07-18`, and authorized funding credential:
+- New automated review runs require controlled Node transport `nullform-http-v1` with `--admission-policy <path>` (provider/model/endpoint/tariffs/credential-env from user config) and authorized funding:
   ```bash
-  node tools/workflow.mjs review-run --role reviewer --change <name> --model openai/gpt-4o-mini-2024-07-18 --base-ref <base> --admission-policy <policy-path>
-  node tools/workflow.mjs review-run --role oracle --change <name> --model openai/gpt-4o-mini-2024-07-18 --base-ref <base> --admission-policy <policy-path> --product-command '["node","product-entry.mjs"]'
+  node tools/workflow.mjs review-run --role reviewer --change <name> --model <provider>/<model> --base-ref <base> --admission-policy <policy-path>
+  node tools/workflow.mjs review-run --role oracle --change <name> --model <provider>/<model> --base-ref <base> --admission-policy <policy-path> --product-command '["node","product-entry.mjs"]'
   ```
 - Historical native OMP evidence remains distinguishable and verified from session events, but no monetarily-enforced native SDK dispatch is enabled in CLI.
 - No source-hash exemptions, no fixture-as-release, no static-ACCEPT markdown bypass.

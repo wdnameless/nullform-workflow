@@ -125,13 +125,13 @@ CONCERNS/BLOCKERS: <риски, остаточный долг или блоки�
 
 1. **Новые запуски через текущий CLI**:
    - Требуют переносимого контролируемого Node-транспорта `nullform-http-v1` (`tools/review/http-child.mjs`), работающего в стандартном Node.js (OMP и Bun не требуются).
-   - Используют официальный эндпоинт OpenAI Chat Completions, жестко привязанный к проверенному снапшоту модели `openai/gpt-4o-mini-2024-07-18`.
+   - Используют эндпоинт, модель, тарифы и имя credential-переменной из admission-policy (конфиг пользователя); пина к конкретному провайдеру нет.
    - Обязательно требуют явного указания поддерживаемой политики допуска через флаг `--admission-policy <path>`.
-   - Требуют авторизованных учетных данных (`OPENAI_API_KEY`) и финансовой авторизации, контролируемой через бухгалтерскую книгу расходов (`tools/review/budget.mjs`). Ключ передается исключительно на границе сетевого запроса.
+   - Требуют авторизованных учетных данных (переменная, названная политикой) и финансовой авторизации, контролируемой через бухгалтерскую книгу расходов (`tools/review/budget.mjs`). Ключ передается исключительно на границе сетевого запроса.
    - Команды запуска нового ревью:
      ```bash
-     node tools/workflow.mjs review-run --role reviewer --change <name> --model openai/gpt-4o-mini-2024-07-18 --base-ref <base> --admission-policy <policy-path>
-     node tools/workflow.mjs review-run --role oracle --change <name> --model openai/gpt-4o-mini-2024-07-18 --base-ref <base> --admission-policy <policy-path> --product-command '["node","product-entry.mjs"]'
+     node tools/workflow.mjs review-run --role reviewer --change <name> --model <provider>/<model> --base-ref <base> --admission-policy <policy-path>
+     node tools/workflow.mjs review-run --role oracle --change <name> --model <provider>/<model> --base-ref <base> --admission-policy <policy-path> --product-command '["node","product-entry.mjs"]'
      ```
 2. **Исторические свидетельства native OMP**:
    - Исторические записи сессий OMP остаются различимыми, читаемыми и проверяемыми парсером через `tools/review/evidence.mjs` по сохраненным событиям сессии (`sessionId`).

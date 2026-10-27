@@ -32,6 +32,7 @@ import { projectHttpRecord, reprojectHttpExecution } from '../review/http-eviden
 import {
   admitSession,
   holdReservation,
+  validatePolicy,
   PINNED_MAX_OUTPUT_TOKENS,
   PINNED_CONTEXT_TOKENS,
   PINNED_TARIFFS_USD_PER_MILLION,
@@ -329,4 +330,92 @@ server.listen(0, '127.0.0.1', () => process.send({ endpoint: 'http://127.0.0.1:'
 
   assert.notEqual(envelope.status, 0, 'the live transport must refuse an all-zero-token terminal response');
   assert.match(String(envelope.reason || ''), /usage|token|zero|unknown/i, `refusal must name the unknown zero usage: ${envelope.reason}`);
+});
+
+test('user-configured route: acme provider validates with policy-carried tariffs and credential', () => {
+  const normalized = validatePolicy({
+    schemaVersion: 1,
+    provider: 'acme',
+    model: 'acme-1',
+    transport: 'nullform-http-v1',
+    endpoint: 'https://acme.example/v1/chat/completions',
+    credentialEnv: 'ACME_API_KEY',
+    contextTokens: 64000,
+    ceilingUsd: 0.5,
+    maxRequests: 4,
+    maxContextBytes: 1048576,
+    maxResponseBytes: 262144,
+    maxOutputTokens: 4096,
+    timeoutMs: 60000,
+    tariffsUsdPerMillion: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+  });
+  assert.equal(normalized.provider, 'acme');
+  assert.equal(normalized.model, 'acme-1');
+  assert.equal(normalized.credentialEnv, 'ACME_API_KEY');
+  assert.equal(normalized.tariffsUsdPerMillion.output, 2);
+  assert.ok(normalized.reserveNanoUsd > 0);
+});
+
+test('user-configured route: http endpoint, bad tariffs, bad credentialEnv rejected', () => {
+  const base = {
+    schemaVersion: 1,
+    provider: 'acme',
+    model: 'acme-1',
+    transport: 'nullform-http-v1',
+    endpoint: 'https://acme.example/v1/chat/completions',
+    credentialEnv: 'ACME_API_KEY',
+    contextTokens: 64000,
+    ceilingUsd: 0.5,
+    maxRequests: 4,
+    maxContextBytes: 1048576,
+    maxResponseBytes: 262144,
+    maxOutputTokens: 4096,
+    timeoutMs: 60000,
+    tariffsUsdPerMillion: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+  };
+  assert.throws(() => validatePolicy({ ...base, endpoint: 'http://acme.example/v1' }), /https/);
+  assert.throws(() => validatePolicy({ ...base, tariffsUsdPerMillion: { input: 1, output: 2 } }), /tariff/i);
+  assert.throws(() => validatePolicy({ ...base, credentialEnv: 'lowercase' }), /credentialEnv/);
+  assert.throws(() => validatePolicy({ ...base, provider: 'openrouter-proxy' }), /Forbidden provider/);
+});
+
+test('user-configured route: dry-run validates without OPENAI_API_KEY in env (A1)', () => {
+  const root = makeTempDir('review-acme-dryrun-');
+  try {
+    initGitRepo(root);
+    const changeId = 'feat-acme';
+    setupProject(root, changeId);
+    const policy = {
+      schemaVersion: 1,
+      provider: 'acme',
+      model: 'acme-1',
+      transport: 'nullform-http-v1',
+      endpoint: 'https://acme.example/v1/chat/completions',
+      credentialEnv: 'ACME_API_KEY',
+      contextTokens: 64000,
+      ceilingUsd: 0.5,
+      maxRequests: 4,
+      maxContextBytes: 1048576,
+      maxResponseBytes: 262144,
+      maxOutputTokens: 4096,
+      timeoutMs: 60000,
+      tariffsUsdPerMillion: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+    };
+    writeFileSync(join(root, 'admission.json'), JSON.stringify(policy), 'utf8');
+    const saved = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const res = runReviewRecord({
+        root, changeId, role: 'reviewer', model: 'acme/acme-1',
+        baseRef: 'HEAD', admissionPolicy: 'admission.json', dryRun: true,
+      });
+      assert.equal(res.ok, true, 'dry-run must validate the user-configured route');
+      assert.equal(res.admission.supported, true);
+      assert.match(res.admission.effectiveRoute, /acme\.example/);
+    } finally {
+      if (saved !== undefined) process.env.OPENAI_API_KEY = saved;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

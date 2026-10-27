@@ -6,12 +6,12 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { authorize } from './gatekeeper.mjs';
 import { hashFile, sourceDigest, testFilesHash, scanWorktree, isAcceptancePath, isAcceptanceArtifactFilename, isStructuralExcludedPath, isSecretOrCredentialPath, isRealPathInsideRoot, isPathInsideRoot, validateRootPath, validatePathWithinScope, cleanGitEnv } from '../worktree-snapshot.mjs';
 import { sanitizeError } from '../installation/state.mjs';
-import { admitSession, holdReservation, inspectAdmission, nanoUsdToUsd, PINNED_CONTEXT_TOKENS, settleReservation, validatePolicy, EXECUTOR, redactSecret } from './budget.mjs';
+import { admitSession, holdReservation, inspectAdmission, nanoUsdToUsd, PINNED_CONTEXT_TOKENS, settleReservation, validatePolicy, EXECUTOR, redactPolicySecrets } from './budget.mjs';
 import * as budgetModule from './budget.mjs';
 import * as httpEvidence from './http-evidence.mjs';
 const inspectBudget = budgetModule.inspectBudget;
 const { projectHttpRecord, validateHttpRecord } = httpEvidence;
-import { isBrandedExecutor } from './http-runtime.mjs';
+import { isBrandedExecutor, credentialEnvForProvider } from './http-runtime.mjs';
 import { assertProductExecutionInvariant } from './native-tools.mjs';
 
 export const EVIDENCE_FILE = 'review-evidence.json';
@@ -365,7 +365,7 @@ function completeRun(options, identity) {
       // Surface the child's own refusal reason (redacted) instead of a bare exit code.
       let reason = '';
       try { reason = String(JSON.parse(result.stdout || '{}').reason || ''); } catch { reason = ''; }
-      throw new Error(`runner exited with code ${run.exitCode}${reason ? `: ${redactSecret(reason, process.env.OPENAI_API_KEY)}` : ''}`);
+      throw new Error(`runner exited with code ${run.exitCode}${reason ? `: ${redactPolicySecrets(reason, policy)}` : ''}`);
     }
     const text = result.stdout || result.transcriptText || '';
     if (typeof text !== 'string' || Buffer.byteLength(text) > 32 * 1024 * 1024) throw new Error('Missing/oversized native transcript');
@@ -391,7 +391,7 @@ function completeRun(options, identity) {
   } catch (error) {
     // Unknown, failed or cancelled spend stays held and blocks fresh admission.
     if (reservationId) {
-      try { holdReservation({ root, reservationId, reason: error.message }); }
+      try { holdReservation({ root, reservationId, reason: error.message, policy }); }
       catch { /* the reservation is already settled or held; never rewrite known state */ }
     } else if (httpExecutor) {
       // No reservation was ever obtained and no runner was dispatched, so this run directory is
@@ -400,10 +400,10 @@ function completeRun(options, identity) {
       // on this path and is never reached here. If removal fails the run is retained below.
       try { rmSync(directory, { recursive: true, force: true }); } catch { /* retained for operator inspection */ }
       if (!existsSync(directory)) {
-        throw new Error(`${sanitizeError(redactSecret(error.message, process.env.OPENAI_API_KEY))} [no session retained: admission was refused before dispatch]`);
+        throw new Error(`${sanitizeError(redactPolicySecrets(error.message, policy))} [no session retained: admission was refused before dispatch]`);
       }
     }
-    run.status = 'failed'; run.reason = sanitizeError(redactSecret(error.message, process.env.OPENAI_API_KEY));
+    run.status = 'failed'; run.reason = sanitizeError(redactPolicySecrets(error.message, policy));
     saveRun(file, run);
     throw new Error(`${run.reason} [retained session: ${directory}]`);
   }
@@ -463,8 +463,9 @@ export function runReviewRecord(options) {
       // The policy fixes the verified official route; the executor declares where bytes
       // actually go and approves its own effective route (a loopback seam is explicit).
       if (typeof httpExecutor.approveEndpoint !== 'function' || !httpExecutor.approveEndpoint(httpExecutor.endpoint)) throw new Error('Effective transport route is not approved by the supplied executor');
-      if (model !== `${policy.provider}/${policy.model}`) throw new Error(`Requested model '${model}' is not the admitted pinned snapshot '${policy.provider}/${policy.model}'`);
-      if (!resumeSessionDir && typeof process.env[policy.provider === 'nullform-gateway' ? 'NULLFORM_GATEWAY_API_KEY' : 'OPENAI_API_KEY'] !== 'string') throw new Error(`${policy.provider === 'nullform-gateway' ? 'NULLFORM_GATEWAY_API_KEY' : 'OPENAI_API_KEY'} is required at the dispatch boundary; no credential means no dispatch`);
+      if (model !== `${policy.provider}/${policy.model}`) throw new Error(`Requested model '${model}' is not the admitted route model '${policy.provider}/${policy.model}'`);
+      const credentialEnv = credentialEnvForProvider(policy.provider, policy);
+      if (!resumeSessionDir && typeof process.env[credentialEnv] !== 'string') throw new Error(`${credentialEnv} is required at the dispatch boundary; no credential means no dispatch`);
     }
   }
   const normalized = { ...options, root, productCommand, resumeSessionDir, httpExecutor, policy };

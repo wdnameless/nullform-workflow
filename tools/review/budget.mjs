@@ -32,7 +32,8 @@ export const EVIDENCE_CLASSES = Object.freeze(['provider-direct', 'transport-fix
 const LOCK_FILE = 'nullform-review-budget.lock';
 const NANO_PER_USD = 1e9;
 const POLICY_FIELDS = ['schemaVersion', 'provider', 'model', 'transport', 'endpoint', 'ceilingUsd', 'maxRequests',
-  'maxContextBytes', 'maxResponseBytes', 'maxOutputTokens', 'timeoutMs', 'maxInputTokens', 'tariffsUsdPerMillion'];
+  'maxContextBytes', 'maxResponseBytes', 'maxOutputTokens', 'timeoutMs', 'maxInputTokens', 'tariffsUsdPerMillion',
+  'credentialEnv', 'contextTokens'];
 // Derived fields are RECOMPUTED from the pinned constants and never trusted from input;
 // accepting them keeps validation idempotent for the normalized policy the child gets.
 // They can never weaken the reserve, route or tariff.
@@ -44,11 +45,27 @@ function rateNanoPerToken(usdPerMillion) { return Math.round(usdPerMillion * 100
 
 /** Pinned tariff in integer nano-USD per token, for callers that price observed usage. */
 export function pinnedTariffsNanoPerToken() { return Object.fromEntries(COUNTERS.map(key => [key, rateNanoPerToken(PINNED_TARIFFS_USD_PER_MILLION[key])])); }
-
 export function redactSecret(text, secret) {
   const value = typeof text === 'string' ? text : '';
   if (typeof secret !== 'string' || secret.length < 8) return value;
   return value.split(secret).join('[REDACTED_PROVIDER_CREDENTIAL]');
+}
+
+/**
+ * Redact every known provider credential from text: the policy-named one
+ * plus the two historical pinned names (defense in depth, env may carry
+ * several keys). Never throws, never requires any key to exist.
+ */
+export function redactPolicySecrets(text, policy = null, env = process.env) {
+  let value = typeof text === 'string' ? text : '';
+  const names = new Set(['OPENAI_API_KEY', 'NULLFORM_GATEWAY_API_KEY']);
+  const named = policy && typeof policy.credentialEnv === 'string' ? policy.credentialEnv : '';
+  if (/^[A-Z][A-Z0-9_]{2,63}$/.test(named)) names.add(named);
+  for (const name of names) {
+    const secret = env ? env[name] : undefined;
+    if (typeof secret === 'string' && secret.length >= 8) value = value.split(secret).join('[REDACTED_PROVIDER_CREDENTIAL]');
+  }
+  return value;
 }
 
 /**
@@ -75,6 +92,41 @@ function boundedInteger(value, name, minimum = 1) {
   if (!Number.isSafeInteger(value) || value < minimum) throw new Error(`Invalid bounded admission policy ${name}`);
   return value;
 }
+/**
+ * User-configured route: provider/model/endpoint/tariffs/credential come from
+ * the admission policy (user config), validated for shape — never trusted blind.
+ * Returns the route descriptor or throws with the exact defect.
+ */
+function userConfiguredRoute(policy) {
+  if (typeof policy.provider !== 'string' || !/^[a-z0-9][a-z0-9._-]{1,63}$/i.test(policy.provider)) throw new Error('User-configured route: provider must be a safe identifier');
+  if (typeof policy.model !== 'string' || !policy.model.trim() || policy.model.length > 128) throw new Error('User-configured route: model must be a non-empty string');
+  let url = null;
+  try { url = new URL(policy.endpoint); } catch { url = null; }
+  const loopback = url && url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
+  if (!url || (url.protocol !== 'https:' && !loopback)) throw new Error('User-configured route: endpoint must be https (http only for 127.0.0.1 fixture class)');
+  if (typeof policy.credentialEnv !== 'string' || !/^[A-Z][A-Z0-9_]{2,63}$/.test(policy.credentialEnv)) throw new Error('User-configured route: credentialEnv must name the credential env var');
+  const contextTokens = boundedInteger(policy.contextTokens, 'contextTokens');
+  if (contextTokens > GATEWAY_CONTEXT_TOKENS) throw new Error(`User-configured route: contextTokens exceeds the published cap ${GATEWAY_CONTEXT_TOKENS}`);
+  const rates = policy.tariffsUsdPerMillion;
+  if (!rates || typeof rates !== 'object' || Array.isArray(rates)) throw new Error('User-configured route: tariffsUsdPerMillion must carry all 4 finite counters');
+  for (const key of COUNTERS) {
+    if (typeof rates[key] !== 'number' || !Number.isFinite(rates[key]) || rates[key] < 0) throw new Error(`User-configured route: tariff '${key}' must be a finite number >= 0`);
+  }
+  return { model: policy.model, endpoint: policy.endpoint, contextTokens, tariffs: { ...rates }, credentialEnv: policy.credentialEnv };
+}
+
+/**
+ * Resolve the admitted route: pinned table first, user-configured policy
+ * second, OpenRouter never. Returns the route descriptor or throws.
+ */
+function resolveRoute(policy, PINNED_ROUTES) {
+  const pinned = PINNED_ROUTES[policy.provider];
+  if (pinned) return pinned;
+  if (/openrouter/i.test(String(policy.provider))) throw new Error(`Forbidden provider '${policy.provider}': OpenRouter and opaque gateways are never admitted`);
+  const userRoute = userConfiguredRoute(policy);
+  if (!userRoute) throw new Error(`Unsupported execution boundary: provider '${policy.provider}' is not a verified admitted route, so its routing, retries and output limits cannot be enforced`);
+  return userRoute;
+}
 
 /**
  * The only policy validator. A caller can never lower the reserve, rename the route,
@@ -87,13 +139,9 @@ export function validatePolicy(policy) {
     [PINNED_PROVIDER]: { model: PINNED_MODEL, endpoint: PINNED_ENDPOINT, contextTokens: PINNED_CONTEXT_TOKENS, tariffs: PINNED_TARIFFS_USD_PER_MILLION },
     [GATEWAY_PROVIDER]: { model: GATEWAY_MODEL, endpoint: GATEWAY_ENDPOINT, contextTokens: GATEWAY_CONTEXT_TOKENS, tariffs: GATEWAY_TARIFFS_USD_PER_MILLION },
   };
-  const route = PINNED_ROUTES[policy.provider];
-  if (!route) {
-    if (/openrouter/i.test(String(policy.provider))) throw new Error(`Forbidden provider '${policy.provider}': OpenRouter and opaque gateways are never admitted`);
-    throw new Error(`Unsupported execution boundary: provider '${policy.provider}' is not a verified admitted route, so its routing, retries and output limits cannot be enforced`);
-  }
+  const route = resolveRoute(policy, PINNED_ROUTES);
   if (policy.transport !== EXECUTOR) throw new Error(`Unsupported execution boundary: transport must be exactly '${EXECUTOR}'`);
-  if (policy.endpoint !== route.endpoint) throw new Error(`Unverified endpoint/gateway route refused; only the pinned route endpoint is admitted`);
+  if (policy.endpoint !== route.endpoint) throw new Error('Unverified endpoint route refused; endpoint must match the admitted route');
   if (policy.model !== route.model) throw new Error(`Admission policy model must be the verified exact snapshot '${route.model}'`);
   if (typeof policy.ceilingUsd !== 'number' || !Number.isFinite(policy.ceilingUsd) || policy.ceilingUsd <= 0) throw new Error('Invalid admission policy ceiling');
   const ceilingNanoUsd = Math.floor(policy.ceilingUsd * NANO_PER_USD);
@@ -116,7 +164,8 @@ export function validatePolicy(policy) {
   if (!Number.isSafeInteger(reserveNanoUsd) || reserveNanoUsd < 1) throw new Error('Invalid admission policy reserve');
   return Object.freeze({ schemaVersion: 1, provider: policy.provider, model: route.model, transport: EXECUTOR, endpoint: route.endpoint,
     ceilingUsd: policy.ceilingUsd, ceilingNanoUsd, maxRequests, maxContextBytes, maxResponseBytes, maxOutputTokens, timeoutMs,
-    tariffsUsdPerMillion: { ...route.tariffs }, tariffsNanoPerToken, reserveNanoUsd });
+    tariffsUsdPerMillion: { ...route.tariffs }, tariffsNanoPerToken, reserveNanoUsd,
+    ...(route.credentialEnv ? { credentialEnv: route.credentialEnv, contextTokens: route.contextTokens } : {}) });
 }
 
 /** Observed provider usage priced at the ORIGINAL captured tariff. Never assumes zero. */
@@ -425,10 +474,10 @@ export function settleReservation({ root, reservationId, usage }) {
   });
 }
 
-export function holdReservation({ root, reservationId, reason }) {
+export function holdReservation({ root, reservationId, reason, policy = null }) {
   return withReservation(root, reservationId, reservation => {
     reservation.status = 'held';
-    reservation.heldReason = redactSecret(String(reason || 'unknown outcome'), process.env.OPENAI_API_KEY).slice(0, MAX_HELD_REASON_CHARS);
+    reservation.heldReason = redactPolicySecrets(String(reason || 'unknown outcome'), policy).slice(0, MAX_HELD_REASON_CHARS);
     reservation.heldAt = new Date().toISOString();
     return { reservationId, heldNanoUsd: reservation.reservedNanoUsd };
   });
