@@ -214,8 +214,15 @@ function countUntrackedLines(absRoot, safe) {
 export function readProcessCmdline(pid) {
   const id = Number(pid);
   if (!Number.isFinite(id)) return "";
+  if (process.platform === "win32") {
+    try {
+      const out = execFileSync("powershell", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${id}').CommandLine`], { encoding: "utf8", timeout: 8000, windowsHide: true });
+      return String(out || "").trim();
+    } catch {}
+    return "";
+  }
   try {
-    const out = execFileSync("powershell", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${id}').CommandLine`], { encoding: "utf8", timeout: 8000, windowsHide: true });
+    const out = execFileSync("ps", ["-o", "command=", "-p", String(id)], { encoding: "utf8", timeout: 8000 });
     return String(out || "").trim();
   } catch {}
   return "";
@@ -242,7 +249,8 @@ export function isOwnServerCommand(cmdline, { toolPath = null, root = null, sess
   // каталог проекта из `--root`, который всегда абсолютный.
   const tail = (toolPath || "tools/dashboard.mjs").replace(/\\/g, "/").toLowerCase();
   const hasTool = norm.includes(tail) && norm.includes("--serve");
-  const hasRoot = root ? norm.includes(resolve(root).replace(/\\/g, "/").toLowerCase()) : true;
+  const roots = [root, (() => { try { return resolve(root); } catch { return ""; } })()].map((r) => String(r || "").replace(/\\/g, "/").toLowerCase()).filter(Boolean);
+  const hasRoot = root ? roots.some((r) => norm.includes(r)) : true;
   const hasSession = sessionKey ? norm.includes(`--session ${sessionKey}`.toLowerCase()) || norm.includes(`--session=${sessionKey}`.toLowerCase()) : true;
   return hasTool && hasRoot && hasSession;
 }
