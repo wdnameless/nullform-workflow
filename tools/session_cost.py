@@ -435,8 +435,8 @@ def parse_and_aggregate(
     return result
 
 
-def format_table(data: Dict[str, Any], cache_report: bool = False, by_role: bool = False) -> str:
-    lines: List[str] = []
+def format_table(data: dict[str, Any], cache_report: bool = False, by_role: bool = False) -> str:
+    lines: list[str] = []
 
     def format_row(name: str, m: Dict[str, Any], width: int = 30) -> str:
         tokens_str = f"in={m['input']:,} out={m['output']:,} total={m['totalTokens']:,}"
@@ -620,7 +620,6 @@ def run_selftest() -> None:
 
     # Scenario 7: dependencies check
     # All imported modules in standard library
-    import sys
     stdlib_names = sys.stdlib_module_names
     for mod in ("argparse", "collections", "datetime", "json", "os", "re", "sys", "tempfile", "typing"):
         assert mod in stdlib_names, f"{mod} not in stdlib"
