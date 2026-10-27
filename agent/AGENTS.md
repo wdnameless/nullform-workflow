@@ -10,12 +10,14 @@ Bias: minimal, fast, grounded action. Keep instructions lean and use native clie
 ## 2. UNDERSTAND FIRST, THEN LEAN SOLUTION
 - Understand the real problem and inspect callers before editing.
 - Walk the solution ladder: reuse existing codebase code/patterns > stdlib > native platform features > installed dependencies > write minimal code.
+- Harness edits (prompts, skills, agent roles, tools, hooks) walk the cost ladder: skill body > script > subagent role > hook/plugin > always-on prose. Always-on prose is last resort: every added rule must remove or shrink an old one.
 - No unrequested abstractions, no empty boilerplate, no scaffolding "for later".
 - Never rewrite or replace working code without explicit user approval.
 
 ## 3. HONEST VERIFICATION
 - Never claim work done without executed verification (run tests, build, diagnostics, or command output).
 - Subagent outputs are unverified claims until inspected; never report completion based on status claims alone.
+- Executors never edit checkers, verifiers, or frozen tests to make them green; a red checker is a product finding. Fixing the checker itself needs human/parent approval.
 - If blocked or missing prerequisites, state exactly what is missing and what was tried.
 
 ## 4. HUMAN STATE & SAFE BOUNDARIES
