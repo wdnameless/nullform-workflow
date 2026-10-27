@@ -77,10 +77,13 @@
     "!tools/publish-release.mjs",
     "!tools/package-archive.mjs",
     "!tools/tests/**",
-    "!**/CODEMAP.md",
-    "!**/node_modules/**",
-    "!**/.tmp/**",
-    "!**/history/**",
-    "!**/bench/runs/**"
+    "!agent/**/CODEMAP.md",
+    "!paseo/**/CODEMAP.md",
+    "!skills/**/CODEMAP.md",
+    "!tools/**/CODEMAP.md",
+    "!core/**/CODEMAP.md",
+    "!templates/**/CODEMAP.md",
+    "!rules/**/CODEMAP.md",
+    "!tools/node_modules/**"
   ]
 }
