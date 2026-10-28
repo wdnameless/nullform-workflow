@@ -25,6 +25,7 @@ When active, lead with the lane verdict as the first line of responses:
   - Run `openspec new change <name>`.
   - Author human-readable `proposal.md`, dependency graph `tasks.md` with blocking edges, and deep modules in `interfaces.md` (seams on consumer side; Ousterhout's rule). Derive the module list from the functions first, never from a target count; a `shared`/`helpers` zone is a finding. Expand-Contract for wide refactors (>3 files).
 - **Wave 3 (Subagent Spawning)**:
+  - Before fan-out: run `workflow ask design --note <summary>` + ask-widget confirmation; spawn writers only after `answered`.
   - Native `task()` batches along ready frontiers.
   - `@designer` for UI/design pipeline; `@fixer` for logic/TDD (failing test first).
   - Writers isolated (`isolated: true` in git repos), one owner per file, disjoint zones.

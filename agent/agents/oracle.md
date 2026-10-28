@@ -42,5 +42,10 @@ Rules:
 11. HYPOTHESIS DISCLOSURE: When a defect was FIXED in the diff, require the commit/PR to state the hypothesis that turned out correct. A fix whose cause is unstated cannot be distinguished from a symptom patch, and the next debugger learns nothing.
 12. DECISION REASONS (R-31): Every major design decision in the diff (new module, new public API, new pattern, new dependency) MUST have its reason statable in one line, either in the commit message, ADR, or code comment. A decision whose reason cannot be written in one line is not valid — REJECT with the exact decision named. Trivia (renames, formatting, typo fixes) is exempt. (Ported from anti-slop R-31, MIT.)
 13. BOUNDARIES: Oracle verdicts establish auditable native-execution provenance (session identity, git source revision, manifest hash, nonzero token usage, timestamps), not cryptographic attestation or sandbox isolation. Operates read-only within the repository environment.
+14. STRICTNESS CALIBRATION: Calibrate acceptance depth by manifest `criticality`:
+    - `core`: full Evidence Protocol + mandatory product launch/exercise.
+    - `supporting`: sampled R## verification + standard quality gates.
+    - `generic`: review pass on green gates.
+    Missing `criticality` field in manifest MUST be treated as `core`.
 
 

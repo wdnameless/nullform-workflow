@@ -123,6 +123,9 @@
     "rel": "tools/benchmark.mjs"
   },
   {
+    "rel": "tools/brief.mjs"
+  },
+  {
     "rel": "tools/lm-replay.mjs"
   },
   {
@@ -153,6 +156,12 @@
     "rel": "tools/dashboard.mjs"
   },
   {
+    "rel": "tools/dashboard-collectors.mjs"
+  },
+  {
+    "rel": "tools/dashboard-ui.mjs"
+  },
+  {
     "rel": "tools/dashboard-sketch.mjs"
   },
   {
@@ -160,6 +169,21 @@
   },
   {
     "rel": "tools/dashboard-routes.mjs"
+  },
+  {
+    "rel": "tools/dashboard-needed.mjs"
+  },
+  {
+    "rel": "tools/dashboard-shell-client.mjs"
+  },
+  {
+    "rel": "tools/session-log.mjs"
+  },
+  {
+    "rel": "tools/trajectory.mjs"
+  },
+  {
+    "rel": "tools/hud-status.mjs"
   },
   {
     "rel": "tools/arch-drill.mjs"
@@ -286,6 +310,9 @@
   },
   {
     "rel": "tools/review/http-evidence.mjs"
+  },
+  {
+    "rel": "tools/review/gatekeeper.mjs"
   },
   {
     "rel": "tools/installation/adapters.mjs"

@@ -199,3 +199,26 @@ test("CLI: --help, --dry-run, --check и --json возвращают ожида�
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("generateMutants: не мутирует внутри строковых литералов", () => {
+  const code = [
+    'import { x } from "./some-module.mjs";',
+    'console.log("  review-run: --dry-run reads policy");',
+    "function ok(a, b) { return a === b; }",
+  ].join("\n");
+  const mutants = generateMutants(code, { maxMutants: 20 });
+  assert.ok(mutants.length > 0);
+  assert.ok(mutants.every((m) => m.lineNumber === 3), "мутанты только в коде, не в строках");
+});
+
+test("generateMutants: onlyLines ограничивает строки и точен на единицу", () => {
+  const code = [
+    "function a(x) { return x === 1; }",
+    "function b(x) { return x === 2; }",
+    "function c(x) { return x === 3; }",
+  ].join("\n");
+  const mutants = generateMutants(code, { maxMutants: 20, onlyLines: [2] });
+  assert.ok(mutants.length > 0);
+  assert.ok(mutants.every((m) => m.lineNumber === 2), "мутанты только на строке 2");
+  assert.ok(mutants.some((m) => m.mutatedLine.includes("!==")));
+});

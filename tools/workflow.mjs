@@ -1508,7 +1508,7 @@ function checkHandoffFile(root, startedAt) {
 }
 
 /** Kinds the dashboard colours; anything else is a typo, not a new state. */
-const WAIT_KINDS = ["briefing", "spec", "plan", "action", "stop"];
+const WAIT_KINDS = ["briefing", "spec", "plan", "design", "action", "stop"];
 
 /**
  * Открыть ожидание пользователя: раунд брифинга, ручной гейт, вопрос перед

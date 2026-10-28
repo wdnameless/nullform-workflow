@@ -132,10 +132,12 @@ export const MUTATION_OPERATORS = [
  * @param {string} sourceCode
  * @param {object} [options]
  * @param {number} [options.maxMutants=50]
+ * @param {Set<number>|number[]} [options.onlyLines] номера строк (1-based), вне которых мутанты не генерятся
  * @returns {Array<object>}
  */
 export function generateMutants(sourceCode, options = {}) {
   const maxMutants = options.maxMutants || 50;
+  const onlyLines = options.onlyLines ? new Set(options.onlyLines) : null;
   const mutants = [];
   const lines = sourceCode.split("\n");
 
@@ -143,6 +145,7 @@ export function generateMutants(sourceCode, options = {}) {
 
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     if (mutants.length >= maxMutants) break;
+    if (onlyLines && !onlyLines.has(lineIdx + 1)) continue;
     const line = lines[lineIdx];
     const trimmed = line.trim();
 
@@ -150,11 +153,21 @@ export function generateMutants(sourceCode, options = {}) {
     if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) {
       continue;
     }
-
+    // ponytail: мутации внутри строковых литералов (help-тексты, пути импортов) — шум:
+    // тесты их не ловят по дизайну, а скор падает. ceiling: построчный эвристик, сломается
+    // на многострочных template-литералах. upgrade: AST-мутатор при переходе на парсер.
+    const codeOnly = line.replace(/(["'`])(?:(?!\1)[^\\]|\\.)*\1/g, '""');
+    if (/^\s*(?:import|export)[^"']*from\s*""\s*;?\s*$/.test(codeOnly)) continue;
+    const hasCodeOp = /===|!==|<=|>=|&&|\|\||\btrue\b|\bfalse\b|(?<=\w\s*)[+-](?=\s*\w)|(?<=\s)[<>](?=\s)|\breturn\s+(?:0|null|["']["'])/.test(codeOnly);
+    if (!hasCodeOp) continue;
     for (const op of MUTATION_OPERATORS) {
       if (mutants.length >= maxMutants) break;
 
-      const matches = [...line.matchAll(op.find)];
+      const matches = [...line.matchAll(op.find)].filter((m) => {
+        // Совпадение внутри строкового литерала — шум: в codeOnly там кавычки/пустота.
+        const seg = codeOnly.slice(m.index, m.index + m[0].length);
+        return seg === m[0];
+      });
       for (const m of matches) {
         if (mutants.length >= maxMutants) break;
 
@@ -204,6 +217,7 @@ export function runMutationTesting(options) {
     maxMutants = 50,
     timeoutSec = 30,
     dryRun = false,
+    onlyLines = null,
   } = options;
 
   const absTarget = resolve(targetPath);
@@ -212,7 +226,7 @@ export function runMutationTesting(options) {
   }
 
   const originalSource = readFileSync(absTarget, "utf8");
-  const mutants = generateMutants(originalSource, { maxMutants });
+  const mutants = generateMutants(originalSource, { maxMutants, onlyLines });
 
   if (dryRun) {
     return {
@@ -345,6 +359,7 @@ export function parseArgs(argv = []) {
     threshold: 80,
     maxMutants: 50,
     timeoutSec: 30,
+    onlyLines: null,
     dryRun: false,
     check: false,
     json: false,
@@ -358,6 +373,7 @@ export function parseArgs(argv = []) {
     "threshold",
     "max-mutants",
     "timeout-sec",
+    "lines",
     "dry-run",
     "check",
     "json",
@@ -402,6 +418,20 @@ export function parseArgs(argv = []) {
       } else {
         options.timeoutSec = parsed;
       }
+    } else if (arg === "--lines" || arg.startsWith("--lines=")) {
+      const raw = arg.startsWith("--lines=") ? arg.slice("--lines=".length) : argv[++i];
+      const nums = [];
+      for (const part of String(raw).split(",")) {
+        const m = part.trim().match(/^(\d+)(?:-(\d+))?$/);
+        if (!m) { nums.length = 0; break; }
+        const a = Number.parseInt(m[1], 10), b = m[2] ? Number.parseInt(m[2], 10) : a;
+        for (let n = Math.min(a, b); n <= Math.max(a, b); n++) nums.push(n);
+      }
+      if (nums.length === 0 || nums.some((n) => !Number.isFinite(n) || n < 1)) {
+        options.errors.push(`--lines требует список номеров/диапазонов через запятую (получено: ${JSON.stringify(raw)})`);
+      } else {
+        options.onlyLines = nums;
+      }
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2).split("=")[0];
       if (!KNOWN_FLAGS.has(name)) {
@@ -427,7 +457,7 @@ export function main(argv = process.argv.slice(2)) {
   --cmd <command>     Команда запуска тестов (по умолчанию: node --test)
   --threshold <n>     Минимальный % убитых мутантов (по умолчанию: 80)
   --max-mutants <n>   Максимум мутантов для проверки (по умолчанию: 50)
-  --timeout-sec <n>   Таймаут одного прогона в сек (по умолчанию: 30)
+  --lines <a,b-c>     Мутировать только эти строки (1-based); диапазоны через дефис
   --dry-run           Показать мутантов без запуска тестов
   --check             Завершить с exit 1, если score < threshold
   --json              Вывод в формате JSON
@@ -461,6 +491,7 @@ export function main(argv = process.argv.slice(2)) {
       maxMutants: opts.maxMutants,
       timeoutSec: opts.timeoutSec,
       dryRun: opts.dryRun,
+      onlyLines: opts.onlyLines,
     });
 
     if (opts.json) {

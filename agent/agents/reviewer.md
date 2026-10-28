@@ -83,6 +83,7 @@ Bash read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`
 - Scope: Implementation review of the patch, modified files, and consumer context. Do not substitute blind acceptance against the requirements manifest (reserved for `oracle`).
 - Provenance: Review evidence relies on auditable native execution records (session identity, git source revision, manifest hash, nonzero token usage, timestamps), not cryptographic attestation or sandbox isolation.
 - Environment: Operates with read-only inspection tools within the repo workspace.
+- Knowledge base: Reviewer MUST check change against CONTEXT.md terms + active change's interfaces.md; findings without KB/contract reference are invalid; verdict without KB grounding = NEEDS_KB.
 </boundaries>
 
 <criteria>

@@ -208,6 +208,16 @@ jobs:
             node --test --test-concurrency=2 tools/tests/*.test.mjs
           fi
 
+      - name: Mutation gate
+        env:
+          BASE_REF: '${{ github.base_ref || github.event.repository.default_branch }}'
+          PUSH_BASE: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: node tools/mutation-changed.mjs
+
+      - name: Security audit
+        run: npm audit --audit-level=high
+
       - name: Auto-review gate
         run: |
           node tools/auto-review.mjs --root . --json --check '["node","--test","tools/tests/nullform-cli.test.mjs"]'
