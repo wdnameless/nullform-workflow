@@ -135,12 +135,13 @@ function resolveRoute(policy, PINNED_ROUTES) {
 export function validatePolicy(policy) {
   if (!policy || Array.isArray(policy) || typeof policy !== 'object' || policy.schemaVersion !== 1) throw new Error('Invalid bounded admission policy schema');
   if (Object.keys(policy).some(key => !POLICY_FIELDS.includes(key) && !DERIVED_FIELDS.includes(key))) throw new Error('Invalid bounded admission policy schema: unknown field');
+  if (/openrouter/i.test(String(policy.provider))) throw new Error(`Forbidden provider '${policy.provider}': OpenRouter and opaque gateways are never admitted`);
+  if (policy.transport !== EXECUTOR) throw new Error(`Unsupported execution boundary: transport must be exactly '${EXECUTOR}'`);
   const PINNED_ROUTES = {
     [PINNED_PROVIDER]: { model: PINNED_MODEL, endpoint: PINNED_ENDPOINT, contextTokens: PINNED_CONTEXT_TOKENS, tariffs: PINNED_TARIFFS_USD_PER_MILLION },
     [GATEWAY_PROVIDER]: { model: GATEWAY_MODEL, endpoint: GATEWAY_ENDPOINT, contextTokens: GATEWAY_CONTEXT_TOKENS, tariffs: GATEWAY_TARIFFS_USD_PER_MILLION },
   };
   const route = resolveRoute(policy, PINNED_ROUTES);
-  if (policy.transport !== EXECUTOR) throw new Error(`Unsupported execution boundary: transport must be exactly '${EXECUTOR}'`);
   if (policy.endpoint !== route.endpoint) throw new Error('Unverified endpoint route refused; endpoint must match the admitted route');
   if (policy.model !== route.model) throw new Error(`Admission policy model must be the verified exact snapshot '${route.model}'`);
   if (typeof policy.ceilingUsd !== 'number' || !Number.isFinite(policy.ceilingUsd) || policy.ceilingUsd <= 0) throw new Error('Invalid admission policy ceiling');
