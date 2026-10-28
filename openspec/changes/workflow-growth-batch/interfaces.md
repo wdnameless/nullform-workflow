@@ -10,7 +10,7 @@
   `computeLeadTime(events)` для тестов (чистая функция).
 - NEW `tools/cfr-report.mjs`: `git log --since=<N>d --format=%H|%at|%s`
   в root; conventional `fix(`/`feat(`; fix в 48ч после feat на той же
-  ветке-линии = post-merge fix. CLI: `--root . [--since Nd] [--json]`.
+  ветке-линии = post-merge fix. CLI: `--root . [--since Ndays] [--json]`.
   Вывод: rate% + counts + список. Read-only, без гейта. Экспорт
   `computeCfr(commits)` для тестов.
 - Тесты: фикстурные, быстрые (<1с), без git-сети (cfr — мокать вывод log

@@ -887,29 +887,32 @@ function parseRenamePaths(filePath) {
   const a = norm.match(/^(.*?)\s*=>\s*(.*)$/);
   return a ? [a[1].replace(/\/\/+/g, "/"), a[2].replace(/\/\/+/g, "/")] : [norm];
 }
-function validateOpenspecArtifact(root, a, fullPath, invalid) {
-  if (!statSync(fullPath).isDirectory()) { invalid.push(`openspec: path '${a.path}' must be a directory`); return; }
+function openspecDirProblems(root, a, fullPath) {
+  const problems = [];
+  if (!statSync(fullPath).isDirectory()) return [`openspec: path '${a.path}' must be a directory`];
   let entries = [];
   try { entries = readdirSync(fullPath); } catch {}
-  if (entries.length === 0) { invalid.push(`openspec: directory '${a.path}' is empty`); return; }
+  if (entries.length === 0) return [`openspec: directory '${a.path}' is empty`];
   for (const entry of entries) {
     const entryPath = join(a.path, entry);
-    if (!isRealPathInsideRoot(root, entryPath)) { invalid.push(`openspec: entry '${entryPath}' real path must stay inside project root`); return; }
+    if (!isRealPathInsideRoot(root, entryPath)) return [`openspec: entry '${entryPath}' real path must stay inside project root`];
   }
-  const propPath = join(fullPath, "proposal.md"), tasksPath = join(fullPath, "tasks.md"), specsPath = join(fullPath, "specs");
-  if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) invalid.push(`openspec: missing proposal.md in '${a.path}'`);
-  if (!existsSync(tasksPath) || !statSync(tasksPath).isFile() || readFileSync(tasksPath, "utf8").trim().length === 0) invalid.push(`openspec: missing tasks.md in '${a.path}'`);
-  if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) invalid.push(`openspec: missing specs/ directory in '${a.path}'`);
-  // A plan whose dependencies loop or name missing tickets can never finish; that is
-  // visible from tasks.md alone, without pretending to verify requirement coverage.
-  if (existsSync(tasksPath)) {
-    const planProblem = validatePlanCoverage(readFileSync(tasksPath, "utf8"));
-    if (planProblem) invalid.push(`openspec: tasks.md ${planProblem}`);
+  return problems;
+}
+
+function openspecFileProblems(a, fullPath) {
+  const problems = [];
+  const nonEmpty = (p) => existsSync(p) && statSync(p).isFile() && readFileSync(p, "utf8").trim().length > 0;
+  if (!nonEmpty(join(fullPath, "proposal.md"))) problems.push(`openspec: missing proposal.md in '${a.path}'`);
+  if (!nonEmpty(join(fullPath, "tasks.md"))) problems.push(`openspec: missing tasks.md in '${a.path}'`);
+  const specsPath = join(fullPath, "specs");
+  if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) {
+    problems.push(`openspec: missing specs/ directory in '${a.path}'`);
   }
-  if (invalid.length) return;
-  // File presence is not validation: a specs/spec.md at the capability root is
-  // silently ignored on archive, and only `openspec validate` reports that. The
-  // command's name appeared in this file solely inside an error hint before.
+  return problems;
+}
+
+function runOpenspecValidate(root, fullPath) {
   const changeId = basename(fullPath);
   // `openspec` is pinned through `npx` in CI and is not a dependency of this package, so
   // PATH is not a reliable place to find it. Resolve a local install first, then the
@@ -920,14 +923,31 @@ function validateOpenspecArtifact(root, a, fullPath, invalid) {
     : spawnSync("openspec", ["validate", changeId, "--strict"], {
         cwd: root, encoding: "utf8", windowsHide: true, timeout: 60000, shell: process.platform === "win32",
       });
-  if (res.error) {
-    invalid.push(`openspec: could not run 'openspec validate ${changeId}' (${res.error.code || res.error.message}); the change is UNVERIFIED, not valid`);
-    return;
-  }
+  if (res.error) return `openspec: could not run 'openspec validate ${changeId}' (${res.error.code || res.error.message}); the change is UNVERIFIED, not valid`;
   if (res.status !== 0) {
     const detail = `${res.stdout || ""}${res.stderr || ""}`.trim().split(/\r?\n/).filter(Boolean).slice(0, 4).join(" / ");
-    invalid.push(`openspec: '${changeId}' does not validate (${detail || `exit ${res.status}`})`);
+    return `openspec: '${changeId}' does not validate (${detail || `exit ${res.status}`})`;
   }
+  return null;
+}
+
+function validateOpenspecArtifact(root, a, fullPath, invalid) {
+  invalid.push(...openspecDirProblems(root, a, fullPath));
+  if (invalid.length) return;
+  invalid.push(...openspecFileProblems(a, fullPath));
+  const tasksPath = join(fullPath, "tasks.md");
+  // A plan whose dependencies loop or name missing tickets can never finish; that is
+  // visible from tasks.md alone, without pretending to verify requirement coverage.
+  if (existsSync(tasksPath)) {
+    const planProblem = validatePlanCoverage(readFileSync(tasksPath, "utf8"));
+    if (planProblem) invalid.push(`openspec: tasks.md ${planProblem}`);
+  }
+  if (invalid.length) return;
+  // File presence is not validation: a specs/spec.md at the capability root is
+  // silently ignored on archive, and only `openspec validate` reports that. The
+  // command's name appeared in this file solely inside an error hint before.
+  const verdict = runOpenspecValidate(root, fullPath);
+  if (verdict) invalid.push(verdict);
 }
 
 
@@ -965,32 +985,46 @@ function changeDirOf(st) {
  * declared dependency must name a ticket that exists, and dependencies must not loop.
  * Returns null when there is nothing to check or the plan is sound.
  */
-function validatePlanCoverage(tasksBody) {
-  const lines = String(tasksBody || "").split(/\r?\n/);
+function parsePlanTickets(tasksBody) {
   const tickets = new Map();
-  for (const line of lines) {
+  for (const line of String(tasksBody || "").split(/\r?\n/)) {
     const m = /^\s*-\s*\[[ xX]\]\s*\**(T-\d+)\**/i.exec(line);
     if (!m) continue;
-    const id = m[1].toUpperCase();
     const deps = /Blocked-by:\s*(.*)$/i.exec(line);
     const raw = deps ? deps[1] : "";
-    const blockedBy = (raw.match(/T-\d+/gi) || []).map((d) => d.toUpperCase());
-    tickets.set(id, blockedBy);
+    tickets.set(m[1].toUpperCase(), (raw.match(/T-\d+/gi) || []).map((d) => d.toUpperCase()));
   }
-  if (tickets.size === 0) return null;
+  return tickets;
+}
+
+function missingPlanDep(tickets) {
   for (const [id, deps] of tickets) {
     for (const dep of deps) if (!tickets.has(dep)) return `${id} is blocked by ${dep}, which is not in this plan`;
   }
+  return null;
+}
+
+function planCycleFrom(tickets, id) {
+  const seen = new Set([id]);
+  const stack = [...(tickets.get(id) || [])];
+  while (stack.length) {
+    const next = stack.pop();
+    if (next === id) return `blocked-by cycle: ${id} cannot start`;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    stack.push(...(tickets.get(next) || []));
+  }
+  return null;
+}
+
+function validatePlanCoverage(tasksBody) {
+  const tickets = parsePlanTickets(tasksBody);
+  if (tickets.size === 0) return null;
+  const missing = missingPlanDep(tickets);
+  if (missing) return missing;
   for (const id of tickets.keys()) {
-    const seen = new Set([id]);
-    const stack = [...(tickets.get(id) || [])];
-    while (stack.length) {
-      const next = stack.pop();
-      if (next === id) return `blocked-by cycle: ${id} cannot start`;
-      if (seen.has(next)) continue;
-      seen.add(next);
-      stack.push(...(tickets.get(next) || []));
-    }
+    const cycle = planCycleFrom(tickets, id);
+    if (cycle) return cycle;
   }
   return null;
 }

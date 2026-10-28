@@ -37,84 +37,70 @@ function median(numbers) {
  * @param {Array<{at: string, kind: string, text?: string}>} events
  * @returns {{byTier: Record<string, {medianStartCloseMs: number, n: number}>, medianAskAnsweredMs: number, medianOracleCloseMs: number}}
  */
-export function computeLeadTime(events) {
-  const byTier = {
-    T0: { medianStartCloseMs: 0, n: 0 },
-    T1: { medianStartCloseMs: 0, n: 0 },
-    T2: { medianStartCloseMs: 0, n: 0 },
-    T3: { medianStartCloseMs: 0, n: 0 },
-  };
+function emptyLeadTime() {
+  const byTier = {};
+  for (const t of ["T0", "T1", "T2", "T3"]) byTier[t] = { medianStartCloseMs: 0, n: 0 };
+  return { byTier, medianAskAnsweredMs: 0, medianOracleCloseMs: 0 };
+}
 
-  if (!Array.isArray(events) || events.length === 0) {
-    return {
-      byTier,
-      medianAskAnsweredMs: 0,
-      medianOracleCloseMs: 0,
-    };
+function tierOf(text) {
+  const m = text.match(/^(T[0-3])\b/);
+  return m ? m[1] : null;
+}
+
+function isOracleEvent(kind, text) {
+  return kind === "oracle" || (kind === "artifact" && /^oracle\b/i.test(text));
+}
+
+function applyStart(st, text, atMs) {
+  st.currentStart = { tier: tierOf(text), at: atMs };
+  st.pendingAskAt = null;
+  st.pendingOracleAt = null;
+}
+
+function applyClose(st, text, atMs) {
+  if (st.currentStart) {
+    const duration = atMs - st.currentStart.at;
+    if (duration >= 0) {
+      const tier = tierOf(text) || st.currentStart.tier || "T1";
+      (st.byTier[tier] ??= []).push(duration);
+    }
+    st.currentStart = null;
   }
+  if (st.pendingOracleAt != null && atMs >= st.pendingOracleAt) {
+    st.oracleClose.push(atMs - st.pendingOracleAt);
+    st.pendingOracleAt = null;
+  }
+}
 
-  const startCloseDurationsByTier = { T0: [], T1: [], T2: [], T3: [] };
-  const askAnsweredDurations = [];
-  const oracleCloseDurations = [];
+function applyEvent(st, kind, text, atMs) {
+  if (kind === "start") applyStart(st, text, atMs);
+  else if (kind === "ask") st.pendingAskAt = atMs;
+  else if (kind === "answered" && st.pendingAskAt != null && atMs >= st.pendingAskAt) {
+    st.askAnswered.push(atMs - st.pendingAskAt);
+    st.pendingAskAt = null;
+  }
+  else if (isOracleEvent(kind, text)) st.pendingOracleAt = atMs;
+  else if (kind === "close") applyClose(st, text, atMs);
+}
 
-  let currentStart = null;
-  let pendingAskAt = null;
-  let pendingOracleAt = null;
-
+export function computeLeadTime(events) {
+  if (!Array.isArray(events) || events.length === 0) return emptyLeadTime();
+  const st = { byTier: { T0: [], T1: [], T2: [], T3: [] }, askAnswered: [], oracleClose: [],
+    currentStart: null, pendingAskAt: null, pendingOracleAt: null };
   for (const ev of events) {
     if (!ev || typeof ev !== "object") continue;
-    const kind = ev.kind;
-    const text = typeof ev.text === "string" ? ev.text : "";
     const atMs = ev.at ? new Date(ev.at).getTime() : NaN;
     if (Number.isNaN(atMs)) continue;
-
-    if (kind === "start") {
-      const tierMatch = text.match(/^(T[0-3])\b/);
-      const tier = tierMatch ? tierMatch[1] : null;
-      currentStart = { tier, at: atMs };
-      pendingAskAt = null;
-      pendingOracleAt = null;
-    } else if (kind === "ask") {
-      pendingAskAt = atMs;
-    } else if (kind === "answered") {
-      if (pendingAskAt != null && atMs >= pendingAskAt) {
-        askAnsweredDurations.push(atMs - pendingAskAt);
-        pendingAskAt = null;
-      }
-    } else if (kind === "oracle" || (kind === "artifact" && /^oracle\b/i.test(text))) {
-      pendingOracleAt = atMs;
-    } else if (kind === "close") {
-      if (currentStart) {
-        const tierMatch = text.match(/^(T[0-3])\b/);
-        const tier = tierMatch ? tierMatch[1] : (currentStart.tier || "T1");
-        const duration = atMs - currentStart.at;
-        if (duration >= 0) {
-          if (!startCloseDurationsByTier[tier]) {
-            startCloseDurationsByTier[tier] = [];
-          }
-          startCloseDurationsByTier[tier].push(duration);
-        }
-        currentStart = null;
-      }
-      if (pendingOracleAt != null && atMs >= pendingOracleAt) {
-        oracleCloseDurations.push(atMs - pendingOracleAt);
-        pendingOracleAt = null;
-      }
-    }
+    applyEvent(st, ev.kind, typeof ev.text === "string" ? ev.text : "", atMs);
   }
-
-  for (const [tier, list] of Object.entries(startCloseDurationsByTier)) {
-    byTier[tier] = {
-      medianStartCloseMs: median(list),
-      n: list.length,
-    };
+  const out = emptyLeadTime();
+  for (const [tier, list] of Object.entries(st.byTier)) {
+    out.byTier[tier] = { medianStartCloseMs: median(list), n: list.length };
   }
-
-  return {
-    byTier,
-    medianAskAnsweredMs: median(askAnsweredDurations),
-    medianOracleCloseMs: median(oracleCloseDurations),
-  };
+  out.medianAskAnsweredMs = median(st.askAnswered);
+  out.medianOracleCloseMs = median(st.oracleClose);
+  return out;
 }
 
 export function parseCliArgs(argv = process.argv.slice(2)) {

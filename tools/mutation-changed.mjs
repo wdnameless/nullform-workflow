@@ -63,29 +63,7 @@ Options:
     process.exit(0);
   }
 
-  let rawFiles = [];
-
-  let baseRef = null;
-  if (flags.files) {
-    rawFiles = flags.files
-      .split(/[,\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-  } else {
-    baseRef = resolveBaseRef(ROOT, flags.base);
-    if (!baseRef) {
-      console.log("mutation-changed: no base ref resolvable; skipping mutation gate.");
-      process.exit(0);
-    }
-
-    console.log(`mutation-changed: computing changed files vs ${baseRef}...${flags.head}`);
-    const diff = getChangedFiles(ROOT, baseRef, flags.head);
-    if (diff === null) {
-      console.log("mutation-changed: git diff failed or unavailable; skipping mutation gate.");
-      process.exit(0);
-    }
-    rawFiles = diff;
-  }
+  const { rawFiles, baseRef } = collectRawFiles(flags);
 
   const candidateFiles = filterCandidateFiles(ROOT, rawFiles);
 
@@ -95,12 +73,7 @@ Options:
   }
 
   // ponytail: cap first 10 files to keep CI bounded | ceiling: 10 files | upgrade: parallel sharded matrix
-  const maxFiles = flags.maxFiles || 10;
-  let targets = candidateFiles;
-  if (targets.length > maxFiles) {
-    console.log(`mutation-changed: runtime ceiling reached — capping to first ${maxFiles} of ${candidateFiles.length} files.`);
-    targets = targets.slice(0, maxFiles);
-  }
+  const targets = capTargets(candidateFiles, flags.maxFiles || 10);
 
   console.log(`mutation-changed: evaluating ${targets.length} file(s) (mutants/file=${flags.maxMutants}, threshold=${flags.threshold}%):`);
   for (const t of targets) {
@@ -119,22 +92,47 @@ Options:
     if (runFileGate(target, flags, baseRef)) passedFiles.push(target);
     else failedFiles.push({ target, exitCode: 1 });
   }
+  reportAggregate(targets, passedFiles, failedFiles);
+}
 
+function collectRawFiles(flags) {
+  if (flags.files) {
+    return { rawFiles: flags.files.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean), baseRef: null };
+  }
+  const baseRef = resolveBaseRef(ROOT, flags.base);
+  if (!baseRef) {
+    console.log("mutation-changed: no base ref resolvable; skipping mutation gate.");
+    process.exit(0);
+  }
+  console.log(`mutation-changed: computing changed files vs ${baseRef}...${flags.head}`);
+  const diff = getChangedFiles(ROOT, baseRef, flags.head);
+  if (diff === null) {
+    console.log("mutation-changed: git diff failed or unavailable; skipping mutation gate.");
+    process.exit(0);
+  }
+  return { rawFiles: diff, baseRef };
+}
 
+function capTargets(candidateFiles, maxFiles) {
+  if (candidateFiles.length <= maxFiles) return candidateFiles;
+  console.log(`mutation-changed: runtime ceiling reached — capping to first ${maxFiles} of ${candidateFiles.length} files.`);
+  return candidateFiles.slice(0, maxFiles);
+}
+
+function reportAggregate(targets, passedFiles, failedFiles) {
   console.log("\n============================================================");
   console.log("                MUTATION GATE AGGREGATE RESULT              ");
   console.log("============================================================");
   console.log(`Passed files: ${passedFiles.length}/${targets.length}`);
-  if (failedFiles.length > 0) {
-    console.error(`Failed files: ${failedFiles.length}/${targets.length}`);
-    for (const f of failedFiles) {
-      console.error(`  FAIL: ${f.target} (exit code ${f.exitCode})`);
-    }
-    process.exit(1);
+  if (failedFiles.length === 0) {
+    console.log("All evaluated files passed mutation threshold.");
+    process.exit(0);
   }
-
-  console.log("All evaluated files passed mutation threshold.");
-  process.exit(0);
+  console.error(`Failed files: ${failedFiles.length}/${targets.length}`);
+  for (const f of failedFiles) {
+    console.error(`  FAIL: ${f.target} (exit code ${f.exitCode})`);
+  }
+  process.exit(1);
 }
 export function runFileGate(target, flags, baseRef) {
   const suite = findMatchingSuite(ROOT, target);

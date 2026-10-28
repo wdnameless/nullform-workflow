@@ -69,73 +69,45 @@ export function parseUncoveredLines(str) {
   return lines;
 }
 
-export function parseCoverageReport(text) {
-  const result = {
-    files: {},
-    summary: { linePercent: 0, branchPercent: 0, funcsPercent: 0 },
-  };
-  if (!text || typeof text !== "string") return result;
+function splitRow(rawLine) {
+  if (!rawLine.includes("|")) return null;
+  const parts = rawLine.replace(/^(?:ℹ|\u2139\uFE0F|\u2139)?\s?/, "").split("|");
+  if (parts.length < 4) return null;
+  const m = parts[0].match(/^(\s*)(.*)$/);
+  return { indent: m ? m[1].length : 0, name: m ? m[2].trim() : "",
+    cols: parts.slice(1, 4).map((c) => c.trim()), rest: parts.slice(4).join("|").trim() };
+}
 
-  const lines = text.split(/\r?\n/);
-  const dirStack = [];
+function popToIndent(stack, indent) {
+  while (stack.length > 0 && stack[stack.length - 1].indent >= indent) stack.pop();
+}
 
-  for (const rawLine of lines) {
-    if (!rawLine.includes("|")) continue;
-    const cleanLine = rawLine.replace(/^(?:ℹ|\u2139\uFE0F|\u2139)?\s?/, "");
-    const parts = cleanLine.split("|");
-    if (parts.length < 4) continue;
-
-    const col0 = parts[0];
-    const col1 = parts[1].trim();
-    const col2 = parts[2].trim();
-    const col3 = parts[3].trim();
-    const col4 = parts.slice(4).join("|").trim();
-
-    const match = col0.match(/^(\s*)(.*)$/);
-    const indent = match ? match[1].length : 0;
-    const name = match ? match[2].trim() : "";
-
-    if (!name || name.toLowerCase() === "file") continue;
-
-    if (name.toLowerCase() === "all files") {
-      result.summary = {
-        linePercent: Number.parseFloat(col1) || 0,
-        branchPercent: Number.parseFloat(col2) || 0,
-        funcsPercent: Number.parseFloat(col3) || 0,
-      };
-      continue;
-    }
-
-    const col1Num = col1.replace(/%$/, "").trim();
-    if (!/^\d+(\.\d+)?$/.test(col1Num)) {
-      while (dirStack.length > 0 && dirStack[dirStack.length - 1].indent >= indent) {
-        dirStack.pop();
-      }
-      dirStack.push({ indent, name });
-      continue;
-    }
-
-    while (dirStack.length > 0 && dirStack[dirStack.length - 1].indent >= indent) {
-      dirStack.pop();
-    }
-    const dirPath = dirStack.map((d) => d.name).join("/");
-    const fullPath = dirPath ? `${dirPath}/${name}` : name;
-    const linePercent = Number.parseFloat(col1Num) || 0;
-    const branchPercent = Number.parseFloat(col2.replace(/%$/, "").trim()) || 0;
-    const funcsPercent = Number.parseFloat(col3.replace(/%$/, "").trim()) || 0;
-    const uncoveredLines = parseUncoveredLines(col4);
-    const uncoveredRanges = col4 ? col4.split(/[\s,]+/).filter(Boolean) : [];
-
-    result.files[fullPath] = {
-      file: fullPath,
-      linePercent,
-      branchPercent,
-      funcsPercent,
-      uncoveredLines,
-      uncoveredRanges,
-    };
+function applyRow(result, stack, row) {
+  const { indent, name, cols, rest } = row;
+  if (!name || name.toLowerCase() === "file") return;
+  const pct = (c) => Number.parseFloat(c.replace(/%$/, "").trim()) || 0;
+  if (name.toLowerCase() === "all files") {
+    result.summary = { linePercent: pct(cols[0]), branchPercent: pct(cols[1]), funcsPercent: pct(cols[2]) };
+    return;
   }
+  const col1Num = cols[0].replace(/%$/, "").trim();
+  popToIndent(stack, indent);
+  if (!/^\d+(\.\d+)?$/.test(col1Num)) { stack.push({ indent, name }); return; }
+  const fullPath = stack.length > 0 ? `${stack.map((d) => d.name).join("/")}/${name}` : name;
+  result.files[fullPath] = { file: fullPath, linePercent: pct(cols[0]),
+    branchPercent: pct(cols[1]), funcsPercent: pct(cols[2]),
+    uncoveredLines: parseUncoveredLines(rest),
+    uncoveredRanges: rest ? rest.split(/[\s,]+/).filter(Boolean) : [] };
+}
 
+export function parseCoverageReport(text) {
+  const result = { files: {}, summary: { linePercent: 0, branchPercent: 0, funcsPercent: 0 } };
+  if (!text || typeof text !== "string") return result;
+  const stack = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const row = splitRow(rawLine);
+    if (row) applyRow(result, stack, row);
+  }
   return result;
 }
 
@@ -165,24 +137,22 @@ function coverageStats(covered, total, coveredLines, uncoveredLines) {
   };
 }
 
-export function changedLinesCovered(uncovered, changedLines = []) {
-  let uncoveredSet;
-  if (uncovered instanceof Set) {
-    uncoveredSet = uncovered;
-  } else if (Array.isArray(uncovered)) {
-    if (uncovered.length > 0 && typeof uncovered[0] === "string" && uncovered[0].includes("-")) {
-      uncoveredSet = new Set(parseUncoveredLines(uncovered.join(" ")));
-    } else {
-      uncoveredSet = new Set(uncovered);
-    }
-  } else if (typeof uncovered === "string") {
-    uncoveredSet = new Set(parseUncoveredLines(uncovered));
-  } else if (uncovered && typeof uncovered === "object") {
-    const list = uncovered.uncoveredLines || uncovered.uncovered || [];
-    uncoveredSet = new Set(Array.isArray(list) ? list : parseUncoveredLines(String(list)));
-  } else {
-    uncoveredSet = new Set();
+function toUncoveredSet(uncovered) {
+  if (uncovered instanceof Set) return uncovered;
+  if (Array.isArray(uncovered)) {
+    const ranged = uncovered.length > 0 && typeof uncovered[0] === "string" && uncovered[0].includes("-");
+    return new Set(ranged ? parseUncoveredLines(uncovered.join(" ")) : uncovered);
   }
+  if (typeof uncovered === "string") return new Set(parseUncoveredLines(uncovered));
+  if (uncovered && typeof uncovered === "object") {
+    const list = uncovered.uncoveredLines || uncovered.uncovered || [];
+    return new Set(Array.isArray(list) ? list : parseUncoveredLines(String(list)));
+  }
+  return new Set();
+}
+
+export function changedLinesCovered(uncovered, changedLines = []) {
+  const uncoveredSet = toUncoveredSet(uncovered);
 
   const lines = Array.isArray(changedLines) ? changedLines : Array.from(changedLines || []);
   const total = lines.length;
@@ -278,6 +248,47 @@ export function runFileCoverage(root, target, flags, baseRef) {
   return { passed, percent: stats.percent, target, stats };
 }
 
+function collectRawFiles(flags) {
+  if (flags.files) {
+    return { rawFiles: flags.files.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean),
+      baseRef: flags.base ? resolveBaseRef(ROOT, flags.base) : null };
+  }
+  const baseRef = resolveBaseRef(ROOT, flags.base);
+  if (!baseRef) {
+    console.log("coverage-changed: no base ref resolvable; skipping coverage gate.");
+    process.exit(0);
+  }
+  console.log(`coverage-changed: computing changed files vs ${baseRef}...${flags.head}`);
+  const diff = getChangedFiles(ROOT, baseRef, flags.head);
+  if (diff === null) {
+    console.log("coverage-changed: git diff failed or unavailable; skipping coverage gate.");
+    process.exit(0);
+  }
+  return { rawFiles: diff, baseRef };
+}
+
+function capTargets(candidateFiles, maxFiles) {
+  if (candidateFiles.length <= maxFiles) return candidateFiles;
+  console.log(`coverage-changed: runtime ceiling reached — capping to first ${maxFiles} of ${candidateFiles.length} files.`);
+  return candidateFiles.slice(0, maxFiles);
+}
+
+function reportAggregate(targets, passedFiles, failedFiles, threshold) {
+  console.log("\n============================================================");
+  console.log("                COVERAGE GATE AGGREGATE RESULT              ");
+  console.log("============================================================");
+  console.log(`Passed files: ${passedFiles.length}/${targets.length}`);
+  if (failedFiles.length === 0) {
+    console.log("All evaluated files passed coverage threshold.");
+    process.exit(0);
+  }
+  console.error(`Failed files: ${failedFiles.length}/${targets.length}`);
+  for (const f of failedFiles) {
+    console.error(`  FAIL: ${f.target} (${f.reason || `coverage ${f.percent}% < ${threshold}%`})`);
+  }
+  process.exit(1);
+}
+
 export function main() {
   const flags = parseCliArgs();
 
@@ -296,32 +307,7 @@ Options:
     process.exit(0);
   }
 
-  let rawFiles = [];
-  let baseRef = null;
-
-  if (flags.files) {
-    rawFiles = flags.files
-      .split(/[,\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (flags.base) {
-      baseRef = resolveBaseRef(ROOT, flags.base);
-    }
-  } else {
-    baseRef = resolveBaseRef(ROOT, flags.base);
-    if (!baseRef) {
-      console.log("coverage-changed: no base ref resolvable; skipping coverage gate.");
-      process.exit(0);
-    }
-
-    console.log(`coverage-changed: computing changed files vs ${baseRef}...${flags.head}`);
-    const diff = getChangedFiles(ROOT, baseRef, flags.head);
-    if (diff === null) {
-      console.log("coverage-changed: git diff failed or unavailable; skipping coverage gate.");
-      process.exit(0);
-    }
-    rawFiles = diff;
-  }
+  const { rawFiles, baseRef } = collectRawFiles(flags);
 
   const candidateFiles = filterCandidateFiles(ROOT, rawFiles);
 
@@ -331,14 +317,7 @@ Options:
   }
 
   // ponytail: cap first 10 files to keep CI bounded | ceiling: 10 files | upgrade: parallel sharded matrix
-  const maxFiles = flags.maxFiles || 10;
-  let targets = candidateFiles;
-  if (targets.length > maxFiles) {
-    console.log(
-      `coverage-changed: runtime ceiling reached — capping to first ${maxFiles} of ${candidateFiles.length} files.`
-    );
-    targets = targets.slice(0, maxFiles);
-  }
+  const targets = capTargets(candidateFiles, flags.maxFiles || 10);
 
   console.log(`coverage-changed: evaluating ${targets.length} file(s) (threshold=${flags.threshold}%):`);
   for (const t of targets) {
@@ -362,20 +341,7 @@ Options:
     }
   }
 
-  console.log("\n============================================================");
-  console.log("                COVERAGE GATE AGGREGATE RESULT              ");
-  console.log("============================================================");
-  console.log(`Passed files: ${passedFiles.length}/${targets.length}`);
-  if (failedFiles.length > 0) {
-    console.error(`Failed files: ${failedFiles.length}/${targets.length}`);
-    for (const f of failedFiles) {
-      console.error(`  FAIL: ${f.target} (${f.reason || `coverage ${f.percent}% < ${flags.threshold}%`})`);
-    }
-    process.exit(1);
-  }
-
-  console.log("All evaluated files passed coverage threshold.");
-  process.exit(0);
+  reportAggregate(targets, passedFiles, failedFiles, flags.threshold);
 }
 
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));

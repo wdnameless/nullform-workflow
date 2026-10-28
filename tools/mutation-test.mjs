@@ -135,67 +135,60 @@ export const MUTATION_OPERATORS = [
  * @param {Set<number>|number[]} [options.onlyLines] номера строк (1-based), вне которых мутанты не генерятся
  * @returns {Array<object>}
  */
+function stripStringLiterals(line) {
+  return line.replace(/(["'`])(?:(?!\1)[^\\]|\\.)*\1/g, '""');
+}
+
+function isSkippableLine(trimmed, codeOnly) {
+  if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) return true;
+  if (/^\s*(?:import|export)[^"']*from\s*""\s*;?\s*$/.test(codeOnly)) return true;
+  // ponytail: мутации внутри строковых литералов (help-тексты, пути импортов) — шум:
+  // тесты их не ловят по дизайну, а скор падает. ceiling: построчный эвристик, сломается
+  // на многострочных template-литералах. upgrade: AST-мутатор при переходе на парсер.
+  return !/===|!==|<=|>=|&&|\|\||\btrue\b|\bfalse\b|(?<=\w\s*)[+-](?=\s*\w)|(?<=\s)[<>](?=\s)|\breturn\s+(?:0|null|["']["'])/.test(codeOnly);
+}
+
+function codeMatches(line, codeOnly, op) {
+  // Совпадение внутри строкового литерала — шум: в codeOnly там кавычки/пустота.
+  return [...line.matchAll(op.find)].filter((m) => codeOnly.slice(m.index, m.index + m[0].length) === m[0]);
+}
+
+function buildMutant(lines, lineIdx, line, trimmed, op, m, id) {
+  const mutatedLine = line.slice(0, m.index) + op.replace + line.slice(m.index + m[0].length);
+  if (mutatedLine === line) return null;
+  const mutatedLines = [...lines];
+  mutatedLines[lineIdx] = mutatedLine;
+  return { id, operator: op.name, description: op.description, lineNumber: lineIdx + 1,
+    originalLine: trimmed, mutatedLine: mutatedLine.trim(), mutatedCode: mutatedLines.join("\n") };
+}
+
 export function generateMutants(sourceCode, options = {}) {
   const maxMutants = options.maxMutants || 50;
   const onlyLines = options.onlyLines ? new Set(options.onlyLines) : null;
   const mutants = [];
   const lines = sourceCode.split("\n");
-
   let mutantId = 1;
-
-  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-    if (mutants.length >= maxMutants) break;
+  for (let lineIdx = 0; lineIdx < lines.length && mutants.length < maxMutants; lineIdx++) {
     if (onlyLines && !onlyLines.has(lineIdx + 1)) continue;
-    const line = lines[lineIdx];
-    const trimmed = line.trim();
+    mutantId = mutateLine(lines, lineIdx, mutants, mutantId, maxMutants);
+  }
+  return mutants;
+}
 
-    // Пропускаем комментарии и пустые строки
-    if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) {
-      continue;
-    }
-    // ponytail: мутации внутри строковых литералов (help-тексты, пути импортов) — шум:
-    // тесты их не ловят по дизайну, а скор падает. ceiling: построчный эвристик, сломается
-    // на многострочных template-литералах. upgrade: AST-мутатор при переходе на парсер.
-    const codeOnly = line.replace(/(["'`])(?:(?!\1)[^\\]|\\.)*\1/g, '""');
-    if (/^\s*(?:import|export)[^"']*from\s*""\s*;?\s*$/.test(codeOnly)) continue;
-    const hasCodeOp = /===|!==|<=|>=|&&|\|\||\btrue\b|\bfalse\b|(?<=\w\s*)[+-](?=\s*\w)|(?<=\s)[<>](?=\s)|\breturn\s+(?:0|null|["']["'])/.test(codeOnly);
-    if (!hasCodeOp) continue;
-    for (const op of MUTATION_OPERATORS) {
+function mutateLine(lines, lineIdx, mutants, mutantId, maxMutants) {
+  const line = lines[lineIdx];
+  const trimmed = line.trim();
+  const codeOnly = stripStringLiterals(line);
+  if (isSkippableLine(trimmed, codeOnly)) return mutantId;
+  for (const op of MUTATION_OPERATORS) {
+    if (mutants.length >= maxMutants) break;
+    for (const m of codeMatches(line, codeOnly, op)) {
       if (mutants.length >= maxMutants) break;
-
-      const matches = [...line.matchAll(op.find)].filter((m) => {
-        // Совпадение внутри строкового литерала — шум: в codeOnly там кавычки/пустота.
-        const seg = codeOnly.slice(m.index, m.index + m[0].length);
-        return seg === m[0];
-      });
-      for (const m of matches) {
-        if (mutants.length >= maxMutants) break;
-
-        const matchIdx = m.index;
-        const before = line.slice(0, matchIdx);
-        const after = line.slice(matchIdx + m[0].length);
-        const mutatedLine = before + op.replace + after;
-
-        if (mutatedLine === line) continue;
-
-        const mutatedLines = [...lines];
-        mutatedLines[lineIdx] = mutatedLine;
-        const mutatedCode = mutatedLines.join("\n");
-
-        mutants.push({
-          id: mutantId++,
-          operator: op.name,
-          description: op.description,
-          lineNumber: lineIdx + 1,
-          originalLine: trimmed,
-          mutatedLine: mutatedLine.trim(),
-          mutatedCode,
-        });
-      }
+      const built = buildMutant(lines, lineIdx, line, trimmed, op, m, mutantId);
+      if (built) { mutants.push(built); mutantId++; }
     }
   }
-
-  return mutants;
+  return mutantId;
 }
 
 /**
@@ -352,6 +345,65 @@ export function formatMutationReport(summary) {
   return lines.join("\n");
 }
 
+function flagValue(arg, name, argv, i) {
+  return arg.startsWith(`--${name}=`) ? arg.slice(name.length + 3) : argv[i + 1];
+}
+
+function takesSeparateValue(arg, name) {
+  return arg === `--${name}`;
+}
+
+function parseLinesList(raw) {
+  const nums = [];
+  for (const part of String(raw).split(",")) {
+    const m = part.trim().match(/^(\d+)(?:-(\d+))?$/);
+    if (!m) return [];
+    const a = Number.parseInt(m[1], 10), b = m[2] ? Number.parseInt(m[2], 10) : a;
+    for (let n = Math.min(a, b); n <= Math.max(a, b); n++) nums.push(n);
+  }
+  return nums;
+}
+
+function checkThreshold(options, raw) {
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+    options.errors.push(`--threshold требует число от 0 до 100 (получено: ${JSON.stringify(raw)})`);
+  } else options.threshold = parsed;
+}
+
+function checkMaxMutants(options, raw) {
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    options.errors.push(`--max-mutants требует целое число >= 1 (получено: ${JSON.stringify(raw)})`);
+  } else options.maxMutants = parsed;
+}
+
+function checkTimeoutSec(options, raw) {
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    options.errors.push(`--timeout-sec требует положительное число (получено: ${JSON.stringify(raw)})`);
+  } else options.timeoutSec = parsed;
+}
+
+function checkLines(options, raw) {
+  const nums = parseLinesList(raw);
+  if (nums.length === 0 || nums.some((n) => !Number.isFinite(n) || n < 1)) {
+    options.errors.push(`--lines требует список номеров/диапазонов через запятую (получено: ${JSON.stringify(raw)})`);
+  } else options.onlyLines = nums;
+}
+
+const VALUED_APPLIERS = { threshold: checkThreshold, "max-mutants": checkMaxMutants,
+  "timeout-sec": checkTimeoutSec, lines: checkLines };
+
+function applyValuedFlag(options, name, raw) {
+  if (name === "target") options.target = raw;
+  else if (name === "cmd") options.cmd = raw;
+  else VALUED_APPLIERS[name]?.(options, raw);
+}
+
+const VALUED_FLAGS = new Set(["target", "cmd", "threshold", "max-mutants", "timeout-sec", "lines"]);
+const KNOWN_FLAGS = new Set([...VALUED_FLAGS, "dry-run", "check", "json", "help"]);
+
 export function parseArgs(argv = []) {
   const options = {
     target: null,
@@ -367,75 +419,19 @@ export function parseArgs(argv = []) {
     errors: [],
   };
 
-  const KNOWN_FLAGS = new Set([
-    "target",
-    "cmd",
-    "threshold",
-    "max-mutants",
-    "timeout-sec",
-    "lines",
-    "dry-run",
-    "check",
-    "json",
-    "help",
-  ]);
-
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "-h" || arg === "--help") {
-      options.help = true;
-    } else if (arg === "--dry-run") {
-      options.dryRun = true;
-    } else if (arg === "--check") {
-      options.check = true;
-    } else if (arg === "--json") {
-      options.json = true;
-    } else if (arg === "--target" || arg.startsWith("--target=")) {
-      options.target = arg.startsWith("--target=") ? arg.slice("--target=".length) : argv[++i];
-    } else if (arg === "--cmd" || arg.startsWith("--cmd=")) {
-      options.cmd = arg.startsWith("--cmd=") ? arg.slice("--cmd=".length) : argv[++i];
-    } else if (arg === "--threshold" || arg.startsWith("--threshold=")) {
-      const raw = arg.startsWith("--threshold=") ? arg.slice("--threshold=".length) : argv[++i];
-      const parsed = Number.parseFloat(raw);
-      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
-        options.errors.push(`--threshold требует число от 0 до 100 (получено: ${JSON.stringify(raw)})`);
-      } else {
-        options.threshold = parsed;
-      }
-    } else if (arg === "--max-mutants" || arg.startsWith("--max-mutants=")) {
-      const raw = arg.startsWith("--max-mutants=") ? arg.slice("--max-mutants=".length) : argv[++i];
-      const parsed = Number.parseInt(raw, 10);
-      if (!Number.isFinite(parsed) || parsed < 1) {
-        options.errors.push(`--max-mutants требует целое число >= 1 (получено: ${JSON.stringify(raw)})`);
-      } else {
-        options.maxMutants = parsed;
-      }
-    } else if (arg === "--timeout-sec" || arg.startsWith("--timeout-sec=")) {
-      const raw = arg.startsWith("--timeout-sec=") ? arg.slice("--timeout-sec=".length) : argv[++i];
-      const parsed = Number.parseFloat(raw);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        options.errors.push(`--timeout-sec требует положительное число (получено: ${JSON.stringify(raw)})`);
-      } else {
-        options.timeoutSec = parsed;
-      }
-    } else if (arg === "--lines" || arg.startsWith("--lines=")) {
-      const raw = arg.startsWith("--lines=") ? arg.slice("--lines=".length) : argv[++i];
-      const nums = [];
-      for (const part of String(raw).split(",")) {
-        const m = part.trim().match(/^(\d+)(?:-(\d+))?$/);
-        if (!m) { nums.length = 0; break; }
-        const a = Number.parseInt(m[1], 10), b = m[2] ? Number.parseInt(m[2], 10) : a;
-        for (let n = Math.min(a, b); n <= Math.max(a, b); n++) nums.push(n);
-      }
-      if (nums.length === 0 || nums.some((n) => !Number.isFinite(n) || n < 1)) {
-        options.errors.push(`--lines требует список номеров/диапазонов через запятую (получено: ${JSON.stringify(raw)})`);
-      } else {
-        options.onlyLines = nums;
-      }
-    } else if (arg.startsWith("--")) {
+    if (arg === "-h" || arg === "--help") options.help = true;
+    else if (arg === "--dry-run") options.dryRun = true;
+    else if (arg === "--check") options.check = true;
+    else if (arg === "--json") options.json = true;
+    else if (arg.startsWith("--")) {
       const name = arg.slice(2).split("=")[0];
-      if (!KNOWN_FLAGS.has(name)) {
-        options.errors.push(`неизвестный параметр: ${arg}`);
+      if (!KNOWN_FLAGS.has(name)) options.errors.push(`неизвестный параметр: ${arg}`);
+      else if (VALUED_FLAGS.has(name)) {
+        const raw = flagValue(arg, name, argv, i);
+        if (takesSeparateValue(arg, name)) i++;
+        applyValuedFlag(options, name, raw);
       }
     }
   }
