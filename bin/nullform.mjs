@@ -105,6 +105,25 @@ function translateParseError(err) {
  */
 const PASSTHROUGH = { workflow: "workflowArgs", quality: "qualityArgs" };
 
+const INIT_COMMANDS = ["init", "inspect", "doctor", "update", "capabilities", "evidence", "setup", "heal"];
+
+function resolveInitCommand(positionals) {
+  let command = null;
+  for (const pos of positionals) {
+    if (!INIT_COMMANDS.includes(pos)) throw new Error(`Unknown option or command "${pos}"`);
+    if (command && command !== pos) throw new Error(`Unexpected command "${pos}" after "${command}"`);
+    command = pos;
+  }
+  return command;
+}
+
+function parseTimeoutMs(raw) {
+  if (!raw) return null;
+  const val = parseInt(raw, 10);
+  if (!Number.isFinite(val) || val <= 0) throw new Error("Invalid --timeout value");
+  return val * 1000;
+}
+
 export function parseCliArgs(argv = []) {
   const head = Array.isArray(argv) ? argv[0] : undefined;
   if (head && Object.prototype.hasOwnProperty.call(PASSTHROUGH, head)) {
@@ -123,7 +142,8 @@ export function parseCliArgs(argv = []) {
     "require-plugins": { type: "boolean" },
     "skip-plugin-check": { type: "boolean" },
     "skip-release-check": { type: "boolean" },
-    "prune-logs": { type: "boolean" },
+    interactive: { type: "boolean" },
+    "no-interactive": { type: "boolean" },
     harness: { type: "string" },
     "target-harness": { type: "string" },
     root: { type: "string" },
@@ -147,23 +167,9 @@ export function parseCliArgs(argv = []) {
     throw translateParseError(err);
   }
 
-  let command = null;
-  for (const pos of parsed.positionals) {
-    if (["init", "inspect", "doctor", "update", "capabilities", "evidence", "setup", "heal"].includes(pos)) {
-      if (command && command !== pos) throw new Error(`Unexpected command "${pos}" after "${command}"`);
-      command = pos;
-    } else {
-      throw new Error(`Unknown option or command "${pos}"`);
-    }
-  }
+  const command = resolveInitCommand(parsed.positionals);
   if (parsed.values.probe && command !== "inspect") throw new Error("--probe is inspect-only");
-
-  let timeoutMs = null;
-  if (parsed.values.timeout) {
-    const val = parseInt(parsed.values.timeout, 10);
-    if (!Number.isFinite(val) || val <= 0) throw new Error("Invalid --timeout value");
-    timeoutMs = val * 1000;
-  }
+  const timeoutMs = parseTimeoutMs(parsed.values.timeout);
 
   return {
     command,
@@ -190,25 +196,57 @@ export function parseCliArgs(argv = []) {
     requirePlugins: Boolean(parsed.values["require-plugins"]),
     skipPluginCheck: Boolean(parsed.values["skip-plugin-check"]),
     skipReleaseCheck: Boolean(parsed.values["skip-release-check"]),
-    pruneLogs: Boolean(parsed.values["prune-logs"]),
+    interactive: parsed.values["no-interactive"] ? false : (parsed.values.interactive ?? true),
     help: Boolean(parsed.values.help),
     version: Boolean(parsed.values.version),
   };
 }
 
-export function resolveMenuSelection(rawInput) {
+export const HARNESS_MATRIX_PATH = join(PACKAGE_ROOT, "tools", "harness-matrix.json");
+
+export function loadHarnessMatrix(matrixPath = HARNESS_MATRIX_PATH) {
+  try {
+    if (!existsSync(matrixPath)) return null;
+    const raw = readFileSync(matrixPath, "utf8");
+    const stripped = raw.replace(/^\s*\/\/.*$/gm, "").trim();
+    const data = JSON.parse(stripped);
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export function getHarnessMenuItems(matrixPath = HARNESS_MATRIX_PATH) {
+  const matrix = (loadHarnessMatrix(matrixPath) || []).filter((e) => e && e.id);
+  if (matrix.length === 0) return HARNESS_MENU_ITEMS;
+  return matrix.map((entry, index) => ({
+    index: index + 1,
+    id: entry.id,
+    label: entry.label || entry.id,
+    description: entry.description || "",
+  }));
+}
+
+export function resolveMenuSelection(rawInput, items = HARNESS_MENU_ITEMS) {
   if (typeof rawInput !== "string") return null;
   const trimmed = rawInput.trim().toLowerCase();
   if (!trimmed || trimmed === "q" || trimmed === "quit" || trimmed === "exit" || trimmed === "cancel") {
     return null;
   }
-  if (/^[1-8]$/.test(trimmed)) {
+  const list = Array.isArray(items) && items.length > 0 ? items : HARNESS_MENU_ITEMS;
+  if (/^\d+$/.test(trimmed)) {
     const idx = parseInt(trimmed, 10);
-    return HARNESS_CHOICES[idx - 1] || null;
+    if (idx >= 1 && idx <= list.length) {
+      return list[idx - 1]?.id || null;
+    }
+    return null;
   }
   if (HARNESS_CHOICES.includes(trimmed)) {
     return trimmed;
   }
+  const found = list.find((it) => it.id.toLowerCase() === trimmed);
+  if (found) return found.id;
   return null;
 }
 
@@ -247,20 +285,87 @@ function createPromptSession({ input = process.stdin, output = process.stdout, i
   return { ask, close, isTTY: effectiveTTY };
 }
 
-export async function promptHarnessMenu({ session, output = process.stdout, json = false } = {}) {
+export async function promptHarnessMenu({ session, output = process.stdout, json = false, matrixPath, current } = {}) {
   const ownSession = !session;
   const activeSession = session || createPromptSession({ output });
+  const menuItems = getHarnessMenuItems(matrixPath);
   try {
     if (!json && output && typeof output.write === "function") {
       output.write("\nSelect target harness for NULLFORM WORKFLOW:\n");
-      for (const item of HARNESS_MENU_ITEMS) {
+      for (const item of menuItems) {
         output.write(`  ${item.index}) ${item.id.padEnd(10)} — ${item.label} (${item.description})\n`);
       }
     }
-    const answer = await activeSession.ask("Enter harness number (1-8) or name: ");
-    return resolveMenuSelection(answer);
+    const defHint = current ? ` [${current}]` : "";
+    const answer = await activeSession.ask(`Enter harness number (1-${menuItems.length}) or name${defHint}: `);
+    if (typeof answer !== "string") return null;
+    const trimmed = answer.trim();
+    if (trimmed === "..") return "..";
+    if (trimmed === "" && current) return current;
+    return resolveMenuSelection(trimmed, menuItems);
   } finally {
     if (ownSession) activeSession.close();
+  }
+}
+
+function cleanPromptInput(raw) {
+  return typeof raw === "string" ? raw.trim().toLowerCase() : null;
+}
+
+export async function promptFlowStep({ session, output = process.stdout, current = "quick" } = {}) {
+  if (output && typeof output.write === "function") {
+    output.write("\nSelect installation flow:\n");
+    output.write("  1) quick    — Standard installation (all slices S0..S4)\n");
+    output.write("  2) advanced — Choose individual slices (S0 fixed, S1..S4 toggle)\n");
+  }
+  const answer = cleanPromptInput(await session.ask(`Enter flow (1=quick, 2=advanced) [${current}]: `));
+  if (answer === null || ["q", "quit", "cancel", "n", "no"].includes(answer)) return null;
+  if (answer === "..") return "..";
+  if (answer === "y" || answer === "yes") return "quick_confirmed";
+  if (answer === "2" || answer === "advanced") return "advanced";
+  if (answer === "1" || answer === "quick" || answer === "") return "quick";
+  return current || "quick";
+}
+
+export const SLICES_CATALOG = Object.freeze([
+  { id: "S1", num: "1", label: "Quality gates & GATES docs" },
+  { id: "S2", num: "2", label: "Agent personas & roles" },
+  { id: "S3", num: "3", label: "Harness matrix & installer self" },
+  { id: "S4", num: "4", label: "Integration prompt & guide" },
+]);
+
+function renderSlicesMenu(output, set) {
+  output.write("\nArchitecture slices to install:\n");
+  output.write("  [*] S0: Core contracts & lanes (fixed)\n");
+  for (const s of SLICES_CATALOG) {
+    output.write(`  [${set.has(s.id) ? "x" : " "}] ${s.num}) ${s.id}: ${s.label}\n`);
+  }
+}
+
+function finalizeSlices(set) {
+  return ["S0", ...SLICES_CATALOG.map((s) => s.id).filter((id) => set.has(id))];
+}
+
+function applySliceToggle(set, answer) {
+  const matches = answer.match(/[1-4]/g) || [];
+  for (const m of matches) {
+    const id = `S${m}`;
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+  }
+}
+
+export async function promptSlicesStep({ session, output = process.stdout, activeSet } = {}) {
+  const set = activeSet || new Set(["S0", "S1", "S2", "S3", "S4"]);
+  const canWrite = output && typeof output.write === "function";
+  while (true) {
+    if (canWrite) renderSlicesMenu(output, set);
+    const answer = cleanPromptInput(await session.ask("Toggle slice numbers (1-4), 'all', or Enter to accept (.. for back): "));
+    if (answer === null || ["q", "quit", "cancel"].includes(answer)) return null;
+    if (answer === "..") return "..";
+    if (answer === "") return finalizeSlices(set);
+    if (answer === "all") return ["S0", "S1", "S2", "S3", "S4"];
+    applySliceToggle(set, answer);
   }
 }
 
@@ -271,6 +376,7 @@ export async function promptConfirmPlan(plan, { session, output = process.stdout
     if (!json && output && typeof output.write === "function") {
       output.write(`\nInstallation Plan Preview:\n`);
       output.write(`  Harness:      ${plan.harness}\n`);
+      if (plan.slices) output.write(`  Slices:       ${plan.slices.join(", ")}\n`);
       output.write(`  Target root:  ${plan.root}\n`);
       if (plan.projectRoot) output.write(`  Project root: ${plan.projectRoot}\n`);
       output.write(`  User home:    ${plan.userHome}\n`);
@@ -281,9 +387,10 @@ export async function promptConfirmPlan(plan, { session, output = process.stdout
       output.write(`  Removals:     ${removals.length}\n`);
       for (const r of removals) output.write(`    - ${r}\n`);
     }
-    const answer = await activeSession.ask("Proceed with installation? [y/N]: ");
+    const answer = await activeSession.ask("Proceed with installation? [y/N] (.. for back): ");
     if (typeof answer !== "string") return false;
     const norm = answer.trim().toLowerCase();
+    if (norm === "..") return "..";
     return norm === "y" || norm === "yes";
   } finally {
     if (ownSession) activeSession.close();
@@ -327,22 +434,21 @@ function emitJsonOrText(output, errOut, isJson, payload, textMsg, toStderr = tru
   else output.write(safeMsg);
 }
 
-const compactInstallationPlan = (plan) => plan ? {
-  harness: plan.harness, root: plan.root, userHome: plan.userHome,
-  ...(plan.projectRoot ? { projectRoot: plan.projectRoot } : {}),
-  ...(plan.hostHome ? { hostHome: plan.hostHome } : {}),
-  ...(plan.hostManifest ? { hostManifest: plan.hostManifest } : {}),
-  ...(plan.profile ? { profile: plan.profile } : {}),
-  ...(plan.activation ? { activation: plan.activation } : {}),
-  ...(plan.warnings?.length ? { warnings: plan.warnings } : {}),
-  dryRun: Boolean(plan.dryRun),
-  filesCount: Array.isArray(plan.filesToCopy) ? plan.filesToCopy.length : 0,
-  managedFilesCount: plan.managedFiles ? Object.keys(plan.managedFiles).length : 0,
-  adapters: plan.adapters || [],
-  ...(plan.replacedModules?.length ? { replacedModules: plan.replacedModules } : {}),
-  ...(plan.preservedAssets?.count ? { preservedAssets: plan.preservedAssets } : {}),
-  ...(plan.baselineRecorded !== undefined ? { baselineRecorded: plan.baselineRecorded } : {}),
-} : null;
+const OPTIONAL_PLAN_FIELDS = ["projectRoot", "hostHome", "hostManifest", "profile", "activation", "slices", "flow"];
+
+const compactInstallationPlan = (plan) => {
+  if (!plan) return null;
+  const out = { harness: plan.harness, root: plan.root, userHome: plan.userHome,
+    dryRun: Boolean(plan.dryRun),
+    filesCount: Array.isArray(plan.filesToCopy) ? plan.filesToCopy.length : 0,
+    managedFilesCount: plan.managedFiles ? Object.keys(plan.managedFiles).length : 0,
+    adapters: plan.adapters || [] };
+  for (const f of OPTIONAL_PLAN_FIELDS) if (plan[f]) out[f] = plan[f];
+  if (plan.replacedModules?.length) out.replacedModules = plan.replacedModules;
+  if (plan.preservedAssets?.count) out.preservedAssets = plan.preservedAssets;
+  if (plan.baselineRecorded !== undefined) out.baselineRecorded = plan.baselineRecorded;
+  return out;
+};
 
 function printInitSuccess(output, options, { ok, readiness, selectedHarness, savedState, statePath, plan, doctorResult }) {
   if (options.json) {
@@ -385,30 +491,136 @@ function printInitSuccess(output, options, { ok, readiness, selectedHarness, sav
   output.write(`  Readiness:  ${label}\n`);
 }
 
-async function resolveInitHarness(options, existingState, session, output, errOut, { env = process.env, userHome, projectRoot } = {}) {
-  // Precedence 1: Explicit --harness
+function formatDryRunPreview(previewPlan) {
+  return [
+    `[dry-run] Plan for NULLFORM WORKFLOW (${previewPlan.harness}):`,
+    `  Root:         ${previewPlan.root}`,
+    ...(previewPlan.projectRoot ? [`  Project root: ${previewPlan.projectRoot}`] : []),
+    `  User home:    ${previewPlan.userHome}`,
+    `  Files:        ${previewPlan.filesToCopy.length}`,
+    ...previewPlan.adapters.map((a) => `  Adapter:      ${a}`),
+    `  Removals:     ${(previewPlan.replacedModules || []).length}`,
+    ...(previewPlan.replacedModules || []).map((r) => `  Remove:       ${r}`),
+    ...(previewPlan.slices ? [`  Slices:       ${previewPlan.slices.join(", ")}`] : []),
+    ...(previewPlan.preservedAssets?.count ? [`  [WARN] preserved-assets: ${previewPlan.preservedAssets.count} preserved. ${previewPlan.preservedAssets.detail}`] : []),
+  ].join("\n") + "\n";
+}
+
+function resolveInstallPaths({ options, existingState, userHome, selectedHarness }) {
+  const isSameHarness = Boolean(existingState && existingState.harness === selectedHarness);
+  const targetRoot = options.root ? resolve(options.root)
+    : isSameHarness && existingState.root ? resolve(existingState.root)
+    : getDefaultRoot(selectedHarness, userHome, {});
+  const projectRoot = options.projectRoot ? resolve(options.projectRoot)
+    : isSameHarness && existingState.projectRoot ? resolve(existingState.projectRoot)
+    : selectedHarness === "cursor" ? resolve(process.cwd()) : null;
+  return { isSameHarness, targetRoot, projectRoot };
+}
+
+async function repickFlow(wizardState, session, output) {
+  const fRes = await promptFlowStep({ session, output, current: wizardState.flow });
+  if (!fRes || fRes === "..") return 1;
+  wizardState.flow = fRes;
+  return 0;
+}
+
+async function repickSlices(wizardState, session, output) {
+  const sRes = await promptSlicesStep({ session, output, activeSet: wizardState.activeSet });
+  if (!sRes || sRes === "..") return 1;
+  wizardState.slices = sRes;
+  return 0;
+}
+
+async function stepBackFromConfirm(wizardState, session, output) {
+  if (wizardState.flow === "advanced") {
+    const sRes = await promptSlicesStep({ session, output, activeSet: wizardState.activeSet });
+    if (!sRes) return 1;
+    if (sRes === "..") { if (await repickFlow(wizardState, session, output)) return 1; }
+    else wizardState.slices = sRes;
+  } else if (await repickFlow(wizardState, session, output)) return 1;
+  if (wizardState.flow === "advanced" && !wizardState.slices) {
+    if (await repickSlices(wizardState, session, output)) return 1;
+  } else if (wizardState.flow === "quick") wizardState.slices = ["S0", "S1", "S2", "S3", "S4"];
+  return 0;
+}
+
+function buildPreviewPlan(ctx, wizardState, paths) {
+  const { options, existingState, userHome, env, installFn } = ctx;
+  const selectedHarness = wizardState.harness;
+  const { isSameHarness, targetRoot, projectRoot } = resolveInstallPaths({ options, existingState, userHome, selectedHarness });
+  paths.targetRoot = targetRoot;
+  paths.projectRoot = projectRoot;
+  paths.profileOptions = {
+    hostHome: options.hostHome || (isSameHarness ? existingState.hostHome : undefined),
+    hostManifest: options.hostManifest || (isSameHarness ? existingState.hostManifest : undefined),
+    env,
+  };
+  paths.priorManaged = isSameHarness && existingState?.managedFiles ? existingState.managedFiles : undefined;
+  const plan = installFn({ harness: selectedHarness, root: targetRoot, ...(projectRoot ? { projectRoot } : {}),
+    userHome, dryRun: true, ...(paths.priorManaged ? { managedFiles: paths.priorManaged } : {}),
+    recover: !options.dryRun, slices: wizardState.slices, flow: wizardState.flow, ...paths.profileOptions });
+  plan.slices = wizardState.slices;
+  plan.flow = wizardState.flow;
+  if (!options.dryRun) {
+    const restored = readInstallationState(userHome);
+    paths.priorManaged = restored?.harness === selectedHarness && resolve(restored.root) === resolve(targetRoot) ? restored.managedFiles : undefined;
+  }
+  return plan;
+}
+
+async function runPreviewLoop({ options, existingState, userHome, env, session, output, errOut, installFn, wizardState, paths, isHeadless }) {
+  const ctx = { options, existingState, userHome, env, installFn };
+  while (true) {
+    let plan;
+    try {
+      plan = buildPreviewPlan(ctx, wizardState, paths);
+    } catch (err) {
+      const safeMsg = sanitizeError(err.message);
+      emitJsonOrText(output, errOut, options.json, { ok: false, stage: "preflight", error: "install_failed", detail: safeMsg }, `Error: ${safeMsg}\n`);
+      return { error: 1 };
+    }
+    const exit = await settlePreview(plan, { options, session, output, errOut, wizardState, isHeadless });
+    if (exit) return exit;
+  }
+}
+
+async function settlePreview(plan, { options, session, output, errOut, wizardState, isHeadless }) {
+  if (options.dryRun) {
+    emitJsonOrText(output, errOut, options.json, { ok: true, ...compactInstallationPlan(plan) }, formatDryRunPreview(plan), false);
+    return { plan, preview: true };
+  }
+  if (isHeadless) {
+    emitJsonOrText(output, errOut, options.json, { ok: true, ...compactInstallationPlan(plan) }, formatDryRunPreview(plan), false);
+    if (!options.yes) return { error: 1 };
+    return { plan, headless: true };
+  }
+  if (options.yes || wizardState.preConfirmed) return { plan };
+  const confirmed = await promptConfirmPlan(plan, { session, output, json: options.json });
+  if (confirmed === true) return { plan };
+  if (confirmed !== "..") {
+    emitJsonOrText(output, errOut, options.json, { ok: false, cancelled: true, error: "cancelled", detail: "Installation cancelled by operator." }, "Installation cancelled by operator.\n");
+    return { error: 1 };
+  }
+  if (await stepBackFromConfirm(wizardState, session, output)) return { error: 1 };
+  return null;
+}
+
+function resolveInitialHarness({ options, existingState, userHome, projectRoot, env, isHeadless, output, errOut }) {
   if (options.harness !== null && options.harness !== undefined) {
     if (!HARNESS_CHOICES.includes(options.harness)) {
       const msg = `Invalid --harness "${options.harness}". Choose one of: ${HARNESS_CHOICES.join(", ")}`;
       emitJsonOrText(output, errOut, options.json, { ok: false, error: "invalid_harness", detail: msg }, `Error: ${msg}\n`);
       return { error: 2 };
     }
-    return { harness: options.harness };
+    return { harness: options.harness, fixed: true };
   }
-
-  // Precedence 2: Stable saved installation
   if (existingState?.harness && HARNESS_CHOICES.includes(existingState.harness)) {
-    return { harness: existingState.harness };
+    return { harness: existingState.harness, fixed: false };
   }
-
-  // Precedence 3: Single known candidate
-  const candidates = discoverCandidates({ userHome, projectRoot: options.projectRoot || projectRoot, env });
+  const candidates = discoverCandidates({ userHome, projectRoot, env });
   if (candidates.length === 1) {
-    return { harness: candidates[0] };
+    return { harness: candidates[0], fixed: false };
   }
-
-  // Precedence 4: Ambiguity or no candidate
-  const isHeadless = Boolean(options.yes || !session?.isTTY);
   if (isHeadless) {
     if (candidates.length > 1) {
       const msg = `Multiple candidate harnesses detected (${candidates.join(", ")}). Specify --harness <name> to proceed. Choose one of: ${HARNESS_CHOICES.join(", ")}`;
@@ -416,17 +628,49 @@ async function resolveInitHarness(options, existingState, session, output, errOu
       return { error: 2 };
     }
     const msg = `No supported harness detected. Specify --harness <name> to proceed. Choose one of: ${HARNESS_CHOICES.join(", ")}`;
-    emitJsonOrText(output, errOut, options.json, { ok: false, error: "missing_harness", detail: msg }, `Error: ${msg}\n`);
+      emitJsonOrText(output, errOut, options.json, { ok: false, error: "missing_harness", detail: msg }, `Error: ${msg}\n`);
     return { error: 2 };
   }
+  return { harness: null, fixed: false };
+}
 
-  const selected = await promptHarnessMenu({ session, output, json: options.json });
-  if (!selected) {
-    const msg = "Interactive harness selection cancelled or absent in non-interactive mode.";
-    emitJsonOrText(output, errOut, options.json, { ok: false, cancelled: true, error: "cancelled", detail: msg }, `Error: ${msg}\n`);
-    return { error: 1 };
+async function runHarnessStep(w, ctx) {
+  const choice = await promptHarnessMenu({ session: ctx.session, output: ctx.output, json: ctx.json, current: w.harness });
+  if (!choice || choice === "..") return { error: 1 };
+  w.harness = choice;
+  return { next: "FLOW" };
+}
+
+async function runFlowStep(w, ctx) {
+  const flowRes = await promptFlowStep({ session: ctx.session, output: ctx.output, current: w.flow });
+  if (flowRes === null) return { error: 1 };
+  if (flowRes === "..") return { next: ctx.fixedHarness ? "FLOW" : "HARNESS" };
+  if (flowRes === "quick_confirmed") { w.flow = "quick"; w.preConfirmed = true; return { next: "DONE" }; }
+  w.flow = flowRes;
+  return { next: w.flow === "advanced" ? "SLICES" : "DONE" };
+}
+
+async function runSlicesStep(w, ctx) {
+  const slicesRes = await promptSlicesStep({ session: ctx.session, output: ctx.output, activeSet: w.activeSet });
+  if (slicesRes === null) return { error: 1 };
+  return { next: slicesRes === ".." ? "FLOW" : "DONE" };
+}
+
+const WIZARD_STEPS = { HARNESS: runHarnessStep, FLOW: runFlowStep, SLICES: runSlicesStep };
+
+async function runInteractiveWizard({ initialHarness, fixedHarness, session, output, json }) {
+  const w = { harness: initialHarness, flow: "quick", activeSet: new Set(["S0", "S1", "S2", "S3", "S4"]), preConfirmed: false };
+  const ctx = { fixedHarness, session, output, json };
+  let step = w.harness ? "FLOW" : "HARNESS";
+  while (step !== "DONE") {
+    const res = await WIZARD_STEPS[step](w, ctx);
+    if (res.error) return res;
+    step = res.next;
   }
-  return { harness: selected };
+  const slices = w.flow === "quick"
+    ? ["S0", "S1", "S2", "S3", "S4"]
+    : ["S0", ...SLICES_CATALOG.map((s) => s.id).filter((id) => w.activeSet.has(id))];
+  return { harness: w.harness, flow: w.flow, slices, preConfirmed: w.preConfirmed, activeSet: w.activeSet };
 }
 
 export async function runInit(options = {}, deps = {}) {
@@ -449,79 +693,46 @@ export async function runInit(options = {}, deps = {}) {
 
   const session = createPromptSession({ input: deps.stdin || process.stdin, output: options.json ? null : output, isTTY: deps.isTTY });
   try {
-    const harnessRes = await resolveInitHarness(options, existingState, session, output, errOut, {
-      env,
-      userHome,
-      projectRoot: options.projectRoot,
+    const isHeadless = Boolean(options.interactive === false || !session?.isTTY);
+    const initialRes = resolveInitialHarness({
+      options, existingState, userHome, projectRoot: options.projectRoot, env, isHeadless, output, errOut,
     });
-    if (harnessRes.error) return harnessRes.error;
-    const selectedHarness = harnessRes.harness;
+    if (initialRes.error) return initialRes.error;
 
-    const isSameHarness = Boolean(existingState && existingState.harness === selectedHarness);
-    const profileOptions = {
-      hostHome: options.hostHome || (isSameHarness ? existingState.hostHome : undefined),
-      hostManifest: options.hostManifest || (isSameHarness ? existingState.hostManifest : undefined),
-      env,
-    };
-    const targetRoot = options.root
-      ? resolve(options.root)
-      : isSameHarness && existingState.root
-        ? resolve(existingState.root)
-        : getDefaultRoot(selectedHarness, userHome, profileOptions);
-    const projectRoot = options.projectRoot
-      ? resolve(options.projectRoot)
-      : isSameHarness && existingState.projectRoot
-        ? resolve(existingState.projectRoot)
-        : selectedHarness === "cursor"
-          ? resolve(process.cwd())
-          : null;
-    let priorManaged = isSameHarness && existingState?.managedFiles ? existingState.managedFiles : undefined;
-
-    const runInstall = (dryRun) => installFn({
-      harness: selectedHarness, root: targetRoot, ...(projectRoot ? { projectRoot } : {}),
-      userHome, dryRun, ...(priorManaged ? { managedFiles: priorManaged } : {}),
-      recover: !options.dryRun,
-      ...profileOptions,
-    });
-
-    let previewPlan;
-    try {
-      previewPlan = runInstall(true);
-      if (!options.dryRun) {
-        const restored = readInstallationState(userHome);
-        priorManaged = restored?.harness === selectedHarness && resolve(restored.root) === resolve(targetRoot) ? restored.managedFiles : undefined;
-      }
-    } catch (err) {
-      const safeMsg = sanitizeError(err.message);
-      emitJsonOrText(output, errOut, options.json, { ok: false, stage: "preflight", error: "install_failed", detail: safeMsg }, `Error: ${safeMsg}\n`);
-      return 1;
-    }
-
-    if (options.dryRun) {
-      const lines = [
-        `[dry-run] Plan for NULLFORM WORKFLOW (${previewPlan.harness}):`,
-        `  Root:         ${previewPlan.root}`,
-        ...(previewPlan.projectRoot ? [`  Project root: ${previewPlan.projectRoot}`] : []),
-        `  User home:    ${previewPlan.userHome}`,
-        `  Files:        ${previewPlan.filesToCopy.length}`,
-        ...previewPlan.adapters.map((a) => `  Adapter:      ${a}`),
-        `  Removals:     ${(previewPlan.replacedModules || []).length}`,
-        ...(previewPlan.replacedModules || []).map((r) => `  Remove:       ${r}`),
-        ...(previewPlan.preservedAssets?.count ? [`  [WARN] preserved-assets: ${previewPlan.preservedAssets.count} preserved. ${previewPlan.preservedAssets.detail}`] : []),
-      ].join("\n") + "\n";
-      emitJsonOrText(output, errOut, options.json, { ok: true, ...compactInstallationPlan(previewPlan) }, lines, false);
-      return 0;
-    }
-
-    if (!options.yes) {
-      const confirmed = await promptConfirmPlan(previewPlan, { session, output, json: options.json });
-      if (!confirmed) {
-        emitJsonOrText(output, errOut, options.json, { ok: false, cancelled: true, error: "cancelled", detail: "Installation cancelled by operator." }, "Installation cancelled by operator.\n");
-        return 1;
+    let wizardState;
+    if (isHeadless) {
+      wizardState = {
+        harness: initialRes.harness,
+        flow: "quick",
+        slices: ["S0", "S1", "S2", "S3", "S4"],
+        preConfirmed: false,
+        isHeadless: true,
+      };
+    } else {
+      wizardState = await runInteractiveWizard({
+        initialHarness: initialRes.harness,
+        fixedHarness: initialRes.fixed,
+        session,
+        output,
+        json: options.json,
+      });
+      if (wizardState.error) {
+        emitJsonOrText(output, errOut, options.json, { ok: false, cancelled: true, error: "cancelled", detail: "Interactive selection cancelled." }, "Installation cancelled by operator.\n");
+        return wizardState.error;
       }
     }
 
-    let plan;
+    const paths = { targetRoot: null, projectRoot: null, profileOptions: null, priorManaged: undefined };
+    const preview = await runPreviewLoop({ options, existingState, userHome, env, session, output, errOut, installFn, wizardState, paths, isHeadless });
+    if (preview.error) return preview.error;
+    if (preview.preview) return 0;
+    let previewPlan = preview.plan;
+
+
+    const selectedHarness = wizardState.harness;
+    const { targetRoot, projectRoot, profileOptions, priorManaged } = paths;
+    previewPlan.slices = wizardState.slices;
+    let plan = null;
     let lock = null;
     let journal = null;
     try {
@@ -540,6 +751,7 @@ export async function runInit(options = {}, deps = {}) {
         harness: selectedHarness, root: targetRoot, ...(projectRoot ? { projectRoot } : {}),
         userHome, dryRun: false, ...(priorManaged ? { managedFiles: priorManaged } : {}),
         ...profileOptions, hostHome: previewPlan.hostHome || profileOptions.hostHome,
+        slices: wizardState.slices, flow: wizardState.flow,
         lock, journal, deferLock: true,
       });
     } catch (err) {
@@ -787,6 +999,15 @@ export async function runQualityCommand(qualityArgs = [], deps = {}) {
   const output = deps.stdout || process.stdout;
   const errOut = deps.stderr || process.stderr;
   try {
+    if (qualityArgs[0] === "code-size") {
+      let runCodeSizeCli;
+      if (deps.runCodeSizeCli) runCodeSizeCli = deps.runCodeSizeCli;
+      else {
+        const mod = await import("../tools/code-size.mjs");
+        runCodeSizeCli = mod.runCodeSizeCli || mod.main;
+      }
+      return runCodeSizeCli(qualityArgs.slice(1), { stdout: output, stderr: errOut });
+    }
     let runQualityCli;
     if (deps.runQualityCli) runQualityCli = deps.runQualityCli;
     else {

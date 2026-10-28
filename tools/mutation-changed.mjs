@@ -12,8 +12,6 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-
 export function parseCliArgs(argv = process.argv.slice(2)) {
   const { values } = parseArgs({
     args: argv,
@@ -25,6 +23,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
       threshold: { type: "string", default: "80" },
       "dry-run": { type: "boolean", default: false },
       files: { type: "string" },
+      root: { type: "string" },
+      suites: { type: "string", default: "tools/tests" },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: false,
@@ -38,11 +38,13 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     threshold: Number(values.threshold ?? 80),
     dryRun: Boolean(values["dry-run"]),
     files: values.files ?? null,
+    root: values.root ?? null,
+    suites: values.suites ?? "tools/tests",
     help: Boolean(values.help),
   };
 }
-import { gitRevParse, resolveBaseRef, gitDiff, getChangedFiles, getChangedLines, findMatchingSuite, filterCandidateFiles } from "./changed-scope.mjs";
-export { gitRevParse, resolveBaseRef, gitDiff, getChangedFiles, getChangedLines, findMatchingSuite, filterCandidateFiles };
+import { gitRevParse, resolveBaseRef, gitDiff, getChangedFiles, getChangedLines, findMatchingSuite, filterCandidateFiles, resolveRoot } from "./changed-scope.mjs";
+export { gitRevParse, resolveBaseRef, gitDiff, getChangedFiles, getChangedLines, findMatchingSuite, filterCandidateFiles, resolveRoot };
 
 export function main() {
   const flags = parseCliArgs();
@@ -57,16 +59,18 @@ Options:
   --max-mutants <n>    Max mutants per file (default: 10)
   --threshold <n>      Minimum mutation score percent (default: 80)
   --files <list>       Explicit comma-separated file list (bypasses git diff)
+  --root <dir>         Repository root path (default: repo root)
+  --suites <dir>       Test suites directory (default: tools/tests)
   --dry-run            Show planned mutation targets without running tests
   --help, -h           Show this help
 `);
     process.exit(0);
   }
 
-  const { rawFiles, baseRef } = collectRawFiles(flags);
+  const root = resolveRoot(flags.root);
+  const { rawFiles, baseRef } = collectRawFiles(flags, root);
 
-  const candidateFiles = filterCandidateFiles(ROOT, rawFiles);
-
+  const candidateFiles = filterCandidateFiles(root, rawFiles);
   if (candidateFiles.length === 0) {
     console.log("mutation-changed: no changed *.mjs source files detected. Mutation gate PASS (fast exit).");
     process.exit(0);
@@ -89,23 +93,23 @@ Options:
   const passedFiles = [];
 
   for (const target of targets) {
-    if (runFileGate(target, flags, baseRef)) passedFiles.push(target);
+    if (runFileGate(target, flags, baseRef, root)) passedFiles.push(target);
     else failedFiles.push({ target, exitCode: 1 });
   }
   reportAggregate(targets, passedFiles, failedFiles);
 }
 
-function collectRawFiles(flags) {
+function collectRawFiles(flags, root = resolveRoot(flags?.root)) {
   if (flags.files) {
     return { rawFiles: flags.files.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean), baseRef: null };
   }
-  const baseRef = resolveBaseRef(ROOT, flags.base);
+  const baseRef = resolveBaseRef(root, flags.base);
   if (!baseRef) {
     console.log("mutation-changed: no base ref resolvable; skipping mutation gate.");
     process.exit(0);
   }
   console.log(`mutation-changed: computing changed files vs ${baseRef}...${flags.head}`);
-  const diff = getChangedFiles(ROOT, baseRef, flags.head);
+  const diff = getChangedFiles(root, baseRef, flags.head);
   if (diff === null) {
     console.log("mutation-changed: git diff failed or unavailable; skipping mutation gate.");
     process.exit(0);
@@ -134,18 +138,19 @@ function reportAggregate(targets, passedFiles, failedFiles) {
   }
   process.exit(1);
 }
-export function runFileGate(target, flags, baseRef) {
-  const suite = findMatchingSuite(ROOT, target);
+export function runFileGate(target, flags, baseRef, root = resolveRoot(flags?.root)) {
+  const suite = findMatchingSuite(root, target, flags?.suites || "tools/tests");
   const fallbackTrue = process.platform === "win32" ? "node -e 'process.exit(0)'" : "true";
   const testCmd = suite ? `node --test ${suite}` : fallbackTrue;
   console.log(`\n>>> Mutating ${target} using cmd "${testCmd}"`);
-  const args = ["tools/mutation-test.mjs", "--target", target, "--cmd", testCmd,
+  const mutationScript = fileURLToPath(new URL("mutation-test.mjs", import.meta.url));
+  const args = [mutationScript, "--target", target, "--cmd", testCmd,
     "--max-mutants", String(flags.maxMutants), "--threshold", String(flags.threshold), "--check"];
   if (baseRef) {
-    const changedLines = getChangedLines(ROOT, baseRef, flags.head, target);
+    const changedLines = getChangedLines(root, baseRef, flags.head, target);
     if (changedLines && changedLines.length > 0) args.push("--lines", changedLines.join(","));
   }
-  const result = spawnSync(process.execPath, args, { cwd: ROOT, stdio: "inherit", windowsHide: true });
+  const result = spawnSync(process.execPath, args, { cwd: root, stdio: "inherit", windowsHide: true });
   return result.status === 0;
 }
 

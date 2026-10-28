@@ -592,8 +592,7 @@ export function parseArgs(argv) {
   return args;
 }
 
-function printUsage() {
-  console.log(`tools/code-size.mjs — контроль размера исходного кода и функций
+const USAGE = `tools/code-size.mjs — контроль размера исходного кода и функций
 
 Команды:
   check     Проверить дерево на превышения порогов и дрейф от baseline (exit 1 при нарушении)
@@ -602,7 +601,10 @@ function printUsage() {
 
 Опции: --root/-r <dir>, --baseline/-b <file>, --json, --help/-h
 Escape-люки (подробности — в заголовке файла): defer: в первых 50 строках, code-size:allow на функции.
-`);
+`;
+
+function printUsage() {
+  console.log(USAGE.trimEnd());
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -711,6 +713,16 @@ export function main(argv = process.argv.slice(2)) {
   console.error(`code-size: неизвестная команда '${command}'`);
   printUsage();
   return 2;
+}
+
+export function runCodeSizeCli(argv = process.argv.slice(2), io = {}) {
+  const out = io.stdout || process.stdout;
+  const args = parseArgs(argv);
+  if (args.help || !args._[0]) {
+    out.write(USAGE);
+    return 0;
+  }
+  return main(argv);
 }
 
 if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {

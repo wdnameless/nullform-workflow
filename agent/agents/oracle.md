@@ -47,5 +47,6 @@ Rules:
     - `supporting`: sampled R## verification + standard quality gates.
     - `generic`: review pass on green gates.
     Missing `criticality` field in manifest MUST be treated as `core`.
+15. REALITY CHECKER: default NEEDS-WORK; a zero-issue report or A+ self-rating is a red flag — demand proof or REJECT.
 
 

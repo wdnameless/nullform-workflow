@@ -23,7 +23,9 @@ import {
   getChangedFiles,
   getChangedLines,
   findMatchingSuite,
+  runFileCoverage,
 } from "../coverage-changed.mjs";
+import { runQualityCommand } from "../../bin/nullform.mjs";
 
 function makeGitRepo() {
   const root = mkdtempSync(join(tmpdir(), "cov-changed-"));
@@ -178,7 +180,12 @@ test("parseCliArgs: provides correct defaults and parses overrides", () => {
   assert.equal(def.head, "HEAD");
   assert.equal(def.dryRun, false);
   assert.equal(def.base, null);
+  assert.equal(def.root, null);
+  assert.equal(def.suites, "tools/tests");
 
+  const withRootSuites = parseCliArgs(["--root", "/custom/path", "--suites", "custom/tests"]);
+  assert.equal(withRootSuites.root, "/custom/path");
+  assert.equal(withRootSuites.suites, "custom/tests");
   const custom = parseCliArgs([
     "--base",
     "origin/main",
@@ -252,4 +259,34 @@ test("findMatchingSuite: resolves direct and stripped candidates", () => {
   } finally {
     cleanup();
   }
+});
+
+test("runFileCoverage: handles foreign tree without tools/tests directory", () => {
+  const { root, git, cleanup } = makeGitRepo();
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "sample.mjs"), "export const hello = 'world';\n");
+    git("add", "-A");
+    git("commit", "-qm", "foreign project init");
+
+    const verdict = runFileCoverage(root, "src/sample.mjs", { threshold: 50, head: "HEAD", suites: "tests" }, null);
+    assert.ok(verdict);
+    assert.equal(verdict.target, "src/sample.mjs");
+    assert.ok(typeof verdict.passed === "boolean");
+  } finally {
+    cleanup();
+  }
+});
+
+test("runQualityCommand: passthrough to code-size exits 0 on --help", async () => {
+  let stdoutData = "";
+  const mockStdout = {
+    write(chunk) {
+      stdoutData += chunk;
+      return true;
+    },
+  };
+  const code = await runQualityCommand(["code-size", "--help"], { stdout: mockStdout });
+  assert.equal(code, 0);
+  assert.ok(stdoutData.includes("code-size"));
 });

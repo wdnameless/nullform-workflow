@@ -14,10 +14,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { generateMutants } from "./mutation-test.mjs";
-import { gitRevParse, resolveBaseRef, gitDiff, getChangedFiles, getChangedLines, findMatchingSuite, filterCandidateFiles } from "./changed-scope.mjs";
-export { gitRevParse, resolveBaseRef, gitDiff, getChangedFiles, getChangedLines, findMatchingSuite, filterCandidateFiles };
-
-const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
+import { gitRevParse, resolveBaseRef, gitDiff, getChangedFiles, getChangedLines, findMatchingSuite, filterCandidateFiles, resolveRoot } from "./changed-scope.mjs";
+export { gitRevParse, resolveBaseRef, gitDiff, getChangedFiles, getChangedLines, findMatchingSuite, filterCandidateFiles, resolveRoot };
 
 export function parseCliArgs(argv = process.argv.slice(2)) {
   const { values } = parseArgs({
@@ -29,11 +27,12 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
       threshold: { type: "string", default: "50" },
       "dry-run": { type: "boolean", default: false },
       files: { type: "string" },
+      root: { type: "string" },
+      suites: { type: "string", default: "tools/tests" },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: false,
   });
-
   return {
     base: values.base ?? null,
     head: values.head ?? "HEAD",
@@ -41,6 +40,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     threshold: Number(values.threshold ?? 50),
     dryRun: Boolean(values["dry-run"]),
     files: values.files ?? null,
+    root: values.root ?? null,
+    suites: values.suites ?? "tools/tests",
     help: Boolean(values.help),
   };
 }
@@ -186,7 +187,7 @@ function mutantsOnLinesSync(root, target, changedLines) {
 }
 
 export function runFileCoverage(root, target, flags, baseRef) {
-  const suite = findMatchingSuite(root, target);
+  const suite = findMatchingSuite(root, target, flags?.suites || "tools/tests");
   const changedLines = baseRef
     ? getChangedLines(root, baseRef, flags.head, target) || []
     : [];
@@ -248,18 +249,18 @@ export function runFileCoverage(root, target, flags, baseRef) {
   return { passed, percent: stats.percent, target, stats };
 }
 
-function collectRawFiles(flags) {
+function collectRawFiles(flags, root = resolveRoot(flags?.root)) {
   if (flags.files) {
     return { rawFiles: flags.files.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean),
-      baseRef: flags.base ? resolveBaseRef(ROOT, flags.base) : null };
+      baseRef: flags.base ? resolveBaseRef(root, flags.base) : null };
   }
-  const baseRef = resolveBaseRef(ROOT, flags.base);
+  const baseRef = resolveBaseRef(root, flags.base);
   if (!baseRef) {
     console.log("coverage-changed: no base ref resolvable; skipping coverage gate.");
     process.exit(0);
   }
   console.log(`coverage-changed: computing changed files vs ${baseRef}...${flags.head}`);
-  const diff = getChangedFiles(ROOT, baseRef, flags.head);
+  const diff = getChangedFiles(root, baseRef, flags.head);
   if (diff === null) {
     console.log("coverage-changed: git diff failed or unavailable; skipping coverage gate.");
     process.exit(0);
@@ -296,6 +297,8 @@ export function main() {
     console.log(`Usage: node tools/coverage-changed.mjs [options]
 
 Options:
+  --root <dir>         Repository root path (default: repo root)
+  --suites <dir>       Test suites directory (default: tools/tests)
   --base <ref>         Base Git reference for diff
   --head <ref>         Head Git reference for diff (default: HEAD)
   --max-files <n>      Max changed files to check coverage (default: 10)
@@ -307,10 +310,10 @@ Options:
     process.exit(0);
   }
 
-  const { rawFiles, baseRef } = collectRawFiles(flags);
+  const root = resolveRoot(flags.root);
+  const { rawFiles, baseRef } = collectRawFiles(flags, root);
 
-  const candidateFiles = filterCandidateFiles(ROOT, rawFiles);
-
+  const candidateFiles = filterCandidateFiles(root, rawFiles);
   if (candidateFiles.length === 0) {
     console.log("coverage-changed: no changed *.mjs source files detected. Coverage gate PASS (fast exit).");
     process.exit(0);
@@ -333,7 +336,7 @@ Options:
   const passedFiles = [];
 
   for (const target of targets) {
-    const result = runFileCoverage(ROOT, target, flags, baseRef);
+    const result = runFileCoverage(root, target, flags, baseRef);
     if (result.passed) {
       passedFiles.push(target);
     } else {

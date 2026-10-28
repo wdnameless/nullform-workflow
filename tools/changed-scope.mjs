@@ -9,7 +9,13 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export function resolveRoot(explicit) {
+  if (explicit) return resolve(explicit);
+  return resolve(fileURLToPath(new URL("..", import.meta.url)));
+}
 
 export function gitRevParse(root, ref) {
   try {
@@ -85,23 +91,23 @@ export function getChangedLines(root, baseRef, headRef, file) {
   return lines;
 }
 
-export function findMatchingSuite(root, targetFile) {
+export function findMatchingSuite(root, targetFile, suitesDir = "tools/tests") {
   const norm = targetFile.replace(/\\/g, "/");
   const base = basename(norm, ".mjs");
   const dir = dirname(norm);
 
   const candidates = [
-    join(root, "tools", "tests", `${base}.test.mjs`),
+    join(root, suitesDir, `${base}.test.mjs`),
     join(root, "tests", `${base}.test.mjs`),
     join(root, dir, "tests", `${base}.test.mjs`),
     join(root, dir, `${base}.test.mjs`),
-    join(root, "tools", "tests", `u-${base}.test.mjs`),
-    join(root, "tools", "tests", `p-${base}.test.mjs`),
+    join(root, suitesDir, `u-${base}.test.mjs`),
+    join(root, suitesDir, `p-${base}.test.mjs`),
   ];
 
   const stripped = base.replace(/^(workflow|dashboard|bench)-/, "");
   if (stripped !== base) {
-    candidates.push(join(root, "tools", "tests", `${stripped}.test.mjs`));
+    candidates.push(join(root, suitesDir, `${stripped}.test.mjs`));
   }
 
   for (const c of candidates) {
@@ -110,13 +116,13 @@ export function findMatchingSuite(root, targetFile) {
     }
   }
 
-  const testsDir = join(root, "tools", "tests");
+  const testsDir = join(root, suitesDir);
   if (existsSync(testsDir)) {
     try {
       const files = readdirSync(testsDir);
       const match = files.find((f) => f.endsWith(".test.mjs") && f.includes(base));
       if (match) {
-        return `tools/tests/${match}`;
+        return relative(root, join(testsDir, match)).replace(/\\/g, "/");
       }
     } catch {}
   }

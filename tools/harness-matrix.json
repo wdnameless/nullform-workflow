@@ -1,0 +1,188 @@
+[
+  { "_comment": "MIT idea credit: agency-agents tools.json (harness capability matrix)" },
+  {
+    "id": "claude",
+    "label": "Claude Code",
+    "description": "~/.claude/CLAUDE.md",
+    "detect": {
+      "env": "CLAUDE_CONFIG_DIR",
+      "file": ".claude",
+      "cmd": "claude"
+    },
+    "install": {
+      "userHome": ".claude",
+      "projectPaths": [
+        "CLAUDE.md"
+      ]
+    },
+    "scopes": [
+      "user",
+      "project"
+    ],
+    "runtime": "verified"
+  },
+  {
+    "id": "codex",
+    "label": "OpenAI Codex",
+    "description": "~/.codex/AGENTS.md",
+    "detect": {
+      "env": "CODEX_HOME",
+      "file": ".codex",
+      "cmd": "codex"
+    },
+    "install": {
+      "userHome": ".codex",
+      "projectPaths": [
+        "AGENTS.md"
+      ]
+    },
+    "scopes": [
+      "user",
+      "project"
+    ],
+    "runtime": "verified"
+  },
+  {
+    "id": "opencode",
+    "label": "OpenCode",
+    "description": "Native configuration and adaptive AGENTS.md",
+    "detect": {
+      "env": "OPENCODE_CONFIG_DIR",
+      "file": ".config/opencode",
+      "cmd": "opencode"
+    },
+    "install": {
+      "userHome": ".config/opencode",
+      "projectPaths": [
+        "AGENTS.md",
+        "opencode.json",
+        "opencode.jsonc"
+      ]
+    },
+    "scopes": [
+      "user",
+      "project"
+    ],
+    "runtime": "verified"
+  },
+  {
+    "id": "cursor",
+    "label": "Cursor",
+    "description": "<project>/.cursor/rules/00-workflow.mdc (project-scoped)",
+    "detect": {
+      "env": null,
+      "file": ".cursor",
+      "cmd": "cursor"
+    },
+    "install": {
+      "userHome": ".cursor",
+      "projectPaths": [
+        ".cursor/rules/00-workflow.mdc"
+      ]
+    },
+    "scopes": [
+      "project"
+    ],
+    "runtime": "verified"
+  },
+  {
+    "id": "omp",
+    "label": "Oh My Pi (OMP)",
+    "description": "~/.omp/agent & ~/.agents/skills",
+    "detect": {
+      "env": "OMP_CONFIG_DIR",
+      "file": ".omp",
+      "cmd": "omp"
+    },
+    "install": {
+      "userHome": ".omp/agent",
+      "projectPaths": []
+    },
+    "scopes": [
+      "user"
+    ],
+    "runtime": "verified"
+  },
+  {
+    "id": "openclaw",
+    "label": "OpenClaw",
+    "description": "Native workspace and adaptive AGENTS.md",
+    "detect": {
+      "env": "OPENCLAW_STATE_DIR",
+      "file": ".openclaw",
+      "cmd": "openclaw"
+    },
+    "install": {
+      "userHome": ".openclaw",
+      "projectPaths": [
+        "AGENTS.md",
+        "openclaw.json"
+      ]
+    },
+    "scopes": [
+      "user",
+      "project"
+    ],
+    "runtime": "verified"
+  },
+  {
+    "id": "hermes",
+    "label": "Hermes Agent",
+    "description": "Selected profile: one native auto-load quality skill",
+    "detect": {
+      "env": "HERMES_HOME",
+      "file": ".hermes",
+      "cmd": "hermes"
+    },
+    "install": {
+      "userHome": ".hermes",
+      "projectPaths": [
+        "AGENTS.md"
+      ]
+    },
+    "scopes": [
+      "user",
+      "project"
+    ],
+    "runtime": "verified"
+  },
+  {
+    "id": "openhuman",
+    "label": "OpenHuman",
+    "description": "Adaptive AGENTS.md",
+    "detect": {
+      "env": null,
+      "file": ".openhuman",
+      "cmd": "openhuman"
+    },
+    "install": {
+      "userHome": ".openhuman",
+      "projectPaths": [
+        "AGENTS.md"
+      ]
+    },
+    "scopes": [
+      "user",
+      "project"
+    ],
+    "runtime": "unverified"
+  },
+  {
+    "id": "custom",
+    "label": "Custom",
+    "description": "Operator-declared manifest and instructions file",
+    "detect": {
+      "env": null,
+      "file": null,
+      "cmd": null
+    },
+    "install": {
+      "userHome": ".nullform/custom",
+      "projectPaths": []
+    },
+    "scopes": [
+      "project"
+    ],
+    "runtime": "declared"
+  }
+]

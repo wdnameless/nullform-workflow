@@ -51,6 +51,18 @@ export const DEFAULT_THRESHOLDS = { minLines: 10, failLines: 35 };
 export { DEFAULT_SCOPE, globToRegex, parseArgs };
 export const DEFAULT_BASELINE_FILE = ".clone-baseline.json";
 
+export function loadScope(root) {
+  const configFile = join(root, ".clone.json");
+  if (existsSync(configFile)) {
+    try {
+      const data = JSON.parse(readFileSync(configFile, "utf8").replace(/^\uFEFF/, ""));
+      if (Array.isArray(data?.scope)) {
+        return data.scope;
+      }
+    } catch {}
+  }
+  return DEFAULT_SCOPE;
+}
 function resolveThresholds(options = {}) {
   const minLines = options.minLines ?? options.thresholds?.minLines ?? DEFAULT_THRESHOLDS.minLines;
   const failLines = options.failLines ?? options.thresholds?.failLines ?? DEFAULT_THRESHOLDS.failLines;
@@ -163,7 +175,7 @@ export function coverage(clones, totalLines) {
  */
 export function scanClonesWithDetails(root, options = {}) {
   const minLines = options.minLines ?? options.thresholds?.minLines ?? DEFAULT_THRESHOLDS.minLines;
-  const scope = options.scope || DEFAULT_SCOPE;
+  const scope = options.scope || loadScope(root);
   const filesList = options.files || options.filesList || collectFiles(root, scope);
 
   const fileData = new Map();

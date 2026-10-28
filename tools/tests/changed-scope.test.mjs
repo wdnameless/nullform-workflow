@@ -12,12 +12,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   resolveBaseRef,
+  resolveRoot,
   gitDiff,
   getChangedFiles,
   getChangedLines,
   findMatchingSuite,
   filterCandidateFiles,
 } from "../changed-scope.mjs";
+import { loadScope } from "../clone-coverage.mjs";
 
 function makeGitRepo() {
   const root = mkdtempSync(join(tmpdir(), "changed-scope-"));
@@ -146,6 +148,50 @@ test("resolveBaseRef: env fallbacks and failure branches", () => {
     assert.strictEqual(gitDiff(root, ["--not-a-flag", "???"]), null);
   } finally {
     process.env = saved;
+    cleanup();
+  }
+});
+
+test("resolveRoot: explicit path or default script-parent", () => {
+  const root = resolveRoot();
+  assert.ok(root && typeof root === "string");
+  const explicit = resolveRoot("./fixtures");
+  assert.ok(explicit.endsWith("fixtures"));
+});
+
+test("findMatchingSuite: custom suitesDir on fixture foreign tree", () => {
+  const { root, git, cleanup } = makeGitRepo();
+  try {
+    // Foreign tree without tools/tests dir
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(join(root, "spec"), { recursive: true });
+    writeFileSync(join(root, "src", "engine.mjs"), "export const engine = true;\n");
+    writeFileSync(join(root, "spec", "engine.test.mjs"), "import test from 'node:test';\n");
+    git("add", "-A");
+    git("commit", "-qm", "foreign tree");
+
+    // Default suitesDir (tools/tests) does not exist -> returns null, never crashes
+    assert.equal(findMatchingSuite(root, "src/engine.mjs"), null);
+
+    // Custom suitesDir finds the test in spec
+    assert.equal(findMatchingSuite(root, "src/engine.mjs", "spec"), "spec/engine.test.mjs");
+  } finally {
+    cleanup();
+  }
+});
+
+test("loadScope: loads .clone.json {scope:[...]} from root, falls back to DEFAULT_SCOPE", () => {
+  const { root, cleanup } = makeGitRepo();
+  try {
+    // Without file -> DEFAULT_SCOPE
+    const def = loadScope(root);
+    assert.ok(Array.isArray(def) && def.length > 0);
+
+    // With .clone.json
+    writeFileSync(join(root, ".clone.json"), JSON.stringify({ scope: ["src/**/*.js", "lib/**/*.mjs"] }));
+    const custom = loadScope(root);
+    assert.deepEqual(custom, ["src/**/*.js", "lib/**/*.mjs"]);
+  } finally {
     cleanup();
   }
 });

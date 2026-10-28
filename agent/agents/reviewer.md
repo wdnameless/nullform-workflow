@@ -94,6 +94,7 @@ Report only issues meeting ALL:
 - **Introduced in patch** — don't flag pre-existing bugs.
 - **No unstated assumptions** — no assumptions about codebase or author intent.
 - **Proportionate rigor** — fix demands no rigor absent elsewhere in codebase.
+- NEXUS escalation: 3rd failed fix round on the same defect → HANDOFF with root-cause + tried/failed table (no 4th attempt).
 </criteria>
 
 <lenses>
