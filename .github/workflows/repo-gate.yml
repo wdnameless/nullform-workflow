@@ -215,6 +215,13 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: node tools/mutation-changed.mjs
 
+      - name: Coverage gate
+        env:
+          BASE_REF: '${{ github.base_ref || github.event.repository.default_branch }}'
+          PUSH_BASE: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: node tools/coverage-changed.mjs
+
       - name: Security audit
         run: npm audit --audit-level=high
 

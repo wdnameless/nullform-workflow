@@ -21,7 +21,7 @@ Quality contract: read `<HARNESS>/core/PORTABLE.md` §10 for the canonical produ
 ## 2. TASK CLASSIFIER & TIER GATES
 When strict governance is activated by the user or project, classify the task into one of four lanes:
 - `⚡ [T0 FAST]`: 1–2 known files, localized change → direct edit or single specialist, ≤10 min. No OpenSpec/interview/oracle.
-- `🔧 [T1 STANDARD]`: 3+ files or unfamiliar area → quick recon, micro-plan in chat, 1–2 specialists in one batch. No mandatory Wave 0 interview.
+- `🔧 [T1 STANDARD]`: 3+ files or unfamiliar area → quick recon, micro-plan in chat, 1–2 specialists in one batch; bugfix идёт fast-lane (PORTABLE). No mandatory Wave 0 interview.
 - `🚀 [T2 HEAVY]`: Architecture decision, new module, multi-system change → full 4-Wave SDD (see `<HARNESS>/core/PORTABLE.md`).
 - `🌌 [T3 PROGRAM]`: Multi-feature program → T2 per slice with native worktrees (or portable workspaces) and final integration oracle.
 

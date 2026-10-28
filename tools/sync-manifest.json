@@ -87,6 +87,36 @@
     "rel": "tools/workflow.mjs"
   },
   {
+    "rel": "tools/workflow-shared.mjs"
+  },
+  {
+    "rel": "tools/workflow-ci.mjs"
+  },
+  {
+    "rel": "tools/requirements.mjs"
+  },
+  {
+    "rel": "tools/brief-rounds.mjs"
+  },
+  {
+    "rel": "tools/doctor-lite.mjs"
+  },
+  {
+    "rel": "tools/review/arbitrate.mjs"
+  },
+  {
+    "rel": "tools/carry.mjs"
+  },
+  {
+    "rel": "tools/checklists.mjs"
+  },
+  {
+    "rel": "tools/tripwire.mjs"
+  },
+  {
+    "rel": "tools/review/evidence-history.mjs"
+  },
+  {
     "rel": "tools/workflow/workspaces.mjs"
   },
   {
