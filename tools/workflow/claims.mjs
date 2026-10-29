@@ -149,6 +149,10 @@ function loadContract(root, contractPath) {
   return { contract, contractPath: rel, contractIdentity: file.identity, contractDigest: file.digest, manifestPath, manifestIdentity: manifest.identity, manifestDigest: manifest.digest, fileIdentities, rows };
 }
 function gitBase(root) {
+  // Discovery stops at the workspace root: a parent-owned .git (a user's home,
+  // a shared TMPDIR repo, a monorepo root) must not become this claim's base.
+  // GIT_CEILING_DIRECTORIES is git's native mechanism for exactly this; the
+  // null-base test proves the unrelated case, the git-fixture test the owned one.
   let gitPresent = false;
   for (let path = root; ; path = dirname(path)) {
     if (entry(join(path, ".git"))) { gitPresent = true; break; }
@@ -158,11 +162,15 @@ function gitBase(root) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.toUpperCase().startsWith("GIT_")) delete env[key];
   env.GIT_OPTIONAL_LOCKS = "0";
+  env.GIT_CEILING_DIRECTORIES = root;
   try {
     const base = execFileSync("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "rev-parse", "--verify", "HEAD"], { cwd: root, env, encoding: "utf8", windowsHide: true, timeout: 10000, maxBuffer: 4096, stdio: ["ignore", "pipe", "pipe"] }).trim();
     if (!/^[a-f0-9]{40,64}$/.test(base)) fail("Git did not return a valid base commit");
     return base;
-  } catch { fail("Cannot establish actual Git base; explicit operator reconciliation required"); }
+  } catch (error) {
+    if (error?.code === "ECLAIMSTATE") throw error;
+    return null;
+  }
 }
 function readRecord(root, task) {
   const rel = claimRel(task);
