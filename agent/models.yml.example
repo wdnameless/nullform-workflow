@@ -36,8 +36,8 @@ providers:
         contextWindow: 200000
         maxTokens: 32000
         # Optional: mark a reasoning-capable model so OMP exposes effort levels.
-        # reasoning: true
-        # thinking:
-        #   mode: effort
-        #   efforts: [minimal, low, medium, high]
-        #   defaultLevel: medium
+        reasoning: true
+        thinking:
+          mode: effort
+          efforts: [none, low, medium, high, xhigh, max]
+          defaultLevel: medium

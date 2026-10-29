@@ -1,5 +1,7 @@
 [
-  { "_comment": "MIT idea credit: agency-agents tools.json (harness capability matrix)" },
+  {
+    "_comment": "MIT idea credit: agency-agents tools.json (harness capability matrix)"
+  },
   {
     "id": "claude",
     "label": "Claude Code",
@@ -39,6 +41,10 @@
     "scopes": [
       "user",
       "project"
+    ],
+    "notes": [
+      "native catalog path (FCC codex_model_catalog.py)",
+      "source: free-claude-code harnesses/codex_model_catalog.py"
     ],
     "runtime": "verified"
   },
@@ -134,6 +140,12 @@
       "file": ".hermes",
       "cmd": "hermes"
     },
+    "versions": {
+      "min": "0.20.4",
+      "args": [
+        "--version"
+      ]
+    },
     "install": {
       "userHome": ".hermes",
       "projectPaths": [
@@ -144,7 +156,20 @@
       "user",
       "project"
     ],
-    "runtime": "verified"
+    "notes": [
+      "HERMES_MANAGED_DIR overlay (FCC hermes.py)",
+      "source: free-claude-code cli/launchers/hermes.py"
+    ],
+    "runtime": "verified",
+    "activation": {
+      "args": [
+        "config",
+        "get",
+        "model.provider",
+        "--json"
+      ],
+      "expect": "contains"
+    }
   },
   {
     "id": "openhuman",

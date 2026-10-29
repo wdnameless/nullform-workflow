@@ -68,7 +68,24 @@ test("harness matrix schema, 8+custom entries, MIT attribution, and openhuman un
     assert.ok(Array.isArray(entry.install.projectPaths), `entry ${entry.id} has projectPaths`);
     assert.ok(Array.isArray(entry.scopes), `entry ${entry.id} has scopes`);
     assert.ok(["verified", "declared", "unverified"].includes(entry.runtime), `entry ${entry.id} has valid runtime`);
+    if (entry.versions !== undefined) {
+      assert.ok(entry.versions && typeof entry.versions === "object", `entry ${entry.id} versions is object`);
+      assert.equal(typeof entry.versions.min, "string", `entry ${entry.id} versions.min is string`);
+      assert.ok(Array.isArray(entry.versions.args), `entry ${entry.id} versions.args is array`);
+    }
+    if (entry.notes !== undefined) {
+      assert.ok(Array.isArray(entry.notes), `entry ${entry.id} notes is array`);
+      assert.ok(entry.notes.every((n) => typeof n === "string"), `entry ${entry.id} notes are strings`);
+    }
   }
+
+  const hermes = matrix.find((m) => m.id === "hermes");
+  assert.equal(hermes.versions?.min, "0.20.4");
+  assert.deepEqual(hermes.versions?.args, ["--version"]);
+  assert.ok(Array.isArray(hermes.notes) && hermes.notes.some((n) => n.includes("MANAGED_DIR")));
+
+  const codex = matrix.find((m) => m.id === "codex");
+  assert.ok(Array.isArray(codex.notes) && codex.notes.some((n) => n.includes("catalog")));
 
   const openhuman = matrix.find((m) => m.id === "openhuman");
   assert.equal(openhuman.runtime, "unverified");

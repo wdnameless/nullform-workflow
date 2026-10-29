@@ -18,6 +18,7 @@ import { acquireDeploymentLock, DeploymentJournal } from "../tools/installation/
 import { getCapabilitiesInfo, checkVersionAlignment } from "../tools/installation/capabilities.mjs";
 import { inspectHarness, resolveHostHome } from "../tools/installation/profiles.mjs";
 import { runSetup, runHeal } from "../tools/harness-setup.mjs";
+import { probeHarness, defaultRunner } from "../tools/harness-probe.mjs";
 import {
   PACKAGE_NAME,
   HARNESS_CHOICES,
@@ -139,6 +140,7 @@ export function parseCliArgs(argv = []) {
     json: { type: "boolean" },
     quiet: { type: "boolean", short: "q" },
     probe: { type: "boolean" },
+    report: { type: "boolean" },
     "require-plugins": { type: "boolean" },
     "skip-plugin-check": { type: "boolean" },
     "skip-release-check": { type: "boolean" },
@@ -193,6 +195,7 @@ export function parseCliArgs(argv = []) {
     json: Boolean(parsed.values.json),
     quiet: Boolean(parsed.values.quiet),
     probe: Boolean(parsed.values.probe),
+    report: Boolean(parsed.values.report),
     requirePlugins: Boolean(parsed.values["require-plugins"]),
     skipPluginCheck: Boolean(parsed.values["skip-plugin-check"]),
     skipReleaseCheck: Boolean(parsed.values["skip-release-check"]),
@@ -825,6 +828,30 @@ export async function runInit(options = {}, deps = {}) {
   }
 }
 
+function buildDoctorReport(enriched, deps = {}) {
+  const pkgVersion = deps.pkgVersion || readPackageVersion(deps.root || PACKAGE_ROOT);
+  const matrix = (deps.loadHarnessMatrix ? deps.loadHarnessMatrix() : loadHarnessMatrix()) || [];
+  const runner = deps.probeRunner || defaultRunner;
+  const harnessProbes = matrix
+    .filter((entry) => entry && entry.id && entry.detect?.cmd)
+    .map((entry) => ({
+      id: entry.id,
+      ...probeHarness(entry, runner),
+    }));
+  const configCheck = enriched.checks?.find((c) => c.id === "configs" || c.id === "harness-integration");
+  const configStatus = configCheck?.status || (enriched.ok ? "pass" : "warn");
+  return {
+    pkgVersion,
+    system: {
+      platform: deps.platform || process.platform,
+      arch: deps.arch || process.arch,
+      node: deps.nodeVersion || process.version,
+    },
+    harnessProbes,
+    configStatus,
+  };
+}
+
 export async function runDoctorCommand(options = {}, deps = {}) {
   const env = deps.env || process.env;
   const output = deps.stdout || process.stdout;
@@ -838,7 +865,7 @@ export async function runDoctorCommand(options = {}, deps = {}) {
     savedState = loaded.state;
   } catch (err) {
     const safeMsg = sanitizeError(err.message);
-    if (options.json) output.write(JSON.stringify({ ok: false, error: "invalid_state", detail: safeMsg }, null, 2) + "\n");
+    if (options.json || options.report) output.write(JSON.stringify({ ok: false, error: "invalid_state", detail: safeMsg }, null, 2) + "\n");
     else errOut.write(`doctor error: ${safeMsg}\n`);
     return 1;
   }
@@ -846,7 +873,7 @@ export async function runDoctorCommand(options = {}, deps = {}) {
   const checkHarness = options.harness !== null && options.harness !== undefined ? options.harness : options.targetHarness;
   if (checkHarness && !HARNESS_CHOICES.includes(checkHarness)) {
     const msg = `Invalid --harness "${checkHarness}". Choose one of: ${HARNESS_CHOICES.join(", ")}`;
-    if (options.json) output.write(JSON.stringify({ ok: false, error: "invalid_harness", detail: msg }, null, 2) + "\n");
+    if (options.json || options.report) output.write(JSON.stringify({ ok: false, error: "invalid_harness", detail: msg }, null, 2) + "\n");
     else errOut.write(`doctor error: ${msg}\n`);
     return 2;
   }
@@ -860,7 +887,7 @@ export async function runDoctorCommand(options = {}, deps = {}) {
   }
   if (!installedRoot || !targetHarness) {
     const msg = `No saved installation found at ${getStateFilePath(userHome)}. Run 'nullform init' first or specify --harness and --root.`;
-    if (options.json) output.write(JSON.stringify({ ok: false, error: "missing_state", detail: msg }, null, 2) + "\n");
+    if (options.json || options.report) output.write(JSON.stringify({ ok: false, error: "missing_state", detail: msg }, null, 2) + "\n");
     else errOut.write(`doctor error: ${msg}\n`);
     return 1;
   }
@@ -909,6 +936,15 @@ export async function runDoctorCommand(options = {}, deps = {}) {
   });
   const readiness = summarizeDoctorReadiness(result);
   const enriched = { ...result, targetHarness, ...(projectRoot ? { projectRoot } : {}), userHome, readiness };
+  return emitDoctorResult(enriched, readiness, options, deps, output);
+}
+
+function emitDoctorResult(enriched, readiness, options, deps, output) {
+  if (options.report) {
+    const report = buildDoctorReport(enriched, deps);
+    output.write(JSON.stringify({ ...enriched, report }, null, 2) + "\n");
+    return enriched.ok ? 0 : 1;
+  }
   if (options.json) {
     output.write(JSON.stringify(enriched, null, 2) + "\n");
   } else {
@@ -1140,6 +1176,7 @@ Doctor Options:
   --root <dir>       Override installed workflow root
   --project-root <d> Override project root directory
   --release-url <u>  Check release drift against npm metadata endpoint
+  --report           Print shareable machine report with harness probes and system info
   --json             Output structured JSON report
   --quiet, -q        Summary line only
 
