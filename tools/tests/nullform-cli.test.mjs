@@ -653,7 +653,7 @@ test("init headless --yes --json prints exactly one JSON document (certify parse
       ["init", "--harness", "codex", "--root", customRoot, "--user-home", tmpHome, "--yes", "--json"],
       {
         ...io,
-        installHarness: (opts) => ({ harness: opts.harness, root: opts.root, userHome: opts.userHome, filesToCopy: [], adapters: [] }),
+        installHarness: (opts) => ({ harness: opts.harness, root: opts.root, userHome: opts.userHome, filesToCopy: [], adapters: [], warnings: ["Pre-existing legacy OMP assets detected (mcp.json); preserved."] }),
         runDoctor: () => ({ ok: true, checks: [], summary: { pass: 1, fail: 0, warn: 0, skip: 0 } }),
       }
     );
@@ -661,6 +661,7 @@ test("init headless --yes --json prints exactly one JSON document (certify parse
     const parsed = JSON.parse(io.getStdout());
     assert.equal(parsed.ok, true);
     assert.equal(parsed.stage, "complete");
+    assert.ok(parsed.plan.warnings.some((w) => w.includes("mcp.json")), "plan.warnings must reach stdout JSON (smoke R03)");
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }

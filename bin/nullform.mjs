@@ -447,6 +447,7 @@ const compactInstallationPlan = (plan) => {
     managedFilesCount: plan.managedFiles ? Object.keys(plan.managedFiles).length : 0,
     adapters: plan.adapters || [] };
   for (const f of OPTIONAL_PLAN_FIELDS) if (plan[f]) out[f] = plan[f];
+  if (plan.warnings?.length) out.warnings = plan.warnings;
   if (plan.replacedModules?.length) out.replacedModules = plan.replacedModules;
   if (plan.preservedAssets?.count) out.preservedAssets = plan.preservedAssets;
   if (plan.baselineRecorded !== undefined) out.baselineRecorded = plan.baselineRecorded;
