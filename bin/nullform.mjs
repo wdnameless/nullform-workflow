@@ -593,8 +593,12 @@ async function settlePreview(plan, { options, session, output, errOut, wizardSta
     return { plan, preview: true };
   }
   if (isHeadless) {
-    emitJsonOrText(output, errOut, options.json, { ok: true, ...compactInstallationPlan(plan) }, formatDryRunPreview(plan), false);
-    if (!options.yes) return { error: 1 };
+    // Headless+--yes proceeds to the final payload below: emitting the preview
+    // here would print two JSON documents on --json stdout (smoke parses one).
+    if (!options.yes) {
+      emitJsonOrText(output, errOut, options.json, { ok: true, ...compactInstallationPlan(plan) }, formatDryRunPreview(plan), false);
+      return { error: 1 };
+    }
     return { plan, headless: true };
   }
   if (options.yes || wizardState.preConfirmed) return { plan };

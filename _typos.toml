@@ -66,3 +66,8 @@ unparseable = "unparseable"
 # the user's own words ("COCO (congitive complexity)"), and a requirements gate that
 # silently corrects a quote is verifying a paraphrase, not the request.
 congitive = "congitive"
+# Misspelling preserved verbatim inside a requirements manifest: the manifest quotes
+# the user's own words ("Codex, CloudeCode, Hermes"), and correcting a quote
+# falsifies the requirement record (same policy as congitive above).
+Cloude = "Cloude"
+CloudeCode = "CloudeCode"

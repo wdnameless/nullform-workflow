@@ -643,3 +643,25 @@ test("nullform update CLI redacts credential URL in JSON and text error outputs"
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("init headless --yes --json prints exactly one JSON document (certify parses stdout)", async () => {
+  const tmpHome = createTempDir("cli-single-json-");
+  const customRoot = join(tmpHome, "custom-root");
+  try {
+    const io = createIO("", false);
+    const code = await main(
+      ["init", "--harness", "codex", "--root", customRoot, "--user-home", tmpHome, "--yes", "--json"],
+      {
+        ...io,
+        installHarness: (opts) => ({ harness: opts.harness, root: opts.root, userHome: opts.userHome, filesToCopy: [], adapters: [] }),
+        runDoctor: () => ({ ok: true, checks: [], summary: { pass: 1, fail: 0, warn: 0, skip: 0 } }),
+      }
+    );
+    assert.equal(code, 0);
+    const parsed = JSON.parse(io.getStdout());
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.stage, "complete");
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
