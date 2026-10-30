@@ -42,3 +42,14 @@ providers:
         #   mode: effort
         #   efforts: [none, low, medium, high, xhigh, max]
         #   defaultLevel: medium
+
+categories:
+  strict:
+    chain: [my-provider/__DEFAULT_MODEL_ID__]
+    effort: high
+  builder:
+    chain: [my-provider/__DEFAULT_MODEL_ID__]
+    effort: medium
+  scout:
+    chain: [my-provider/__DEFAULT_MODEL_ID__]
+    effort: low

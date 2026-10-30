@@ -62,8 +62,8 @@
       "reason": ""
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 1222,
-      "reason": "Committed fixture grows (d8ccafb): recon note must name real files, interfaces must live inside the change, spec needs ADDED+Scenario — baseline had not followed the commit"
+      "lines": 1335,
+      "reason": "Committed fixture grows (d8ccafb) + omh-model-routing T2: 4 reported/verified gate tests (2026-10-30)"
     },
     "tools/workflow.mjs": {
       "lines": 1680,

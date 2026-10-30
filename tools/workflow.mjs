@@ -46,6 +46,7 @@ import {
   validateReviewEvidence,
   runReviewRecord,
   recordStageB,
+  isPositiveOracleVerdict,
 } from "./review/evidence.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { parseRequirement } from "./requirements.mjs";
@@ -1142,6 +1143,31 @@ function validateArtifacts(root, st) {
   return { reqs, missing, invalid, ok: missing.length === 0 && invalid.length === 0 };
 }
 
+function markOracleVerified(root, st, path, detail) {
+  let isOracleAccept = isPositiveOracleVerdict(detail || "");
+  if (!isOracleAccept && path && existsSync(join(root, path))) {
+    try {
+      isOracleAccept = isPositiveOracleVerdict(readFileSync(join(root, path), "utf8"));
+    } catch {}
+  }
+  if (st.stages) {
+    if (isPlainObject(st.stages) && st.stages.oracle) {
+      st.stages.oracle = { ...(isPlainObject(st.stages.oracle) ? st.stages.oracle : {}), status: "done", verified: isOracleAccept };
+    } else if (Array.isArray(st.stages)) {
+      const idx = st.stages.findIndex((s) => (s?.id || s?.name) === "oracle");
+      if (idx >= 0) st.stages[idx] = { ...st.stages[idx], status: "done", verified: isOracleAccept };
+    }
+  }
+  return isOracleAccept;
+}
+
+function createArtifactRecord(root, st, kind, path, detail) {
+  const verified = kind === "oracle" ? markOracleVerified(root, st, path, detail) : false;
+  const record = { at: new Date().toISOString(), path, detail, verified };
+  if (kind === "oracle") record.snapshot = scanWorktree(root);
+  return record;
+}
+
 function cmdArtifact(root, flags) {
   return withStateLock(root, () => {
     const st = load(root);
@@ -1249,10 +1275,7 @@ function cmdArtifact(root, flags) {
       return 1;
     }
 
-    const record = { at: new Date().toISOString(), path, detail };
-    if (kind === "oracle") {
-      record.snapshot = scanWorktree(root);
-    }
+    const record = createArtifactRecord(root, st, kind, path, detail);
     st.artifacts[kind] = record;
     save(root, st);
     const done = Object.keys(st.artifacts).length;
@@ -1931,6 +1954,167 @@ function checkAutoClose(root, st, flags) {
   return 0;
 }
 
+/**
+ * Reported-only stages: done && !verified (interfaces.md §T2, R03).
+ * A stage is reported-only if its status is 'done' (or 'reported') and verified is not true.
+ */
+function isStageReported(status, verified) {
+  const norm = String(status || "").toLowerCase();
+  return (norm === "done" || norm === "reported") && !verified;
+}
+
+function checkStageObject(id, s) {
+  if (typeof s === "boolean") return !s ? id : null;
+  if (typeof s === "string") return isStageReported(s, false) ? id : null;
+  if (isPlainObject(s)) {
+    const rawSt = s.status || (s.done ? "done" : (s.verified !== undefined ? "done" : "pending"));
+    return isStageReported(rawSt, s.verified === true) ? id : null;
+  }
+  return null;
+}
+
+function extractReportedFromArray(stages) {
+  const list = [];
+  for (const s of stages) {
+    if (!s) continue;
+    const id = String(s.id || s.name || s.stage || "unknown");
+    const status = s.status || (s.done ? "done" : "pending");
+    if (isStageReported(status, s.verified === true)) list.push(id);
+  }
+  return list;
+}
+
+function extractReportedFromObject(stages) {
+  const list = [];
+  for (const [id, s] of Object.entries(stages)) {
+    const hit = checkStageObject(id, s);
+    if (hit) list.push(hit);
+  }
+  return list;
+}
+
+function hasOracleStage(stages) {
+  if (Array.isArray(stages)) {
+    return stages.some((s) => (s?.id || s?.name) === "oracle");
+  }
+  return isPlainObject(stages) && stages.oracle !== undefined;
+}
+
+function checkUnverifiedOracleArtifact(st, reported) {
+  if (st?.artifacts?.oracle?.verified !== false) return null;
+  if (reported.includes("oracle")) return null;
+  if (hasOracleStage(st.stages)) return null;
+  return "oracle";
+}
+
+function getReportedStages(st) {
+  if (!st) return [];
+  const reported = Array.isArray(st.stages)
+    ? extractReportedFromArray(st.stages)
+    : (isPlainObject(st.stages) ? extractReportedFromObject(st.stages) : []);
+  const oracleMissing = checkUnverifiedOracleArtifact(st, reported);
+  if (oracleMissing) reported.push(oracleMissing);
+  return [...new Set(reported)];
+}
+
+function checkStageState(root, st, flags) {
+  const unverifiedStages = getReportedStages(st);
+  if (!unverifiedStages.length) return { ok: true, unverifiedStages: [] };
+  if (!flags.force) {
+    console.error(`workflow: cannot close ${st.tier} — reported-but-unverified: ${unverifiedStages.join(", ")}.`);
+    console.error(`  verify stages with passing oracle/gates, or close with --force --reason "<why unverified stages are accepted>".`);
+    logEvent(root, "reported-but-unverified", `${st.tier} — ${st.task} (${unverifiedStages.join(", ")})`);
+    return { ok: false, exitCode: 1, unverifiedStages };
+  }
+  if (!flags.reason) {
+    console.error(`workflow: --force requires --reason "<why unverified stages are accepted>"`);
+    return { ok: false, exitCode: 1, unverifiedStages };
+  }
+  return { ok: true, unverifiedStages };
+}
+
+function recordStage(root, stageName, { status = "done", verified = false } = {}) {
+  return withStateLock(root, () => {
+    const st = load(root);
+    if (!st || st.status !== "open") {
+      console.error("workflow: no open task to update stage. Run `start` first.");
+      return 2;
+    }
+    if (!st.stages) st.stages = {};
+    const now = new Date().toISOString();
+    const entry = { status, verified: Boolean(verified), at: now };
+    if (verified) entry.verifiedAt = now;
+    if (isPlainObject(st.stages)) {
+      st.stages[stageName] = { ...(isPlainObject(st.stages[stageName]) ? st.stages[stageName] : {}), ...entry };
+    } else if (Array.isArray(st.stages)) {
+      const idx = st.stages.findIndex((s) => (s?.id || s?.name) === stageName);
+      if (idx >= 0) st.stages[idx] = { ...st.stages[idx], ...entry };
+      else st.stages.push({ id: stageName, ...entry });
+    }
+    if (stageName === "oracle" && st.artifacts?.oracle) {
+      st.artifacts.oracle.verified = Boolean(verified);
+    }
+    save(root, st);
+    logEvent(root, "stage", `${stageName}: ${status}${verified ? " (verified)" : " (reported)"}`);
+    return 0;
+  });
+}
+
+function setStageVerified(root, stageName, verified = true) {
+  return recordStage(root, stageName, { status: "done", verified: Boolean(verified) });
+}
+
+function recordGatePass(root, gateName) {
+  return setStageVerified(root, gateName, true);
+}
+
+function cmdStage(root, flags = {}) {
+  const name = flags.name || flags.stage || flags._?.[1];
+  if (!name) {
+    console.error("workflow stage: --name <stage> is required.");
+    return 1;
+  }
+  const status = flags.status || "done";
+  const verified = flags.verified !== undefined ? Boolean(flags.verified) : false;
+  return recordStage(root, String(name), { status: String(status), verified });
+}
+
+function cmdGatePass(root, flags = {}) {
+  const gate = flags.gate || flags.name || flags._?.[1];
+  if (!gate) {
+    console.error("workflow gate-pass: --gate <name> is required.");
+    return 1;
+  }
+  return recordGatePass(root, String(gate));
+}
+
+function formatDeviationParts(dev) {
+  const parts = [];
+  if (dev.missing) parts.push(`missing ${dev.missing.join(", ")}`);
+  if (dev.invalid) parts.push(`invalid ${dev.invalid.join(", ")}`);
+  if (dev.staleAcceptance) parts.push("stale acceptance");
+  if (dev.unverifiedStages) parts.push(`unverified ${dev.unverifiedStages.join(", ")}`);
+  return parts.join(" + ");
+}
+
+function buildDeviationRecord(reason, { missing, invalid, staleAcceptance, unverifiedStages }) {
+  const dev = { forced: true, reason: String(reason) };
+  let hasAny = false;
+  if (missing?.length) { dev.missing = [...missing]; hasAny = true; }
+  if (invalid?.length) { dev.invalid = [...invalid]; hasAny = true; }
+  if (staleAcceptance) { dev.staleAcceptance = staleAcceptance; hasAny = true; }
+  if (unverifiedStages?.length) { dev.unverifiedStages = [...unverifiedStages]; hasAny = true; }
+  return hasAny ? dev : null;
+}
+
+function applyCloseDeviation(st, flags, details) {
+  if (!flags.force) return null;
+  const dev = buildDeviationRecord(flags.reason, details);
+  if (!dev) return null;
+  st.deviation = dev;
+  return formatDeviationParts(dev);
+}
+
 function cmdClose(root, flags) {
   return withStateLock(root, () => {
     const st = load(root);
@@ -2004,6 +2188,8 @@ function cmdClose(root, flags) {
       return 1;
     }
   }
+  const stageCheck = checkStageState(root, st, flags);
+  if (!stageCheck.ok) return stageCheck.exitCode;
 
   st.status = "closed";
   st.closedAt = new Date().toISOString();
@@ -2014,30 +2200,15 @@ function cmdClose(root, flags) {
   // acceptance. Leaving the stale case unrecorded made the override invisible in
   // state.json and metrics (`forced: false`), i.e. the cheapest way to ship
   // unverified work left no trace at all.
-  const deviation = {};
-  if (missing.length && flags.force) {
-    deviation.forced = true;
-    deviation.reason = String(flags.reason);
-    deviation.missing = [...missing];
-  }
-  if (invalid.length && flags.force) {
-    deviation.forced = true;
-    deviation.reason = String(flags.reason);
-    deviation.invalid = [...invalid];
-  }
-  if (staleAcceptance && flags.force) {
-    deviation.forced = true;
-    deviation.reason = String(flags.reason);
-    deviation.staleAcceptance = staleAcceptance;
-  }
-  if (deviation.forced) {
-    st.deviation = deviation;
-    const what = [
-      deviation.missing ? `missing ${deviation.missing.join(", ")}` : null,
-      deviation.staleAcceptance ? "stale acceptance" : null,
-    ].filter(Boolean).join(" + ");
-    logEvent(root, "close", `${st.tier} — ${st.task} (force: ${deviation.reason})`, { forced: true });
-    console.log(`workflow: closed with DEVIATION — ${what} (${deviation.reason})`);
+  const deviationText = applyCloseDeviation(st, flags, {
+    missing,
+    invalid,
+    staleAcceptance,
+    unverifiedStages: stageCheck.unverifiedStages,
+  });
+  if (deviationText) {
+    logEvent(root, "close", `${st.tier} — ${st.task} (force: ${flags.reason})`, { forced: true });
+    console.log(`workflow: closed with DEVIATION — ${deviationText} (${flags.reason})`);
   } else {
     logEvent(root, "close", `${st.tier} — ${st.task}`);
     console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
@@ -2191,6 +2362,8 @@ export function runWorkflowCli(argv = [], options = {}) {
     case "review-run":   code = cmdReviewRun(root, args.flags, Math.max(0, args._.length - 1)); break;
     case "stage-b":      code = cmdStageB(root, args.flags); break;
     case "brief":        code = cmdBrief(root, args.flags, options); break;
+    case "stage":        code = cmdStage(root, args.flags); break;
+    case "gate-pass":    code = cmdGatePass(root, args.flags); break;
     default:
       if (cmd !== undefined) console.error(`workflow: unknown command '${cmd}'\n`);
       printWorkflowHelp();
@@ -2201,7 +2374,7 @@ export function runWorkflowCli(argv = [], options = {}) {
 
 /* ---------------------------------------------------------------------- exports and main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass };
 
 import { fileURLToPath } from "node:url";
 

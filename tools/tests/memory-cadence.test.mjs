@@ -21,6 +21,8 @@ import {
   loadConfig,
   loadCadenceState,
   recordCadenceReview,
+  recordCadenceDecision,
+  buildSessionPack,
   checkCadenceStatus,
   formatCadenceReport,
 } from "../memory-cadence.mjs";
@@ -347,4 +349,231 @@ test("CLI: --root переопределяет каталог состояния
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test("recordCadenceDecision: сохраняет решения keep/reject/defer и отклоняет reason < 10 символов", () => {
+  const tmp = createTempDir();
+  try {
+    const statePath = join(tmp, "cadence.json");
+
+    // 1. Валидное решение keep (reason >= 10 символов)
+    const rec1 = recordCadenceDecision(statePath, {
+      id: "mem-001",
+      decision: "keep",
+      reason: "Архитектурно важное решение проекта",
+    });
+    assert.equal(rec1.id, "mem-001");
+    assert.equal(rec1.decision, "keep");
+    assert.equal(rec1.reason, "Архитектурно важное решение проекта");
+    assert.ok(rec1.at);
+
+    // Проверка round-trip через loadCadenceState
+    let state = loadCadenceState(statePath);
+    assert.equal(state.decisions.length, 1);
+    assert.equal(state.decisions[0].id, "mem-001");
+    assert.equal(state.decisions[0].decision, "keep");
+
+    // 2. Валидное решение reject
+    recordCadenceDecision(statePath, {
+      id: "mem-002",
+      decision: "reject",
+      reason: "Устаревший контекст прошлой итерации",
+    });
+
+    // 3. Валидное решение defer
+    recordCadenceDecision(statePath, {
+      id: "mem-003",
+      decision: "defer",
+      reason: "Требует дополнительного исследования",
+    });
+
+    state = loadCadenceState(statePath);
+    assert.equal(state.decisions.length, 3);
+
+    // 4. reason < 10 символов отклоняется
+    assert.throws(
+      () => {
+        recordCadenceDecision(statePath, {
+          id: "mem-004",
+          decision: "reject",
+          reason: "Коротко",
+        });
+      },
+      (err) => {
+        return err instanceof Error && /at least 10 characters/i.test(err.message);
+      }
+    );
+
+    // 5. Недопустимый decision отклоняется
+    assert.throws(
+      () => {
+        recordCadenceDecision(statePath, {
+          id: "mem-005",
+          decision: "invalid_decision",
+          reason: "Обоснование решения достаточной длины",
+        });
+      },
+      (err) => {
+        return err instanceof Error && /must be one of: keep, reject, defer/i.test(err.message);
+      }
+    );
+
+    // 6. Отсутствие id отклоняется
+    assert.throws(
+      () => {
+        recordCadenceDecision(statePath, {
+          decision: "keep",
+          reason: "Обоснование решения достаточной длины",
+        });
+      },
+      (err) => {
+        return err instanceof Error && /Decision id is required/i.test(err.message);
+      }
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("buildSessionPack: фильтрует rejected, помечает deferred, сохраняет существующий формат пакета", () => {
+  const tmp = createTempDir();
+  try {
+    const statePath = join(tmp, "cadence.json");
+
+    recordCadenceDecision(statePath, {
+      id: "mem-keep",
+      decision: "keep",
+      reason: "Актуальное правило для всей команды",
+    });
+    recordCadenceDecision(statePath, {
+      id: "mem-reject",
+      decision: "reject",
+      reason: "Устаревшая информация не должна попадать в сессию",
+    });
+    recordCadenceDecision(statePath, {
+      id: "mem-defer",
+      decision: "defer",
+      reason: "Требует подтверждения от оракула",
+    });
+
+    const state = loadCadenceState(statePath);
+
+    // Тест 1: Входной формат — массив
+    const rawArray = [
+      { id: "mem-keep", content: "keep content", priority: 1 },
+      { id: "mem-reject", content: "reject content", priority: 2 },
+      { id: "mem-defer", content: "defer content", priority: 3 },
+      { id: "mem-unknown", content: "unknown content", priority: 4 },
+    ];
+
+    const packedArray = buildSessionPack(rawArray, state);
+    assert.equal(Array.isArray(packedArray), true);
+    assert.equal(packedArray.length, 3);
+
+    const idsInPack = packedArray.map((m) => m.id);
+    assert.ok(idsInPack.includes("mem-keep"));
+    assert.ok(idsInPack.includes("mem-defer"));
+    assert.ok(idsInPack.includes("mem-unknown"));
+    assert.ok(!idsInPack.includes("mem-reject"), "rejected воспоминание должно быть исключено из сессионного пакета");
+
+    const deferredItem = packedArray.find((m) => m.id === "mem-defer");
+    assert.equal(deferredItem.deferred, true, "deferred воспоминание должно быть помечено deferred: true");
+    assert.equal(deferredItem.content, "defer content", "исходные поля должны сохраняться");
+    assert.equal(deferredItem.priority, 3, "исходные поля должны сохраняться");
+
+    const keptItem = packedArray.find((m) => m.id === "mem-keep");
+    assert.equal(keptItem.deferred, undefined, "keep воспоминание не должно иметь deferred: true");
+
+    // Тест 2: Входной формат — объект пакета с метаданными
+    const sessionPackObject = {
+      session: "session-xyz-123",
+      createdAt: "2026-10-30T10:00:00.000Z",
+      memories: rawArray,
+      extraFlag: true,
+    };
+
+    const packedObj = buildSessionPack(sessionPackObject, statePath);
+    assert.equal(packedObj.session, "session-xyz-123", "исходные метаданные пакета должны оставаться нетронутыми");
+    assert.equal(packedObj.extraFlag, true, "исходные флаги должны оставаться нетронутыми");
+    assert.equal(packedObj.memories.length, 3);
+    assert.ok(!packedObj.memories.some((m) => m.id === "mem-reject"), "rejected исключен из memories пакета");
+    assert.ok(packedObj.memories.find((m) => m.id === "mem-defer").deferred, "deferred помечен в memories пакета");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("CLI: --record-decision сохраняет решение, отклоняет reason < 10 символов с кодом 2", () => {
+  const tmp = createTempDir();
+  try {
+    const statePath = join(tmp, "cadence.json");
+
+    // 1. Отклонение reason < 10 символов с кодом 2
+    const resShort = spawnSync(
+      process.execPath,
+      [CLI_PATH, "--state", statePath, "--record-decision", "--id", "m-short", "--decision", "reject", "--reason", "short"],
+      { encoding: "utf8" }
+    );
+    assert.equal(resShort.status, 2, "reason < 10 символов должен завершаться с кодом 2");
+    assert.ok(resShort.stderr.includes("10 символов"));
+
+    // 2. Успешная запись валидного решения
+    const resOk = spawnSync(
+      process.execPath,
+      [CLI_PATH, "--state", statePath, "--record-decision", "--id", "m-ok", "--decision", "reject", "--reason", "Контекст более не актуален"],
+      { encoding: "utf8" }
+    );
+    assert.equal(resOk.status, 0, "Успешная запись должна завершаться с кодом 0");
+    assert.ok(resOk.stdout.includes("Решение по памяти успешно записано"));
+
+    // 3. Проверка записи в файле состояния
+    const state = loadCadenceState(statePath);
+    assert.equal(state.decisions.length, 1);
+    assert.equal(state.decisions[0].id, "m-ok");
+    assert.equal(state.decisions[0].decision, "reject");
+    assert.equal(state.decisions[0].reason, "Контекст более не актуален");
+
+    // 4. Запись с флагом --json
+    const resJson = spawnSync(
+      process.execPath,
+      [CLI_PATH, "--state", statePath, "--record-decision", "--id", "m-json", "--decision", "defer", "--reason", "Требует уточнения у пользователя", "--json"],
+      { encoding: "utf8" }
+    );
+    assert.equal(resJson.status, 0);
+    const parsed = JSON.parse(resJson.stdout);
+    assert.equal(parsed.action, "recorded-decision");
+    assert.equal(parsed.decision.id, "m-json");
+    assert.equal(parsed.decision.decision, "defer");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("CLI: неполные параметры для --record-decision отклоняются с кодом 2", () => {
+  // без --id
+  const resNoId = spawnSync(
+    process.execPath,
+    [CLI_PATH, "--record-decision", "--decision", "keep", "--reason", "Важное обоснование"],
+    { encoding: "utf8" }
+  );
+  assert.equal(resNoId.status, 2);
+  assert.ok(resNoId.stderr.includes("--id"));
+
+  // без --decision
+  const resNoDec = spawnSync(
+    process.execPath,
+    [CLI_PATH, "--record-decision", "--id", "m-1", "--reason", "Важное обоснование"],
+    { encoding: "utf8" }
+  );
+  assert.equal(resNoDec.status, 2);
+  assert.ok(resNoDec.stderr.includes("--decision"));
+
+  // недопустимый --decision
+  const resBadDec = spawnSync(
+    process.execPath,
+    [CLI_PATH, "--record-decision", "--id", "m-1", "--decision", "invalid", "--reason", "Важное обоснование"],
+    { encoding: "utf8" }
+  );
+  assert.equal(resBadDec.status, 2);
+  assert.ok(resBadDec.stderr.includes("keep, reject, defer"));
 });

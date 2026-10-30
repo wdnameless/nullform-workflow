@@ -1219,3 +1219,116 @@ test("T1 recon: an acceptance check is required, not just a file list", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("gate: reported-only stages refuse cmdClose with reported-but-unverified", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-unverified-close-"));
+  try {
+    cmdStart(root, { tier: "T1", task: "unverified-stage-task" });
+    cmdArtifact(root, { kind: "recon", detail: "Files: tools/a.mjs; acceptance: node --test passes" });
+
+    // Stage in reported-only state: done && !verified
+    const st = load(root);
+    st.stages = {
+      quality: { status: "done", verified: false },
+    };
+    save(root, st);
+
+    // cmdClose must refuse
+    const closeCode = cmdClose(root, {});
+    assert.equal(closeCode, 1, "cmdClose must refuse reported-only stages");
+    assert.equal(load(root).status, "open", "task must remain open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: verified stages allow cmdClose without force", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-verified-close-"));
+  try {
+    cmdStart(root, { tier: "T1", task: "verified-stage-task" });
+    cmdArtifact(root, { kind: "recon", detail: "Files: tools/a.mjs; acceptance: node --test passes" });
+
+    // Stage in verified state
+    const st = load(root);
+    st.stages = {
+      quality: { status: "done", verified: true },
+    };
+    save(root, st);
+
+    // cmdClose must succeed
+    const closeCode = cmdClose(root, {});
+    assert.equal(closeCode, 0, "cmdClose must succeed when all stages are verified");
+    assert.equal(load(root).status, "closed", "task must be closed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: force close on reported-only stages writes deviation with unverifiedStages", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-force-unverified-"));
+  try {
+    cmdStart(root, { tier: "T1", task: "forced-unverified-task" });
+    cmdArtifact(root, { kind: "recon", detail: "Files: tools/a.mjs; acceptance: node --test passes" });
+
+    const st = load(root);
+    st.stages = {
+      quality: { status: "done", verified: false },
+      mutation: { status: "done", verified: false },
+    };
+    save(root, st);
+
+    // force without reason must fail
+    assert.equal(cmdClose(root, { force: true }), 1, "--force without --reason must fail");
+
+    // force with reason must succeed
+    const closeCode = cmdClose(root, { force: true, reason: "approved waiver for quality and mutation stages" });
+    assert.equal(closeCode, 0, "cmdClose with force and reason must succeed");
+
+    const closedState = load(root);
+    assert.equal(closedState.status, "closed");
+    assert.ok(closedState.deviation, "deviation must be recorded in state");
+    assert.equal(closedState.deviation.forced, true);
+    assert.equal(closedState.deviation.reason, "approved waiver for quality and mutation stages");
+    assert.deepEqual(closedState.deviation.unverifiedStages, ["quality", "mutation"]);
+
+    const eventsFile = join(root, ".workflow", "events.jsonl");
+    assert.ok(existsSync(eventsFile), "events.jsonl must exist");
+    const lines = readFileSync(eventsFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const closeEvent = lines.find((e) => e.kind === "close");
+    assert.ok(closeEvent, "close event must be logged");
+    assert.equal(closeEvent.forced, true, "close event must be marked as forced");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gate: oracle ACCEPT sets verified true; gate pass sets stage verified true", async () => {
+  const { recordStage, setStageVerified, recordGatePass } = await import("../workflow.mjs");
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-oracle-gate-verified-"));
+  try {
+    cmdStart(root, { tier: "T1", task: "oracle-gate-verified-task" });
+    cmdArtifact(root, { kind: "recon", detail: "Files: tools/a.mjs; acceptance: node --test passes" });
+
+    // 1. Stage in reported-only state: done && !verified
+    recordStage(root, "quality", { status: "done", verified: false });
+    assert.equal(load(root).stages.quality.verified, false);
+    assert.equal(cmdClose(root, {}), 1, "close must fail while quality is reported-only");
+
+    // 2. Gate pass verifies the stage
+    recordGatePass(root, "quality");
+    assert.equal(load(root).stages.quality.verified, true, "gate pass must set verified: true");
+
+    // 3. Oracle stage: when oracle ACCEPT verdict is recorded, its stage is verified
+    recordStage(root, "oracle", { status: "done", verified: false });
+    assert.equal(cmdClose(root, {}), 1, "close must fail while oracle is reported-only");
+
+    setStageVerified(root, "oracle", true);
+    assert.equal(load(root).stages.oracle.verified, true, "oracle verified must be true");
+
+    // Close now succeeds
+    assert.equal(cmdClose(root, {}), 0, "task with all verified stages closes cleanly");
+    assert.equal(load(root).status, "closed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
