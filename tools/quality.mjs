@@ -176,6 +176,14 @@ export function toolAvailable(argv, cwd = process.cwd()) {
     return spawnSync(probe, [cmd], { cwd, stdio: "pipe", encoding: "utf8", shell: false, windowsHide: true }).status === 0;
   }
   if (existsSync(resolve(cwd, cmd))) return true;
+  if (process.platform === "win32") {
+    const lastSlash = Math.max(cmd.lastIndexOf("/"), cmd.lastIndexOf("\\"));
+    const hasExt = /\.[^.\\/]+$/.test(cmd.slice(lastSlash + 2));
+    if (!hasExt) {
+      if ([".exe", ".cmd", ".bat"].some((ext) => existsSync(resolve(cwd, cmd + ext)))) return true;
+      return spawnSync("where", [cmd], { cwd, stdio: "pipe", encoding: "utf8", shell: false, windowsHide: true }).status === 0;
+    }
+  }
   // `.cmd`/`.bat` shims live on PATH without an extension, so `where` still knows them.
   return /[\\/]/.test(cmd) ? false
     : spawnSync(process.platform === "win32" ? "where" : "which", [cmd], { cwd, stdio: "pipe", encoding: "utf8", shell: false, windowsHide: true }).status === 0;

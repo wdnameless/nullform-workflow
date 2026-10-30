@@ -10,7 +10,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { validateRootPath } from '../worktree-snapshot.mjs';
-
+import { compactLedger } from './ledger-compact.mjs';
+export { compactLedger };
 export const BUDGET_LEDGER_FILE = 'nullform-review-budget.json';
 // Non-Git fallback state lives under .workflow/ (structurally excluded from the source
 // snapshot) so operational state can never hash itself into financial source identity.
@@ -300,7 +301,7 @@ const MAX_LEDGER_BYTES = 1024 * 1024; // 1 MiB documented bound
 const MAX_HELD_REASON_CHARS = 512;
 const REQUEST_RECORD_GROWTH_BYTES = 128;
 const TERMINAL_METADATA_GROWTH_BYTES = (MAX_HELD_REASON_CHARS * 6) + 128;
-function readLedger(ledgerPath) {
+export function readLedger(ledgerPath) {
   if (!existsSync(ledgerPath)) return { settledNanoUsd: 0, reservations: [] };
   const fileSize = statSync(ledgerPath).size;
   if (fileSize > MAX_LEDGER_BYTES) throw new Error(`Budget ledger '${ledgerPath}' is ${fileSize} bytes, exceeding the ${MAX_LEDGER_BYTES}-byte bound; refusing to parse`);
@@ -328,9 +329,15 @@ function readLedger(ledgerPath) {
   return parsed;
 }
 
-function writeLedger(ledgerPath, ledger) {
-  const formatted = `${JSON.stringify(ledger, null, 2)}\n`;
-  const byteLength = Buffer.byteLength(formatted, 'utf8');
+
+export function writeLedger(ledgerPath, ledger) {
+  let formatted = `${JSON.stringify(ledger, null, 2)}\n`;
+  let byteLength = Buffer.byteLength(formatted, 'utf8');
+  if (byteLength > MAX_LEDGER_BYTES) {
+    compactLedger(ledger);
+    formatted = `${JSON.stringify(ledger, null, 2)}\n`;
+    byteLength = Buffer.byteLength(formatted, 'utf8');
+  }
   if (byteLength > MAX_LEDGER_BYTES) {
     throw new Error(`Budget ledger '${ledgerPath}' is ${byteLength} bytes, exceeding the ${MAX_LEDGER_BYTES}-byte bound; refusing to write`);
   }

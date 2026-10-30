@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 import { checkQualityGates, cmdCheckCi } from "../workflow.mjs";
+import { toolAvailable } from "../quality.mjs";
 
 function parseFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
@@ -282,5 +283,58 @@ test("R09: cmdCheckCi integrates quality gates (passes clean, fails dirty with e
   } finally {
     rmSync(cleanTmp, { recursive: true, force: true });
     rmSync(dirtyTmp, { recursive: true, force: true });
+  }
+});
+
+/* ----------------------------------------------------------------- R03 tests */
+
+test("R03: toolAvailable resolves path-like cmd without extension on win32 via shim (.venv/Scripts/python)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "quality-venv-"));
+  const origPlatform = process.platform;
+  try {
+    const scriptsDir = join(tmp, ".venv", "Scripts");
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(join(scriptsDir, "python.exe"), "");
+
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    assert.equal(
+      toolAvailable([".venv/Scripts/python"], tmp),
+      true,
+      "toolAvailable must resolve .venv/Scripts/python on win32 when python.exe exists"
+    );
+    assert.equal(
+      toolAvailable([".venv/Scripts/nonexistent"], tmp),
+      false,
+      "nonexistent tool returns false"
+    );
+
+    // POSIX behavior byte-identical (does not probe .exe on POSIX)
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    assert.equal(
+      toolAvailable([".venv/Scripts/python"], tmp),
+      false,
+      "POSIX behavior byte-identical: does not probe .exe on linux"
+    );
+  } finally {
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R03: toolAvailable resolves .cmd and .bat shims for path-like commands on win32", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "quality-shims-"));
+  const origPlatform = process.platform;
+  try {
+    const binDir = join(tmp, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "tool1.cmd"), "@echo off\n");
+    writeFileSync(join(binDir, "tool2.bat"), "@echo off\n");
+
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    assert.equal(toolAvailable(["bin/tool1"], tmp), true, "resolves .cmd shim");
+    assert.equal(toolAvailable(["bin/tool2"], tmp), true, "resolves .bat shim");
+  } finally {
+    Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+    rmSync(tmp, { recursive: true, force: true });
   }
 });

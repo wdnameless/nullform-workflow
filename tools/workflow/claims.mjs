@@ -151,14 +151,9 @@ function loadContract(root, contractPath) {
 function gitBase(root) {
   // Discovery stops at the workspace root: a parent-owned .git (a user's home,
   // a shared TMPDIR repo, a monorepo root) must not become this claim's base.
-  // GIT_CEILING_DIRECTORIES is git's native mechanism for exactly this; the
-  // null-base test proves the unrelated case, the git-fixture test the owned one.
-  let gitPresent = false;
-  for (let path = root; ; path = dirname(path)) {
-    if (entry(join(path, ".git"))) { gitPresent = true; break; }
-    if (dirname(path) === path) break;
-  }
-  if (!gitPresent) return null;
+  // Direct presence of root/.git avoids upward discovery into parent repositories;
+  // the null-base test proves the unrelated case, the git-fixture test the owned one.
+  if (!entry(join(root, ".git"))) return null;
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.toUpperCase().startsWith("GIT_")) delete env[key];
   env.GIT_OPTIONAL_LOCKS = "0";

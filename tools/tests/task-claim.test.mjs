@@ -316,3 +316,32 @@ test("claim records actual Git base without executing contract checks", (t) => {
   assert.equal(packet(f).baseCommit, expected);
   assert.equal(existsSync(join(f.root, "should-not-run")), false);
 });
+
+test("nested workspace inside parent git repo without own .git records null baseCommit", (t) => {
+  const parent = sandbox(t);
+  const git = (...args) => execFileSync("git", args, { cwd: parent, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "--quiet");
+  writeFileSync(join(parent, "root.txt"), "parent content\n");
+  git("add", "root.txt");
+  git("-c", "user.name=Claim Fixture", "-c", "user.email=claim@example.invalid", "-c", `core.hooksPath=${resolve(parent, "no-hooks")}`, "commit", "--quiet", "-m", "fixture");
+
+  const workspaceRoot = join(parent, "nested-workspace");
+  const base = join(workspaceRoot, "openspec", "changes", "demo");
+  mkdirSync(base, { recursive: true });
+  mkdirSync(join(workspaceRoot, "src"));
+  writeFileSync(join(workspaceRoot, "src", "report.mjs"), "export const report = 1;\n");
+  writeFileSync(join(base, "manifest.md"), "| ID | Quote |\n| R01 | export report |\n| R02 | preserve format |\n");
+  const contract = {
+    schemaVersion: 1,
+    change: "demo",
+    requirements: ["R01"],
+    files: ["src/report.mjs"],
+    checks: [["node", "--test", "tools/tests/report.test.mjs"]],
+  };
+  const contractPath = "contract.json";
+  writeFileSync(join(workspaceRoot, contractPath), JSON.stringify(contract));
+
+  const claim = claimTask(workspaceRoot, "export-report", "agent-a", contractPath);
+  assert.equal(claim.baseCommit, null);
+  assert.equal(contextPacket(workspaceRoot, { change: "demo", task: "export-report" }).baseCommit, null);
+});

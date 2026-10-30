@@ -37,7 +37,8 @@ providers:
         maxTokens: 32000
         # Optional: mark a reasoning-capable model so OMP exposes effort levels.
         reasoning: true
-        thinking:
-          mode: effort
-          efforts: [none, low, medium, high, xhigh, max]
-          defaultLevel: medium
+        # Re-commented: [none..max] violates OMP EffortSchema (minimal..max; source: @oh-my-pi/pi-coding-agent/src/config/models-config-schema-bundle.ts:132)
+        # thinking:
+        #   mode: effort
+        #   efforts: [none, low, medium, high, xhigh, max]
+        #   defaultLevel: medium

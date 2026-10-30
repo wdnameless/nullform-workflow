@@ -189,6 +189,305 @@ def metrics_to_dict(metrics: Dict[str, Any], include_cache_report: bool = False)
     return out
 
 
+def _parse_line(line: str) -> Optional[Dict[str, Any]]:
+    stripped = line.strip()
+    if not stripped:
+        return None
+    try:
+        event = json.loads(stripped)
+    except Exception:
+        return None
+    if not isinstance(event, dict):
+        return None
+    return event
+
+def _resolve_model_key(
+    raw_model: Optional[str],
+    provider: Optional[str],
+    fallback: str = "unknown",
+) -> str:
+    if not raw_model:
+        return fallback
+    if provider and "/" not in raw_model:
+        return f"{provider}/{raw_model}"
+    return raw_model
+
+
+def _inc_metrics(
+    metric_name: str,
+    agent_m: Dict[str, Any],
+    day_m: Dict[str, Any],
+    total_m: Dict[str, Any],
+) -> None:
+    agent_m[metric_name] += 1
+    day_m[metric_name] += 1
+    total_m[metric_name] += 1
+
+
+def _handle_model_change(
+    event: Dict[str, Any],
+    current_model: Optional[str],
+    per_agent: Dict[str, Dict[str, Any]],
+    per_day: Dict[str, Dict[str, Any]],
+    total_metrics: Dict[str, Any],
+) -> Optional[str]:
+    raw_model = event.get("model") or event.get("to")
+    model_key = _resolve_model_key(raw_model, event.get("provider"), current_model or "unknown")
+    day_key = parse_timestamp_to_utc_date(event.get("timestamp"))
+
+    is_fallback = bool(
+        event.get("resolvedModelIsFallback")
+        or event.get("isFallback")
+        or event.get("fallback")
+    )
+    if is_fallback:
+        _inc_metrics("fallbackChanges", per_agent[model_key], per_day[day_key], total_metrics)
+
+    prev = event.get("from") or current_model
+    switched = (
+        (prev is not None and raw_model and raw_model != prev)
+        or (current_model is None and event.get("from") is not None)
+    )
+    if switched:
+        _inc_metrics("modelSwitches", per_agent[model_key], per_day[day_key], total_metrics)
+
+    return raw_model if raw_model else current_model
+
+
+def _handle_fallback(
+    event: Dict[str, Any],
+    current_model: Optional[str],
+    per_agent: Dict[str, Dict[str, Any]],
+    per_day: Dict[str, Dict[str, Any]],
+    total_metrics: Dict[str, Any],
+) -> Optional[str]:
+    raw_model = event.get("model") or current_model or "unknown"
+    model_key = _resolve_model_key(raw_model, event.get("provider"))
+    day_key = parse_timestamp_to_utc_date(event.get("timestamp"))
+
+    _inc_metrics("fallbackChanges", per_agent[model_key], per_day[day_key], total_metrics)
+
+    ev_model = event.get("model")
+    if ev_model and current_model is not None and ev_model != current_model:
+        _inc_metrics("modelSwitches", per_agent[model_key], per_day[day_key], total_metrics)
+        return ev_model
+    return current_model
+def _extract_assistant_usage(
+    event: Dict[str, Any],
+) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    msg = event.get("message")
+    if not isinstance(msg, dict):
+        return None
+    if msg.get("role") != "assistant":
+        return None
+    usage = msg.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    if "input" not in usage or not isinstance(usage["input"], (int, float)):
+        return None
+    if "output" not in usage or not isinstance(usage["output"], (int, float)):
+        return None
+    return msg, usage
+
+
+def _extract_agent_role(
+    event: Dict[str, Any],
+    msg: Dict[str, Any],
+    current_session_agent: Optional[str],
+    agent_key: str,
+) -> str:
+    ev_role = event.get("role")
+    role_fallback = ev_role if ev_role != "assistant" else None
+    agent_identifier = (
+        event.get("agent")
+        or msg.get("agent")
+        or event.get("agent_name")
+        or msg.get("agent_name")
+        or event.get("session")
+        or msg.get("session")
+        or role_fallback
+        or current_session_agent
+        or agent_key
+    )
+    return role_of(agent_identifier)
+
+
+def _record_turn_classification(
+    usage: Dict[str, Any],
+    u_copy: Dict[str, Any],
+    agent_m: Dict[str, Any],
+    day_m: Dict[str, Any],
+    total_m: Dict[str, Any],
+) -> None:
+    inp_val = int(u_copy.get("input", 0))
+    out_val = int(u_copy.get("output", 0))
+    cr_val = int(u_copy.get("cacheRead", 0))
+
+    has_cache_field = "cacheRead" in usage or "cacheWrite" in usage
+    is_zero_usage = (inp_val == 0 and out_val == 0 and cr_val == 0)
+    is_warm = cr_val > 0
+    is_cold = has_cache_field and (inp_val > 0 and cr_val == 0)
+
+    if is_zero_usage:
+        _inc_metrics("zeroUsageTurns", agent_m, day_m, total_m)
+    elif is_warm:
+        _inc_metrics("warmTurns", agent_m, day_m, total_m)
+    elif is_cold:
+        _inc_metrics("coldTurns", agent_m, day_m, total_m)
+
+def _handle_message(
+    event: Dict[str, Any],
+    current_model: Optional[str],
+    current_session_agent: Optional[str],
+    per_agent: Dict[str, Dict[str, Any]],
+    per_day: Dict[str, Dict[str, Any]],
+    per_role: Dict[str, Dict[str, Any]],
+    total_metrics: Dict[str, Any],
+) -> Optional[str]:
+    extracted = _extract_assistant_usage(event)
+    if extracted is None:
+        return current_model
+    msg, usage = extracted
+
+    provider = msg.get("provider") or event.get("provider") or "unknown"
+    model = msg.get("model") or event.get("model") or "unknown"
+    agent_key = f"{provider}/{model}"
+
+    if current_model is None:
+        current_model = agent_key
+
+    role = _extract_agent_role(event, msg, current_session_agent, agent_key)
+    ts = msg.get("timestamp")
+    if ts is None:
+        ts = event.get("timestamp")
+    day_key = parse_timestamp_to_utc_date(ts)
+
+    if msg.get("resolvedModelIsFallback") is True or msg.get("isFallback") is True or msg.get("fallback") is True:
+        _inc_metrics("fallbackChanges", per_agent[agent_key], per_day[day_key], total_metrics)
+    u_copy = dict(usage)
+    if "totalTokens" not in u_copy:
+        u_copy["totalTokens"] = int(u_copy.get("input", 0)) + int(u_copy.get("output", 0))
+
+    _record_turn_classification(
+        usage, u_copy, per_agent[agent_key], per_day[day_key], total_metrics
+    )
+
+    add_metrics(per_agent[agent_key], u_copy)
+    add_metrics(per_day[day_key], u_copy)
+    add_metrics(total_metrics, u_copy)
+
+    role_m = per_role[role]
+    role_m["steps"] += 1
+    add_metrics(role_m, u_copy)
+
+    return current_model
+
+
+def _process_event(
+    event: Dict[str, Any],
+    current_model: Optional[str],
+    current_session_agent: Optional[str],
+    per_agent: Dict[str, Dict[str, Any]],
+    per_day: Dict[str, Dict[str, Any]],
+    per_role: Dict[str, Dict[str, Any]],
+    total_metrics: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[str]]:
+    event_type = event.get("type")
+    if event_type == "session":
+        session_agent = (
+            event.get("agent")
+            or event.get("agent_name")
+            or event.get("role")
+            or event.get("session")
+            or event.get("id")
+            or event.get("name")
+        )
+        return current_model, session_agent
+
+    if event_type == "model_change":
+        new_model = _handle_model_change(event, current_model, per_agent, per_day, total_metrics)
+        return new_model, current_session_agent
+
+    if event_type == "fallback":
+        new_model = _handle_fallback(event, current_model, per_agent, per_day, total_metrics)
+        return new_model, current_session_agent
+
+    if event_type == "message":
+        new_model = _handle_message(
+            event, current_model, current_session_agent,
+            per_agent, per_day, per_role, total_metrics,
+        )
+        return new_model, current_session_agent
+
+    return current_model, current_session_agent
+
+
+def _process_transcript_file(
+    path: str,
+    per_agent: Dict[str, Dict[str, Any]],
+    per_day: Dict[str, Dict[str, Any]],
+    per_role: Dict[str, Dict[str, Any]],
+    total_metrics: Dict[str, Any],
+) -> None:
+    if not os.path.exists(path):
+        return
+    try:
+        current_model: Optional[str] = None
+        current_session_agent: Optional[str] = None
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                event = _parse_line(line)
+                if event is None:
+                    continue
+                current_model, current_session_agent = _process_event(
+                    event, current_model, current_session_agent,
+                    per_agent, per_day, per_role, total_metrics,
+                )
+    except Exception:
+        return
+
+
+def _aggregate_by_role(
+    per_role: Dict[str, Dict[str, Any]],
+    total_metrics: Dict[str, Any],
+) -> Tuple[Dict[str, Any], float]:
+    total_units = round(
+        total_metrics["output"] * W_OUT
+        + total_metrics["cacheWrite"] * W_WRITE
+        + total_metrics["cacheRead"] * W_READ,
+        4,
+    )
+    out_per_role = {}
+    for role_key, rm in sorted(per_role.items()):
+        role_units = round(
+            rm["output"] * W_OUT
+            + rm["cacheWrite"] * W_WRITE
+            + rm["cacheRead"] * W_READ,
+            4,
+        )
+        share = round(role_units / total_units, 4) if total_units > 0 else 0.0
+        cost_dict = dict(rm["cost"])
+        if "total" not in cost_dict and cost_dict:
+            cost_dict["total"] = sum(cost_dict.values())
+        elif not cost_dict:
+            cost_dict = {"total": 0.0}
+        clean_cost = {k: (round(v, 6) if isinstance(v, float) else v) for k, v in cost_dict.items()}
+
+        out_per_role[role_key] = {
+            "steps": rm["steps"],
+            "input": rm["input"],
+            "output": rm["output"],
+            "cacheRead": rm["cacheRead"],
+            "cacheWrite": rm["cacheWrite"],
+            "totalTokens": rm["totalTokens"],
+            "cost": clean_cost,
+            "normalizedUnits": role_units,
+            "share": share,
+            "sharePercent": round(share * 100.0, 2),
+        }
+    return out_per_role, total_units
+
+
 def parse_and_aggregate(
     paths: List[str],
     cache_report: bool = False,
@@ -202,185 +501,7 @@ def parse_and_aggregate(
     total_metrics = empty_metrics()
 
     for path in paths:
-        if not os.path.exists(path):
-            continue
-        try:
-            current_model: Optional[str] = None
-            current_session_agent: Optional[str] = None
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except Exception:
-                        continue
-
-                    if not isinstance(event, dict):
-                        continue
-
-                    event_type = event.get("type")
-
-                    if event_type == "session":
-                        current_session_agent = (
-                            event.get("agent")
-                            or event.get("agent_name")
-                            or event.get("role")
-                            or event.get("session")
-                            or event.get("id")
-                            or event.get("name")
-                        )
-                        continue
-                    # Parse model_change events
-                    if event_type == "model_change":
-                        raw_model = event.get("model") or event.get("to")
-                        prov = event.get("provider")
-                        if prov and raw_model and "/" not in raw_model:
-                            model_key = f"{prov}/{raw_model}"
-                        elif raw_model:
-                            model_key = raw_model
-                        else:
-                            model_key = current_model or "unknown"
-
-                        ts = event.get("timestamp")
-                        day_key = parse_timestamp_to_utc_date(ts)
-
-                        is_fallback = bool(
-                            event.get("resolvedModelIsFallback")
-                            or event.get("isFallback")
-                            or event.get("fallback")
-                        )
-                        if is_fallback:
-                            per_agent[model_key]["fallbackChanges"] += 1
-                            per_day[day_key]["fallbackChanges"] += 1
-                            total_metrics["fallbackChanges"] += 1
-
-                        prev = event.get("from") or current_model
-                        if prev is not None and raw_model and raw_model != prev:
-                            per_agent[model_key]["modelSwitches"] += 1
-                            per_day[day_key]["modelSwitches"] += 1
-                            total_metrics["modelSwitches"] += 1
-                        elif current_model is None and event.get("from") is not None:
-                            per_agent[model_key]["modelSwitches"] += 1
-                            per_day[day_key]["modelSwitches"] += 1
-                            total_metrics["modelSwitches"] += 1
-
-                        if raw_model:
-                            current_model = raw_model
-                        continue
-
-                    # Parse fallback events
-                    if event_type == "fallback":
-                        raw_model = event.get("model") or current_model or "unknown"
-                        prov = event.get("provider")
-                        if prov and raw_model and "/" not in raw_model:
-                            model_key = f"{prov}/{raw_model}"
-                        else:
-                            model_key = raw_model
-
-                        ts = event.get("timestamp")
-                        day_key = parse_timestamp_to_utc_date(ts)
-
-                        per_agent[model_key]["fallbackChanges"] += 1
-                        per_day[day_key]["fallbackChanges"] += 1
-                        total_metrics["fallbackChanges"] += 1
-
-                        if event.get("model") and current_model is not None and event.get("model") != current_model:
-                            per_agent[model_key]["modelSwitches"] += 1
-                            per_day[day_key]["modelSwitches"] += 1
-                            total_metrics["modelSwitches"] += 1
-                            current_model = event.get("model")
-                        continue
-
-                    if event_type != "message":
-                        continue
-
-                    msg = event.get("message")
-                    if not isinstance(msg, dict):
-                        continue
-                    if msg.get("role") != "assistant":
-                        continue
-
-                    usage = msg.get("usage")
-                    if not isinstance(usage, dict):
-                        continue
-
-                    # Numeric input and output required per spec
-                    if "input" not in usage or not isinstance(usage["input"], (int, float)):
-                        continue
-                    if "output" not in usage or not isinstance(usage["output"], (int, float)):
-                        continue
-
-                    provider = msg.get("provider") or event.get("provider") or "unknown"
-                    model = msg.get("model") or event.get("model") or "unknown"
-                    agent_key = f"{provider}/{model}"
-
-                    if current_model is None:
-                        current_model = agent_key
-
-                    agent_identifier = (
-                        event.get("agent")
-                        or msg.get("agent")
-                        or event.get("agent_name")
-                        or msg.get("agent_name")
-                        or event.get("session")
-                        or msg.get("session")
-                        or (event.get("role") if event.get("role") != "assistant" else None)
-                        or current_session_agent
-                        or agent_key
-                    )
-                    role = role_of(agent_identifier)
-                    # Timestamp can be on message or top-level event
-                    ts = msg.get("timestamp")
-                    if ts is None:
-                        ts = event.get("timestamp")
-                    day_key = parse_timestamp_to_utc_date(ts)
-
-                    if msg.get("resolvedModelIsFallback") is True or msg.get("isFallback") is True or msg.get("fallback") is True:
-                        per_agent[agent_key]["fallbackChanges"] += 1
-                        per_day[day_key]["fallbackChanges"] += 1
-                        total_metrics["fallbackChanges"] += 1
-
-                    # Total tokens auto-compute if omitted
-                    u_copy = dict(usage)
-                    if "totalTokens" not in u_copy:
-                        u_copy["totalTokens"] = int(u_copy.get("input", 0)) + int(u_copy.get("output", 0))
-
-                    inp_val = int(u_copy.get("input", 0))
-                    out_val = int(u_copy.get("output", 0))
-                    cr_val = int(u_copy.get("cacheRead", 0))
-
-                    has_cache_field = "cacheRead" in usage or "cacheWrite" in usage
-                    # Classification by actual token usage: an errored turn that
-                    # still spent tokens is a real (cold/warm) turn, not zero-usage.
-                    # Mixing both made zeroUsageTurns overlap the token totals.
-                    is_zero_usage = (inp_val == 0 and out_val == 0 and cr_val == 0)
-                    is_warm = cr_val > 0
-                    is_cold = has_cache_field and (inp_val > 0 and cr_val == 0)
-
-                    if is_zero_usage:
-                        per_agent[agent_key]["zeroUsageTurns"] += 1
-                        per_day[day_key]["zeroUsageTurns"] += 1
-                        total_metrics["zeroUsageTurns"] += 1
-                    elif is_warm:
-                        per_agent[agent_key]["warmTurns"] += 1
-                        per_day[day_key]["warmTurns"] += 1
-                        total_metrics["warmTurns"] += 1
-                    elif is_cold:
-                        per_agent[agent_key]["coldTurns"] += 1
-                        per_day[day_key]["coldTurns"] += 1
-                        total_metrics["coldTurns"] += 1
-
-                    add_metrics(per_agent[agent_key], u_copy)
-                    add_metrics(per_day[day_key], u_copy)
-                    add_metrics(total_metrics, u_copy)
-
-                    role_m = per_role[role]
-                    role_m["steps"] += 1
-                    add_metrics(role_m, u_copy)
-        except Exception:
-            continue
+        _process_transcript_file(path, per_agent, per_day, per_role, total_metrics)
 
     out_per_agent = {k: metrics_to_dict(v, do_cache) for k, v in sorted(per_agent.items())}
     out_per_day = {k: metrics_to_dict(v, do_cache) for k, v in sorted(per_day.items())}
@@ -395,103 +516,63 @@ def parse_and_aggregate(
         result["per_model"] = out_per_agent
 
     if by_role:
-        total_units = round(
-            total_metrics["output"] * W_OUT
-            + total_metrics["cacheWrite"] * W_WRITE
-            + total_metrics["cacheRead"] * W_READ,
-            4,
-        )
-        out_per_role = {}
-        for role_key, rm in sorted(per_role.items()):
-            role_units = round(
-                rm["output"] * W_OUT
-                + rm["cacheWrite"] * W_WRITE
-                + rm["cacheRead"] * W_READ,
-                4,
-            )
-            share = round(role_units / total_units, 4) if total_units > 0 else 0.0
-            cost_dict = dict(rm["cost"])
-            if "total" not in cost_dict and cost_dict:
-                cost_dict["total"] = sum(cost_dict.values())
-            elif not cost_dict:
-                cost_dict = {"total": 0.0}
-            clean_cost = {k: (round(v, 6) if isinstance(v, float) else v) for k, v in cost_dict.items()}
-
-            out_per_role[role_key] = {
-                "steps": rm["steps"],
-                "input": rm["input"],
-                "output": rm["output"],
-                "cacheRead": rm["cacheRead"],
-                "cacheWrite": rm["cacheWrite"],
-                "totalTokens": rm["totalTokens"],
-                "cost": clean_cost,
-                "normalizedUnits": role_units,
-                "share": share,
-                "sharePercent": round(share * 100.0, 2),
-            }
+        out_per_role, total_units = _aggregate_by_role(per_role, total_metrics)
         result["per_role"] = out_per_role
         result["total"]["normalizedUnits"] = total_units
 
     return result
 
 
-def format_table(data: dict[str, Any], cache_report: bool = False, by_role: bool = False) -> str:
-    lines: list[str] = []
+def _format_table_row(name: str, m: Dict[str, Any], width: int = 30, cache_report: bool = False) -> str:
+    tokens_str = f"in={m['input']:,} out={m['output']:,} total={m['totalTokens']:,}"
+    if m.get("cacheRead", 0) > 0 or m.get("cacheWrite", 0) > 0:
+        tokens_str += f" (cacheR={m['cacheRead']:,} cacheW={m['cacheWrite']:,})"
+    cost_val = m.get("cost", {}).get("total", 0.0)
+    cost_str = f"${cost_val:,.4f}"
+    row_str = f"  {name:<{width}} | {tokens_str:<50} | {cost_str:>10}"
+    if cache_report and "cacheReadShare" in m:
+        share_val = m["cacheReadShare"]
+        share_str = f"{share_val:.1%}" if share_val is not None else "n/a"
+        cache_detail = (
+            f"    cacheShare={share_str} warm={m.get('warmTurns', 0)} "
+            f"cold={m.get('coldTurns', 0)} zero={m.get('zeroUsageTurns', 0)} "
+            f"switches={m.get('modelSwitches', 0)} fallbacks={m.get('fallbackChanges', 0)}"
+        )
+        return f"{row_str}\n{cache_detail}"
+    return row_str
 
-    def format_row(name: str, m: Dict[str, Any], width: int = 30) -> str:
-        tokens_str = f"in={m['input']:,} out={m['output']:,} total={m['totalTokens']:,}"
-        if m.get("cacheRead", 0) > 0 or m.get("cacheWrite", 0) > 0:
-            tokens_str += f" (cacheR={m['cacheRead']:,} cacheW={m['cacheWrite']:,})"
-        cost_val = m.get("cost", {}).get("total", 0.0)
-        cost_str = f"${cost_val:,.4f}"
-        row_str = f"  {name:<{width}} | {tokens_str:<50} | {cost_str:>10}"
-        if cache_report and "cacheReadShare" in m:
-            share_val = m["cacheReadShare"]
-            share_str = f"{share_val:.1%}" if share_val is not None else "n/a"
-            cache_detail = (
-                f"    cacheShare={share_str} warm={m.get('warmTurns', 0)} "
-                f"cold={m.get('coldTurns', 0)} zero={m.get('zeroUsageTurns', 0)} "
-                f"switches={m.get('modelSwitches', 0)} fallbacks={m.get('fallbackChanges', 0)}"
-            )
-            return f"{row_str}\n{cache_detail}"
-        return row_str
 
-    lines.append("=== PER AGENT ===")
-    if data["per_agent"]:
-        for agent, m in data["per_agent"].items():
-            lines.append(format_row(agent, m))
+def _format_section(title: str, section_data: Dict[str, Any], width: int = 30, cache_report: bool = False) -> List[str]:
+    lines: List[str] = [title]
+    if section_data:
+        for name, m in section_data.items():
+            lines.append(_format_table_row(name, m, width=width, cache_report=cache_report))
     else:
         lines.append("  (none)")
+    return lines
 
-    lines.append("")
-    lines.append("=== PER DAY (UTC) ===")
-    if data["per_day"]:
-        for day, m in data["per_day"].items():
-            lines.append(format_row(day, m, width=15))
+
+def _format_role_section(per_role: Dict[str, Any]) -> List[str]:
+    lines: List[str] = ["=== PER ROLE ==="]
+    if per_role:
+        for role, r in sorted(per_role.items()):
+            steps = r.get("steps", 0)
+            units = r.get("normalizedUnits", 0.0)
+            share = r.get("share", 0.0)
+            share_str = f"{share:.1%}" if share is not None else "0.0%"
+            units_str = f"{units:,.2f}"
+            lines.append(f"  {role:<15} | steps={steps:<5} | units={units_str:>12} | share={share_str:>7}")
     else:
         lines.append("  (none)")
-    if by_role or "per_role" in data:
-        lines.append("")
-        lines.append("=== PER ROLE ===")
-        per_role = data.get("per_role", {})
-        if per_role:
-            for role, r in sorted(per_role.items()):
-                steps = r.get("steps", 0)
-                units = r.get("normalizedUnits", 0.0)
-                share = r.get("share", 0.0)
-                share_str = f"{share:.1%}" if share is not None else "0.0%"
-                units_str = f"{units:,.2f}"
-                lines.append(f"  {role:<15} | steps={steps:<5} | units={units_str:>12} | share={share_str:>7}")
-        else:
-            lines.append("  (none)")
+    return lines
 
-    lines.append("")
-    tot = data["total"]
+
+def _format_total_summary(tot: Dict[str, Any], cache_report: bool = False) -> List[str]:
     tot_tokens = f"in={tot['input']:,} out={tot['output']:,} total={tot['totalTokens']:,}"
     if tot.get("cacheRead", 0) > 0 or tot.get("cacheWrite", 0) > 0:
         tot_tokens += f" (cacheR={tot['cacheRead']:,} cacheW={tot['cacheWrite']:,})"
     tot_cost = f"${tot.get('cost', {}).get('total', 0.0):,.4f}"
-    lines.append(f"TOTAL: {tot_tokens} | cost={tot_cost}")
+    lines: List[str] = [f"TOTAL: {tot_tokens} | cost={tot_cost}"]
     if cache_report and "cacheReadShare" in tot:
         share_val = tot["cacheReadShare"]
         share_str = f"{share_val:.1%}" if share_val is not None else "n/a"
@@ -500,7 +581,19 @@ def format_table(data: dict[str, Any], cache_report: bool = False, by_role: bool
             f"cold={tot.get('coldTurns', 0)} zero={tot.get('zeroUsageTurns', 0)} "
             f"switches={tot.get('modelSwitches', 0)} fallbacks={tot.get('fallbackChanges', 0)}"
         )
+    return lines
 
+
+def format_table(data: dict[str, Any], cache_report: bool = False, by_role: bool = False) -> str:
+    lines: list[str] = []
+    lines.extend(_format_section("=== PER AGENT ===", data.get("per_agent", {}), width=30, cache_report=cache_report))
+    lines.append("")
+    lines.extend(_format_section("=== PER DAY (UTC) ===", data.get("per_day", {}), width=15, cache_report=cache_report))
+    if by_role or "per_role" in data:
+        lines.append("")
+        lines.extend(_format_role_section(data.get("per_role", {})))
+    lines.append("")
+    lines.extend(_format_total_summary(data["total"], cache_report=cache_report))
     return "\n".join(lines)
 
 

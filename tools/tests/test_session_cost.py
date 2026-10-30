@@ -320,5 +320,28 @@ class TestSessionCostByRole(unittest.TestCase):
         finally:
             sys.argv = orig_argv
 
+class TestSessionCostExtractedHelpers(unittest.TestCase):
+    """Verify extracted pure helpers maintain correct behavior in isolation."""
+
+    def test_parse_line(self):
+        self.assertIsNone(session_cost._parse_line(""))
+        self.assertIsNone(session_cost._parse_line("   \n"))
+        self.assertIsNone(session_cost._parse_line("invalid json {"))
+        self.assertIsNone(session_cost._parse_line("123"))
+        self.assertEqual(session_cost._parse_line('{"type":"session"}'), {"type": "session"})
+
+    def test_resolve_model_key(self):
+        self.assertEqual(session_cost._resolve_model_key(None, None, fallback="fb"), "fb")
+        self.assertEqual(session_cost._resolve_model_key("model-x", "provider-y"), "provider-y/model-x")
+        self.assertEqual(session_cost._resolve_model_key("prov/model-x", "provider-y"), "prov/model-x")
+        self.assertEqual(session_cost._resolve_model_key("model-x", None), "model-x")
+
+    def test_format_table_row(self):
+        m = {"input": 100, "output": 50, "totalTokens": 150, "cost": {"total": 0.05}}
+        row = session_cost._format_table_row("agent-1", m, width=10)
+        self.assertIn("agent-1", row)
+        self.assertIn("in=100 out=50 total=150", row)
+        self.assertIn("$0.0500", row)
+
 if __name__ == "__main__":
     unittest.main()

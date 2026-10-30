@@ -236,7 +236,7 @@ Terms used in this NULLFORM WORKFLOW harness. Definitions say what a term
 - **Delete-guard** — `agent/extensions/nullform-delete-guard.ts`. Optional OMP extension, not installed globally by minimal `nullform init`. Requires interactive confirmation for identified destructive shell/Git restoration commands and blocks identified Git restoration headlessly. Other permissions are unchanged. A best-effort command guard, not an arbitrary-shell/filesystem sandbox.
 - **Destructive rule (`DestructiveRule`)** — pattern match specification (`agent/extensions/nullform-delete-guard.ts`) associating a high-risk command regex with a human-readable action description and optional headless-block policy.
 - **Delete guard result (`DeleteGuardResult`)** — execution block decision (`agent/extensions/nullform-delete-guard.ts`) containing denial status, user-facing reason, and instruction preventing command retry.
-- **Effort** — reasoning depth vocabulary: none|low|medium|high|xhigh|max (default medium).
+- **Effort** — reasoning depth vocabulary: minimal|low|medium|high|xhigh|max (default medium). Source: OMP EffortSchema (models-config-schema-bundle.ts:132); 'none' is a wire off-switch, not a schema value.
 
 ## Operations
 

@@ -527,3 +527,110 @@ test('gateway route: settle prices usage at zero without throwing', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('near-bound ledger: write triggers settle-compaction keeping size < 1 MiB with honest rollup', () => {
+  const dir = makeTempDir();
+  try {
+    nonGitDir(dir);
+    const auth = resolveBudgetAuthority(dir);
+    mkdirSync(auth.stateDir, { recursive: true });
+
+    const rowTemplate = (id, settledNanoUsd = 1000) => ({
+      reservationId: id,
+      status: 'settled',
+      reservedNanoUsd: settledNanoUsd,
+      maxRequests: 1,
+      requests: [{ ordinal: 1, at: '2026-10-24T00:00:00.000Z' }],
+      createdAt: '2026-10-24T00:00:00.000Z',
+      settledAt: '2026-10-24T00:00:01.000Z',
+      settledNanoUsd,
+    });
+
+    const count = 3000;
+    const reservations = Array.from({ length: count }, (_, i) => rowTemplate(`res-${String(i).padStart(8, '0')}`, 1000));
+    const totalSettled = count * 1000;
+    const ledger = { settledNanoUsd: totalSettled, reservations };
+
+    const uncompactedBytes = Buffer.byteLength(`${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
+    assert.ok(uncompactedBytes > BYTE_BOUND, `Uncompacted bytes ${uncompactedBytes} must exceed 1 MiB bound`);
+
+    budget.writeLedger(auth.ledgerPath, ledger);
+
+    const onDiskSize = statSync(auth.ledgerPath).size;
+    assert.ok(onDiskSize < BYTE_BOUND, `Compacted ledger on disk size ${onDiskSize} must be < 1 MiB`);
+
+    const readBack = budget.readLedger(auth.ledgerPath);
+    assert.equal(readBack.settledNanoUsd, totalSettled);
+    assert.ok(readBack.reservations.length < count, 'Reservations must be compacted');
+
+    const snap = budget.inspectBudget({ root: dir, policy: makePolicy({ ceilingUsd: 100.0 }) });
+    assert.equal(snap.totalSettledNanoUsd, totalSettled);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('settleReservation on near-bound ledger triggers compaction on write', () => {
+  const dir = makeTempDir();
+  try {
+    nonGitDir(dir);
+    const auth = resolveBudgetAuthority(dir);
+    mkdirSync(auth.stateDir, { recursive: true });
+
+    const rowTemplate = (id, settledNanoUsd = 1000) => ({
+      reservationId: id,
+      status: 'settled',
+      reservedNanoUsd: settledNanoUsd,
+      maxRequests: 1,
+      requests: [{ ordinal: 1, at: '2026-10-24T00:00:00.000Z' }],
+      createdAt: '2026-10-24T00:00:00.000Z',
+      settledAt: '2026-10-24T00:00:01.000Z',
+      settledNanoUsd,
+    });
+
+    const sample1 = JSON.stringify({ settledNanoUsd: 1000, reservations: [rowTemplate('res-00000000')] }, null, 2);
+    const sample2 = JSON.stringify({ settledNanoUsd: 2000, reservations: [rowTemplate('res-00000000'), rowTemplate('res-00000001')] }, null, 2);
+    const rowBytes = Buffer.byteLength(sample2, 'utf8') - Buffer.byteLength(sample1, 'utf8');
+    const baseBytes = Buffer.byteLength(sample1, 'utf8') - rowBytes;
+
+    const activeResId = 'active-res-001';
+    const activeRow = {
+      reservationId: activeResId,
+      status: 'reserved',
+      reservedNanoUsd: 100000,
+      maxRequests: 2,
+      requests: [{ ordinal: 1, at: '2026-10-24T00:00:00.000Z' }],
+      createdAt: '2026-10-24T00:00:00.000Z',
+      model: 'gpt-4o-mini-2024-07-18',
+      tariffsNanoPerToken: { input: 150, output: 600, cacheRead: 75, cacheWrite: 0 },
+      extra: 'x'.repeat(240),
+    };
+    const activeRowBytes = Buffer.byteLength(JSON.stringify(activeRow, null, 2));
+    const targetBytes = BYTE_BOUND - activeRowBytes - 30;
+    const count = Math.floor((targetBytes - baseBytes) / rowBytes);
+
+    const reservations = [
+      ...Array.from({ length: count }, (_, i) => rowTemplate(`res-${String(i).padStart(8, '0')}`, 1000)),
+      activeRow,
+    ];
+    const totalSettled = count * 1000;
+    const initialText = `${JSON.stringify({ settledNanoUsd: totalSettled, reservations }, null, 2)}\n`;
+    assert.ok(Buffer.byteLength(initialText, 'utf8') <= BYTE_BOUND, 'Initial ledger must be <= 1 MiB on disk');
+    writeFileSync(auth.ledgerPath, initialText, 'utf8');
+
+    settleReservation({
+      root: dir,
+      reservationId: activeResId,
+      usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const onDiskSize = statSync(auth.ledgerPath).size;
+    assert.ok(onDiskSize < BYTE_BOUND, `Ledger on disk size ${onDiskSize} must be < 1 MiB`);
+
+    const snap = budget.inspectBudget({ root: dir, policy: makePolicy({ ceilingUsd: 100.0 }) });
+    assert.ok(snap.totalSettledNanoUsd > totalSettled, 'Settled usage added to rollup');
+    assert.ok(snap.reservationCount <= 2, 'Settled reservations compacted into rollup');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
