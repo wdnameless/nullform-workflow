@@ -10,7 +10,8 @@ const REPO_ROOT = resolve(__dirname, "../..");
 const SCRIPT_PATH = resolve(REPO_ROOT, "tools/install-harness.mjs");
 const SH_PATH = resolve(REPO_ROOT, "install.sh");
 import { createTempDir } from "./test-helpers.mjs";
-import { detectHarness } from "../install-harness.mjs";
+import { detectHarness, installHarness, STORE_MARKER, isPreparedStore } from "../install-harness.mjs";
+import { readLocalVersion } from "../installation/state.mjs";
 import { preflightJson5Config, preflightJsoncConfig, loadYaml } from "../installation/config.mjs";
 import { resolveHostHome } from "../installation/profiles.mjs";
 function getBashPath() {
@@ -163,11 +164,7 @@ test("detectHarness and dry-run plans for openclaw, hermes, and openhuman", () =
 
 /** True when a harness prerequisite (`omp`, `openspec`) is runnable on this host. */
 function hasCommand(name) {
-  const probe = spawnSync(name, ["--version"], {
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    timeout: 10000,
-  });
+  const probe = spawnSync(name, ["--version"], { encoding: "utf8", shell: process.platform === "win32", timeout: 10000 });
   return !probe.error && probe.status === 0;
 }
 
@@ -181,10 +178,7 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
   const root = join(temp, "live");
   const userHome = join(temp, "home");
   try {
-    const installed = spawnSync(process.execPath, [
-      SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json",
-    ], { encoding: "utf8" });
-    assert.equal(installed.status, 0, installed.stderr);
+    const installed = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json"], { encoding: "utf8" });
 
     const law = readFileSync(join(userHome, ".omp", "agent", "AGENTS.md"), "utf8");
     assert.ok(law.includes(root.replace(/\\/g, "/")));
@@ -194,9 +188,7 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
     assert.ok(existsSync(join(root, "tools", "sync-manifest.json")));
 
     const verified = spawnSync(process.execPath, [
-      join(root, "tools", "verify.mjs"),
-      "--profile", "verify", "--root", root, "--harness", root,
-      "--user-home", userHome, "--json",
+      join(root, "tools", "verify.mjs"), "--profile", "verify", "--root", root, "--harness", root, "--user-home", userHome, "--json",
     ], { encoding: "utf8" });
     // A truncated document means stdout was cut mid-write (process.exit()
     // discarding a queued pipe write). Report the raw bytes: without them the
@@ -219,13 +211,8 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
     // the verifier's install-doctor check runs the shipped doctor, whose plugin probe is
     // opt-in (`--require-plugins`) and therefore not part of this install's contract.
     for (const label of [
-      "node present",
-      "no unsubstituted placeholders",
-      "prompt surfaces have no volatile literals",
-      "prompt surfaces match baseline",
-      "tier gate enforces artifacts",
-      "portable core specification",
-      "install doctor",
+      "node present", "no unsubstituted placeholders", "prompt surfaces have no volatile literals",
+      "prompt surfaces match baseline", "tier gate enforces artifacts", "portable core specification", "install doctor",
     ]) {
       assert.equal(statusOf(label), "PASS", `${label}: ${JSON.stringify(report.results)}`);
     }
@@ -505,14 +492,7 @@ test("reinstallation preserves JSONC comments/trailing commas, respects opencode
   const tempHome = createTempDir("harness-preserve-cfg-home-");
   try {
     const opencodeJsoncPath = join(tempRoot, "opencode.jsonc");
-    writeFileSync(opencodeJsoncPath, [
-      "{",
-      "  // User JSONC comment preserved",
-      '  "customUserSecret": "super-secret-123",',
-      '  "customSetting": 42,',
-      "}",
-      "",
-    ].join("\n"), "utf8");
+    writeFileSync(opencodeJsoncPath, "{\n  // User JSONC comment preserved\n  \"customUserSecret\": \"super-secret-123\",\n  \"customSetting\": 42,\n}\n", "utf8");
 
     const hermesHome = join(tempHome, ".hermes");
     mkdirSync(hermesHome, { recursive: true });
@@ -633,16 +613,7 @@ test("consumer regression: malformed markers, malformed YAML, and complex YAML a
     assert.match(badYamlRes.stderr, /Preflight failed: malformed YAML/i);
     assert.equal(existsSync(join(tempRoot, "tools")), false, "Zero files copied on YAML preflight failure");
 
-    writeFileSync(hermesConfig, [
-      "# Top level comment",
-      "default_endpoint: &default_ep 'https://api.example.com/v1/#endpoint'",
-      "multiline_note: |",
-      "  Line one with # not a comment",
-      "  Line two",
-      "backup_endpoint: *default_ep",
-      "custom_user_setting: 12345",
-      "",
-    ].join("\n"), "utf8");
+    writeFileSync(hermesConfig, "# Top level comment\ndefault_endpoint: &default_ep 'https://api.example.com/v1/#endpoint'\nmultiline_note: |\n  Line one with # not a comment\n  Line two\nbackup_endpoint: *default_ep\ncustom_user_setting: 12345\n", "utf8");
     const okYamlRes = spawnSync(process.execPath, [
       SCRIPT_PATH, "--harness", "hermes", "--root", tempRoot, "--user-home", tempHome, "--host-home", hermesHome, "--json",
     ], { encoding: "utf8", env: isolatedChildEnv(tempHome) });
@@ -651,6 +622,71 @@ test("consumer regression: malformed markers, malformed YAML, and complex YAML a
     assert.ok(afterYaml.includes("default_endpoint: &default_ep") && afterYaml.includes("backup_endpoint: *default_ep"));
     assert.ok(afterYaml.includes("Line one with # not a comment") && afterYaml.includes("custom_user_setting: 12345"));
     assert.equal(loadYaml().parse(afterYaml).mcp_servers, undefined);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test("repeat install reuses prepared storage (store marker + version check) without full copy (R10)", () => {
+  const tempRoot = createTempDir("harness-store-reuse-root-");
+  const tempHome = createTempDir("harness-store-reuse-home-");
+  try {
+    const currentVer = readLocalVersion(REPO_ROOT);
+    assert.ok(currentVer, "Repository must have a valid VERSION");
+
+    // 1. Initial install on fresh targetRoot: full copy
+    const t0 = Date.now();
+    const plan1 = installHarness({ harness: "claude", root: tempRoot, userHome: tempHome });
+    const duration1 = Date.now() - t0;
+    assert.equal(plan1.storeReused, false, "Initial install must perform a full store copy");
+    assert.ok(plan1.filesToCopy.length > 0, "Initial install must copy store files");
+    const markerPath = join(tempRoot, STORE_MARKER);
+    assert.equal(existsSync(markerPath), true, "Initial install must create the store marker");
+
+    const markerData = JSON.parse(readFileSync(markerPath, "utf8"));
+    assert.equal(markerData.version, currentVer, "Store marker must record current version");
+    assert.equal(isPreparedStore(tempRoot, currentVer), true, "isPreparedStore must report true on prepared store");
+
+    // Canary check: write a canary marker into an owned store file
+    const readmePath = join(tempRoot, "README.md");
+    writeFileSync(readmePath, "CANARY_HUMAN_EDIT_REUSE_CHECK\n", "utf8");
+
+    // 2. Repeat install on the same targetRoot: reuses prepared store
+    const t1 = Date.now();
+    const plan2 = installHarness({ harness: "claude", root: tempRoot, userHome: tempHome });
+    const duration2 = Date.now() - t1;
+    assert.equal(plan2.storeReused, true, "Repeat install must detect prepared store and reuse");
+    assert.equal(plan2.reusedStore, true, "reusedStore property must be true");
+    assert.equal(plan2.filesToCopy.length, 0, "Repeat install must not copy store files (0 copy calls)");
+    assert.equal(readFileSync(readmePath, "utf8"), "CANARY_HUMAN_EDIT_REUSE_CHECK\n", "Reused store must not overwrite existing store files");
+    assert.ok(duration2 <= duration1, `Repeat install timing (${duration2}ms) must be faster than full copy (${duration1}ms)`);
+
+    // 3. Repeat install via CLI (--json): verified via process spawn
+    const cliRes = spawnSync(process.execPath, [
+      SCRIPT_PATH, "--harness", "claude", "--root", tempRoot, "--user-home", tempHome, "--json",
+    ], { encoding: "utf8" });
+    assert.equal(cliRes.status, 0, cliRes.stderr);
+    const cliPlan = JSON.parse(cliRes.stdout);
+    assert.equal(cliPlan.storeReused, true, "CLI repeat install must report storeReused: true");
+    assert.equal(cliPlan.filesToCopy.length, 0, "CLI repeat install must report filesToCopy: []");
+
+    // 4. Missing marker triggers full copy fallback and recreates marker
+    rmSync(markerPath, { force: true });
+    assert.equal(isPreparedStore(tempRoot, currentVer), false, "Missing marker must invalidate prepared store");
+    const planNoMarker = installHarness({ harness: "claude", root: tempRoot, userHome: tempHome });
+    assert.equal(planNoMarker.storeReused, false, "Missing marker must force full copy");
+    assert.ok(planNoMarker.filesToCopy.length > 0, "Files must be copied when marker is missing");
+    assert.equal(existsSync(markerPath), true, "Store marker must be recreated after full copy");
+
+    // 5. Version mismatch in marker triggers full copy fallback and updates marker
+    writeFileSync(markerPath, JSON.stringify({ version: "0.0.1" }), "utf8");
+    assert.equal(isPreparedStore(tempRoot, currentVer), false, "Version mismatch must invalidate prepared store");
+    const planVerMismatch = installHarness({ harness: "claude", root: tempRoot, userHome: tempHome });
+    assert.equal(planVerMismatch.storeReused, false, "Version mismatch must force full copy");
+    assert.ok(planVerMismatch.filesToCopy.length > 0, "Files must be copied when version mismatches");
+    const updatedMarker = JSON.parse(readFileSync(markerPath, "utf8"));
+    assert.equal(updatedMarker.version, currentVer, "Store marker version must be updated to current version");
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
     rmSync(tempHome, { recursive: true, force: true });

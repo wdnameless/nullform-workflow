@@ -1087,7 +1087,7 @@ test("R07: CLI --ensure и --url учитывают --session, создавая 
       { encoding: "utf8", env: { ...process.env, NF_NO_OPEN: "1" }, timeout: 15000 }
     );
     assert.equal(runUrl.status, 0, `CLI --url завершился с ошибкой: ${runUrl.stderr}`);
-    assert.match(runUrl.stdout.trim(), new RegExp(`http://localhost:${port}`), "--url должен вернуть URL alpha");
+    assert.match(runUrl.stdout.trim(), new RegExp(`http://(?:localhost|127\\.0\\.0\\.1):${port}`), "--url должен вернуть URL alpha");
   } finally {
     if (spawnedPid) {
       try { process.kill(spawnedPid); } catch {}

@@ -29,13 +29,14 @@ import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { MANAGED_START, MANAGED_END, RUNTIME_PARSER_DEPS, resolveRuntimePackageDir, preflightAllConfigs, hashContent, isCommandInPath } from "./installation/config.mjs";
+import { MANAGED_START, MANAGED_END, preflightAllConfigs, hashContent, isCommandInPath } from "./installation/config.mjs";
 import { applyHarnessAdapter, prepareHermesActivation } from "./installation/adapters.mjs";
 import { validateRootPath, validatePathWithinScope } from './worktree-snapshot.mjs';
-import { CONCRETE_HARNESSES, CORE_FILES, getCoreDirs, getDefaultRoot, preflightFilesystemConfinement, readInstallationState, readLocalVersion } from './installation/state.mjs';
+import { CONCRETE_HARNESSES, getDefaultRoot, preflightFilesystemConfinement, readInstallationState, readLocalVersion } from './installation/state.mjs';
 import { acquireDeploymentLock, DeploymentJournal, safeAtomicWrite, getDeploymentJournalPath } from './installation/journal.mjs';
 import { resolveHostHome, validateHostManifest, inspectHarness } from "./installation/profiles.mjs";
 import { detectInstall, suggestUpgrade, detectConflicts } from "./install-detect.mjs";
+import { STORE_MARKER, isPreparedStore, writeStoreMarker, applyStorePlan } from "./install-store.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -47,6 +48,7 @@ function isStrictlyInside(parent, child) {
   const rel = relative(resolve(parent), resolve(child));
   return Boolean(rel && !rel.startsWith("..") && !isAbsolute(rel));
 }
+
 
 /** Кандидаты без причин: тонкая обёртка над подробным детектом (single source of truth). */
 function discoverCandidates(options = {}) {
@@ -235,22 +237,7 @@ function pruneReplacedModules({ targetRoot, priorManaged, plan, journal, dryRun 
   }
 }
 
-/**
- * Copies runtime parser dependencies (yaml, json5, jsonc-parser) selectively
- * into targetRoot/tools/node_modules without copying the developer node_modules tree.
- */
-function copyRuntimeDeps(repoRoot, targetRoot, slashRoot, assetContext) {
-  const copied = [];
-  const destToolsNm = join(targetRoot, "tools", "node_modules");
-  for (const pkg of RUNTIME_PARSER_DEPS) {
-    const srcPkg = resolveRuntimePackageDir(pkg, repoRoot);
-    if (srcPkg && existsSync(srcPkg)) {
-      const destPkg = join(destToolsNm, pkg);
-      copied.push(...copyDirRecursive(srcPkg, destPkg, slashRoot, assetContext));
-    }
-  }
-  return copied;
-}
+
 export function translateStdioEntry(entry, platform = process.platform) {
   if (!entry || typeof entry !== "object") return entry;
   const isWin = platform === "win32";
@@ -276,6 +263,24 @@ export function translateStdioEntry(entry, platform = process.platform) {
 
 export const translateMcpEntry = translateStdioEntry;
 
+const VALUE_FLAGS = {
+  "--host-home": "hostHome",
+  "--host-manifest": "hostManifest",
+  "--harness": "harness",
+  "--root": "root",
+  "--project-root": "projectRoot",
+  "--user-home": "userHome",
+};
+
+const BOOL_FLAGS = {
+  "--help": "help",
+  "-h": "help",
+  "--dry-run": "dryRun",
+  "--json": "json",
+  "--force": "force",
+  "--probe": "probe",
+};
+
 function parseCliArgs(argv) {
   const options = { harness: "auto", root: "", projectRoot: "", userHome: "", dryRun: false, json: false, help: false };
   const takeVal = (i, flag) => {
@@ -284,24 +289,21 @@ function parseCliArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--help" || arg === "-h") options.help = true;
-    else if (arg === "--dry-run") options.dryRun = true;
-    else if (arg === "--json") options.json = true;
-    else if (arg === "inspect") options.command = "inspect";
-    else if (arg === "--probe") options.probe = true;
-    else if (arg === "--host-home") options.hostHome = takeVal(i++, "--host-home");
-    else if (arg.startsWith("--host-home=")) options.hostHome = arg.slice("--host-home=".length);
-    else if (arg === "--host-manifest") options.hostManifest = takeVal(i++, "--host-manifest");
-    else if (arg.startsWith("--host-manifest=")) options.hostManifest = arg.slice("--host-manifest=".length);
-    else if (arg === "--harness") options.harness = takeVal(i++, "--harness");
-    else if (arg.startsWith("--harness=")) options.harness = arg.slice("--harness=".length);
-    else if (arg === "--root") options.root = takeVal(i++, "--root");
-    else if (arg.startsWith("--root=")) options.root = arg.slice("--root=".length);
-    else if (arg === "--project-root") options.projectRoot = takeVal(i++, "--project-root");
-    else if (arg.startsWith("--project-root=")) options.projectRoot = arg.slice("--project-root=".length);
-    else if (arg === "--user-home") options.userHome = takeVal(i++, "--user-home");
-    else if (arg.startsWith("--user-home=")) options.userHome = arg.slice("--user-home=".length);
-    else throw new Error(`Unknown option "${arg}"`);
+    if (BOOL_FLAGS[arg]) {
+      options[BOOL_FLAGS[arg]] = true;
+    } else if (arg === "inspect") {
+      options.command = "inspect";
+    } else if (VALUE_FLAGS[arg]) {
+      options[VALUE_FLAGS[arg]] = takeVal(i++, arg);
+    } else {
+      const eqIdx = arg.indexOf("=");
+      const flag = eqIdx !== -1 ? arg.slice(0, eqIdx) : "";
+      if (flag && VALUE_FLAGS[flag]) {
+        options[VALUE_FLAGS[flag]] = arg.slice(eqIdx + 1);
+      } else {
+        throw new Error(`Unknown option "${arg}"`);
+      }
+    }
   }
   if (options.probe && options.command !== "inspect") throw new Error("--probe is inspect-only");
   return options;
@@ -384,17 +386,7 @@ function installHarness(options = {}) {
 
   // An explicitly requested apply may first recover a dead transaction. A public dry-run never does.
   // Recover before collision checks: an interrupted first apply has no published skill ownership yet.
-  if ((!options.dryRun || options.recover) && !options.lock && existsSync(getDeploymentJournalPath(userHome))) {
-    const recoveryLock = acquireDeploymentLock({
-      userHome, targetRoot, projectRoot, hostHome: hostHome || hostHomes.hermes, hostHomes, harness: selectedHarness,
-    });
-    recoveryLock.release();
-    const restored = readInstallationState(userHome);
-    options = {
-      ...options,
-      managedFiles: restored?.harness === selectedHarness && resolve(restored.root) === resolve(targetRoot) ? restored.managedFiles : undefined,
-    };
-  }
+  options = maybeRecoverAbandoned({ options, userHome, targetRoot, projectRoot, selectedHarness, hostHome, hostHomes });
   const reports = Object.fromEntries(targetHarnesses.map(h => [h, inspectHarness({ harness: h, userHome, hostHome: hostHomes[h], hostManifest, projectRoot, env })]));
   const report = reports[selectedHarness];
   preflightAllConfigs({ harnesses: targetHarnesses, targetRoot, projectRoot, userHome, hostHomes, hostManifest });
@@ -426,56 +418,23 @@ function installHarness(options = {}) {
   if (journal && typeof journal.beginBatch === "function") journal.beginBatch();
 
   try {
-    const priorManaged = options.managedFiles && typeof options.managedFiles === "object" ? options.managedFiles : {};
-    const plan = {
-      harness: selectedHarness,
-      root: targetRoot,
-      ...(projectRoot ? { projectRoot } : {}),
-      userHome,
-      ...(hostHome ? { hostHome } : {}),
-      ...(hostManifest ? { hostManifest } : {}),
-      ...(report ? { profile: report } : { profiles: reports }),
-      warnings: [],
-      dryRun: Boolean(options.dryRun),
-      filesToCopy: [],
-      adapters: [],
-      replacedModules: [],
-      managedFiles: {},
-      preservedAssets: {
-        count: 0, modifiedOwned: 0, unowned: 0, examples: [],
-        detail: "Preserved assets may differ from packaged behavior and security policy; review local changes.",
-      },
-    };
-    const detected = detectInstall(userHome);
-    const currentVersion = readLocalVersion(REPO_ROOT);
-    const upgradeHint = suggestUpgrade(detected?.version, currentVersion);
-    plan.detection = detected;
-    plan.upgrade = upgradeHint;
-    plan.conflicts = detected?.conflicts || [];
-    if (detected?.conflicts?.length > 0) {
-      for (const c of detected.conflicts) {
-        plan.warnings.push(`Conflict with ${c.marker} at ${c.path}: ${c.advice}`);
-      }
-    }
+    const priorManaged = resolvePriorManaged(userHome, targetRoot, options.managedFiles);
+    const currentVersion = options.targetVersion || readLocalVersion(REPO_ROOT);
+    const storeReused = !Boolean(options.force) && isPreparedStore(targetRoot, currentVersion);
+
+    const plan = buildBasePlan({
+      selectedHarness, targetRoot, projectRoot, userHome, hostHome, hostManifest,
+      report, reports, storeReused, options, currentVersion,
+    });
     const assetContext = { dryRun: Boolean(options.dryRun), priorManaged, plan, journal };
     const copyAsset = (src, dest) => copyAndSubstitute(src, dest, slashRoot, assetContext);
 
-    const coreDirs = getCoreDirs();
+    applyStorePlan({
+      plan, targetRoot, repoRoot: REPO_ROOT, slashRoot, assetContext,
+      storeReused, currentVersion, options, journal, priorManaged,
+      copyAsset, copyDirRecursive,
+    });
 
-    for (const dir of coreDirs) {
-      const srcDir = join(REPO_ROOT, dir);
-      if (existsSync(srcDir)) {
-        plan.filesToCopy.push(...copyDirRecursive(srcDir, join(targetRoot, dir), slashRoot, assetContext));
-      }
-    }
-
-    for (const file of CORE_FILES) {
-      const srcFile = join(REPO_ROOT, file);
-      const destFile = join(targetRoot, file);
-      if (existsSync(srcFile) && copyAsset(srcFile, destFile)) plan.filesToCopy.push(destFile);
-    }
-
-    plan.filesToCopy.push(...copyRuntimeDeps(REPO_ROOT, targetRoot, slashRoot, assetContext));
     pruneReplacedModules({ targetRoot, priorManaged, plan, journal, dryRun: Boolean(options.dryRun) });
     const writeAdapter = (filePath, content) => {
       plan.adapters.push(filePath);
@@ -499,15 +458,7 @@ function installHarness(options = {}) {
       });
     }
 
-    const promptLint = join(targetRoot, "tools", "prompt-lint.mjs");
-    if (selectedHarness === "omp" && !options.dryRun && existsSync(promptLint)) {
-      try {
-        runPromptLintBaseline(promptLint, targetRoot, userHome);
-        plan.baselineRecorded = true;
-      } catch {
-        plan.baselineRecorded = false;
-      }
-    }
+    maybeRunPromptLintBaseline({ selectedHarness, dryRun: options.dryRun, targetRoot, userHome, plan });
     if (isOwnJournal && journal && typeof journal.finalize === "function") {
       journal.endBatch();
       journal.finalize();
@@ -529,6 +480,115 @@ function installHarness(options = {}) {
       lock.release();
     }
   }
+}
+function maybeRecoverAbandoned({ options, userHome, targetRoot, projectRoot, selectedHarness, hostHome, hostHomes }) {
+  if ((!options.dryRun || options.recover) && !options.lock && existsSync(getDeploymentJournalPath(userHome))) {
+    const recoveryLock = acquireDeploymentLock({
+      userHome, targetRoot, projectRoot, hostHome: hostHome || hostHomes.hermes, hostHomes, harness: selectedHarness,
+    });
+    recoveryLock.release();
+    const restored = readInstallationState(userHome);
+    return {
+      ...options,
+      managedFiles: restored?.harness === selectedHarness && resolve(restored.root) === resolve(targetRoot) ? restored.managedFiles : undefined,
+    };
+  }
+  return options;
+}
+
+function resolvePriorManaged(userHome, targetRoot, managedFiles) {
+  if (managedFiles && typeof managedFiles === "object") return managedFiles;
+  try {
+    const state = readInstallationState(userHome);
+    if (state?.root && resolve(state.root) === resolve(targetRoot) && state.managedFiles) {
+      return state.managedFiles;
+    }
+  } catch {}
+  return {};
+}
+
+function buildBasePlan({ selectedHarness, targetRoot, projectRoot, userHome, hostHome, hostManifest, report, reports, storeReused, options, currentVersion }) {
+  const plan = {
+    harness: selectedHarness,
+    root: targetRoot,
+    ...(projectRoot ? { projectRoot } : {}),
+    userHome,
+    ...(hostHome ? { hostHome } : {}),
+    ...(hostManifest ? { hostManifest } : {}),
+    ...(report ? { profile: report } : { profiles: reports }),
+    warnings: [],
+    dryRun: Boolean(options.dryRun),
+    filesToCopy: [],
+    storeReused,
+    reusedStore: storeReused,
+    adapters: [],
+    replacedModules: [],
+    managedFiles: {},
+    preservedAssets: {
+      count: 0, modifiedOwned: 0, unowned: 0, examples: [],
+      detail: "Preserved assets may differ from packaged behavior and security policy; review local changes.",
+    },
+  };
+  const detected = detectInstall(userHome);
+  plan.detection = detected;
+  plan.upgrade = suggestUpgrade(detected?.version, currentVersion);
+  plan.conflicts = detected?.conflicts || [];
+  if (detected?.conflicts?.length > 0) {
+    for (const c of detected.conflicts) {
+      plan.warnings.push(`Conflict with ${c.marker} at ${c.path}: ${c.advice}`);
+    }
+  }
+  return plan;
+}
+
+function maybeRunPromptLintBaseline({ selectedHarness, dryRun, targetRoot, userHome, plan }) {
+  const promptLint = join(targetRoot, "tools", "prompt-lint.mjs");
+  if (selectedHarness === "omp" && !dryRun && existsSync(promptLint)) {
+    try {
+      runPromptLintBaseline(promptLint, targetRoot, userHome);
+      plan.baselineRecorded = true;
+    } catch {
+      plan.baselineRecorded = false;
+    }
+  }
+}
+
+function printPlanStatus(plan) {
+  if (plan.detection?.present) {
+    console.log(`  Existing ver: v${plan.detection.version || "unknown"} (${plan.detection.root || "unknown"})`);
+  }
+  if (plan.upgrade?.needed) {
+    console.log(`  [UPGRADE]     ${plan.upgrade.message}`);
+  }
+  if (plan.conflicts?.length > 0) {
+    for (const c of plan.conflicts) {
+      process.stderr.write(`[WARN] Conflict with ${c.marker} at ${c.path}: ${c.advice}\n`);
+    }
+  }
+}
+
+function printDryRunPlan(plan) {
+  console.log(`[dry-run] Plan for NULLFORM WORKFLOW harness installation:`);
+  console.log(`  Harness:      ${plan.harness}`);
+  console.log(`  Install root: ${plan.root}`);
+  printPlanStatus(plan);
+  console.log(`  Files count:  ${plan.filesToCopy.length}`);
+  console.log(`  Adapters:`);
+  for (const adapter of plan.adapters) console.log(`    - ${adapter}`);
+  console.log(`  Removals:     ${plan.replacedModules.length}`);
+  for (const removed of plan.replacedModules) console.log(`    - ${removed}`);
+}
+
+function printInstallSummary(plan) {
+  console.log(`\n=== NULLFORM WORKFLOW Installer ===`);
+  console.log(`  Harness:      ${plan.harness}`);
+  console.log(`  Install root: ${plan.root}`);
+  if (plan.storeReused) console.log(`  Store:        reused (prepared store detected)`);
+  printPlanStatus(plan);
+  console.log(`  Files copied: ${plan.filesToCopy.length}`);
+  console.log(`  Adapters:`);
+  for (const adapter of plan.adapters) console.log(`    [ok] ${adapter}`);
+  console.log(`Installation complete.\n`);
 }
 
 function runPromptLintBaseline(promptLint, harnessRoot, userHome) {
@@ -557,6 +617,7 @@ Options:
   --probe               Inspect-only bounded native probe; never used during install
   --dry-run             Preview installation plan without writing any files
   --json                Output result as JSON
+  --force               Force full copy even if prepared store is detected
   --help, -h            Show this help message
 `.trim());
 }
@@ -596,53 +657,11 @@ async function main() {
     }
 
     if (options.dryRun) {
-      console.log(`[dry-run] Plan for NULLFORM WORKFLOW harness installation:`);
-      console.log(`  Harness:      ${plan.harness}`);
-      console.log(`  Install root: ${plan.root}`);
-      if (plan.detection?.present) {
-        console.log(`  Existing ver: v${plan.detection.version || "unknown"} (${plan.detection.root || "unknown"})`);
-      }
-      if (plan.upgrade?.needed) {
-        console.log(`  [UPGRADE]     ${plan.upgrade.message}`);
-      }
-      if (plan.conflicts?.length > 0) {
-        for (const c of plan.conflicts) {
-          process.stderr.write(`[WARN] Conflict with ${c.marker} at ${c.path}: ${c.advice}\n`);
-        }
-      }
-      console.log(`  Files count:  ${plan.filesToCopy.length}`);
-      console.log(`  Adapters:`);
-      for (const adapter of plan.adapters) {
-        console.log(`    - ${adapter}`);
-      }
-      console.log(`  Removals:     ${plan.replacedModules.length}`);
-      for (const removed of plan.replacedModules) {
-        console.log(`    - ${removed}`);
-      }
+      printDryRunPlan(plan);
       process.exitCode = 0;
       return;
     }
-
-    console.log(`\n=== NULLFORM WORKFLOW Installer ===`);
-    console.log(`  Harness:      ${plan.harness}`);
-    console.log(`  Install root: ${plan.root}`);
-    if (plan.detection?.present) {
-      console.log(`  Existing ver: v${plan.detection.version || "unknown"} (${plan.detection.root || "unknown"})`);
-    }
-    if (plan.upgrade?.needed) {
-      console.log(`  [UPGRADE]     ${plan.upgrade.message}`);
-    }
-    if (plan.conflicts?.length > 0) {
-      for (const c of plan.conflicts) {
-        process.stderr.write(`[WARN] Conflict with ${c.marker} at ${c.path}: ${c.advice}\n`);
-      }
-    }
-    console.log(`  Files copied: ${plan.filesToCopy.length}`);
-    console.log(`  Adapters:`);
-    for (const adapter of plan.adapters) {
-      console.log(`    [ok] ${adapter}`);
-    }
-    console.log(`Installation complete.\n`);
+    printInstallSummary(plan);
     process.exitCode = 0;
     return;
   } catch (err) {
@@ -656,4 +675,4 @@ if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === r
   main();
 }
 
-export { installHarness, detectHarness, discoverCandidates, discoverCandidatesDetailed, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath, detectInstall, suggestUpgrade, detectConflicts };
+export { installHarness, detectHarness, discoverCandidates, discoverCandidatesDetailed, SUPPORTED_HARNESSES, MANAGED_START, MANAGED_END, isCommandInPath, detectInstall, suggestUpgrade, detectConflicts, STORE_MARKER, isPreparedStore, writeStoreMarker, applyStorePlan };

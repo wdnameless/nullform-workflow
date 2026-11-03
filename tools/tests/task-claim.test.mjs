@@ -5,7 +5,8 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { claimTask, releaseTask, readClaim, contextPacket } from "../workflow/claims.mjs";
+import { claimTask, releaseTask, readClaim, contextPacket, isClaimed } from "../workflow/claims.mjs";
+import { cmdSettle, runWorkflowCli } from "../workflow.mjs";
 
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "task-claim-"));
@@ -61,7 +62,7 @@ test("claim grants one writer without disclosing holder authority", (t) => {
   const before = readFileSync(statePath(f.root));
   assert.throws(() => acquire(f, "export-report", "agent-b"), (error) => {
     assertPrivate(error.message, first.token);
-    return error.code === "ECLAIMED";
+    return error.code === 409 || error.code === "ECLAIMED";
   });
   assert.deepEqual(readFileSync(statePath(f.root)), before);
   assert.equal(readClaim(f.root, "export-report").owner, "agent-a");
@@ -344,4 +345,63 @@ test("nested workspace inside parent git repo without own .git records null base
   const claim = claimTask(workspaceRoot, "export-report", "agent-a", contractPath);
   assert.equal(claim.baseCommit, null);
   assert.equal(contextPacket(workspaceRoot, { change: "demo", task: "export-report" }).baseCommit, null);
+});
+
+test("claimTask throws {code: 409} already-claimed and isClaimed tracks task state", (t) => {
+  const f = fixture(t);
+  assert.equal(isClaimed(f.root, "export-report"), false);
+  const claim = acquire(f);
+  assert.equal(isClaimed(f.root, "export-report"), true);
+
+  assert.throws(() => acquire(f, "export-report", "agent-b"), (error) => {
+    assert.equal(error.code, 409);
+    assert.match(String(error.message), /already-claimed/);
+    return true;
+  });
+
+  assert.equal(isClaimed(f.root, "export-report"), true);
+  releaseTask(f.root, "export-report", claim.token);
+  assert.equal(isClaimed(f.root, "export-report"), false);
+});
+
+test("settle without --yes refuses and leaves filesystem untouched", (t) => {
+  const f = fixture(t);
+  const change = "test-settle";
+  const wtDir = join(f.root, ".tmp", "worktrees", change);
+  mkdirSync(wtDir, { recursive: true });
+  writeFileSync(join(wtDir, "worktree-file.txt"), "untouched");
+
+  const code = cmdSettle(f.root, { change, yes: false });
+  assert.equal(code, 1);
+  assert.equal(existsSync(wtDir), true);
+  assert.equal(readFileSync(join(wtDir, "worktree-file.txt"), "utf8"), "untouched");
+
+  const cliCode = runWorkflowCli(["settle", "--change", change, "--root", f.root]);
+  assert.equal(cliCode, 1);
+  assert.equal(existsSync(wtDir), true);
+});
+
+test("settle with --yes removes fixture worktree", (t) => {
+  const f = fixture(t);
+  const change = "test-settle-yes";
+  const wtDir = join(f.root, ".tmp", "worktrees", change);
+  mkdirSync(wtDir, { recursive: true });
+  writeFileSync(join(wtDir, "worktree-file.txt"), "to-be-removed");
+  assert.equal(existsSync(wtDir), true);
+
+  const code = cmdSettle(f.root, { change, yes: true });
+  assert.equal(code, 0);
+  assert.equal(existsSync(wtDir), false);
+
+  const change2 = "test-settle-doc";
+  const changeDir = join(f.root, "openspec", "changes", change2);
+  mkdirSync(changeDir, { recursive: true });
+  const wtDir2 = join(f.root, ".tmp", "worktrees", `feature${change2}`);
+  mkdirSync(wtDir2, { recursive: true });
+  writeFileSync(join(changeDir, "worktrees.md"), `| .tmp/worktrees/feature${change2} | feat/${change2} |\n`);
+  assert.equal(existsSync(wtDir2), true);
+
+  const cliCode = runWorkflowCli(["settle", "--change", change2, "--yes", "--root", f.root]);
+  assert.equal(cliCode, 0);
+  assert.equal(existsSync(wtDir2), false);
 });

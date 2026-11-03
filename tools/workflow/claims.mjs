@@ -241,7 +241,7 @@ export function claimTask(root, task, owner, contractPath) {
   return transition(canonical, (publish) => {
     const all = records(canonical);
     const previous = all.get(task);
-    if (previous && previous.endsAt === null) fail(`Task "${task}" is already claimed; never retry a refusal`, "ECLAIMED");
+    if (previous && previous.endsAt === null) fail("already-claimed", 409);
     if (previous?.history.length >= 64) fail("Claim history is full; explicit operator archival required", "EBOUNDS");
     const loaded = loadContract(canonical, contractPath);
     for (const other of all.values()) {
@@ -285,6 +285,11 @@ export function readClaim(root, task) {
   return record ? publicClaim(record) : null;
 }
 
+export function isClaimed(root, task) {
+  const record = readClaim(root, task);
+  return Boolean(record && record.endsAt === null);
+}
+
 /** An active packet is a projection of pinned task authority, never generic instructions. */
 export function contextPacket(root, { change, task } = {}) {
   if (typeof change !== "string" || !CHANGE_ID.test(change)) fail("--change must be an alphanumeric slug", "EARGS");
@@ -326,6 +331,6 @@ export function runClaimCommand(command, root, flags, positionalCount = 1) {
   } catch (error) {
     // Do not echo native JSON parse diagnostics or argv; either may contain authority.
     console.error(`workflow ${command} error: ${error.message}`);
-    return error.code === "ECLAIMED" ? 3 : 1;
+    return (error.code === "ECLAIMED" || error.code === 409) ? 3 : 1;
   }
 }

@@ -1,14 +1,14 @@
 # tools/tests/
 
 ## Responsibility
-Test suite and regression verification harness for the `tools/` CLI toolchain, workflow engine, harness installation and portability layer, review and evidence integrity, prompt caching, and JEV subsystem. Provides deterministic unit assertions and subprocess-isolated CLI acceptance tests across 100 `*.test.mjs` suites (plus one Bun/TS benchmark runner suite). Guarantees zero ambient pollution of developer workspaces or user configuration via temporary directory sandboxing, disposable git repositories, and sanitized environment variables.
+Test suite and regression verification harness for the `tools/` CLI toolchain, workflow engine, harness installation and portability layer, review and evidence integrity, prompt caching, CI change-scope gates, and JEV subsystem. Provides deterministic unit assertions and subprocess-isolated CLI acceptance tests across 109 `*.test.mjs` suites (plus one Bun/TS benchmark runner suite and `test_session_cost.py`). Guarantees zero ambient pollution of developer workspaces or user configuration via temporary directory sandboxing, disposable git repositories, and sanitized environment variables.
 
 ## Design Patterns
-- **Runner Convention & Strict Assertions**: 99 of 100 suites adhere to Node's built-in `node:test` runner (`import test from "node:test"`) paired with `node:assert/strict`. The sole exception is `bench-session-runner.test.ts` (executed via Bun for TypeScript benchmark sessions).
-- **Shared Harness Sandboxing (`test-helpers.mjs`)**: Central test helper imported by 16 suites, providing `createTempDir(prefix)` (allocating isolated paths under `os.tmpdir()`) and `createGitRepo(prefix)` (spawning disposable git repositories with initial commit and safe test git identity).
+- **Runner Convention & Strict Assertions**: 108 of 109 suites adhere to Node's built-in `node:test` runner (`import test from "node:test"`) paired with `node:assert/strict`. The sole exception is `bench-session-runner.test.ts` (executed via Bun for TypeScript benchmark sessions). `test_session_cost.py` is the only Python suite.
+- **Shared Harness Sandboxing (`test-helpers.mjs`)**: Central test helper imported by 21 suites, providing `createTempDir(prefix)` (allocating isolated paths under `os.tmpdir()`) and `createGitRepo(prefix)` (spawning disposable git repositories with initial commit and safe test git identity). Role-specific variants live beside it: `jev-test-helpers.mjs` and `jev-native-test-helpers.mjs`.
 - **Filesystem & Subprocess Isolation**: CLI commands execute out-of-process via `spawnSync(process.execPath, ...)` or `bash` under dedicated scratch cwd. Installer tests strip ambient variables (`HOME`, `USERPROFILE`, `LOCALAPPDATA`, `NULLFORM_USER_HOME`, `HERMES_*`) to prevent reading or mutating real user journals (`~/.nullform`) or active repositories.
 - **Fixture Runner & Static Dataset Seeding (`fixtures/`)**: Static datasets and shared runners reside in `tools/tests/fixtures/`. `review-execution.mjs` (imported by 7 suites) exports `writeEvidence` and `prepareEvidence` for synthesizing review bundles; subdirectories supply deterministic baselines: `fixtures/cache/` (JSONL transcripts and token fingerprints), `fixtures/jev/` (`calibration.json`, `heldout.json`), and `fixtures/return-contract/` (`valid.md`).
-- **Family-Based Organization**: The 100 test suites are structured into 14 multi-test families alongside ~47 single-module suites:
+- **Family-Based Organization**: The 109 test suites are structured into 15 multi-test families alongside ~50 single-module suites:
   - `jev` (8): `jev-evaluate`, `jev-control`, `jev-policy`, `jev-catalog`, `jev-evidence`, `jev-assist`, `jev-extension`, `jev-extension-guards`.
   - `workflow` (7): `workflow-gate`, `workflow-audit`, `workflow-budget`, `workflow-staleness`, `workflow-metrics`, `workflow-suggest`, `workflow-workspaces`.
   - `review` (6): `review-evidence`, `review-integrity`, `review-arbitration`, `review-budget`, `review-controlled-http`, `review-boundaries`.
@@ -23,7 +23,10 @@ Test suite and regression verification harness for the `tools/` CLI toolchain, w
   - `skill` (2): `skill-audit`, `skill-benefit-eval`.
   - `task` (2): `task-claim`, `task-claim-cli`.
   - `worktree` (2): `worktree-doctor`, `worktree-snapshot`.
-  - Single-module tests (~47): targeted unit coverage for individual utilities including `doctor`, `prompt-cache`, `self-update`, `nullform-cli`, `auto-review`, `debt-ledger`, `code-size`, and `test-lens`.
+  - `ci-gate` (8, added): `changed-scope` (8 tests; also exercises `clone-coverage` helpers), `clone-coverage` (14), `coverage-changed` (12), `mutation-changed`, `cfr-report` (8), `lead-time` (7), `model-router` (14), `sync-manifest-coverage` (2). All but `sync-manifest-coverage` import their module directly; `coverage-changed` and `harness-probe` additionally import `../../bin/nullform.mjs`, so the CLI↔gate contract is covered from both sides.
+  - `init-wizard` (6, added): drives `bin/nullform.mjs` interactive setup headless/JSON paths.
+  - `workflow-beats` (2, added): journal-beat sequencing via `../journal.mjs`.
+  - Single-module tests (~50): targeted unit coverage for individual utilities including `doctor`, `prompt-cache`, `self-update`, `nullform-cli`, `auto-review`, `debt-ledger`, `code-size`, `harness-probe`, and `test-lens`.
 
 ## Data & Control Flow
 1. **Runner Discovery**: Test runner executes suites via `node --test tools/tests/*.test.mjs` (`bench-session-runner.test.ts` via Bun). Top-level scripts (`verify.ps1`, `verify.sh`, `tools/verify.mjs`) route test execution through `test-lens.mjs` for structured output filtering.

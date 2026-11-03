@@ -467,8 +467,8 @@ test("start prints a responding dashboard URL, not a stale file with a live PID"
       env: { ...process.env, PASEO_AGENT_ID: `wf-dashboard-${process.pid}-${Date.now()}` },
     });
     assert.equal(res.status, 0, res.stderr || res.stdout);
-    const url = res.stdout.match(/dashboard: (http:\/\/localhost:\d+)/)?.[1];
-    assert.ok(url && url !== "http://localhost:1", res.stdout);
+    const url = res.stdout.match(/dashboard: (http:\/\/(?:localhost|127\.0\.0\.1):\d+)/)?.[1];
+    assert.ok(url && url !== "http://localhost:1" && url !== "http://127.0.0.1:1", res.stdout);
     const health = await (await fetch(`${url}/api/health`, {
       signal: AbortSignal.timeout(2000),
     })).json();

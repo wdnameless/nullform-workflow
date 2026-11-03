@@ -60,10 +60,12 @@ import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validateP
 import { doctorLite } from "./doctor-lite.mjs";
 import { runBriefRounds, appendAddenda } from "./brief-rounds.mjs";
 import { oracleInput } from "./brief.mjs";
+import { recordGate } from "./gate-counter.mjs";
 function printWorkflowHelp() {
   printCoreWorkflowHelp();
   console.log("  review-run: --admission-policy PATH runs the controlled Node transport; --dry-run reads policy/ledger read-only; --resume-session DIR imports exact evidence.");
   console.log("  brief: --rounds N (default 2, max 5) --manifest PATH [--brief TEXT|PATH] runs interactive briefing rounds.");
+  console.log("  settle: --change <name> --yes removes change worktree and branch after acceptance.");
 }
 const DIR = ".workflow";
 const FILE = "state.json";
@@ -669,7 +671,7 @@ function autoOpenDashboard(root, flags) {
     windowsHide: true,
   });
   const url = result.status === 0
-    ? result.stdout.match(/Дашборд: (http:\/\/localhost:\d+)/)?.[1]
+    ? result.stdout.match(/Дашборд: (http:\/\/(?:localhost|127\.0\.0\.1):\d+)/)?.[1]
     : null;
   if (!url) {
     const reason = result.error?.code === "ETIMEDOUT"
@@ -1337,6 +1339,10 @@ function cmdEscalate(root, flags) {
   });
 }
 
+function recordCheckGate(root, ok) {
+  recordGate({ gate: "workflow-check", result: ok ? "pass" : "fail", root });
+}
+
 function cmdCheck(root) {
   const doc = doctorLite(root);
   if (!doc.ok) {
@@ -1352,6 +1358,7 @@ function cmdCheck(root) {
     const isInvalid = invalid.some((inv) => inv.startsWith(`${r.kind}:`));
     console.log(`  ${a && !isInvalid ? "done" : "MISS"} ${r.kind.padEnd(11)} ${a && a.path ? a.path : r.label}`);
   }
+  recordCheckGate(root, ok);
   if (!ok) {
     if (missing.length) {
       console.log(`\n${missing.length} artifact(s) missing for ${st.tier}.`);
@@ -2116,7 +2123,7 @@ function applyCloseDeviation(st, flags, details) {
 }
 
 function cmdClose(root, flags) {
-  return withStateLock(root, () => {
+  const closeResult = withStateLock(root, () => {
     const st = load(root);
     if (!st) { console.error("workflow: no task state."); return 2; }
 
@@ -2219,6 +2226,8 @@ function cmdClose(root, flags) {
   appendMetric(root, metricRecord);
   return 0;
   });
+  recordGate({ gate: "workflow-close", result: closeResult === 0 ? "pass" : "fail", root });
+  return closeResult;
 }
 import { cmdCheckCi } from "./workflow-ci.mjs";
 export { checkQualityGates } from "./workflow-ci.mjs";
@@ -2327,6 +2336,93 @@ async function cmdBrief(root, flags, options = {}) {
   }
 }
 
+function confirmSettle(flags) {
+  const change = flags.change || flags.name || flags._?.[1];
+  if (!change || typeof change !== "string") {
+    console.error("workflow settle: --change <name> is required.");
+    return null;
+  }
+  if (!flags.yes) {
+    console.error(`workflow settle: confirmation required (--yes) to remove worktree and branch for change '${change}'.`);
+    return null;
+  }
+  return change;
+}
+
+function resolveSettleDocTargets(root, change, worktreePaths, branches) {
+  const doc = join(root, "openspec", "changes", change, "worktrees.md");
+  if (!existsSync(doc)) return;
+  try {
+    for (const line of readFileSync(doc, "utf8").split("\n")) {
+      const match = line.match(/\.tmp\/worktrees\/[^\s|`]+/);
+      if (match) worktreePaths.add(resolve(root, match[0]));
+      const branchMatch = line.match(/(?:feat|fix|feature)\/[a-z0-9_-]+/i);
+      if (branchMatch) branches.add(branchMatch[0]);
+    }
+  } catch {}
+}
+
+function resolveSettleGitTargets(root, change, worktreePaths, branches) {
+  if (!isInsideGitRepo(root)) return;
+  try {
+    const out = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    let currentPath = null;
+    for (const line of out.split("\n")) {
+      if (line.startsWith("worktree ")) {
+        currentPath = line.slice("worktree ".length).trim();
+        if (currentPath.includes(change)) worktreePaths.add(resolve(root, currentPath));
+      } else if (line.startsWith("branch refs/heads/") && currentPath?.includes(change)) {
+        branches.add(line.slice("branch refs/heads/".length).trim());
+      }
+    }
+  } catch {}
+}
+
+function resolveSettleTargets(root, change) {
+  const worktreePaths = new Set();
+  const branches = new Set([change, `feat/${change}`, `fix/${change}`, `feat-${change}`, `fix-${change}`]);
+  resolveSettleDocTargets(root, change, worktreePaths, branches);
+  const wtBase = join(root, ".tmp", "worktrees");
+  if (existsSync(wtBase)) {
+    try {
+      for (const entry of readdirSync(wtBase)) {
+        if (entry.includes(change)) worktreePaths.add(resolve(wtBase, entry));
+      }
+    } catch {}
+  }
+  resolveSettleGitTargets(root, change, worktreePaths, branches);
+  return { worktreePaths, branches };
+}
+
+function removeSettleWorktrees(root, worktreePaths) {
+  for (const wtPath of worktreePaths) {
+    if (isPathInsideRoot(root, wtPath) && resolve(wtPath) !== resolve(root)) {
+      if (isInsideGitRepo(root)) {
+        try { execFileSync("git", ["worktree", "remove", "--force", wtPath], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
+      }
+      try { rmSync(wtPath, { recursive: true, force: true }); } catch {}
+    }
+  }
+}
+
+function removeSettleBranches(root, branches) {
+  if (!isInsideGitRepo(root)) return;
+  try { execFileSync("git", ["worktree", "prune"], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
+  for (const b of branches) {
+    try { execFileSync("git", ["branch", "-D", b], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
+  }
+}
+
+function cmdSettle(root, flags = {}) {
+  const change = confirmSettle(flags);
+  if (!change) return 1;
+  const { worktreePaths, branches } = resolveSettleTargets(root, change);
+  removeSettleWorktrees(root, worktreePaths);
+  removeSettleBranches(root, branches);
+  console.log(`workflow settle: change '${change}' worktree and branch removed.`);
+  return 0;
+}
+
 export function runWorkflowCli(argv = [], options = {}) {
   const args = parse(argv);
   const root = args.flags.root ? String(args.flags.root) : (options.cwd || process.cwd());
@@ -2364,6 +2460,7 @@ export function runWorkflowCli(argv = [], options = {}) {
     case "brief":        code = cmdBrief(root, args.flags, options); break;
     case "stage":        code = cmdStage(root, args.flags); break;
     case "gate-pass":    code = cmdGatePass(root, args.flags); break;
+    case "settle":       code = cmdSettle(root, args.flags); break;
     default:
       if (cmd !== undefined) console.error(`workflow: unknown command '${cmd}'\n`);
       printWorkflowHelp();
@@ -2374,7 +2471,7 @@ export function runWorkflowCli(argv = [], options = {}) {
 
 /* ---------------------------------------------------------------------- exports and main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass, cmdSettle };
 
 import { fileURLToPath } from "node:url";
 

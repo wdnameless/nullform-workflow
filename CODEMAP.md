@@ -20,6 +20,9 @@ Root repository boundary, orchestration harness coordinator, and distributed npm
 
 ## Integration Points
 - **Package Distribution & Bin Wiring**: `package.json` defines package metadata, npm distribution allowlist (`files`), dependencies (`json5`, `jsonc-parser`, `yaml`), and binary entrypoint `bin/nullform.mjs`.
+- **CI Gate Entrypoints (changed-scope family)**: `tools/changed-scope.mjs` is the shared diff/scope resolver behind `tools/mutation-changed.mjs` and `tools/coverage-changed.mjs`; `tools/clone-coverage.mjs` enforces the duplication ratchet against `.clone-baseline.json`. All are CLI-invoked from CI, exit non-zero on violation, and exit 0 without work when the diff is empty.
+- **Read-Only Delivery Metrics**: `tools/cfr-report.mjs` (conventional-commit CFR) and `tools/lead-time.mjs` (tier lead time from `.workflow/events.jsonl`) report only — no gate, zeros and exit 0 on missing input.
+- **Model Routing**: `tools/model-router.mjs` resolves model categories into concrete models from the models config, failing with `MODEL_STOP_QUESTION` instead of substituting an unavailable model.
 - **Install & Verification Wrappers**: Root entrypoints `install.ps1`, `install.sh`, `verify.ps1`, and `verify.sh`, alongside `tools/audit.ps1` and `tools/audit.sh`, forward platform CLI invocations to Node implementations in `tools/`.
 - **Quality & Hygiene Configurations**: `eslint.config.mjs` (ESLint flat config with Node 2024 globals and complexity ceilings) and `_typos.toml` (prose spellchecking exclusions and dictionary extensions) establish automated linting boundaries.
 - **Skill Integrity Registry**: `skills-lock.json` stores skill provenance, source repositories, and SHA-256 folder hashes for pinned skills in `skills/`.
@@ -34,3 +37,23 @@ Root repository boundary, orchestration harness coordinator, and distributed npm
   - `openspec/`: OpenSpec change proposals, task breakdowns, architecture specifications, and legacy acceptance contracts (`openspec/changes/`).
   - `tests/`: Integration test suites and sandbox validation harnesses ensuring installer and toolchain stability.
 - **Runtime Hosts & Services**: Coordinates Oh My Pi (`@oh-my-pi/pi-coding-agent`), Paseo daemons, Claude Code CLI, and local MCP servers (`codebase-index`, `context7`, `dap-debugger`).
+
+## Repository Directory Map
+
+| Directory | Responsibility | Detailed Map |
+|---|---|---|
+| `<root>` | Package boundary, install/verify wrappers, lint + typo policy | this file |
+| `bin/` | npm CLI entrypoint: argv dispatch + interactive init wizard | `bin/CODEMAP.md` |
+| `tools/` | CLI toolchain, workflow engine, quality/cost gates, delivery metrics | `tools/CODEMAP.md` |
+| `tools/installation/` | Transactional harness deployment (lock + journal + restore, managed blocks) | `tools/installation/CODEMAP.md` |
+| `tools/review/` | Controlled review: gatekeeper, money ledger, native/HTTP executors, evidence, arbitration | `tools/review/CODEMAP.md` |
+| `tools/workflow/` | Durable task claims and workspace lifecycle | `tools/workflow/CODEMAP.md` |
+| `tools/tests/` | 109-suite regression harness and sandbox conventions | `tools/tests/CODEMAP.md` |
+| `tools/tests/fixtures/` | Golden inputs and synthetic review-execution test doubles | `tools/tests/fixtures/CODEMAP.md` |
+| `agent/` | Agent personas, plugin manifest, model blueprint | `agent/CODEMAP.md` |
+| `agent/extensions/` | OMP extension hooks | `agent/extensions/CODEMAP.md` |
+| `bench/checks/` | Benchmark assertion checks | `bench/checks/CODEMAP.md` |
+| `bench/fixtures/` | Benchmark task fixtures | `bench/fixtures/CODEMAP.md` |
+| `jev/`, `jev/plugins/jev/`, `.../hooks/`, `.../scripts/` | Claude Code plugin bundle, hooks, JEV routing/eval | `jev/CODEMAP.md`, `jev/plugins/CODEMAP.md`, `jev/plugins/jev/CODEMAP.md`, `jev/plugins/jev/hooks/CODEMAP.md`, `jev/plugins/jev/scripts/CODEMAP.md` |
+| `paseo/` | Paseo workspace provisioning | `paseo/CODEMAP.md` |
+| `tests/` | Integration/sandbox suites | `tests/CODEMAP.md` |

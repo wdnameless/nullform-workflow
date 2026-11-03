@@ -377,11 +377,7 @@ test("CLI execution on repository: check exits 0 with fresh baseline, scan finds
     encoding: "utf8",
   });
   assert.equal(scanProc.status, 0);
-  assert.ok(
-    scanProc.stdout.includes("tools/install-harness.mjs:600") &&
-    scanProc.stdout.includes("tools/install-harness.mjs:627"),
-    "scan output must list known install-harness.mjs:600/627 clones"
-  );
+  // install-harness.mjs:600/627 clones eliminated by split; journal duplicates remain
   assert.ok(
     scanProc.stdout.includes("tools/installation/journal.mjs"),
     "scan output must list known journal.mjs clone"

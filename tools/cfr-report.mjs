@@ -12,6 +12,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -41,6 +42,44 @@ function isFix(subject) {
   return /^(?:fix(?:\([^)]*\))?!?:|fix\()/i.test(subject.trim());
 }
 
+
+/**
+ * Normalizes git --since interval:
+ * - short forms "7d", "30d" -> "7.days.ago", "30.days.ago"
+ * - long forms ("7.days.ago", "30 days ago", "yesterday", "2026-11-01", etc.) passthrough
+ * - invalid / garbage values throw with an explanatory message
+ * @param {string} s
+ * @returns {string}
+ */
+export function normalizeSince(s) {
+  if (typeof s !== "string") {
+    throw new Error(`Invalid --since value: expected string, got ${typeof s}`);
+  }
+  const trimmed = s.trim();
+  if (!trimmed) {
+    throw new Error("Invalid --since value: interval cannot be empty");
+  }
+
+  const shortMatch = trimmed.match(/^(\d+)\s*d$/i);
+  if (shortMatch) {
+    const days = Number(shortMatch[1]);
+    if (days <= 0) {
+      throw new Error(`Invalid --since interval: "${s}" must be positive`);
+    }
+    return `${days}.days.ago`;
+  }
+
+  const isRelativeDot = /^\d+\.(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\.ago$/i.test(trimmed);
+  const isRelativeSpace = /^\d+\s+(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago$/i.test(trimmed);
+  const isKeyword = /^(?:yesterday|today|now)$/i.test(trimmed);
+  const isIsoDate = /^\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(trimmed);
+
+  if (isRelativeDot || isRelativeSpace || isKeyword || isIsoDate) {
+    return trimmed;
+  }
+
+  throw new Error(`Invalid --since interval: "${s}"`);
+}
 export function parseGitLog(output) {
   if (!output || typeof output !== "string") return [];
   const lines = output.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -145,24 +184,59 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
   };
 }
 
-function readGitLog(root, since) {
+export function readGitLog(root, since, runner = execFileSync) {
+  const normSince = normalizeSince(since);
+  let raw = "";
   try {
-    const raw = execFileSync("git", ["log", `--since=${since}`, "--format=%H|%at|%s"], {
+    raw = runner("git", ["log", `--since=${normSince}`, "--format=%H|%at|%s"], {
       cwd: root,
       encoding: "utf8",
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
-    });
-    return parseGitLog(raw);
+    }) || "";
   } catch {
+    raw = "";
+  }
+
+  if (typeof raw !== "string" || raw.trim() === "") {
+    let isNonEmpty = false;
+    try {
+      const inside = runner("git", ["rev-parse", "--is-inside-work-tree"], {
+        cwd: root,
+        encoding: "utf8",
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (inside && String(inside).trim() === "true") {
+        const head = runner("git", ["rev-parse", "HEAD"], {
+          cwd: root,
+          encoding: "utf8",
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        if (head && String(head).trim().length > 0) {
+          isNonEmpty = true;
+        }
+      }
+    } catch {
+      isNonEmpty = false;
+    }
+
+    if (isNonEmpty) {
+      const err = new Error("cfr-empty-log");
+      err.code = "cfr-empty-log";
+      throw err;
+    }
     return [];
   }
+
+  return parseGitLog(raw);
 }
 
-export function main() {
+export function main(argv = process.argv.slice(2), runner = execFileSync) {
   let flags;
   try {
-    flags = parseCliArgs();
+    flags = parseCliArgs(argv);
   } catch (err) {
     console.error(`cfr-report: ${err.message}`);
     process.exit(2);
@@ -174,7 +248,13 @@ export function main() {
   }
 
   const root = resolve(flags.root);
-  const commits = readGitLog(root, flags.since);
+  let commits;
+  try {
+    commits = readGitLog(root, flags.since, runner);
+  } catch (err) {
+    console.error(`cfr-report: ${err.message}`);
+    process.exit(2);
+  }
   const result = computeCfr(commits);
 
   if (flags.json) {
@@ -196,6 +276,8 @@ export function main() {
   process.exit(0);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  main();
-}
+try {
+  if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+    main();
+  }
+} catch {}

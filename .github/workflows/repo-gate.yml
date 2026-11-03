@@ -409,6 +409,9 @@ jobs:
               tools/tests/fixtures/return-contract.fixture.md
           fi
 
+      - name: Process lifecycle evals
+        run: node tools/lifecycle-evals.mjs check
+
   bench-smoke:
     name: Benchmark Smoke Gate
     runs-on: ubuntu-latest

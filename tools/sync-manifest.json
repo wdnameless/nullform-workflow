@@ -87,6 +87,9 @@
     "rel": "tools/workflow.mjs"
   },
   {
+    "rel": "tools/gate-counter.mjs"
+  },
+  {
     "rel": "tools/workflow-shared.mjs"
   },
   {
@@ -331,6 +334,9 @@
   },
   {
     "rel": "tools/review/budget.mjs"
+  },
+  {
+    "rel": "tools/review/ledger-compact.mjs"
   },
   {
     "rel": "tools/review/http-runtime.mjs"

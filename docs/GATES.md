@@ -34,3 +34,13 @@ Add this step to any GitHub Actions workflow to run gates against a target repos
     node path/to/tools/coverage-changed.mjs --root . --base ${{ github.base_ref || 'main' }} --suites tests
     node path/to/tools/mutation-changed.mjs --root . --base ${{ github.base_ref || 'main' }} --suites tests
 ```
+
+## Split vs Reseed Policy
+
+When a change encounters a COCO complexity or code-size ratchet threshold:
+
+1. **Split Code (Default)**: If growth stems from accumulated responsibilities, split logic into focused functions or dedicated sibling modules (e.g. M1/B1 decomposing `workflow.mjs` into modular subsystems like `claims.mjs`). Do not raise ceilings to accommodate sprawl.
+2. **Reseed Baseline (Explicit Exception)**: Reseed the baseline (`nullform quality baseline` or `.code-size.baseline.json`) ONLY when intrinsic domain complexity or an architectural protocol shift cannot be split without harmful indirection. Every reseed requires:
+   - An explicit commit message documenting the **date** and **substantive reason**.
+   - Preserving ratchet monotonicity (`min(recorded, measured)`) without wiping legacy ceilings.
+3. **M1/B2 Precedent**: Structural bloat requires splitting modules (M1); legitimate baseline resets require audit-trailed reseed commits (B2), never unvetted `// code-size:allow` bypasses.

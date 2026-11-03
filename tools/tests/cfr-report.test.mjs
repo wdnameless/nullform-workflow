@@ -13,7 +13,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computeCfr, parseGitLog } from "../cfr-report.mjs";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
+import { computeCfr, parseGitLog, normalizeSince, readGitLog } from "../cfr-report.mjs";
 
 test("computeCfr on empty or invalid input returns zero values", () => {
   const emptyStrRes = computeCfr("");
@@ -148,4 +150,100 @@ test("computeCfr: string/ms timestamps and invalid guards", () => {
   // non-string parseGitLog input → []
   assert.deepEqual(parseGitLog(null), []);
   assert.deepEqual(parseGitLog(42), []);
+});
+
+test("normalizeSince: short forms map to .days.ago, long forms passthrough, garbage throws", () => {
+  // Short forms
+  assert.equal(normalizeSince("7d"), "7.days.ago");
+  assert.equal(normalizeSince("30d"), "30.days.ago");
+  assert.equal(normalizeSince("14d"), "14.days.ago");
+  assert.equal(normalizeSince("1d"), "1.days.ago");
+  assert.equal(normalizeSince("  7d  "), "7.days.ago");
+  assert.equal(normalizeSince("7D"), "7.days.ago");
+
+  // Long forms passthrough
+  assert.equal(normalizeSince("7.days.ago"), "7.days.ago");
+  assert.equal(normalizeSince("30.days.ago"), "30.days.ago");
+  assert.equal(normalizeSince("7 days ago"), "7 days ago");
+  assert.equal(normalizeSince("2 weeks ago"), "2 weeks ago");
+  assert.equal(normalizeSince("yesterday"), "yesterday");
+  assert.equal(normalizeSince("2026-11-01"), "2026-11-01");
+
+  // Garbage throws with informative text
+  const garbageCases = [
+    "",
+    "   ",
+    "garbage",
+    "invalid",
+    "foo",
+    "0d",
+    "-5d",
+    "7x",
+    null,
+    undefined,
+    123,
+  ];
+  for (const bad of garbageCases) {
+    assert.throws(() => normalizeSince(bad), /Invalid.*since/i, `Expected throw for: ${bad}`);
+  }
+});
+
+test("readGitLog: empty stdout in non-empty repo throws cfr-empty-log (stub execFileSync)", () => {
+  const calls = [];
+  const stubRunner = (cmd, args) => {
+    calls.push({ cmd, args });
+    if (args[0] === "log") {
+      return ""; // empty git log stdout
+    }
+    if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") {
+      return "true\n";
+    }
+    if (args[0] === "rev-parse" && args[1] === "HEAD") {
+      return "3fae1848dc4fa06af1f240679e551c97e0e7180d\n";
+    }
+    throw new Error(`Unexpected command: ${cmd} ${args.join(" ")}`);
+  };
+
+  assert.throws(
+    () => readGitLog(".", "7d", stubRunner),
+    (err) => err && (err.message === "cfr-empty-log" || err.code === "cfr-empty-log"),
+    "Expected cfr-empty-log error when log is empty in non-empty repo"
+  );
+  assert.ok(calls.some((c) => c.args[0] === "log"));
+  assert.ok(calls.some((c) => c.args[0] === "rev-parse" && c.args.includes("--is-inside-work-tree")));
+  assert.ok(calls.some((c) => c.args[0] === "rev-parse" && c.args.includes("HEAD")));
+});
+
+test("readGitLog: empty stdout in empty repo returns empty array without throwing (stub execFileSync)", () => {
+  const stubRunner = (cmd, args) => {
+    if (args[0] === "log") {
+      return "";
+    }
+    if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") {
+      return "true\n";
+    }
+    if (args[0] === "rev-parse" && args[1] === "HEAD") {
+      throw new Error("fatal: Needed a single revision"); // empty repo, no commits
+    }
+    throw new Error(`Unexpected command: ${cmd} ${args.join(" ")}`);
+  };
+
+  const result = readGitLog(".", "7d", stubRunner);
+  assert.deepEqual(result, []);
+});
+
+test("CLI: --since 7d matches --since 7.days.ago, and empty log in repo exits 2 with stderr", () => {
+  const cliPath = resolve("tools/cfr-report.mjs");
+  const out7d = execFileSync(process.execPath, [cliPath, "--since", "7d", "--json"], { encoding: "utf8" });
+  const outLong = execFileSync(process.execPath, [cliPath, "--since", "7.days.ago", "--json"], { encoding: "utf8" });
+  assert.equal(out7d, outLong);
+
+  assert.throws(
+    () => execFileSync(process.execPath, [cliPath, "--since", "2099-01-01"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+    (err) => {
+      assert.equal(err.status, 2);
+      assert.match(err.stderr, /cfr-empty-log/);
+      return true;
+    }
+  );
 });

@@ -633,7 +633,7 @@ async function _ensureDashboardImpl(absRoot, key, { open = true, port = null } =
   if (existing) {
     const probed = await probeDashboard(existing.port);
     if (isCompatibleDashboard(probed, absRoot, key)) {
-      const url = `http://localhost:${existing.port}`;
+      const url = `http://127.0.0.1:${existing.port}`;
       if (openSystem) openInBrowser(url);
       return { url, port: existing.port, started: false };
     }
@@ -647,12 +647,12 @@ async function _ensureDashboardImpl(absRoot, key, { open = true, port = null } =
       writeRuntime(absRoot, { key,
         pid: probed.pid,
         port: p,
-        url: `http://localhost:${p}`,
+        url: `http://127.0.0.1:${p}`,
         root: absRoot,
         startedAt: new Date().toISOString(),
         adopted: true,
       });
-      const url = `http://localhost:${p}`;
+      const url = `http://127.0.0.1:${p}`;
       if (openSystem) openInBrowser(url);
       return { url, port: p, started: false, adopted: true };
     }
@@ -673,7 +673,7 @@ async function _ensureDashboardImpl(absRoot, key, { open = true, port = null } =
     if (info && (!existing || info.pid !== existing.pid || info.port !== existing.port)) {
       const probed = await probeDashboard(info.port);
       if (isCompatibleDashboard(probed, absRoot, key)) {
-        const url = `http://localhost:${info.port}`;
+        const url = `http://127.0.0.1:${info.port}`;
         if (openSystem) openInBrowser(url);
         return { url, port: info.port, started: true };
       }
@@ -983,7 +983,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (opts.serve) {
     SERVER_SESSION = key;
     const bound = await startLiveServer(absRoot, opts.port, { session: key, pollMs: opts.pollMs });
-    const url = `http://localhost:${bound.port}`;
+    const url = `http://127.0.0.1:${bound.port}`;
     writeRuntime(absRoot, { key,
       pid: process.pid,
       port: bound.port,
