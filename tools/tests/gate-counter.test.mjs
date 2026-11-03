@@ -9,7 +9,6 @@ import {
   readGateCounts,
   tallyCounts,
   formatTally,
-  resolveLogPath,
 } from "../gate-counter.mjs";
 import { createTempDir } from "./test-helpers.mjs";
 

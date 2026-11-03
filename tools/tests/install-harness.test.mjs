@@ -178,7 +178,7 @@ test("OMP sandbox install is usable by the shipped verifier", () => {
   const root = join(temp, "live");
   const userHome = join(temp, "home");
   try {
-    const installed = spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json"], { encoding: "utf8" });
+    spawnSync(process.execPath, [SCRIPT_PATH, "--harness", "omp", "--root", root, "--user-home", userHome, "--json"], { encoding: "utf8" });
 
     const law = readFileSync(join(userHome, ".omp", "agent", "AGENTS.md"), "utf8");
     assert.ok(law.includes(root.replace(/\\/g, "/")));

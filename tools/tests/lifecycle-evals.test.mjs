@@ -6,7 +6,6 @@ import { resolve } from "node:path";
 import {
   isClaimed,
   claimTask,
-  releaseTask,
   readClaim,
   evaluateApproval,
   computeBackoff,
