@@ -75,55 +75,27 @@ const DEFAULT_BUDGETS = { T0: 10, T1: 25, T2: 45, T3: 45 };
 const BUDGET_WARN_RATIO = 0.8;
 const BUDGET_WARN_DEFAULT_TOKENS = 200_000;
 const BUDGET_WARN_DEFAULT_CALLS = 45;
-// Acceptance vocabulary for a lane whose label promises an "acceptance check".
-// Deliberately narrow to evidence words, not intent words like "plan"/"map":
-// 39 of 65 historical recon notes named files and never said how done is proven.
-const ACCEPTANCE_RE = /(accept|verif|check|prove|proof|proven|test(?:s|ed)?\b|pass(?:es|ed)?\b|green|criteria|criterion|exit\s*code|repro|assert|smoke|suite|\d+\s*\/\s*\d+|провер|приёмк|приемк|критери|тест|готов)/i;
-
-
-// Ordered: each tier inherits every requirement below it.
-const LADDER = ["T0", "T1", "T2", "T3"];
-
-const REQUIREMENTS = {
-  T0: [
-    { kind: "lane", label: "lane declared (start --tier)", auto: true },
-  ],
-  T1: [
-    // minDetail: a one-word "done" is what makes a gate decorative. The floor is
-    // low on purpose - enough that the field cannot be satisfied by accident.
-    // detailMustContain: the label promises an acceptance check, and length alone
-    // accepted "recon done: mapped boundaries and files" - a note that says where
-    // you looked and never how you would know the work finished.
-    { kind: "recon", label: "recon notes: files touched + acceptance check", path: null, minDetail: 20, detailMustContain: ACCEPTANCE_RE },
-  ],
-  T2: [
-    { kind: "manifest", label: "manifest.md with R## rows + verbatim user quotes", path: "openspec/changes/<name>/manifest.md", requiresPath: true, mustContain: /R\d\d/ },
-    { kind: "openspec", label: "openspec change validated", path: "openspec/changes/<name>", requiresPath: true },
-    { kind: "interfaces", label: "interfaces.md: boundaries + signatures + owners", path: "openspec/changes/<name>/interfaces.md", requiresPath: true, minDetail: 40 },
-    { kind: "oracle", label: "oracle verdict + its reasons", path: null, minDetail: 30, mustContain: /ACCEPT|REJECT/i },
-  ],
-  T3: [
-    // The label promises "isolated worktree per major slice", so the evidence must
-    // name the worktree and its branch. It was a free-text note with no floor and no
-    // path, which `--detail "x"` satisfied.
-    { kind: "worktree", label: "isolated worktree per major slice (worktrees.md: slice, path, branch)", path: "openspec/changes/<name>/worktrees.md", requiresPath: true, minDetail: 40, detailMustContain: /worktree/i },
-  ],
-};
-
-/** Everything required at `tier`, in ladder order. */
-function requiredFor(tier) {
-  const upto = LADDER.indexOf(tier);
-  if (upto < 0) return [];
-  const out = [];
-  for (let i = 0; i <= upto; i++) {
-    for (const r of REQUIREMENTS[LADDER[i]]) out.push({ ...r, tier: LADDER[i] });
-  }
-  return out;
-}
-
-/* --------------------------------------------------------------------- state */
+/* --------------------------------------------------------------------- core & state */
 
 import {
+  LADDER,
+  ACCEPTANCE_RE,
+  REQUIREMENTS,
+  requiredFor,
+  openspecDirProblems,
+  openspecFileProblems,
+  runOpenspecValidate,
+  validateOpenspecArtifact,
+  isChangeScopedKind,
+  changeDirOf,
+  parsePlanTickets,
+  missingPlanDep,
+  planCycleFrom,
+  validatePlanCoverage,
+  validateManifestRows,
+  validateArtifacts,
+  markOracleVerified,
+  createArtifactRecord,
   statePath,
   budgetsPath,
   isPlainObject,
@@ -141,6 +113,7 @@ import {
   acquireLock,
   withStateLock,
 } from "./workflow-core.mjs";
+export { ACCEPTANCE_RE, REQUIREMENTS, requiredFor, openspecDirProblems, openspecFileProblems, runOpenspecValidate, validateOpenspecArtifact, isChangeScopedKind, changeDirOf, parsePlanTickets, missingPlanDep, planCycleFrom, validatePlanCoverage, validateManifestRows, validateArtifacts, markOracleVerified, createArtifactRecord };
 function cmdMetrics(root) {
   const list = loadMetrics(root);
   if (list.length === 0) {
@@ -635,285 +608,7 @@ function parseRenamePaths(filePath) {
   const a = norm.match(/^(.*?)\s*=>\s*(.*)$/);
   return a ? [a[1].replace(/\/\/+/g, "/"), a[2].replace(/\/\/+/g, "/")] : [norm];
 }
-function openspecDirProblems(root, a, fullPath) {
-  const problems = [];
-  if (!statSync(fullPath).isDirectory()) return [`openspec: path '${a.path}' must be a directory`];
-  let entries = [];
-  try { entries = readdirSync(fullPath); } catch {}
-  if (entries.length === 0) return [`openspec: directory '${a.path}' is empty`];
-  for (const entry of entries) {
-    const entryPath = join(a.path, entry);
-    if (!isRealPathInsideRoot(root, entryPath)) return [`openspec: entry '${entryPath}' real path must stay inside project root`];
-  }
-  return problems;
-}
 
-function openspecFileProblems(a, fullPath) {
-  const problems = [];
-  const nonEmpty = (p) => existsSync(p) && statSync(p).isFile() && readFileSync(p, "utf8").trim().length > 0;
-  if (!nonEmpty(join(fullPath, "proposal.md"))) problems.push(`openspec: missing proposal.md in '${a.path}'`);
-  if (!nonEmpty(join(fullPath, "tasks.md"))) problems.push(`openspec: missing tasks.md in '${a.path}'`);
-  const specsPath = join(fullPath, "specs");
-  if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) {
-    problems.push(`openspec: missing specs/ directory in '${a.path}'`);
-  }
-  return problems;
-}
-
-function runOpenspecValidate(root, fullPath) {
-  const changeId = basename(fullPath);
-  // `openspec` is pinned through `npx` in CI and is not a dependency of this package, so
-  // PATH is not a reliable place to find it. Resolve a local install first, then the
-  // pinned npx invocation, so the same tree validates identically on every machine.
-  const localCli = join(dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "@fission-ai", "openspec", "bin", "openspec.js");
-  const res = existsSync(localCli)
-    ? spawnSync(process.execPath, [localCli, "validate", changeId, "--strict"], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 60000 })
-    : spawnSync("openspec", ["validate", changeId, "--strict"], {
-        cwd: root, encoding: "utf8", windowsHide: true, timeout: 60000, shell: process.platform === "win32",
-      });
-  if (res.error) return `openspec: could not run 'openspec validate ${changeId}' (${res.error.code || res.error.message}); the change is UNVERIFIED, not valid`;
-  if (res.status !== 0) {
-    const detail = `${res.stdout || ""}${res.stderr || ""}`.trim().split(/\r?\n/).filter(Boolean).slice(0, 4).join(" / ");
-    return `openspec: '${changeId}' does not validate (${detail || `exit ${res.status}`})`;
-  }
-  return null;
-}
-
-function validateOpenspecArtifact(root, a, fullPath, invalid) {
-  invalid.push(...openspecDirProblems(root, a, fullPath));
-  if (invalid.length) return;
-  invalid.push(...openspecFileProblems(a, fullPath));
-  const tasksPath = join(fullPath, "tasks.md");
-  // A plan whose dependencies loop or name missing tickets can never finish; that is
-  // visible from tasks.md alone, without pretending to verify requirement coverage.
-  if (existsSync(tasksPath)) {
-    const planProblem = validatePlanCoverage(readFileSync(tasksPath, "utf8"));
-    if (planProblem) invalid.push(`openspec: tasks.md ${planProblem}`);
-  }
-  if (invalid.length) return;
-  // File presence is not validation: a specs/spec.md at the capability root is
-  // silently ignored on archive, and only `openspec validate` reports that. The
-  // command's name appeared in this file solely inside an error hint before.
-  const verdict = runOpenspecValidate(root, fullPath);
-  if (verdict) invalid.push(verdict);
-}
-
-
-/** Kinds whose file must live inside the current change directory. */
-function isChangeScopedKind(kind) {
-  return kind === "manifest" || kind === "interfaces";
-}
-
-/** The change directory recorded for this task, or null when none is bound yet. */
-function changeDirOf(st) {
-  const rel = st?.artifacts?.openspec?.path;
-  return rel ? String(rel) : null;
-}
-
-/**
- * A manifest is only a manifest if its rows parse as requirements. `/R\d\d/` was the
- * whole check, so a file containing the literal string "R01" and nothing else passed
- * as "manifest.md with R## rows + verbatim user quotes".
- *
- * Returns a problem description, or null when the rows are usable.
- */
-/**
- * Cross-checks the ticket list in tasks.md against the manifest.
- * The real format is a checkbox list (`- [ ] **T-01 (Z1)** ... Blocked-by: T-02`),
- * not a table: a table parser found nothing in every shipped change and would have
- * been dead code. Tickets are optional; when present they must cover the manifest,
- * carry a wave, and not declare a blocked-by cycle.
- * Returns null when there is nothing to check, or a problem summary.
- */
-/**
- * Checks the ticket list in tasks.md for an unstartable plan.
- * The real format is `- [ ] **T-01 (Z1)** ... Blocked-by: T-02`, not a table. Tickets
- * rarely name R##, so requirement coverage is NOT verified here — claiming it would
- * repeat the empty-gate defect this audit exists to fix. What is verifiable: every
- * declared dependency must name a ticket that exists, and dependencies must not loop.
- * Returns null when there is nothing to check or the plan is sound.
- */
-function parsePlanTickets(tasksBody) {
-  const tickets = new Map();
-  for (const line of String(tasksBody || "").split(/\r?\n/)) {
-    const m = /^\s*-\s*\[[ xX]\]\s*\**(T-\d+)\**/i.exec(line);
-    if (!m) continue;
-    const deps = /Blocked-by:\s*(.*)$/i.exec(line);
-    const raw = deps ? deps[1] : "";
-    tickets.set(m[1].toUpperCase(), (raw.match(/T-\d+/gi) || []).map((d) => d.toUpperCase()));
-  }
-  return tickets;
-}
-
-function missingPlanDep(tickets) {
-  for (const [id, deps] of tickets) {
-    for (const dep of deps) if (!tickets.has(dep)) return `${id} is blocked by ${dep}, which is not in this plan`;
-  }
-  return null;
-}
-
-function planCycleFrom(tickets, id) {
-  const seen = new Set([id]);
-  const stack = [...(tickets.get(id) || [])];
-  while (stack.length) {
-    const next = stack.pop();
-    if (next === id) return `blocked-by cycle: ${id} cannot start`;
-    if (seen.has(next)) continue;
-    seen.add(next);
-    stack.push(...(tickets.get(next) || []));
-  }
-  return null;
-}
-
-function validatePlanCoverage(tasksBody) {
-  const tickets = parsePlanTickets(tasksBody);
-  if (tickets.size === 0) return null;
-  const missing = missingPlanDep(tickets);
-  if (missing) return missing;
-  for (const id of tickets.keys()) {
-    const cycle = planCycleFrom(tickets, id);
-    if (cycle) return cycle;
-  }
-  return null;
-}
-function validateManifestRows(body) {
-  const rows = String(body || "").split(/\r?\n/).filter((line) => /^\s*\|/.test(line));
-  const parsed = rows.map(parseRequirement).filter(Boolean);
-  if (parsed.length === 0) return "no requirement rows parse (expected | R01 | <verbatim quote> | ... | <status> |)";
-  const ids = new Set(parsed.map((r) => r.id));
-  if (ids.size !== parsed.length) return "duplicate requirement IDs";
-  // A row with no text outside its own ID and status names no requirement.
-  for (const row of rows) {
-    const req = parseRequirement(row);
-    if (!req) continue;
-    const cells = row.split("|").map((c) => c.trim()).filter(Boolean);
-    const quote = cells.filter((c) => c !== req.id && !/^(open|in-spec|in-ticket|done|placeholder|deferred|dropped)$/i.test(c));
-    if (quote.length === 0 || quote.every((c) => c.length < 3)) {
-      return `row '${req.id}' carries no verbatim quote`;
-    }
-  }
-  return null;
-}
-
-function validateArtifacts(root, st) {
-  const reqs = requiredFor(st.tier);
-  const missing = [];
-  const invalid = [];
-
-  for (const r of reqs) {
-    const a = st.artifacts[r.kind];
-    if (!a) {
-      missing.push(r.kind);
-      continue;
-    }
-
-    // A note-only artifact has no file to test, so `check` is the only place its
-    // contract can be enforced. Recording without re-validating made the gate
-    // decorative again for any state written by hand or by an older build.
-    if (r.detailMustContain && !r.detailMustContain.test(String(a.detail || ""))) {
-      invalid.push(`${r.kind}: note records no acceptance evidence (expected ${r.detailMustContain})`);
-      continue;
-    }
-
-    if (r.requiresPath || a.path) {
-      if (!a.path) {
-        invalid.push(`${r.kind}: missing required file path`);
-        continue;
-      }
-      if (!isPathInsideRoot(root, a.path)) {
-        invalid.push(`${r.kind}: path '${a.path}' must be a relative path inside project root`);
-        continue;
-      }
-      const fullPath = join(root, a.path);
-      if (!existsSync(fullPath)) {
-        invalid.push(`${r.kind}: path '${a.path}' does not exist on disk`);
-        continue;
-      }
-      if (!isRealPathInsideRoot(root, a.path)) {
-        invalid.push(`${r.kind}: path '${a.path}' real path must stay inside project root`);
-        continue;
-      }
-      if (r.kind === "openspec") {
-        validateOpenspecArtifact(root, a, fullPath, invalid);
-      } else {
-        const s = statSync(fullPath);
-        if (!s.isFile()) {
-          invalid.push(`${r.kind}: path '${a.path}' must be a file`);
-          continue;
-        }
-        let body = "";
-        try { body = readFileSync(fullPath, "utf8"); } catch {}
-        if (body.trim().length === 0) {
-          invalid.push(`${r.kind}: file '${a.path}' is empty`);
-          continue;
-        }
-        if (r.mustContain && !r.mustContain.test(body)) {
-          invalid.push(`${r.kind}: file '${a.path}' does not contain expected pattern (${r.mustContain})`);
-          continue;
-        }
-        if (r.kind === "interfaces" && body.trim().length < 10) {
-          invalid.push(`${r.kind}: file '${a.path}' is too short (< 10 chars)`);
-          continue;
-        }
-        // A sibling change's manifest or interfaces file satisfies the letter of the
-        // contract but proves nothing about THIS change. The oracle path already had
-        // this guard; the other two path artifacts did not.
-        const boundChange = changeDirOf(st);
-        if (boundChange && isChangeScopedKind(r.kind)) {
-          const relFromChange = relative(join(root, boundChange), fullPath).replace(/\\/g, "/");
-          if (relFromChange.startsWith("..") || isAbsolute(relFromChange)) {
-            invalid.push(`${r.kind}: '${a.path}' belongs to another change, not '${boundChange}'`);
-            continue;
-          }
-        }
-        if (r.kind === "manifest") {
-          const rowProblem = validateManifestRows(body);
-          if (rowProblem) invalid.push(`manifest: ${rowProblem}`);
-        }
-      }
-    }
-
-    if (r.kind === "oracle") {
-      validateOracleArtifact(root, a, st, invalid);
-      if (st.tier === "T2" || st.tier === "T3") {
-        const changeId = st.artifacts?.openspec?.path ? basename(st.artifacts.openspec.path) : null;
-        if (changeId) {
-          const revRes = validateReviewEvidence({ root, changeId, tier: st.tier });
-          if (!revRes.ok) {
-            for (const err of revRes.errors) invalid.push(err);
-          }
-        }
-      }
-    }
-  }
-
-  return { reqs, missing, invalid, ok: missing.length === 0 && invalid.length === 0 };
-}
-
-function markOracleVerified(root, st, path, detail) {
-  let isOracleAccept = isPositiveOracleVerdict(detail || "");
-  if (!isOracleAccept && path && existsSync(join(root, path))) {
-    try {
-      isOracleAccept = isPositiveOracleVerdict(readFileSync(join(root, path), "utf8"));
-    } catch {}
-  }
-  if (st.stages) {
-    if (isPlainObject(st.stages) && st.stages.oracle) {
-      st.stages.oracle = { ...(isPlainObject(st.stages.oracle) ? st.stages.oracle : {}), status: "done", verified: isOracleAccept };
-    } else if (Array.isArray(st.stages)) {
-      const idx = st.stages.findIndex((s) => (s?.id || s?.name) === "oracle");
-      if (idx >= 0) st.stages[idx] = { ...st.stages[idx], status: "done", verified: isOracleAccept };
-    }
-  }
-  return isOracleAccept;
-}
-
-function createArtifactRecord(root, st, kind, path, detail) {
-  const verified = kind === "oracle" ? markOracleVerified(root, st, path, detail) : false;
-  const record = { at: new Date().toISOString(), path, detail, verified };
-  if (kind === "oracle") record.snapshot = scanWorktree(root);
-  return record;
-}
 
 function cmdArtifact(root, flags) {
   return withStateLock(root, () => {
