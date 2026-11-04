@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, symlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, symlinkSync, existsSync, utimesSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve, basename } from "node:path";
@@ -16,6 +16,7 @@ import {
   cmdEscalate,
   cmdClose,
   cmdCheckCi,
+  checkExperienceFresh,
   load,
   save,
 } from "../workflow.mjs";
@@ -1327,6 +1328,143 @@ test("gate: oracle ACCEPT sets verified true; gate pass sets stage verified true
 
     // Close now succeeds
     assert.equal(cmdClose(root, {}), 0, "task with all verified stages closes cleanly");
+    assert.equal(load(root).status, "closed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("experience gate: checkExperienceFresh detects missing dir, stale files, and fresh lesson", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-exp-helper-"));
+  try {
+    const now = new Date().toISOString();
+    assert.deepEqual(checkExperienceFresh(root, now), { ok: false, checked: 0 });
+
+    const expDir = join(root, ".workflow", "experience");
+    mkdirSync(expDir, { recursive: true });
+    assert.deepEqual(checkExperienceFresh(root, now), { ok: false, checked: 0 });
+
+    const file = join(expDir, "general.md");
+    writeFileSync(file, "cue | lesson | evidence\n", "utf8");
+    utimesSync(file, 1000, 1000);
+    assert.deepEqual(checkExperienceFresh(root, now), { ok: false, checked: 1 });
+
+    const future = (Date.now() + 10000) / 1000;
+    utimesSync(file, future, future);
+    assert.deepEqual(checkExperienceFresh(root, now), { ok: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function setupT2Exp(root) {
+  setupT2(root, { evidence: false });
+  const featDir = join(root, "openspec", "changes", "feat-x");
+  writeFileSync(join(root, "manifest.md"), "| R01 | \"user wanted X\" | acc | done |\n", "utf8");
+  writeFileSync(join(featDir, "manifest.md"), "| R01 | \"user wanted X\" | acc | done |\n", "utf8");
+  writeValidEvidence(root, featDir, "feat-x");
+  mkdirSync(join(root, ".workflow", "sessions"), { recursive: true });
+  writeFileSync(join(root, ".workflow", "sessions", "dummy.jsonl"), "", "utf8");
+}
+
+test("experience gate: (a) T2 close without fresh lessons fails with refusal text", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-exp-refusal-"));
+  const errors = [];
+  const origErr = console.error;
+  console.error = (...args) => { errors.push(args.join(" ")); origErr(...args); };
+  try {
+    setupT2Exp(root);
+    cmdStart(root, { tier: "T2", task: "experience-refusal" });
+    cmdArtifact(root, { kind: "recon", detail: "mapped boundaries; acceptance: tests pass" });
+    cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from brief" });
+    cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal validated" });
+    cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified all requirements" });
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "close must exit 1 when no fresh lesson is appended");
+    const errText = errors.join("\n");
+    assert.match(errText, /workflow: cannot close T2 — no experience lesson appended \(0 files checked\); append 'cue \| lesson \| evidence' to \.workflow\/experience\/<domain>\.md, or close with --force --reason "<why>"/);
+    assert.equal(load(root).status, "open", "task must stay open");
+  } finally {
+    console.error = origErr;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("experience gate: (b) T2 close with fresh lesson file closes cleanly", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-exp-clean-"));
+  try {
+    setupT2Exp(root);
+    cmdStart(root, { tier: "T2", task: "experience-clean" });
+    cmdArtifact(root, { kind: "recon", detail: "mapped boundaries; acceptance: tests pass" });
+    cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from brief" });
+    cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal validated" });
+    cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified all requirements" });
+
+    const expDir = join(root, ".workflow", "experience");
+    mkdirSync(expDir, { recursive: true });
+    const file = join(expDir, "general.md");
+    writeFileSync(file, "- cue | lesson | evidence\n", "utf8");
+    const future = (Date.now() + 10000) / 1000;
+    utimesSync(file, future, future);
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 0, "close must succeed with fresh experience file");
+    assert.equal(load(root).status, "closed", "task must be closed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("experience gate: (c) T2 close with --force requires reason and records deviation", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-exp-force-"));
+  const errors = [];
+  const origErr = console.error;
+  console.error = (...args) => { errors.push(args.join(" ")); origErr(...args); };
+  try {
+    setupT2Exp(root);
+    cmdStart(root, { tier: "T2", task: "experience-force" });
+    cmdArtifact(root, { kind: "recon", detail: "mapped boundaries; acceptance: tests pass" });
+    cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from brief" });
+    cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal validated" });
+    cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified all requirements" });
+
+    // --force without reason must fail
+    const failCode = cmdClose(root, { force: true });
+    assert.equal(failCode, 1, "--force without reason must exit 1");
+    assert.match(errors.join("\n"), /workflow: --force requires --reason "<why no lesson was recorded>"/);
+    assert.equal(load(root).status, "open", "task must stay open");
+
+    // --force with reason succeeds and records deviation
+    const passCode = cmdClose(root, { force: true, reason: "skip lesson for prototype" });
+    assert.equal(passCode, 0, "--force with reason must succeed");
+    const st = load(root);
+    assert.equal(st.status, "closed");
+    assert.equal(st.deviation.forced, true);
+    assert.equal(st.deviation.reason, "skip lesson for prototype");
+    assert.equal(st.deviation.noExperience, true);
+  } finally {
+    console.error = origErr;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("experience gate: (d) T0 and T1 close without experience lessons", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-exp-t0-t1-"));
+  try {
+    mkdirSync(join(root, ".workflow", "sessions"), { recursive: true });
+    writeFileSync(join(root, ".workflow", "sessions", "dummy.jsonl"), "", "utf8");
+    // T0
+    assert.equal(cmdStart(root, { tier: "T0", task: "t0-task" }), 0);
+    assert.equal(cmdClose(root, {}), 0, "T0 close must succeed without experience files");
+
+    // T1
+    assert.equal(cmdStart(root, { tier: "T1", task: "t1-task" }), 0);
+    assert.equal(cmdArtifact(root, { kind: "recon", detail: "files a.mjs; acceptance: node --test passes" }), 0);
+    assert.equal(cmdClose(root, {}), 0, "T1 close must succeed without experience files");
     assert.equal(load(root).status, "closed");
   } finally {
     rmSync(root, { recursive: true, force: true });

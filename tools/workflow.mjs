@@ -1557,6 +1557,13 @@ function getSessionConsumption(root, flags = {}) {
   return { tokens: t !== null && !Number.isNaN(t) ? t : parsed.tokens, calls: c !== null && !Number.isNaN(c) ? c : parsed.calls };
 }
 
+function checkExperienceFresh(root, startedAt) {
+  try {
+    const dir = join(root, DIR, "experience"), files = readdirSync(dir).filter((f) => f.endsWith(".md")), startMs = startedAt ? new Date(startedAt).getTime() : 0;
+    return files.some((f) => statSync(join(dir, f), { throwIfNoEntry: false })?.mtimeMs > startMs) ? { ok: true } : { ok: false, checked: files.length };
+  } catch { return { ok: false, checked: 0 }; }
+}
+
 function checkHandoffFile(root, startedAt) {
   const p = join(root, DIR, "handoff.md");
   if (!existsSync(p)) return { exists: false, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: "file missing" };
@@ -2101,16 +2108,18 @@ function formatDeviationParts(dev) {
   if (dev.invalid) parts.push(`invalid ${dev.invalid.join(", ")}`);
   if (dev.staleAcceptance) parts.push("stale acceptance");
   if (dev.unverifiedStages) parts.push(`unverified ${dev.unverifiedStages.join(", ")}`);
+  if (dev.noExperience) parts.push("no experience lesson");
   return parts.join(" + ");
 }
 
-function buildDeviationRecord(reason, { missing, invalid, staleAcceptance, unverifiedStages }) {
+function buildDeviationRecord(reason, { missing, invalid, staleAcceptance, unverifiedStages, noExperience }) {
   const dev = { forced: true, reason: String(reason) };
   let hasAny = false;
   if (missing?.length) { dev.missing = [...missing]; hasAny = true; }
   if (invalid?.length) { dev.invalid = [...invalid]; hasAny = true; }
   if (staleAcceptance) { dev.staleAcceptance = staleAcceptance; hasAny = true; }
   if (unverifiedStages?.length) { dev.unverifiedStages = [...unverifiedStages]; hasAny = true; }
+  if (noExperience) { dev.noExperience = true; hasAny = true; }
   return hasAny ? dev : null;
 }
 
@@ -2197,7 +2206,16 @@ function cmdClose(root, flags) {
   }
   const stageCheck = checkStageState(root, st, flags);
   if (!stageCheck.ok) return stageCheck.exitCode;
-
+  let noExperience = false;
+  if (st.tier === "T2" || st.tier === "T3") {
+    const exp = checkExperienceFresh(root, st.startedAt);
+    if (!exp.ok && !flags.force) {
+      console.error(`workflow: cannot close ${st.tier} — no experience lesson appended (${exp.checked} files checked); append 'cue | lesson | evidence' to .workflow/experience/<domain>.md, or close with --force --reason "<why>"`);
+      return 1;
+    }
+    if (!exp.ok && !flags.reason) { console.error('workflow: --force requires --reason "<why no lesson was recorded>"'); return 1; }
+    if (!exp.ok) noExperience = true;
+  }
   st.status = "closed";
   st.closedAt = new Date().toISOString();
   if (flags["diff-lines"] !== undefined) {
@@ -2208,10 +2226,7 @@ function cmdClose(root, flags) {
   // state.json and metrics (`forced: false`), i.e. the cheapest way to ship
   // unverified work left no trace at all.
   const deviationText = applyCloseDeviation(st, flags, {
-    missing,
-    invalid,
-    staleAcceptance,
-    unverifiedStages: stageCheck.unverifiedStages,
+    missing, invalid, staleAcceptance, unverifiedStages: stageCheck.unverifiedStages, noExperience,
   });
   if (deviationText) {
     logEvent(root, "close", `${st.tier} — ${st.task} (force: ${flags.reason})`, { forced: true });
@@ -2471,7 +2486,7 @@ export function runWorkflowCli(argv = [], options = {}) {
 
 /* ---------------------------------------------------------------------- exports and main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass, cmdSettle };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, checkExperienceFresh, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass, cmdSettle };
 
 import { fileURLToPath } from "node:url";
 

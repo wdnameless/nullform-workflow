@@ -62,8 +62,8 @@
       "reason": ""
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 1335,
-      "reason": "Committed fixture grows (d8ccafb) + omh-model-routing T2: 4 reported/verified gate tests (2026-10-30)"
+      "lines": 1473,
+      "reason": "Committed fixture grows (d8ccafb) + omh-model-routing T2: 4 reported/verified gate tests (2026-10-30) + experience close-gate T1: 5 tests (2026-11-04)"
     },
     "tools/workflow.mjs": {
       "lines": 1680,
