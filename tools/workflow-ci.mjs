@@ -3,8 +3,8 @@
  * tools/workflow-ci.mjs — CI-гейты workflow (check-ci): вынесены из workflow.mjs 1:1.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, resolve, relative } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync, rmSync } from "node:fs";
+import { join, resolve, relative, dirname, basename } from "node:path";
 import { checkCodeSize, loadConfig as loadCodeSizeConfig } from "./code-size.mjs";
 import { checkTripwire } from "./tripwire.mjs";
 import { scanRepo } from "./debt-ledger.mjs";
@@ -16,10 +16,24 @@ import {
   validateReviewEvidence,
   LEGACY_MARKER,
   isSupersededOracleArtifact,
+  recordStageB,
+  runReviewRecord,
 } from "./review/evidence.mjs";
+import { repairBudget } from "./review/arbitrate.mjs";
+import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review/http-runtime.mjs";
+import { validateReviewCapability } from "./installation/capabilities.mjs";
+import { runBriefRounds, appendAddenda } from "./brief-rounds.mjs";
+import { oracleInput } from "./brief.mjs";
 import { validateReviewEvidenceAtRevision } from "./review/evidence-history.mjs";
 import { isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath } from "./worktree-snapshot.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries, gitIgnoredPaths, lastTouchingRevision, hasReconEvidence } from "./workflow-shared.mjs";
+import {
+  isPlainObject,
+  withStateLock,
+  load,
+  save,
+  logEvent,
+} from "./workflow-core.mjs";
 
 export function resolveChangedFilesAgainstBase(root, baseRef) {
   const run = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000 });
@@ -704,3 +718,359 @@ export function cmdCheckCi(root, flags = {}) {
   console.log(`workflow check-ci: ${tier} evidence verified for change '${changeId}'.`);
   return 0;
 }
+
+/**
+ * Reported-only stages: done && !verified (interfaces.md §T2, R03).
+ * A stage is reported-only if its status is 'done' (or 'reported') and verified is not true.
+ */
+export function isStageReported(status, verified) {
+  const norm = String(status || "").toLowerCase();
+  return (norm === "done" || norm === "reported") && !verified;
+}
+
+export function checkStageObject(id, s) {
+  if (typeof s === "boolean") return !s ? id : null;
+  if (typeof s === "string") return isStageReported(s, false) ? id : null;
+  if (isPlainObject(s)) {
+    const rawSt = s.status || (s.done ? "done" : (s.verified !== undefined ? "done" : "pending"));
+    return isStageReported(rawSt, s.verified === true) ? id : null;
+  }
+  return null;
+}
+
+export function extractReportedFromArray(stages) {
+  const list = [];
+  for (const s of stages) {
+    if (!s) continue;
+    const id = String(s.id || s.name || s.stage || "unknown");
+    const status = s.status || (s.done ? "done" : "pending");
+    if (isStageReported(status, s.verified === true)) list.push(id);
+  }
+  return list;
+}
+
+export function extractReportedFromObject(stages) {
+  const list = [];
+  for (const [id, s] of Object.entries(stages)) {
+    const hit = checkStageObject(id, s);
+    if (hit) list.push(hit);
+  }
+  return list;
+}
+
+export function hasOracleStage(stages) {
+  if (Array.isArray(stages)) {
+    return stages.some((s) => (s?.id || s?.name) === "oracle");
+  }
+  return isPlainObject(stages) && stages.oracle !== undefined;
+}
+
+export function checkUnverifiedOracleArtifact(st, reported) {
+  if (st?.artifacts?.oracle?.verified !== false) return null;
+  if (reported.includes("oracle")) return null;
+  if (hasOracleStage(st.stages)) return null;
+  return "oracle";
+}
+
+export function getReportedStages(st) {
+  if (!st) return [];
+  const reported = Array.isArray(st.stages)
+    ? extractReportedFromArray(st.stages)
+    : (isPlainObject(st.stages) ? extractReportedFromObject(st.stages) : []);
+  const oracleMissing = checkUnverifiedOracleArtifact(st, reported);
+  if (oracleMissing) reported.push(oracleMissing);
+  return [...new Set(reported)];
+}
+
+export function checkStageState(root, st, flags) {
+  const unverifiedStages = getReportedStages(st);
+  if (!unverifiedStages.length) return { ok: true, unverifiedStages: [] };
+  if (!flags.force) {
+    console.error(`workflow: cannot close ${st.tier} — reported-but-unverified: ${unverifiedStages.join(", ")}.`);
+    console.error(`  verify stages with passing oracle/gates, or close with --force --reason "<why unverified stages are accepted>".`);
+    logEvent(root, "reported-but-unverified", `${st.tier} — ${st.task} (${unverifiedStages.join(", ")})`);
+    return { ok: false, exitCode: 1, unverifiedStages };
+  }
+  if (!flags.reason) {
+    console.error(`workflow: --force requires --reason "<why unverified stages are accepted>"`);
+    return { ok: false, exitCode: 1, unverifiedStages };
+  }
+  return { ok: true, unverifiedStages };
+}
+
+export function recordStage(root, stageName, { status = "done", verified = false } = {}) {
+  return withStateLock(root, () => {
+    const st = load(root);
+    if (!st || st.status !== "open") {
+      console.error("workflow: no open task to update stage. Run `start` first.");
+      return 2;
+    }
+    if (!st.stages) st.stages = {};
+    const now = new Date().toISOString();
+    const entry = { status, verified: Boolean(verified), at: now };
+    if (verified) entry.verifiedAt = now;
+    if (isPlainObject(st.stages)) {
+      st.stages[stageName] = { ...(isPlainObject(st.stages[stageName]) ? st.stages[stageName] : {}), ...entry };
+    } else if (Array.isArray(st.stages)) {
+      const idx = st.stages.findIndex((s) => (s?.id || s?.name) === stageName);
+      if (idx >= 0) st.stages[idx] = { ...st.stages[idx], ...entry };
+      else st.stages.push({ id: stageName, ...entry });
+    }
+    if (stageName === "oracle" && st.artifacts?.oracle) {
+      st.artifacts.oracle.verified = Boolean(verified);
+    }
+    save(root, st);
+    logEvent(root, "stage", `${stageName}: ${status}${verified ? " (verified)" : " (reported)"}`);
+    return 0;
+  });
+}
+
+export function setStageVerified(root, stageName, verified = true) {
+  return recordStage(root, stageName, { status: "done", verified: Boolean(verified) });
+}
+
+export function recordGatePass(root, gateName) {
+  return setStageVerified(root, gateName, true);
+}
+
+export function cmdStage(root, flags = {}) {
+  const name = flags.name || flags.stage || flags._?.[1];
+  if (!name) {
+    console.error("workflow stage: --name <stage> is required.");
+    return 1;
+  }
+  const status = flags.status || "done";
+  const verified = flags.verified !== undefined ? Boolean(flags.verified) : false;
+  return recordStage(root, String(name), { status: String(status), verified });
+}
+
+export function cmdGatePass(root, flags = {}) {
+  const gate = flags.gate || flags.name || flags._?.[1];
+  if (!gate) {
+    console.error("workflow gate-pass: --gate <name> is required.");
+    return 1;
+  }
+  return recordGatePass(root, String(gate));
+}
+
+export function formatDeviationParts(dev) {
+  const parts = [];
+  if (dev.missing) parts.push(`missing ${dev.missing.join(", ")}`);
+  if (dev.invalid) parts.push(`invalid ${dev.invalid.join(", ")}`);
+  if (dev.staleAcceptance) parts.push("stale acceptance");
+  if (dev.unverifiedStages) parts.push(`unverified ${dev.unverifiedStages.join(", ")}`);
+  if (dev.noExperience) parts.push("no experience lesson");
+  return parts.join(" + ");
+}
+
+export function buildDeviationRecord(reason, { missing, invalid, staleAcceptance, unverifiedStages, noExperience }) {
+  const dev = { forced: true, reason: String(reason) };
+  let hasAny = false;
+  if (missing?.length) { dev.missing = [...missing]; hasAny = true; }
+  if (invalid?.length) { dev.invalid = [...invalid]; hasAny = true; }
+  if (staleAcceptance) { dev.staleAcceptance = staleAcceptance; hasAny = true; }
+  if (unverifiedStages?.length) { dev.unverifiedStages = [...unverifiedStages]; hasAny = true; }
+  if (noExperience) { dev.noExperience = true; hasAny = true; }
+  return hasAny ? dev : null;
+}
+
+export function applyCloseDeviation(st, flags, details) {
+  if (!flags.force) return null;
+  const dev = buildDeviationRecord(flags.reason, details);
+  if (!dev) return null;
+  st.deviation = dev;
+  return formatDeviationParts(dev);
+}
+
+/** Review attempts already recorded for this change: prior cycles in history + the live one. */
+export function reviewAttempts(root, changeId) {
+  if (!changeId) return { repairs: 0, retries: 0, reReviews: 0 };
+  const dir = join(root, "openspec", "changes", changeId);
+  const file = join(dir, "review-evidence.json");
+  if (!existsSync(file)) return { repairs: 0, retries: 0, reReviews: 0 };
+  try {
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    const cycles = Array.isArray(data.history) ? data.history.length : 0;
+    return { repairs: 0, retries: 0, reReviews: cycles };
+  } catch { return { repairs: 0, retries: 0, reReviews: 0 }; }
+}
+
+export function cmdReviewRun(root, flags, positionals = 0) {
+  try {
+    const { redo, dryRun } = assertReviewRunFlags(flags, positionals);
+    const gate = validateReviewCapability(flags.harness, { dryRun: true, userHome: flags["user-home"] });
+    if (!gate.ok) throw new Error(gate.error);
+    // The re-review ceiling from CONTEXT.md ("one initial review plus two re-reviews")
+    // was a documented rule with no enforcement: the attempt count is already in the
+    // evidence history, so it is counted here instead of being asserted in prose.
+    const attempts = reviewAttempts(root, flags.change);
+    repairBudget(attempts);
+    const productCommand = flags["product-command"] ? JSON.parse(flags["product-command"]) : null;
+    let policy = null, httpExecutor = null;
+    if (!dryRun && !flags["resume-session"]) {
+      if (!flags["admission-policy"]) throw new Error('No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON');
+      policy = validatePolicy(JSON.parse(readFileSync(resolve(root, flags["admission-policy"]), "utf8")));
+      resolveNodeRuntime({});
+      httpExecutor = createHttpExecutor({ root, policy });
+    }
+    const res = runReviewRecord({
+      root, changeId: flags.change, role: flags.role, model: flags.model,
+      baseRef: flags["base-ref"], prompt: flags.prompt, redo,
+      productCommand, admissionPolicy: flags["admission-policy"], resumeSessionDir: flags["resume-session"] ?? null,
+      dryRun, harness: gate.harness, httpExecutor, policy,
+    });
+    console.log(res.dryRun ? JSON.stringify(res, null, 2) : `workflow review-run: recorded ${flags.role} execution for '${flags.change}'.`);
+    return res.ok ? 0 : 1;
+  } catch (err) {
+    console.error(`workflow review-run error: ${err.message}`);
+    return 1;
+  }
+}
+
+export function cmdStageB(root, flags) {
+  try {
+    const res = recordStageB({ root, changeId: flags.change, phase: flags.phase || "after", disposition: flags.disposition || "lean-already", testCmd: flags["test-cmd"] || flags.testCmd, summary: flags.summary, ...(flags["test-timeout"] !== undefined ? { testTimeoutMs: /^[1-9]\d*$/.test(String(flags["test-timeout"])) && typeof flags["test-timeout"] !== "boolean" ? Number(flags["test-timeout"]) * 1000 : NaN } : {}) });
+    if (res.ok) { console.log(`workflow stage-b: recorded ${flags.phase || "after"} execution (${res.stageB.disposition || "frozen baseline"}) for '${flags.change}'.`); return 0; }
+    return 1;
+  } catch (err) { console.error(`workflow stage-b error: ${err.message}`); return 1; }
+}
+
+export async function cmdBrief(root, flags, options = {}) {
+  try {
+    let rounds = flags.rounds !== undefined ? parseInt(flags.rounds, 10) : 2;
+    if (isNaN(rounds) || rounds < 1) rounds = 2;
+    if (rounds > 5) rounds = 5;
+
+    let manifestPath = flags.manifest ? String(flags.manifest).trim() : null;
+    if (!manifestPath) {
+      const st = load(root);
+      if (st?.artifacts?.manifest?.path) {
+        manifestPath = st.artifacts.manifest.path;
+      }
+    }
+    if (!manifestPath) {
+      console.error("workflow brief: manifest path required (--manifest <path>)");
+      return 1;
+    }
+    manifestPath = resolve(root, manifestPath);
+
+    let briefText = "";
+    const briefArg = flags.brief || flags["brief-file"] || flags.file;
+    if (briefArg) {
+      const candidatePath = resolve(root, String(briefArg));
+      if (existsSync(candidatePath) && statSync(candidatePath).isFile()) {
+        briefText = readFileSync(candidatePath, "utf8");
+      } else {
+        briefText = String(briefArg);
+      }
+    } else {
+      const manifestDir = dirname(manifestPath);
+      try {
+        const frozen = oracleInput(manifestDir);
+        if (frozen && existsSync(frozen)) {
+          briefText = readFileSync(frozen, "utf8");
+        }
+      } catch {
+        // No frozen brief, briefText defaults to empty
+      }
+    }
+
+    const ask = options?.ask;
+    const addenda = await runBriefRounds(briefText, { rounds, ask });
+    appendAddenda(manifestPath, addenda);
+    console.log(`workflow brief: recorded ${addenda.length} addenda in ${basename(manifestPath)} (${rounds} rounds).`);
+    return 0;
+  } catch (err) {
+    console.error(`workflow brief error: ${err.message}`);
+    return 1;
+  }
+}
+
+export function confirmSettle(flags) {
+  const change = flags.change || flags.name || flags._?.[1];
+  if (!change || typeof change !== "string") {
+    console.error("workflow settle: --change <name> is required.");
+    return null;
+  }
+  if (!flags.yes) {
+    console.error(`workflow settle: confirmation required (--yes) to remove worktree and branch for change '${change}'.`);
+    return null;
+  }
+  return change;
+}
+
+export function resolveSettleDocTargets(root, change, worktreePaths, branches) {
+  const doc = join(root, "openspec", "changes", change, "worktrees.md");
+  if (!existsSync(doc)) return;
+  try {
+    for (const line of readFileSync(doc, "utf8").split("\n")) {
+      const match = line.match(/\.tmp\/worktrees\/[^\s|`]+/);
+      if (match) worktreePaths.add(resolve(root, match[0]));
+      const branchMatch = line.match(/(?:feat|fix|feature)\/[a-z0-9_-]+/i);
+      if (branchMatch) branches.add(branchMatch[0]);
+    }
+  } catch {}
+}
+
+export function resolveSettleGitTargets(root, change, worktreePaths, branches) {
+  if (!isInsideGitRepo(root)) return;
+  try {
+    const out = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    let currentPath = null;
+    for (const line of out.split("\n")) {
+      if (line.startsWith("worktree ")) {
+        currentPath = line.slice("worktree ".length).trim();
+        if (currentPath.includes(change)) worktreePaths.add(resolve(root, currentPath));
+      } else if (line.startsWith("branch refs/heads/") && currentPath?.includes(change)) {
+        branches.add(line.slice("branch refs/heads/".length).trim());
+      }
+    }
+  } catch {}
+}
+
+export function resolveSettleTargets(root, change) {
+  const worktreePaths = new Set();
+  const branches = new Set([change, `feat/${change}`, `fix/${change}`, `feat-${change}`, `fix-${change}`]);
+  resolveSettleDocTargets(root, change, worktreePaths, branches);
+  const wtBase = join(root, ".tmp", "worktrees");
+  if (existsSync(wtBase)) {
+    try {
+      for (const entry of readdirSync(wtBase)) {
+        if (entry.includes(change)) worktreePaths.add(resolve(wtBase, entry));
+      }
+    } catch {}
+  }
+  resolveSettleGitTargets(root, change, worktreePaths, branches);
+  return { worktreePaths, branches };
+}
+
+export function removeSettleWorktrees(root, worktreePaths) {
+  for (const wtPath of worktreePaths) {
+    if (isPathInsideRoot(root, wtPath) && resolve(wtPath) !== resolve(root)) {
+      if (isInsideGitRepo(root)) {
+        try { execFileSync("git", ["worktree", "remove", "--force", wtPath], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
+      }
+      try { rmSync(wtPath, { recursive: true, force: true }); } catch {}
+    }
+  }
+}
+
+export function removeSettleBranches(root, branches) {
+  if (!isInsideGitRepo(root)) return;
+  try { execFileSync("git", ["worktree", "prune"], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
+  for (const b of branches) {
+    try { execFileSync("git", ["branch", "-D", b], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
+  }
+}
+
+export function cmdSettle(root, flags = {}) {
+  const change = confirmSettle(flags);
+  if (!change) return 1;
+  const { worktreePaths, branches } = resolveSettleTargets(root, change);
+  removeSettleWorktrees(root, worktreePaths);
+  removeSettleBranches(root, branches);
+  console.log(`workflow settle: change '${change}' worktree and branch removed.`);
+  return 0;
+}
+
+

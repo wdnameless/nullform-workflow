@@ -41,25 +41,14 @@ import { spawnSync, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname, resolve, basename, relative, isAbsolute } from "node:path";
 import { readJsonlSafe } from "./session-log.mjs";
-import {
-  validateOracleArtifact,
-  validateReviewEvidence,
-  runReviewRecord,
-  recordStageB,
-  isPositiveOracleVerdict,
-} from "./review/evidence.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { parseRequirement } from "./requirements.mjs";
-import { repairBudget } from "./review/arbitrate.mjs";
 export { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
-import { validateReviewCapability, printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
+import { printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
 import { runWorkspaceCommand } from "./workflow/workspaces.mjs";
 import { runClaimCommand } from "./workflow/claims.mjs";
-import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review/http-runtime.mjs";
 import { doctorLite } from "./doctor-lite.mjs";
-import { runBriefRounds, appendAddenda } from "./brief-rounds.mjs";
-import { oracleInput } from "./brief.mjs";
 import { recordGate } from "./gate-counter.mjs";
 function printWorkflowHelp() {
   printCoreWorkflowHelp();
@@ -112,239 +101,18 @@ import {
   sleepSync,
   acquireLock,
   withStateLock,
+  cmdMetrics,
+  logEvent,
+  recordAbandonedLane,
+  suggestTier,
+  cmdSuggest,
+  checkExperienceFresh,
+  findAcceptanceStaleness,
+  loadSoftBudgets,
+  getSessionConsumption,
+  checkHandoffFile,
 } from "./workflow-core.mjs";
 export { ACCEPTANCE_RE, REQUIREMENTS, requiredFor, openspecDirProblems, openspecFileProblems, runOpenspecValidate, validateOpenspecArtifact, isChangeScopedKind, changeDirOf, parsePlanTickets, missingPlanDep, planCycleFrom, validatePlanCoverage, validateManifestRows, validateArtifacts, markOracleVerified, createArtifactRecord };
-function cmdMetrics(root) {
-  const list = loadMetrics(root);
-  if (list.length === 0) {
-    console.log("задач пока нет");
-    return 0;
-  }
-
-  const total = list.length;
-  const byTier = {};
-  const durations = [];
-  let forcedCount = 0;
-  let autoCount = 0;
-
-  for (const m of list) {
-    const t = m.tier || "UNKNOWN";
-    byTier[t] = (byTier[t] || 0) + 1;
-    if (typeof m.durationMs === "number" && !Number.isNaN(m.durationMs)) {
-      durations.push(m.durationMs);
-    }
-    if (m.forced) forcedCount++;
-    if (m.auto) autoCount++;
-  }
-
-  durations.sort((a, b) => a - b);
-  const sum = durations.reduce((acc, v) => acc + v, 0);
-  const avgMs = durations.length ? Math.round(sum / durations.length) : 0;
-  let medMs = 0;
-  if (durations.length) {
-    const mid = Math.floor(durations.length / 2);
-    medMs = durations.length % 2 !== 0 ? durations[mid] : Math.round((durations[mid - 1] + durations[mid]) / 2);
-  }
-
-  console.log(`Всего задач: ${total}`);
-  console.log("По тирам:");
-  for (const t of LADDER) {
-    if (byTier[t]) console.log(`  ${t}: ${byTier[t]}`);
-  }
-  for (const [k, v] of Object.entries(byTier)) {
-    if (!LADDER.includes(k)) console.log(`  ${k}: ${v}`);
-  }
-  console.log(`Средняя длительность: ${avgMs} мс`);
-  console.log(`Медианная длительность: ${medMs} мс`);
-  console.log(`Force-закрытий: ${forcedCount}`);
-  console.log(`Авто-режимов: ${autoCount}`);
-
-  // Without this list the only durable record of WHY a lane was force-closed was
-  // state.json, which the next `start` overwrites. Repeating a shortcut three times
-  // therefore never surfaced as "fix the playbook" — it just looked like normal work.
-  const forced = list.filter((m) => m.forced);
-  if (forced.length) {
-    const byReason = new Map();
-    for (const m of forced) {
-      const reason = String(m.reason || "(reason not recorded)").trim();
-      byReason.set(reason, (byReason.get(reason) || 0) + 1);
-    }
-    const ranked = [...byReason.entries()].sort((a, b) => b[1] - a[1]);
-    console.log("Причины force-закрытий:");
-    for (const [reason, count] of ranked.slice(0, 10)) {
-      console.log(`  ${count}x ${reason.length > 120 ? `${reason.slice(0, 117)}...` : reason}`);
-    }
-    const repeated = ranked.filter(([, count]) => count > 1);
-    if (repeated.length) {
-      console.log(`  повторяются: ${repeated.map(([r, c]) => `${c}x "${r.length > 60 ? `${r.slice(0, 57)}...` : r}"`).join("; ")}`);
-      console.log("  повтор — сигнал править skill/rule, а не закрывать заново");
-    }
-  }
-  return 0;
-}
-/* ------------------------------------------------------------------- suggest */
-
-const KEYWORDS_T3_EXPLICIT = [
-  /(?:несколько фич|множество задач|параллельн|мульти-фич|multi-feature|программа)/i,
-];
-// "add X and implement Y" — two independent feature verbs joined by and/plus.
-// Bare "and" alone is NOT a program signal: "migration and schema update" is one feature.
-const VERB_PAIR_T3 = /\b(?:add|implement|build|create|refactor|добавить|реализовать)\b[\s\S]{0,80}?\b(?:and|plus|и)\b[\s\S]{0,80}?\b(?:add|implement|build|create|refactor|добавить|реализовать)\b/i;
-
-const KEYWORDS_T2 = [
-  /\b(?:schema|migration|database|db|migration|architectur|redesign|refactor-all)\b/i,
-  /(?:схема|миграци|архитектур|баз[аы]\s+данных|редизайн)/i,
-];
-
-const KEYWORDS_NEW_DEP_OR_API = [
-  /\b(?:dep|dependency|package|npm|install|api|endpoint|contract|breaking)\b/i,
-  /(?:зависимост|пакет|эндпоинт|контракт|апи)/i,
-];
-
-function isUnfamiliarDir(file) {
-  const normalized = file.replace(/\\/g, "/").toLowerCase();
-  // Heuristic: top-level dirs or paths that look like unknown/new/experimental modules
-  return /(?:^|\/)(?:experimental|legacy|vendor|unfamiliar|new-module|external)\//i.test(normalized);
-}
-
-function getTopLevelDir(file) {
-  const normalized = String(file || "").replace(/\\/g, "/").replace(/^\.?\//, "");
-  const slashIdx = normalized.indexOf("/");
-  if (slashIdx > 0) {
-    return normalized.slice(0, slashIdx);
-  }
-  return normalized ? "." : "";
-}
-
-function extractSignalKeywords(taskStr) {
-  if (!taskStr) return [];
-  const matched = new Set();
-  const lower = taskStr.toLowerCase();
-
-  const t3Literals = [
-    "multi-feature", "несколько фич", "множество задач",
-    "параллельн", "мульти-фич", "программа",
-  ];
-  for (const token of t3Literals) {
-    if (lower.includes(token)) {
-      matched.add(token);
-    }
-  }
-  if (VERB_PAIR_T3.test(taskStr)) {
-    matched.add("verb-pair-t3");
-  }
-
-  const t2Regexes = [
-    /\b(?:schema|migration|database|db|architectur\w*|redesign|refactor-all)\b/gi,
-    /(?:схем\w*|миграц\w*|архитектур\w*|баз[аы]\s+данных|редизайн\w*)/gi,
-  ];
-  for (const re of t2Regexes) {
-    const hits = taskStr.match(re);
-    if (hits) {
-      for (const h of hits) {
-        matched.add(h.toLowerCase());
-      }
-    }
-  }
-
-  return [...matched];
-}
-
-function suggestTier({ files = [], task = "" }) {
-  const fileList = Array.isArray(files)
-    ? files.filter(Boolean)
-    : String(files || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const taskStr = String(task || "");
-
-  const reasons = [];
-  let totalRules = 4;
-  let matchedRules = 0;
-
-  const hasT3Kw = KEYWORDS_T3_EXPLICIT.some((re) => re.test(taskStr))
-    || (VERB_PAIR_T3.test(taskStr) && !KEYWORDS_T2.some((re) => re.test(taskStr)));
-  const hasT2Kw = KEYWORDS_T2.some((re) => re.test(taskStr));
-  const hasDepOrApiKw = KEYWORDS_NEW_DEP_OR_API.some((re) => re.test(taskStr));
-  const count = fileList.length;
-  const hasUnfamiliar = fileList.some(isUnfamiliarDir);
-
-  let tier = "T0";
-
-  // Rule 1: Multi-feature keywords or program scope -> T3
-  if (hasT3Kw) {
-    tier = "T3";
-    matchedRules++;
-    reasons.push("задача содержит ключевые слова множественных фич или объединения задач ('and', 'plus', 'несколько фич')");
-  }
-
-  // Rule 2: Schema / migration / architecture keywords or >9 files -> at least T2
-  if (count > 9 || hasT2Kw) {
-    if (LADDER.indexOf("T2") > LADDER.indexOf(tier)) {
-      tier = "T2";
-    }
-    matchedRules++;
-    if (count > 9) {
-      reasons.push(`большой охват файлов (${count} > 9), требуется manifest и OpenSpec`);
-    }
-    if (hasT2Kw) {
-      reasons.push("задача затрагивает схему данных, миграции или архитектурные изменения");
-    }
-  }
-
-  // Rule 3: 3-9 files or unfamiliar directory -> at least T1
-  if ((count >= 3 && count <= 9) || hasUnfamiliar) {
-    if (LADDER.indexOf("T1") > LADDER.indexOf(tier)) {
-      tier = "T1";
-    }
-    matchedRules++;
-    if (count >= 3 && count <= 9) {
-      reasons.push(`затрагивается от 3 до 9 файлов (${count}), требуется разведка и recon notes`);
-    }
-    if (hasUnfamiliar) {
-      reasons.push("обнаружены файлы в незнакомых или изолированных директориях");
-    }
-  }
-
-  // Rule 4: Small scope: 1-2 files and no keywords -> T0
-  if (count <= 2 && !hasT3Kw && !hasT2Kw) {
-    if (hasDepOrApiKw) {
-      if (LADDER.indexOf("T1") > LADDER.indexOf(tier)) {
-        tier = "T1";
-      }
-      matchedRules++;
-      reasons.push("обнаружены ключевые слова новых зависимостей или API изменений");
-    } else {
-      matchedRules++;
-      reasons.push(`локальное изменение (${count === 0 ? "0-1" : count} файл(а)) без изменения зависимостей, API или схем данных`);
-    }
-  }
-
-  // If no reasons collected yet (e.g. 0 files with standard prompt), provide default T0 reason
-  if (reasons.length === 0) {
-    matchedRules++;
-    reasons.push("базовое локальное изменение");
-  }
-
-  const dirSpread = [...new Set(fileList.map(getTopLevelDir).filter(Boolean))];
-  const matchedKeywords = extractSignalKeywords(taskStr);
-  const rationale = {
-    fileCount: count,
-    dirSpread,
-    keywords: matchedKeywords,
-  };
-
-  const confidence = Number((Math.min(matchedRules, totalRules) / totalRules).toFixed(2));
-  return { tier, confidence, reasons, rationale };
-}
-
-function cmdSuggest(flags) {
-  const rawFiles = flags.files ? String(flags.files) : "";
-  const files = rawFiles ? rawFiles.split(",").map((s) => s.trim()).filter(Boolean) : [];
-  const task = flags.task ? String(flags.task) : "";
-  const result = suggestTier({ files, task });
-  console.log(JSON.stringify(result, null, 2));
-  return 0;
-}
-
 /* ----------------------------------------------------------------------- cli */
 
 function parse(argv) {
@@ -408,17 +176,6 @@ function autoOpenDashboard(root, flags) {
   return { live: true, url };
 }
 
-/** Событие воркфлоу для вкладки «Логи» дашборда: одна строка JSON. */
-function logEvent(root, kind, text, extra = {}) {
-  try {
-    const dir = join(root, ".workflow");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const line = JSON.stringify({ at: new Date().toISOString(), kind, text, ...extra }) + "\n";
-    appendFileSync(join(dir, "events.jsonl"), line, "utf8");
-  } catch {
-    // журнал событий — наблюдаемость, а не условие работы
-  }
-}
 
 const ALLOWED_MODES = ["full", "semi", "interview", "manual"];
 const ALLOWED_DEPTHS = ["strict", "normal", "deep"];
@@ -566,26 +323,6 @@ function cmdStart(root, flags) {
     }
     printRemainingArtifacts(tier, st);
     return 0;
-  });
-}
-/**
- * Terminal metric for a lane replaced by `start --force`. Without it the replaced
- * lane vanished: state was overwritten and no metric row written, leaving started
- * lanes with no counterpart and no visible record that work was abandoned.
- */
-function recordAbandonedLane(root, prev, next, reason) {
-  const closedAt = new Date();
-  appendMetric(root, {
-    task: prev.task || "(untitled)",
-    tier: prev.tier,
-    startedAt: prev.startedAt || closedAt.toISOString(),
-    closedAt: closedAt.toISOString(),
-    durationMs: Math.max(0, closedAt.getTime() - new Date(prev.startedAt || closedAt).getTime()),
-    forced: true,
-    auto: prev.auto ?? null,
-    artifactsCount: prev.artifacts ? Object.keys(prev.artifacts).length : 0,
-    reason: `replaced by '${next.task}': ${reason}`,
-    deviationKind: "abandoned-lane",
   });
 }
 
@@ -816,207 +553,6 @@ function cmdCheck(root) {
   return 0;
 }
 
-function loadSoftBudgets(root, tier = null) {
-  const p = budgetsPath(root);
-  // The tier budget is what `status` prints and what the lane declares. The check
-  // used a flat 45 for every tier, so a T1 lane (declared 25) only warned at 36 —
-  // two different numbers for one contract.
-  const tierCalls = tier && DEFAULT_BUDGETS[tier] ? DEFAULT_BUDGETS[tier] : BUDGET_WARN_DEFAULT_CALLS;
-  const def = { tokens: BUDGET_WARN_DEFAULT_TOKENS, calls: tierCalls, warnRatio: BUDGET_WARN_RATIO };
-  if (!existsSync(p)) return def;
-  try {
-    const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
-    const tierOverride = tier && raw.tiers && typeof raw.tiers[tier] === "number" && raw.tiers[tier] > 0 ? raw.tiers[tier] : null;
-    return {
-      tokens: typeof raw.tokens === "number" && raw.tokens > 0 ? raw.tokens : def.tokens,
-      calls: tierOverride ?? (typeof raw.calls === "number" && raw.calls > 0 ? raw.calls : def.calls),
-      warnRatio: typeof raw.warnRatio === "number" && raw.warnRatio > 0 ? raw.warnRatio : def.warnRatio,
-    };
-  } catch { return def; }
-}
-
-// WHY: Parsing the active session .jsonl transcript directly in JS (reusing logic from
-// tools/session_cost.py for token usage and tools/session-retro.mjs for tool call counting)
-// is the most boring, reliable, and decoupled approach. It reads ground truth directly from
-// transcript lines without spawning child processes or requiring Python, and gracefully
-// supports explicit --tokens/--calls CLI flags as zero-overhead overrides.
-/**
- * Measure context size and tool calls from a session transcript. `sinceMs` bounds the window to the current lane:
- * without it, a close on a fresh project inherited the developer's whole session history
- * (91M tokens / 494 calls measured) and refused every close, including in tests that
- * only ran ten tool calls. Consumption is a property of the lane, not of the shell.
- */
-/** Event time, or NaN when the transcript carries none. */
-function eventTimeMs(ev) {
-  const at = ev.timestamp || ev.at || ev.time || ev.message?.timestamp;
-  const t = at ? new Date(at).getTime() : NaN;
-  return Number.isFinite(t) ? t : NaN;
-}
-
-/** Context size recorded on one event. `totalTokens` is the context size AT that
- * message, not what it spent: summing it over 457 events gave 97M for a session whose
- * real output was 343K. The budget is a context ceiling, so the metric is the max. */
-function eventContextSize(ev) {
-  const u = ev.message?.usage || ev.data?.usage || ev.usage;
-  if (!u) return 0;
-  return typeof u.totalTokens === "number"
-    ? u.totalTokens
-    : (u.input || 0) + (u.cacheRead || 0) + (u.output || 0);
-}
-
-function isToolCallEvent(ev) {
-  return ev.type === "toolCall" || ev.type === "tool_call" || ev.type === "tool_use";
-}
-
-/** Tool calls carried on one event, from any of the shapes a transcript uses. */
-function eventToolCalls(ev) {
-  if (isToolCallEvent(ev)) return 1;
-  if (Array.isArray(ev.message?.tool_calls)) return ev.message.tool_calls.length;
-  const blk = Array.isArray(ev.message?.content) ? ev.message.content : Array.isArray(ev.content) ? ev.content : null;
-  return blk ? blk.filter((b) => b && (b.type === "toolCall" || b.type === "tool_call" || b.type === "tool_use")).length : 0;
-}
-
-function parseSessionUsage(filePath, sinceMs = 0) {
-  let tokens = 0, calls = 0;
-  for (const ev of readJsonlSafe(filePath)) {
-    if (!ev || typeof ev !== "object") continue;
-    if (sinceMs > 0) {
-      const t = eventTimeMs(ev);
-      if (Number.isFinite(t) && t < sinceMs) continue;
-    }
-    const size = eventContextSize(ev);
-    if (size > tokens) tokens = size;
-    calls += eventToolCalls(ev);
-  }
-  return { tokens, calls };
-}
-
-function findJsonlFiles(dir) {
-  const out = [];
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const e of entries) {
-      const full = join(dir, e.name);
-      if (e.isDirectory()) out.push(...findJsonlFiles(full));
-      else if (e.isFile() && e.name.endsWith(".jsonl")) out.push(full);
-    }
-  } catch {}
-  return out;
-}
-
-function findNewestSessionJsonl(dir) {
-  try {
-    if (!existsSync(dir)) return null;
-    if (statSync(dir).isFile() && dir.endsWith(".jsonl")) return dir;
-    const files = findJsonlFiles(dir);
-    let newest = null;
-    for (const f of files) {
-      try {
-        const st = statSync(f);
-        if (!newest || st.mtimeMs > newest.mtimeMs) newest = { path: f, mtimeMs: st.mtimeMs };
-      } catch {}
-    }
-    return newest ? newest.path : null;
-  } catch { return null; }
-}
-
-/** The runtime's own transcript for this turn, accepted only if it is this project's.
- * The session file records its `cwd`, so a transcript from another repository is
- * rejected instead of being charged to this lane. */
-function sessionFileForRoot(root) {
-  const fromEnv = process.env.PI_SESSION_FILE || process.env.OMP_SESSION_FILE;
-  if (!fromEnv || !existsSync(fromEnv)) return null;
-  const declared = declaredCwd(fromEnv);
-  return declared && resolve(declared).toLowerCase() === resolve(root).toLowerCase() ? fromEnv : null;
-}
-
-/** Which transcript to read, in order of authority: an explicit --sessions path, the
- * runtime's own file if it belongs to this project, then project-local dirs.
- *
- * The global fallback (homedir/.omp/agent/sessions) is deliberately absent: it picked the
- * newest session of ANY project, so a fresh T0 in a temp dir inherited this repository's
- * 300K-token context and could not close. Another project's history is not this lane's
- * consumption.
- */
-function resolveSessionFile(root, flags = {}) {
-  if (flags.sessions) {
-    const found = findNewestSessionJsonl(resolve(root, String(flags.sessions)));
-    if (found) return found;
-  }
-  const own = sessionFileForRoot(root);
-  if (own) return own;
-  for (const d of [join(root, DIR, "sessions"), join(root, "agent", "sessions"), join(root, "sessions")]) {
-    const found = findNewestSessionJsonl(d);
-    if (found) return found;
-  }
-  // Home fallback is intentional (a project often has no local transcript), but a session
-  // that DECLARES another project's cwd is not this lane's history. A session declaring no
-  // cwd at all stays eligible: there is nothing to contradict the assumption.
-  return newestSessionForRoot(join(homedir(), ".omp", "agent", "sessions"), root);
-}
-
-/** Newest transcript under `dir` that does not declare a different project root. */
-function newestSessionForRoot(dir, root) {
-  for (const f of newestFirstSessions(dir)) {
-    const declared = declaredCwd(f);
-    if (declared && resolve(declared).toLowerCase() !== resolve(root).toLowerCase()) continue;
-    return f;
-  }
-  return null;
-}
-
-/** Session files under `dir`, newest mtime first. */
-function newestFirstSessions(dir) {
-  const out = [];
-  try {
-    if (!existsSync(dir)) return out;
-    for (const f of findJsonlFiles(dir)) {
-      try { out.push({ path: f, mtimeMs: statSync(f).mtimeMs }); } catch {}
-    }
-  } catch { return out; }
-  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).map((e) => e.path);
-}
-
-/** The cwd a transcript declares on its session header, or null. */
-function declaredCwd(file) {
-  try {
-    for (const ev of readJsonlSafe(file)) {
-      if (ev && ev.type === "session" && typeof ev.cwd === "string") return ev.cwd;
-    }
-  } catch {}
-  return null;
-}
-
-function getSessionConsumption(root, flags = {}) {
-  const t = flags.tokens !== undefined ? Number(flags.tokens) : null;
-  const c = flags.calls !== undefined ? Number(flags.calls) : null;
-  if (t !== null && !Number.isNaN(t) && c !== null && !Number.isNaN(c)) return { tokens: t, calls: c };
-  const sf = resolveSessionFile(root, flags);
-  const sinceMs = flags.sinceMs ? Number(flags.sinceMs) : 0;
-  const parsed = sf ? parseSessionUsage(sf, Number.isFinite(sinceMs) ? sinceMs : 0) : { tokens: 0, calls: 0 };
-  return { tokens: t !== null && !Number.isNaN(t) ? t : parsed.tokens, calls: c !== null && !Number.isNaN(c) ? c : parsed.calls };
-}
-
-function checkExperienceFresh(root, startedAt) {
-  try {
-    const dir = join(root, DIR, "experience"), files = readdirSync(dir).filter((f) => f.endsWith(".md")), startMs = startedAt ? new Date(startedAt).getTime() : 0;
-    return files.some((f) => statSync(join(dir, f), { throwIfNoEntry: false })?.mtimeMs > startMs) ? { ok: true } : { ok: false, checked: files.length };
-  } catch { return { ok: false, checked: 0 }; }
-}
-
-function checkHandoffFile(root, startedAt) {
-  const p = join(root, DIR, "handoff.md");
-  if (!existsSync(p)) return { exists: false, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: "file missing" };
-  try {
-    const st = statSync(p);
-    const startMs = startedAt ? new Date(startedAt).getTime() : 0;
-    const fresh = Number.isFinite(startMs) ? st.mtimeMs > startMs : true;
-    if (!fresh) return { exists: true, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: "stale mtime" };
-    const txt = readFileSync(p, "utf8");
-    const valid = /РЕШЕНИЯ/i.test(txt) && /ТУПИКИ/i.test(txt) && /ДАЛЬШЕ/i.test(txt);
-    return { exists: true, fresh: true, valid, path: join(DIR, "handoff.md"), reason: valid ? null : "missing sections (РЕШЕНИЯ/ТУПИКИ/ДАЛЬШЕ)" };
-  } catch (err) { return { exists: true, fresh: false, valid: false, path: join(DIR, "handoff.md"), reason: err.message }; }
-}
 
 /** Kinds the dashboard colours; anything else is a typo, not a new state. */
 const WAIT_KINDS = ["briefing", "spec", "plan", "design", "action", "stop"];
@@ -1189,122 +725,6 @@ function checkBudgetState(root, st, flags = {}) {
   return 1;
 }
 
-
-
-function findAcceptanceStaleness(root, st) {
-  const oracleArtifact = st.artifacts?.oracle;
-  const acceptedAt = oracleArtifact?.at;
-  if (!acceptedAt) return null;
-  const acceptedMs = new Date(acceptedAt).getTime();
-  if (Number.isNaN(acceptedMs)) return null;
-
-  const snapshot = oracleArtifact.snapshot;
-  const current = scanWorktree(root);
-
-  return current.isGit
-    ? findGitStaleness(root, snapshot, current, acceptedAt)
-    : findNonGitStaleness(snapshot, current, acceptedAt, acceptedMs);
-}
-
-function findGitStaleness(_root, snapshot, current, acceptedAt) {
-  const newer = [];
-  const deleted = [];
-  const untrackedAdded = [];
-
-  for (const [rel, meta] of Object.entries(current.tracked)) {
-    const snap = snapshot?.tracked?.[rel];
-    if (snap) {
-      if (!meta.isSecret && !snap.isSecret && meta.hash !== snap.hash) {
-        newer.push(rel);
-      }
-    } else {
-      const untrackedSnap = snapshot?.untracked?.[rel];
-      if (untrackedSnap) {
-        if (!meta.isSecret && meta.hash !== untrackedSnap.hash) {
-          newer.push(rel);
-        }
-      } else {
-        newer.push(rel);
-      }
-    }
-  }
-
-  if (snapshot && snapshot.tracked) {
-    for (const rel of Object.keys(snapshot.tracked)) {
-      if (!(rel in current.tracked)) deleted.push(rel);
-    }
-  }
-
-  if (snapshot && snapshot.untracked) {
-    for (const rel of Object.keys(snapshot.untracked)) {
-      if (!(rel in current.tracked) && !(rel in current.untracked)) deleted.push(rel);
-    }
-  }
-
-  for (const [rel, meta] of Object.entries(current.untracked)) {
-    const snap = snapshot?.untracked?.[rel];
-    if (!snap) {
-      if (!isSecretOrCredentialPath(rel)) untrackedAdded.push(rel);
-    } else if (!meta.isSecret && meta.hash !== snap.hash) {
-      newer.push(rel);
-    }
-  }
-
-  if (snapshot?.secretDigest !== current.secretDigest) newer.push("tracked credential content");
-
-  const reasons = [];
-  if (newer.length > 0) {
-    reasons.push(`${newer.length} tracked file(s) changed after the oracle verdict (${acceptedAt}): ${newer.slice(0, 5).join(", ")}`);
-  }
-  if (deleted.length > 0) {
-    reasons.push(`${deleted.length} tracked file(s) deleted after the oracle verdict (${acceptedAt}): ${deleted.slice(0, 5).join(", ")}`);
-  }
-  if (untrackedAdded.length > 0) {
-    reasons.push(`${untrackedAdded.length} untracked source file(s) added after the oracle verdict (${acceptedAt}): ${untrackedAdded.slice(0, 5).join(", ")}`);
-  }
-  return reasons.length > 0 ? reasons.join("; ") : null;
-}
-
-function findNonGitStaleness(snapshot, current, acceptedAt, acceptedMs) {
-  if (!snapshot || !snapshot.files) {
-    const newer = Object.keys(current.files).filter((rel) => current.files[rel].mtimeMs > acceptedMs);
-    if (newer.length > 0) {
-      return `${newer.length} file(s) changed after the oracle verdict (${acceptedAt}): ${newer.slice(0, 5).join(", ")}`;
-    }
-    return "cannot verify tree freshness in non-git directory without acceptance snapshot";
-  }
-
-  const newer = [];
-  const deleted = [];
-  const added = [];
-
-  for (const [rel, snap] of Object.entries(snapshot.files)) {
-    if (!(rel in current.files)) {
-      deleted.push(rel);
-    } else if (snap.isSecret) {
-      if (current.files[rel].mtimeMs !== snap.mtimeMs || current.files[rel].size !== snap.size) {
-        newer.push(rel);
-      }
-    } else if (current.files[rel].hash !== snap.hash) {
-      newer.push(rel);
-    }
-  }
-  for (const rel of Object.keys(current.files)) {
-    if (!(rel in snapshot.files)) added.push(rel);
-  }
-
-  const reasons = [];
-  if (newer.length > 0) {
-    reasons.push(`${newer.length} file(s) changed after the oracle verdict (${acceptedAt}): ${newer.slice(0, 5).join(", ")}`);
-  }
-  if (deleted.length > 0) {
-    reasons.push(`${deleted.length} file(s) deleted after the oracle verdict (${acceptedAt}): ${deleted.slice(0, 5).join(", ")}`);
-  }
-  if (added.length > 0) {
-    reasons.push(`${added.length} file(s) added after the oracle verdict (${acceptedAt}): ${added.slice(0, 5).join(", ")}`);
-  }
-  return reasons.length > 0 ? reasons.join("; ") : null;
-}
 function pathMatchesAllow(filePath, pattern) {
   const normPath = filePath.replace(/\\/g, "/");
   const patterns = String(pattern || "").split(/[,;\s]+/).map((p) => p.trim()).filter(Boolean);
@@ -1408,169 +828,24 @@ function checkAutoClose(root, st, flags) {
   return 0;
 }
 
-/**
- * Reported-only stages: done && !verified (interfaces.md §T2, R03).
- * A stage is reported-only if its status is 'done' (or 'reported') and verified is not true.
- */
-function isStageReported(status, verified) {
-  const norm = String(status || "").toLowerCase();
-  return (norm === "done" || norm === "reported") && !verified;
-}
-
-function checkStageObject(id, s) {
-  if (typeof s === "boolean") return !s ? id : null;
-  if (typeof s === "string") return isStageReported(s, false) ? id : null;
-  if (isPlainObject(s)) {
-    const rawSt = s.status || (s.done ? "done" : (s.verified !== undefined ? "done" : "pending"));
-    return isStageReported(rawSt, s.verified === true) ? id : null;
-  }
-  return null;
-}
-
-function extractReportedFromArray(stages) {
-  const list = [];
-  for (const s of stages) {
-    if (!s) continue;
-    const id = String(s.id || s.name || s.stage || "unknown");
-    const status = s.status || (s.done ? "done" : "pending");
-    if (isStageReported(status, s.verified === true)) list.push(id);
-  }
-  return list;
-}
-
-function extractReportedFromObject(stages) {
-  const list = [];
-  for (const [id, s] of Object.entries(stages)) {
-    const hit = checkStageObject(id, s);
-    if (hit) list.push(hit);
-  }
-  return list;
-}
-
-function hasOracleStage(stages) {
-  if (Array.isArray(stages)) {
-    return stages.some((s) => (s?.id || s?.name) === "oracle");
-  }
-  return isPlainObject(stages) && stages.oracle !== undefined;
-}
-
-function checkUnverifiedOracleArtifact(st, reported) {
-  if (st?.artifacts?.oracle?.verified !== false) return null;
-  if (reported.includes("oracle")) return null;
-  if (hasOracleStage(st.stages)) return null;
-  return "oracle";
-}
-
-function getReportedStages(st) {
-  if (!st) return [];
-  const reported = Array.isArray(st.stages)
-    ? extractReportedFromArray(st.stages)
-    : (isPlainObject(st.stages) ? extractReportedFromObject(st.stages) : []);
-  const oracleMissing = checkUnverifiedOracleArtifact(st, reported);
-  if (oracleMissing) reported.push(oracleMissing);
-  return [...new Set(reported)];
-}
-
-function checkStageState(root, st, flags) {
-  const unverifiedStages = getReportedStages(st);
-  if (!unverifiedStages.length) return { ok: true, unverifiedStages: [] };
-  if (!flags.force) {
-    console.error(`workflow: cannot close ${st.tier} — reported-but-unverified: ${unverifiedStages.join(", ")}.`);
-    console.error(`  verify stages with passing oracle/gates, or close with --force --reason "<why unverified stages are accepted>".`);
-    logEvent(root, "reported-but-unverified", `${st.tier} — ${st.task} (${unverifiedStages.join(", ")})`);
-    return { ok: false, exitCode: 1, unverifiedStages };
-  }
-  if (!flags.reason) {
-    console.error(`workflow: --force requires --reason "<why unverified stages are accepted>"`);
-    return { ok: false, exitCode: 1, unverifiedStages };
-  }
-  return { ok: true, unverifiedStages };
-}
-
-function recordStage(root, stageName, { status = "done", verified = false } = {}) {
-  return withStateLock(root, () => {
-    const st = load(root);
-    if (!st || st.status !== "open") {
-      console.error("workflow: no open task to update stage. Run `start` first.");
-      return 2;
-    }
-    if (!st.stages) st.stages = {};
-    const now = new Date().toISOString();
-    const entry = { status, verified: Boolean(verified), at: now };
-    if (verified) entry.verifiedAt = now;
-    if (isPlainObject(st.stages)) {
-      st.stages[stageName] = { ...(isPlainObject(st.stages[stageName]) ? st.stages[stageName] : {}), ...entry };
-    } else if (Array.isArray(st.stages)) {
-      const idx = st.stages.findIndex((s) => (s?.id || s?.name) === stageName);
-      if (idx >= 0) st.stages[idx] = { ...st.stages[idx], ...entry };
-      else st.stages.push({ id: stageName, ...entry });
-    }
-    if (stageName === "oracle" && st.artifacts?.oracle) {
-      st.artifacts.oracle.verified = Boolean(verified);
-    }
-    save(root, st);
-    logEvent(root, "stage", `${stageName}: ${status}${verified ? " (verified)" : " (reported)"}`);
-    return 0;
-  });
-}
-
-function setStageVerified(root, stageName, verified = true) {
-  return recordStage(root, stageName, { status: "done", verified: Boolean(verified) });
-}
-
-function recordGatePass(root, gateName) {
-  return setStageVerified(root, gateName, true);
-}
-
-function cmdStage(root, flags = {}) {
-  const name = flags.name || flags.stage || flags._?.[1];
-  if (!name) {
-    console.error("workflow stage: --name <stage> is required.");
-    return 1;
-  }
-  const status = flags.status || "done";
-  const verified = flags.verified !== undefined ? Boolean(flags.verified) : false;
-  return recordStage(root, String(name), { status: String(status), verified });
-}
-
-function cmdGatePass(root, flags = {}) {
-  const gate = flags.gate || flags.name || flags._?.[1];
-  if (!gate) {
-    console.error("workflow gate-pass: --gate <name> is required.");
-    return 1;
-  }
-  return recordGatePass(root, String(gate));
-}
-
-function formatDeviationParts(dev) {
-  const parts = [];
-  if (dev.missing) parts.push(`missing ${dev.missing.join(", ")}`);
-  if (dev.invalid) parts.push(`invalid ${dev.invalid.join(", ")}`);
-  if (dev.staleAcceptance) parts.push("stale acceptance");
-  if (dev.unverifiedStages) parts.push(`unverified ${dev.unverifiedStages.join(", ")}`);
-  if (dev.noExperience) parts.push("no experience lesson");
-  return parts.join(" + ");
-}
-
-function buildDeviationRecord(reason, { missing, invalid, staleAcceptance, unverifiedStages, noExperience }) {
-  const dev = { forced: true, reason: String(reason) };
-  let hasAny = false;
-  if (missing?.length) { dev.missing = [...missing]; hasAny = true; }
-  if (invalid?.length) { dev.invalid = [...invalid]; hasAny = true; }
-  if (staleAcceptance) { dev.staleAcceptance = staleAcceptance; hasAny = true; }
-  if (unverifiedStages?.length) { dev.unverifiedStages = [...unverifiedStages]; hasAny = true; }
-  if (noExperience) { dev.noExperience = true; hasAny = true; }
-  return hasAny ? dev : null;
-}
-
-function applyCloseDeviation(st, flags, details) {
-  if (!flags.force) return null;
-  const dev = buildDeviationRecord(flags.reason, details);
-  if (!dev) return null;
-  st.deviation = dev;
-  return formatDeviationParts(dev);
-}
-
+import {
+  isStageReported,
+  checkStageObject,
+  extractReportedFromArray,
+  extractReportedFromObject,
+  hasOracleStage,
+  checkUnverifiedOracleArtifact,
+  getReportedStages,
+  checkStageState,
+  recordStage,
+  setStageVerified,
+  recordGatePass,
+  cmdStage,
+  cmdGatePass,
+  formatDeviationParts,
+  buildDeviationRecord,
+  applyCloseDeviation,
+} from "./workflow-ci.mjs";
 function cmdClose(root, flags) {
   const closeResult = withStateLock(root, () => {
     const st = load(root);
@@ -1684,199 +959,21 @@ function cmdClose(root, flags) {
   recordGate({ gate: "workflow-close", result: closeResult === 0 ? "pass" : "fail", root });
   return closeResult;
 }
-import { cmdCheckCi } from "./workflow-ci.mjs";
+import {
+  cmdCheckCi,
+  reviewAttempts,
+  cmdReviewRun,
+  cmdStageB,
+  cmdBrief,
+  confirmSettle,
+  resolveSettleDocTargets,
+  resolveSettleGitTargets,
+  resolveSettleTargets,
+  removeSettleWorktrees,
+  removeSettleBranches,
+  cmdSettle,
+} from "./workflow-ci.mjs";
 export { checkQualityGates } from "./workflow-ci.mjs";
-
-/** Review attempts already recorded for this change: prior cycles in history + the live one. */
-function reviewAttempts(root, changeId) {
-  if (!changeId) return { repairs: 0, retries: 0, reReviews: 0 };
-  const dir = join(root, "openspec", "changes", changeId);
-  const file = join(dir, "review-evidence.json");
-  if (!existsSync(file)) return { repairs: 0, retries: 0, reReviews: 0 };
-  try {
-    const data = JSON.parse(readFileSync(file, "utf8"));
-    const cycles = Array.isArray(data.history) ? data.history.length : 0;
-    return { repairs: 0, retries: 0, reReviews: cycles };
-  } catch { return { repairs: 0, retries: 0, reReviews: 0 }; }
-}
-
-function cmdReviewRun(root, flags, positionals = 0) {
-  try {
-    const { redo, dryRun } = assertReviewRunFlags(flags, positionals);
-    const gate = validateReviewCapability(flags.harness, { dryRun: true, userHome: flags["user-home"] });
-    if (!gate.ok) throw new Error(gate.error);
-    // The re-review ceiling from CONTEXT.md ("one initial review plus two re-reviews")
-    // was a documented rule with no enforcement: the attempt count is already in the
-    // evidence history, so it is counted here instead of being asserted in prose.
-    const attempts = reviewAttempts(root, flags.change);
-    repairBudget(attempts);
-    const productCommand = flags["product-command"] ? JSON.parse(flags["product-command"]) : null;
-    let policy = null, httpExecutor = null;
-    if (!dryRun && !flags["resume-session"]) {
-      if (!flags["admission-policy"]) throw new Error('No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON');
-      policy = validatePolicy(JSON.parse(readFileSync(resolve(root, flags["admission-policy"]), "utf8")));
-      resolveNodeRuntime({});
-      httpExecutor = createHttpExecutor({ root, policy });
-    }
-    const res = runReviewRecord({
-      root, changeId: flags.change, role: flags.role, model: flags.model,
-      baseRef: flags["base-ref"], prompt: flags.prompt, redo,
-      productCommand, admissionPolicy: flags["admission-policy"], resumeSessionDir: flags["resume-session"] ?? null,
-      dryRun, harness: gate.harness, httpExecutor, policy,
-    });
-    console.log(res.dryRun ? JSON.stringify(res, null, 2) : `workflow review-run: recorded ${flags.role} execution for '${flags.change}'.`);
-    return res.ok ? 0 : 1;
-  } catch (err) {
-    console.error(`workflow review-run error: ${err.message}`);
-    return 1;
-  }
-}
-
-function cmdStageB(root, flags) {
-  try {
-    const res = recordStageB({ root, changeId: flags.change, phase: flags.phase || "after", disposition: flags.disposition || "lean-already", testCmd: flags["test-cmd"] || flags.testCmd, summary: flags.summary, ...(flags["test-timeout"] !== undefined ? { testTimeoutMs: /^[1-9]\d*$/.test(String(flags["test-timeout"])) && typeof flags["test-timeout"] !== "boolean" ? Number(flags["test-timeout"]) * 1000 : NaN } : {}) });
-    if (res.ok) { console.log(`workflow stage-b: recorded ${flags.phase || "after"} execution (${res.stageB.disposition || "frozen baseline"}) for '${flags.change}'.`); return 0; }
-    return 1;
-  } catch (err) { console.error(`workflow stage-b error: ${err.message}`); return 1; }
-}
-
-async function cmdBrief(root, flags, options = {}) {
-  try {
-    let rounds = flags.rounds !== undefined ? parseInt(flags.rounds, 10) : 2;
-    if (isNaN(rounds) || rounds < 1) rounds = 2;
-    if (rounds > 5) rounds = 5;
-
-    let manifestPath = flags.manifest ? String(flags.manifest).trim() : null;
-    if (!manifestPath) {
-      const st = load(root);
-      if (st?.artifacts?.manifest?.path) {
-        manifestPath = st.artifacts.manifest.path;
-      }
-    }
-    if (!manifestPath) {
-      console.error("workflow brief: manifest path required (--manifest <path>)");
-      return 1;
-    }
-    manifestPath = resolve(root, manifestPath);
-
-    let briefText = "";
-    const briefArg = flags.brief || flags["brief-file"] || flags.file;
-    if (briefArg) {
-      const candidatePath = resolve(root, String(briefArg));
-      if (existsSync(candidatePath) && statSync(candidatePath).isFile()) {
-        briefText = readFileSync(candidatePath, "utf8");
-      } else {
-        briefText = String(briefArg);
-      }
-    } else {
-      const manifestDir = dirname(manifestPath);
-      try {
-        const frozen = oracleInput(manifestDir);
-        if (frozen && existsSync(frozen)) {
-          briefText = readFileSync(frozen, "utf8");
-        }
-      } catch {
-        // No frozen brief, briefText defaults to empty
-      }
-    }
-
-    const ask = options?.ask;
-    const addenda = await runBriefRounds(briefText, { rounds, ask });
-    appendAddenda(manifestPath, addenda);
-    console.log(`workflow brief: recorded ${addenda.length} addenda in ${basename(manifestPath)} (${rounds} rounds).`);
-    return 0;
-  } catch (err) {
-    console.error(`workflow brief error: ${err.message}`);
-    return 1;
-  }
-}
-
-function confirmSettle(flags) {
-  const change = flags.change || flags.name || flags._?.[1];
-  if (!change || typeof change !== "string") {
-    console.error("workflow settle: --change <name> is required.");
-    return null;
-  }
-  if (!flags.yes) {
-    console.error(`workflow settle: confirmation required (--yes) to remove worktree and branch for change '${change}'.`);
-    return null;
-  }
-  return change;
-}
-
-function resolveSettleDocTargets(root, change, worktreePaths, branches) {
-  const doc = join(root, "openspec", "changes", change, "worktrees.md");
-  if (!existsSync(doc)) return;
-  try {
-    for (const line of readFileSync(doc, "utf8").split("\n")) {
-      const match = line.match(/\.tmp\/worktrees\/[^\s|`]+/);
-      if (match) worktreePaths.add(resolve(root, match[0]));
-      const branchMatch = line.match(/(?:feat|fix|feature)\/[a-z0-9_-]+/i);
-      if (branchMatch) branches.add(branchMatch[0]);
-    }
-  } catch {}
-}
-
-function resolveSettleGitTargets(root, change, worktreePaths, branches) {
-  if (!isInsideGitRepo(root)) return;
-  try {
-    const out = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-    let currentPath = null;
-    for (const line of out.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        currentPath = line.slice("worktree ".length).trim();
-        if (currentPath.includes(change)) worktreePaths.add(resolve(root, currentPath));
-      } else if (line.startsWith("branch refs/heads/") && currentPath?.includes(change)) {
-        branches.add(line.slice("branch refs/heads/".length).trim());
-      }
-    }
-  } catch {}
-}
-
-function resolveSettleTargets(root, change) {
-  const worktreePaths = new Set();
-  const branches = new Set([change, `feat/${change}`, `fix/${change}`, `feat-${change}`, `fix-${change}`]);
-  resolveSettleDocTargets(root, change, worktreePaths, branches);
-  const wtBase = join(root, ".tmp", "worktrees");
-  if (existsSync(wtBase)) {
-    try {
-      for (const entry of readdirSync(wtBase)) {
-        if (entry.includes(change)) worktreePaths.add(resolve(wtBase, entry));
-      }
-    } catch {}
-  }
-  resolveSettleGitTargets(root, change, worktreePaths, branches);
-  return { worktreePaths, branches };
-}
-
-function removeSettleWorktrees(root, worktreePaths) {
-  for (const wtPath of worktreePaths) {
-    if (isPathInsideRoot(root, wtPath) && resolve(wtPath) !== resolve(root)) {
-      if (isInsideGitRepo(root)) {
-        try { execFileSync("git", ["worktree", "remove", "--force", wtPath], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
-      }
-      try { rmSync(wtPath, { recursive: true, force: true }); } catch {}
-    }
-  }
-}
-
-function removeSettleBranches(root, branches) {
-  if (!isInsideGitRepo(root)) return;
-  try { execFileSync("git", ["worktree", "prune"], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
-  for (const b of branches) {
-    try { execFileSync("git", ["branch", "-D", b], { cwd: root, stdio: "ignore", windowsHide: true }); } catch {}
-  }
-}
-
-function cmdSettle(root, flags = {}) {
-  const change = confirmSettle(flags);
-  if (!change) return 1;
-  const { worktreePaths, branches } = resolveSettleTargets(root, change);
-  removeSettleWorktrees(root, worktreePaths);
-  removeSettleBranches(root, branches);
-  console.log(`workflow settle: change '${change}' worktree and branch removed.`);
-  return 0;
-}
 
 export function runWorkflowCli(argv = [], options = {}) {
   const args = parse(argv);
