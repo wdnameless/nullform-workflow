@@ -62,16 +62,20 @@
       "reason": ""
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 1473,
-      "reason": "Committed fixture grows (d8ccafb) + omh-model-routing T2: 4 reported/verified gate tests (2026-10-30) + experience close-gate T1: 5 tests (2026-11-04)"
+      "lines": 1475,
+      "reason": "Committed fixture grows (d8ccafb) + omh-model-routing T2: 4 reported/verified gate tests (2026-10-30) + experience close-gate T1: 5 tests (2026-11-04) + split #16 (2026-11-04)"
     },
     "tools/workflow.mjs": {
-      "lines": 1680,
-      "reason": "Autopilot parity (R01): mode/depth dials in cmdStart + state"
+      "lines": 1038,
+      "reason": "split #16 (2026-11-04)"
     },
     "tools/workflow-ci.mjs": {
-      "lines": 707,
-      "reason": "Per-tier changed-LINE ceiling wired from tripwire (file count cannot see a large single-file edit)"
+      "lines": 1077,
+      "reason": "split #16 (2026-11-04)"
+    },
+    "tools/workflow-core.mjs": {
+      "lines": 1081,
+      "reason": "split #16 (2026-11-04)"
     },
     "tools/review/evidence.mjs": {
       "lines": 704,
@@ -192,11 +196,11 @@
       "reason": ""
     },
     "tools/workflow.mjs:cmdStart": {
-      "lines": 148,
+      "lines": 145,
       "file": "tools/workflow.mjs",
       "name": "cmdStart",
-      "line": 614,
-      "reason": "Autopilot parity (R01): mode/depth validation + persistence"
+      "line": 183,
+      "reason": "split #16 (2026-11-04)"
     }
   }
 }
