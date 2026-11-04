@@ -678,6 +678,8 @@ test("local T2: refuses while proposal/tasks/specs/oracle file are absent", () =
     cmdArtifact(root, { kind: "openspec", path: "openspec/changes/align-feat", detail: "change proposal scaffolded and validated" });
     cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified against brief, no gaps found" });
     assert.equal(cmdCheck(root), 0, "all required evidence present: passes check");
+    mkdirSync(join(root, ".workflow", "experience"), { recursive: true });
+    writeFileSync(join(root, ".workflow", "experience", "general.md"), "cue | lesson | evidence\n", "utf8");
     assert.equal(cmdClose(root, {}), 0, "all required evidence present: passes close");
   } finally {
     rmSync(root, { recursive: true, force: true });
