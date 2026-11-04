@@ -26,8 +26,8 @@
       "reason": "G4 by evidence chain; trajectory loop detection; hud-status contract emitted from values already computed"
     },
     "tools/dashboard-ui.mjs": {
-      "lines": 1564,
-      "reason": "Autopilot-style run view (live-dash-parity R01-R03): hero, stage track, waves matrix, zones strip"
+      "lines": 1364,
+      "reason": "S2 dashboard-family refactor (2026-11-04): arch client JS extracted"
     },
     "tools/dashboard.mjs": {
       "lines": 1118,
@@ -46,12 +46,12 @@
       "reason": ""
     },
     "tools/tests/benchmark.test.mjs": {
-      "lines": 1366,
-      "reason": ""
+      "lines": 1102,
+      "reason": "S2 dashboard-family refactor (2026-11-04): split R02/R03 tests into benchmark-integration.test.mjs"
     },
     "tools/tests/dashboard.test.mjs": {
-      "lines": 1948,
-      "reason": "Behavioral regressions for static snapshot redaction and bounded untracked diff reads"
+      "lines": 1246,
+      "reason": "S2 dashboard-family refactor (2026-11-04): split run view tests into dashboard-run.test.mjs"
     },
     "tools/tests/doctor.test.mjs": {
       "lines": 1541,
