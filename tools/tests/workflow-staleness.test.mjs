@@ -73,6 +73,9 @@ function completeT2(root) {
   for (const [kind, path, detail] of steps) {
     assert.equal(cmdArtifact(root, { kind, path, detail }), 0, `${kind} must record`);
   }
+  const expDir = join(root, ".workflow", "experience");
+  mkdirSync(expDir, { recursive: true });
+  writeFileSync(join(expDir, "general.md"), "cue | lesson | evidence\n", "utf8");
 }
 
 /** Synchronous sleep: makes the verdict/edit ordering deterministic. Filesystems

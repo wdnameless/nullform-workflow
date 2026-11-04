@@ -70,14 +70,19 @@ function parseArgs(argv) {
   return opts;
 }
 
+function isHarnessPath(harness) {
+  return Boolean(harness && (harness.includes("/") || harness.includes("\\") || existsSync(harness)));
+}
+
 function resolveVerifyHarness(opts, userHome) {
   let selectedHarness = opts.harness || "";
-  if (selectedHarness && !SUPPORTED_VERIFY_HARNESSES.includes(selectedHarness)) {
+  const isPath = isHarnessPath(selectedHarness);
+  if (selectedHarness && !isPath && !SUPPORTED_VERIFY_HARNESSES.includes(selectedHarness)) {
     throw new Error(
       `Unsupported harness "${selectedHarness}". Supported harnesses: ${SUPPORTED_VERIFY_HARNESSES.join(", ")}`
     );
   }
-  if (!selectedHarness) {
+  if (!selectedHarness || isPath) {
     selectedHarness = "claude";
   }
 
@@ -89,7 +94,7 @@ function resolveVerifyHarness(opts, userHome) {
 }
 function resolveInitialHarnessRoot(opts) {
   if (opts.harnessRoot) return resolve(opts.harnessRoot);
-  if (opts.harness && (opts.harness.includes("/") || opts.harness.includes("\\") || existsSync(opts.harness))) {
+  if (isHarnessPath(opts.harness)) {
     return resolve(opts.harness);
   }
   return "";
@@ -207,7 +212,7 @@ const USAGE = `Usage: node tools/verify.mjs [options]
 
 Options:
   --profile verify|audit   Profile to run (default: verify)
-  --harness <name>         Harness to verify: claude, codex, opencode (default: claude)
+  --harness <name|path>    Harness to verify: claude, codex, opencode (default: claude)
   --root <path>            Project/repo root directory
   --harness-root <path>    Harness root directory
   --scope <list>           Scope for glossary/coverage check (e.g. agent,tools)
@@ -285,7 +290,7 @@ async function main() {
 
   process.env.NF_NO_DASHBOARD = "1";
 
-  if (opts.harness && !SUPPORTED_VERIFY_HARNESSES.includes(opts.harness)) {
+  if (opts.harness && !isHarnessPath(opts.harness) && !SUPPORTED_VERIFY_HARNESSES.includes(opts.harness)) {
     console.error(`Unsupported harness "${opts.harness}". Supported harnesses: ${SUPPORTED_VERIFY_HARNESSES.join(", ")}`);
     process.exit(2);
   }
