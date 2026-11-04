@@ -40,19 +40,14 @@ function parseArgs(argv) {
       opts.help = true;
     } else if (arg === "--json") {
       opts.json = true;
-    } else if (arg === "--profile") {
-      opts.profile = argv[++i] || "verify";
-    } else if (arg === "--root") {
-      opts.root = argv[++i] || "";
-    } else if (arg === "--harness-root" || arg === "-HarnessRoot") {
-      opts.harnessRoot = argv[++i] || "";
-    } else if (arg === "--harness") {
-      const val = argv[++i] || "";
-      if (val.includes("/") || val.includes("\\") || existsSync(val)) {
-        opts.harnessRoot = val;
-      } else {
-        opts.harness = val;
-      }
+    } else if (arg === "--profile" || arg.startsWith("--profile=")) {
+      opts.profile = arg.startsWith("--profile=") ? arg.slice(10) : argv[++i] || "verify";
+    } else if (arg === "--root" || arg.startsWith("--root=")) {
+      opts.root = arg.startsWith("--root=") ? arg.slice(7) : argv[++i] || "";
+    } else if (arg === "--harness-root" || arg.startsWith("--harness-root=") || arg === "-HarnessRoot") {
+      opts.harnessRoot = arg.startsWith("--harness-root=") ? arg.slice(15) : argv[++i] || "";
+    } else if (arg === "--harness" || arg.startsWith("--harness=") || arg === "-Harness" || arg === "-harness") {
+      opts.harness = arg.startsWith("--harness=") ? arg.slice(10) : argv[++i] || "";
     } else if (arg === "--scope" || arg === "-Scope") {
       const val = argv[++i] || "";
       opts.scope = val.split(",").map((s) => s.trim()).filter(Boolean);
@@ -271,11 +266,16 @@ async function main() {
 
   process.env.NF_NO_DASHBOARD = "1";
 
+  if (opts.harness && !SUPPORTED_VERIFY_HARNESSES.includes(opts.harness)) {
+    console.error(`Unsupported harness "${opts.harness}". Supported harnesses: ${SUPPORTED_VERIFY_HARNESSES.join(", ")}`);
+    process.exit(2);
+  }
+
   let ctx;
   try {
     ctx = { ...resolveRoots(opts), scope: opts.scope };
   } catch (err) {
-    console.error(`Failed to resolve roots: ${err.message}`);
+    console.error(err.message);
     process.exit(2);
   }
 
@@ -291,7 +291,7 @@ async function main() {
   process.exitCode = reportResults(results, opts, ctx);
 }
 
-if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
+if (process.argv[1] && (() => { try { const a = resolve(process.argv[1]).toLowerCase(), b = fileURLToPath(import.meta.url).toLowerCase(); return a === b || realpathSync(process.argv[1]).toLowerCase() === realpathSync(fileURLToPath(import.meta.url)).toLowerCase(); } catch { return false; } })()) {
   main().catch((err) => {
     console.error(`Unhandled error: ${err.stack || err.message}`);
     process.exitCode = 2;
