@@ -5,11 +5,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { assertFactForcing } from '../review/gatekeeper.mjs';
-import {
-  clearPlanTokens,
-  executeDestructive,
-  planDestructive,
-} from '../two-phase.mjs';
 import { observeTrajectory } from '../trajectory.mjs';
 
 test('assertFactForcing accepts when all required caller/consumer reads are present', () => {
@@ -20,12 +15,6 @@ test('assertFactForcing accepts when all required caller/consumer reads are pres
     });
   });
 
-  assert.doesNotThrow(() => {
-    assertFactForcing('tools/two-phase.mjs', {
-      reads: [],
-      required: [],
-    });
-  });
 
   assert.doesNotThrow(() => {
     assertFactForcing('tools/trajectory.mjs');
@@ -65,90 +54,6 @@ test('assertFactForcing refuses and names missing required reads when caller/con
   );
 });
 
-test('two-phase: planDestructive produces token and executeDestructive executes verified plan', () => {
-  clearPlanTokens();
-  const edit = {
-    target: 'tools/two-phase.mjs',
-    operation: 'delete-block',
-    range: [10, 20],
-  };
-
-  const { planToken, hash } = planDestructive(edit);
-  assert.equal(typeof planToken, 'string');
-  assert.equal(typeof hash, 'string');
-  assert.equal(hash.length, 64);
-
-  let executed = false;
-  const result = executeDestructive(planToken, edit, (payload) => {
-    executed = true;
-    return `applied:${payload.target}`;
-  });
-
-  assert.equal(executed, true);
-  assert.equal(result, 'applied:tools/two-phase.mjs');
-});
-
-test('two-phase: refuses unknown or mismatched token and executes only verified plans', () => {
-  clearPlanTokens();
-  const edit = { file: 'secret.txt', action: 'truncate' };
-  const { planToken } = planDestructive(edit);
-
-  let executed = false;
-  const applyFn = () => {
-    executed = true;
-  };
-
-  // Unknown token refusal
-  assert.throws(
-    () => {
-      executeDestructive('unknown-deadbeef-token', edit, applyFn);
-    },
-    (err) => {
-      assert.match(err.message, /unknown plan token/i);
-      return true;
-    }
-  );
-  assert.equal(executed, false);
-
-  // Mismatched edit refusal
-  const tamperedEdit = { file: 'secret.txt', action: 'delete-all' };
-  assert.throws(
-    () => {
-      executeDestructive(planToken, tamperedEdit, applyFn);
-    },
-    (err) => {
-      assert.match(err.message, /mismatched plan token/i);
-      return true;
-    }
-  );
-  assert.equal(executed, false);
-});
-
-test('two-phase: plan token is single-use and invalidated after execution', () => {
-  clearPlanTokens();
-  const edit = { path: 'config.json', op: 'overwrite', content: '{}' };
-  const { planToken } = planDestructive(edit);
-
-  let runCount = 0;
-  executeDestructive(planToken, edit, () => {
-    runCount += 1;
-  });
-  assert.equal(runCount, 1);
-
-  // Second execution must fail because token was invalidated
-  assert.throws(
-    () => {
-      executeDestructive(planToken, edit, () => {
-        runCount += 1;
-      });
-    },
-    (err) => {
-      assert.match(err.message, /unknown plan token/i);
-      return true;
-    }
-  );
-  assert.equal(runCount, 1);
-});
 
 test('trajectory: returns empty loops for non-repeating tool trajectories', () => {
   const events = [

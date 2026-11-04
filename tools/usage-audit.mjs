@@ -275,227 +275,255 @@ function auditUsage(options) {
   }
 
   const maxAgeMs = days * 24 * 60 * 60 * 1000;
-  let scannedFiles = 0;
-  let totalLines = 0;
-  let malformedLines = 0;
-
-  const mcpCounts = {};
-  const builtinCounts = {};
-  const skillCounts = {};
-  const mcpServersUsed = new Set();
-  const skillsUsed = new Set();
-
   const configuredMcpServers = loadMcpServers(mcpPath, notes);
   const installedSkills = loadInstalledSkills(skillsDir);
   const installedPlugins = loadPlugins(pluginsPath, notes);
 
-  const pluginCallCounts = {};
+  const state = {
+    scannedFiles: 0,
+    totalLines: 0,
+    malformedLines: 0,
+    mcpCounts: {},
+    builtinCounts: {},
+    skillCounts: {},
+    mcpServersUsed: new Set(),
+    skillsUsed: new Set(),
+    pluginCallCounts: {},
+  };
   for (const name of Object.keys(KNOWN_PLUGIN_TOOLS)) {
-    pluginCallCounts[name] = 0;
+    state.pluginCallCounts[name] = 0;
   }
   for (const name of installedPlugins) {
-    if (!(name in pluginCallCounts)) {
-      pluginCallCounts[name] = 0;
+    if (!(name in state.pluginCallCounts)) {
+      state.pluginCallCounts[name] = 0;
     }
-  }
-  function recordMcp(toolName, serverName) {
-    mcpCounts[toolName] = (mcpCounts[toolName] || 0) + 1;
-    if (serverName) mcpServersUsed.add(serverName);
-  }
-
-  function recordBuiltin(toolName) {
-    builtinCounts[toolName] = (builtinCounts[toolName] || 0) + 1;
-  }
-
-  function recordSkill(skillName) {
-    skillCounts[skillName] = (skillCounts[skillName] || 0) + 1;
-    skillsUsed.add(skillName);
   }
 
   for (const filePath of allFiles) {
-    try {
-      const stat = statSync(filePath);
-      const fileAgeMs = now - stat.mtimeMs;
-      if (fileAgeMs > maxAgeMs) {
-        continue;
-      }
-    } catch {
-      continue;
+    processSessionFile(filePath, state, now, maxAgeMs);
+  }
+
+  const { unusedMcp, unusedSkills, pluginStats, unusedPlugins } = computeUnused(
+    state,
+    configuredMcpServers,
+    installedSkills,
+    installedPlugins
+  );
+
+  notes.push(`Обработано файлов: ${state.scannedFiles} из ${allFiles.length}`);
+  notes.push(`Всего строк: ${state.totalLines}`);
+  if (state.malformedLines > 0) {
+    notes.push(`Битых строк JSON: ${state.malformedLines}`);
+  }
+
+  return {
+    empty: false,
+    stats: {
+      totalFiles: allFiles.length,
+      scannedFiles: state.scannedFiles,
+      totalLines: state.totalLines,
+      malformedLines: state.malformedLines,
+      days,
+    },
+    tools: {
+      mcp: state.mcpCounts,
+      builtins: state.builtinCounts,
+      skills: state.skillCounts,
+    },
+    unusedMcp,
+    unusedSkills,
+    pluginStats,
+    unusedPlugins,
+    notes,
+  };
+}
+
+function recordMcpTool(name, serverName, state) {
+  state.mcpCounts[name] = (state.mcpCounts[name] || 0) + 1;
+  if (serverName) state.mcpServersUsed.add(serverName);
+}
+
+function recordBuiltinTool(name, state) {
+  state.builtinCounts[name] = (state.builtinCounts[name] || 0) + 1;
+}
+
+function recordSkillTool(skillName, state) {
+  state.skillCounts[skillName] = (state.skillCounts[skillName] || 0) + 1;
+  state.skillsUsed.add(skillName);
+}
+
+function matchMarker(name, argPath, marker) {
+  if (marker.endsWith("_")) return name.startsWith(marker) || Boolean(argPath && argPath.includes(marker));
+  if (marker.startsWith("/")) return name === marker || name === marker.slice(1);
+  return (
+    name === marker ||
+    name.endsWith("__" + marker) ||
+    argPath === "xd://" + marker ||
+    argPath.startsWith("xd://" + marker + "?") ||
+    argPath.includes("/" + marker)
+  );
+}
+function matchPlugin(name, argPath, markers) {
+  for (const marker of markers) {
+    if (matchMarker(name, argPath, marker)) return true;
+  }
+  return false;
+}
+
+function matchKnownPluginTools(name, argPath, state, pluginsCalledInRecord) {
+  for (const [pluginName, markers] of Object.entries(KNOWN_PLUGIN_TOOLS)) {
+    if (matchPlugin(name, argPath, markers)) {
+      state.pluginCallCounts[pluginName] = (state.pluginCallCounts[pluginName] || 0) + 1;
+      pluginsCalledInRecord.add(pluginName);
     }
+  }
+}
 
-    scannedFiles++;
-    let content = "";
-    try {
-      content = readFileSync(filePath, "utf8");
-    } catch {
-      continue;
+function scanToolItem(item, state, pluginsCalledInRecord) {
+  if (!item || typeof item !== "object") return;
+  const isTool =
+    item.type === "toolCall" ||
+    item.type === "tool_use" ||
+    item.type === "tool" ||
+    Boolean(item.name && (item.input || item.arguments));
+
+  if (!isTool && !item.name) return;
+  const name = item.name;
+  if (!name || typeof name !== "string") return;
+
+  const args = item.arguments || item.input || {};
+  const argPath = typeof args.path === "string" ? args.path : "";
+
+  matchKnownPluginTools(name, argPath, state, pluginsCalledInRecord);
+
+  if (argPath.startsWith("skill://")) {
+    const match = argPath.match(/^skill:\/\/([^/\s?#]+)/);
+    if (match && match[1]) {
+      recordSkillTool(match[1], state);
     }
+  }
 
-    const lines = content.split("\n");
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      totalLines++;
-      let record;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        malformedLines++;
-        continue;
-      }
+  if (argPath.startsWith("xd://mcp__")) {
+    const mcpTarget = argPath.slice("xd://mcp__".length);
+    const mcpFullName = "mcp__" + mcpTarget;
+    const parts = mcpTarget.split("_");
+    recordMcpTool(mcpFullName, parts[0], state);
+    return;
+  }
 
-      // Извлечение tool_use / toolCall
-      // 1) message.content (Array)
-      const contentList = Array.isArray(record?.message?.content)
-        ? record.message.content
-        : Array.isArray(record?.content)
-        ? record.content
-        : [];
+  if (name.startsWith("mcp__")) {
+    const target = name.slice(5);
+    const parts = target.split("_");
+    recordMcpTool(name, parts[0], state);
+  } else if (name.startsWith("mcp:") || name.startsWith("mcp/")) {
+    const parts = name.slice(4).split(/[:/]/);
+    recordMcpTool(name, parts[0], state);
+  } else {
+    recordBuiltinTool(name, state);
+  }
+}
+function extractRecordTexts(record) {
+  const texts = [];
+  const rawContent = record?.message?.content ?? record?.content;
+  if (typeof rawContent === "string") {
+    texts.push(rawContent);
+  } else if (Array.isArray(rawContent)) {
+    for (const block of rawContent) {
+      if (typeof block === "string") texts.push(block);
+      else if (typeof block?.text === "string") texts.push(block.text);
+    }
+  }
+  if (typeof record?.text === "string") texts.push(record.text);
+  if (typeof record?.command === "string") texts.push(record.command);
+  return texts;
+}
 
-      // 2) одиночные поля типа record.tool_use или record.toolCall
-      const candidates = [...contentList];
-      if (record.type === "toolCall" || record.type === "tool_use") {
-        candidates.push(record);
-      }
-      const pluginsCalledInRecord = new Set();
+function countMarkerMatches(text, marker, alreadyCalled) {
+  const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (marker.startsWith("/")) {
+    const re = new RegExp(`(?:^|[\\s"'\`])${esc}(?=[\\s"'\`\\r\\n]|$|[?.,!])`, "g");
+    return text.match(re)?.length || 0;
+  }
+  if (!alreadyCalled) {
+    const re = marker.endsWith("_") ? new RegExp(`\\b${esc}\\w*`, "i") : new RegExp(`\\b${esc}\\b`, "i");
+    if (re.test(text)) return 1;
+  }
+  return 0;
+}
 
-      for (const item of candidates) {
-        if (!item || typeof item !== "object") continue;
-        const isTool =
-          item.type === "toolCall" ||
-          item.type === "tool_use" ||
-          item.type === "tool" ||
-          Boolean(item.name && (item.input || item.arguments));
+function countPluginMentions(text, markers, alreadyCalled) {
+  let count = 0;
+  for (const marker of markers) {
+    count += countMarkerMatches(text, marker, alreadyCalled);
+  }
+  return count;
+}
 
-        if (!isTool && !item.name) continue;
+function scanTextMentions(record, state, pluginsCalledInRecord) {
+  const role = record?.message?.role || record?.role;
+  if (role === "toolResult") return;
 
-        const name = item.name;
-        if (!name || typeof name !== "string") continue;
-
-        const args = item.arguments || item.input || {};
-        const argPath = typeof args.path === "string" ? args.path : "";
-
-        // Проверка соответствия инструментам/командам OMP-плагинов
-        for (const [pluginName, markers] of Object.entries(KNOWN_PLUGIN_TOOLS)) {
-          let matched = false;
-          for (const marker of markers) {
-            if (marker.endsWith("_")) {
-              if (name.startsWith(marker) || (argPath && argPath.includes(marker))) {
-                matched = true;
-                break;
-              }
-            } else if (marker.startsWith("/")) {
-              if (name === marker || name === marker.slice(1)) {
-                matched = true;
-                break;
-              }
-            } else {
-              if (
-                name === marker ||
-                name.endsWith("__" + marker) ||
-                argPath === "xd://" + marker ||
-                argPath.startsWith("xd://" + marker + "?") ||
-                argPath.includes("/" + marker)
-              ) {
-                matched = true;
-                break;
-              }
-            }
-          }
-          if (matched) {
-            pluginCallCounts[pluginName] = (pluginCallCounts[pluginName] || 0) + 1;
-            pluginsCalledInRecord.add(pluginName);
-          }
-        }
-
-        // Проверяем skill:// в аргументах (например, read({ path: "skill://<name>" }))
-        const skillArgPath = typeof args.path === "string" ? args.path : "";
-        if (skillArgPath.startsWith("skill://")) {
-          const match = skillArgPath.match(/^skill:\/\/([^/\s?#]+)/);
-          if (match && match[1]) {
-            recordSkill(match[1]);
-          }
-        }
-
-        // Проверяем xd://mcp__... в вызовах write
-        if (skillArgPath.startsWith("xd://mcp__")) {
-          const mcpTarget = skillArgPath.slice("xd://mcp__".length);
-          const mcpFullName = "mcp__" + mcpTarget;
-          const parts = mcpTarget.split("_");
-          recordMcp(mcpFullName, parts[0]);
-          continue;
-        }
-
-        // Прямые MCP вызовы: имя начинается с mcp__ или mcp: или mcp_
-        if (name.startsWith("mcp__")) {
-          const target = name.slice(5);
-          const parts = target.split("_");
-          recordMcp(name, parts[0]);
-        } else if (name.startsWith("mcp:") || name.startsWith("mcp/")) {
-          const parts = name.slice(4).split(/[:/]/);
-          recordMcp(name, parts[0]);
-        } else {
-          // Встроенный тул
-          recordBuiltin(name);
-        }
-      }
-
-      // Сканирование текстов сообщений на слэш-команды и упоминания плагинов
-      const role = record?.message?.role || record?.role;
-      if (role !== "toolResult") {
-        const texts = [];
-        const rawContent = record?.message?.content ?? record?.content;
-        if (typeof rawContent === "string") {
-          texts.push(rawContent);
-        } else if (Array.isArray(rawContent)) {
-          for (const block of rawContent) {
-            if (typeof block === "string") texts.push(block);
-            else if (typeof block?.text === "string") texts.push(block.text);
-          }
-        }
-        if (typeof record?.text === "string") texts.push(record.text);
-        if (typeof record?.command === "string") texts.push(record.command);
-
-        for (const text of texts) {
-          if (!text || typeof text !== "string") continue;
-          for (const [pluginName, markers] of Object.entries(KNOWN_PLUGIN_TOOLS)) {
-            let pluginCountInText = 0;
-            for (const marker of markers) {
-              if (marker.startsWith("/")) {
-                const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-                const re = new RegExp(`(?:^|[\\s"'\`])${esc}(?=[\\s"'\`\\r\\n]|$|[?.,!])`, "g");
-                const matches = text.match(re);
-                if (matches) {
-                  pluginCountInText += matches.length;
-                }
-              } else if (!pluginsCalledInRecord.has(pluginName)) {
-                const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-                const re = marker.endsWith("_")
-                  ? new RegExp(`\\b${esc}\\w*`, "i")
-                  : new RegExp(`\\b${esc}\\b`, "i");
-                if (re.test(text)) {
-                  pluginCountInText += 1;
-                }
-              }
-            }
-            if (pluginCountInText > 0) {
-              pluginCallCounts[pluginName] = (pluginCallCounts[pluginName] || 0) + pluginCountInText;
-              pluginsCalledInRecord.add(pluginName);
-            }
-          }
-        }
+  const texts = extractRecordTexts(record);
+  for (const text of texts) {
+    if (!text || typeof text !== "string") continue;
+    for (const [pluginName, markers] of Object.entries(KNOWN_PLUGIN_TOOLS)) {
+      const mentions = countPluginMentions(text, markers, pluginsCalledInRecord.has(pluginName));
+      if (mentions > 0) {
+        state.pluginCallCounts[pluginName] = (state.pluginCallCounts[pluginName] || 0) + mentions;
+        pluginsCalledInRecord.add(pluginName);
       }
     }
   }
-  // Неиспользуемые MCP-серверы
-  // Сопоставляем configuredMcpServers с используемыми серверами
+}
+
+function processSessionLine(line, state) {
+  if (!line.trim()) return;
+  state.totalLines++;
+  let record;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    state.malformedLines++;
+    return;
+  }
+  const contentList = Array.isArray(record?.message?.content)
+    ? record.message.content
+    : Array.isArray(record?.content) ? record.content : [];
+  const candidates = [...contentList];
+  if (record.type === "toolCall" || record.type === "tool_use") candidates.push(record);
+  const pluginsCalledInRecord = new Set();
+  for (const item of candidates) scanToolItem(item, state, pluginsCalledInRecord);
+  scanTextMentions(record, state, pluginsCalledInRecord);
+}
+
+function isFileFresh(filePath, now, maxAgeMs) {
+  try {
+    return now - statSync(filePath).mtimeMs <= maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+function processSessionFile(filePath, state, now, maxAgeMs) {
+  if (!isFileFresh(filePath, now, maxAgeMs)) return;
+  let content = "";
+  try {
+    content = readFileSync(filePath, "utf8");
+  } catch {
+    return;
+  }
+  state.scannedFiles++;
+  for (const line of content.split("\n")) processSessionLine(line, state);
+}
+
+function computeUnused(state, configuredMcpServers, installedSkills, installedPlugins) {
   const unusedMcp = configuredMcpServers.filter((server) => {
-    // Проверяем, встречалось ли имя сервера как префикс в mcpCounts или в mcpServersUsed
-    if (mcpServersUsed.has(server)) return false;
+    if (state.mcpServersUsed.has(server)) return false;
     const normalized = server.replace(/[-_]/g, "");
-    for (const used of mcpServersUsed) {
+    for (const used of state.mcpServersUsed) {
       if (used.replace(/[-_]/g, "") === normalized) return false;
     }
-    for (const toolName of Object.keys(mcpCounts)) {
+    for (const toolName of Object.keys(state.mcpCounts)) {
       if (toolName.includes(server) || toolName.replace(/[-_]/g, "").includes(normalized)) {
         return false;
       }
@@ -503,8 +531,7 @@ function auditUsage(options) {
     return true;
   });
 
-  // Неиспользуемые установленные скиллы
-  const unusedSkills = installedSkills.filter((skill) => !skillsUsed.has(skill));
+  const unusedSkills = installedSkills.filter((skill) => !state.skillsUsed.has(skill));
   const allPluginNames = new Set([
     ...Object.keys(KNOWN_PLUGIN_TOOLS),
     ...installedPlugins,
@@ -512,42 +539,19 @@ function auditUsage(options) {
 
   const pluginStats = {};
   for (const name of allPluginNames) {
-    const calls = pluginCallCounts[name] || 0;
-    pluginStats[name] = {
-      calls,
-      used: calls > 0,
-    };
+    const calls = state.pluginCallCounts[name] || 0;
+    pluginStats[name] = { calls, used: calls > 0 };
   }
 
   const unusedPlugins = installedPlugins
     .filter((name) => (pluginStats[name]?.calls || 0) === 0)
     .sort();
 
-  notes.push(`Обработано файлов: ${scannedFiles} из ${allFiles.length}`);
-  notes.push(`Всего строк: ${totalLines}`);
-  if (malformedLines > 0) {
-    notes.push(`Битых строк JSON: ${malformedLines}`);
-  }
-
   return {
-    empty: false,
-    stats: {
-      totalFiles: allFiles.length,
-      scannedFiles,
-      totalLines,
-      malformedLines,
-      days,
-    },
-    tools: {
-      mcp: mcpCounts,
-      builtins: builtinCounts,
-      skills: skillCounts,
-    },
     unusedMcp: unusedMcp.sort(),
     unusedSkills: unusedSkills.sort(),
     pluginStats,
     unusedPlugins,
-    notes,
   };
 }
 

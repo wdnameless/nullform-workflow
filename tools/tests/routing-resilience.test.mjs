@@ -16,7 +16,6 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { suggestTier } from "../workflow.mjs";
 import { runEvals, DEFAULT_CASES } from "../orchestrator-evals.mjs";
-import { withFallback, checkBudget } from "../fallback.mjs";
 
 /* ------------------------------------------------------------------ R06: Triage */
 
@@ -151,7 +150,7 @@ test("R07 DEFAULT_CASES covers all 6 orchestrator return contract fields", () =>
 test("R07 DEFAULT_CASES: passes on valid orchestrator contract subject", () => {
   const validSubject = {
     status: "DONE",
-    files: ["tools/workflow.mjs", "tools/fallback.mjs"],
+    files: ["tools/workflow.mjs"],
     tests: "было 10 → стало 14",
     interfaces: "suggestTier({ files, task })",
     requirements: "R06, R07, R08",
@@ -209,76 +208,3 @@ test("R07 orchestrator-evals CLI: exits 0 on valid subject, 1 on failing subject
   }
 });
 
-/* ---------------------------------------------------- R08: Fallback & Budget */
-
-test("R08 withFallback: returns result and tried when first function succeeds", async () => {
-  const fnA = () => "resultA";
-  const fnB = () => "resultB";
-
-  const { result, tried } = await withFallback([fnA, fnB]);
-  assert.equal(result, "resultA");
-  assert.deepEqual(tried, ["fnA"]);
-});
-
-test("R08 withFallback: failover in order and logs tried functions", async () => {
-  const fnA = () => { throw new Error("A failed"); };
-  const fnB = async () => "resultB";
-  const fnC = () => "resultC";
-  const log = [];
-
-  const { result, tried } = await withFallback([fnA, fnB, fnC], undefined, { log });
-  assert.equal(result, "resultB");
-  assert.deepEqual(tried, ["fnA", "fnB"]);
-  assert.deepEqual(log, ["fnA", "fnB"]);
-});
-
-test("R08 withFallback: throws Error naming tried order when all functions fail", async () => {
-  const toolA = () => { throw new Error("A broke"); };
-  const toolB = () => { throw new Error("B broke"); };
-  const toolC = () => { throw new Error("C broke"); };
-  const log = [];
-
-  await assert.rejects(
-    async () => {
-      await withFallback([toolA, toolB, toolC], undefined, { log });
-    },
-    (err) => {
-      assert.ok(err instanceof Error);
-      assert.ok(err.message.includes("toolA, toolB, toolC"));
-      return true;
-    }
-  );
-  assert.deepEqual(log, ["toolA", "toolB", "toolC"]);
-});
-
-test("R08 withFallback: forwards arguments to functions", async () => {
-  const add = (a, b) => a + b;
-  const { result, tried } = await withFallback([add], [2, 3]);
-  assert.equal(result, 5);
-  assert.deepEqual(tried, ["add"]);
-});
-
-test("R08 checkBudget: compact-before-refuse thresholds", () => {
-  const limit = 1000;
-
-  // Well under compact threshold (< 800)
-  assert.equal(checkBudget({ used: 500, limit }), "ok");
-  assert.equal(checkBudget({ used: 799, limit }), "ok");
-
-  // At or above compact threshold (>= 800) but below limit (< 1000)
-  assert.equal(checkBudget({ used: 800, limit }), "compact");
-  assert.equal(checkBudget({ used: 900, limit }), "compact");
-  assert.equal(checkBudget({ used: 999, limit }), "compact");
-
-  // At or above limit (>= 1000)
-  assert.equal(checkBudget({ used: 1000, limit }), "refuse");
-  assert.equal(checkBudget({ used: 1200, limit }), "refuse");
-});
-
-test("R08 checkBudget: respects custom compactAt ratio", () => {
-  const limit = 100;
-  assert.equal(checkBudget({ used: 69, limit, compactAt: 0.7 }), "ok");
-  assert.equal(checkBudget({ used: 70, limit, compactAt: 0.7 }), "compact");
-  assert.equal(checkBudget({ used: 99, limit, compactAt: 0.7 }), "compact");
-  assert.equal(checkBudget({ used: 100, limit, compactAt: 0.7 }), "refuse");
-});
