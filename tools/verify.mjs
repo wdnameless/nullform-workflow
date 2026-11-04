@@ -22,6 +22,18 @@ import { runAuditProfile } from "./audit-profile.mjs";
 import { resolveHostHome } from "./installation/profiles.mjs";
 
 export const SUPPORTED_VERIFY_HARNESSES = ["claude", "codex", "opencode"];
+function parseHarnessArg(arg, argv, i, opts) {
+  if (arg === "--harness-root" || arg.startsWith("--harness-root=") || arg === "-HarnessRoot") {
+    opts.harnessRoot = arg.startsWith("--harness-root=") ? arg.slice(15) : argv[++i] || "";
+    return i;
+  }
+  if (arg === "--harness" || arg.startsWith("--harness=") || arg === "-Harness" || arg === "-harness") {
+    opts.harness = arg.startsWith("--harness=") ? arg.slice(10) : argv[++i] || "";
+    return i;
+  }
+  return -1;
+}
+
 function parseArgs(argv) {
   const opts = {
     profile: "verify",
@@ -36,7 +48,10 @@ function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--help" || arg === "-h") {
+    const hIdx = parseHarnessArg(arg, argv, i, opts);
+    if (hIdx !== -1) {
+      i = hIdx;
+    } else if (arg === "--help" || arg === "-h") {
       opts.help = true;
     } else if (arg === "--json") {
       opts.json = true;
@@ -44,10 +59,6 @@ function parseArgs(argv) {
       opts.profile = arg.startsWith("--profile=") ? arg.slice(10) : argv[++i] || "verify";
     } else if (arg === "--root" || arg.startsWith("--root=")) {
       opts.root = arg.startsWith("--root=") ? arg.slice(7) : argv[++i] || "";
-    } else if (arg === "--harness-root" || arg.startsWith("--harness-root=") || arg === "-HarnessRoot") {
-      opts.harnessRoot = arg.startsWith("--harness-root=") ? arg.slice(15) : argv[++i] || "";
-    } else if (arg === "--harness" || arg.startsWith("--harness=") || arg === "-Harness" || arg === "-harness") {
-      opts.harness = arg.startsWith("--harness=") ? arg.slice(10) : argv[++i] || "";
     } else if (arg === "--scope" || arg === "-Scope") {
       const val = argv[++i] || "";
       opts.scope = val.split(",").map((s) => s.trim()).filter(Boolean);
@@ -59,15 +70,37 @@ function parseArgs(argv) {
   return opts;
 }
 
+function resolveVerifyHarness(opts, userHome) {
+  let selectedHarness = opts.harness || "";
+  if (selectedHarness && !SUPPORTED_VERIFY_HARNESSES.includes(selectedHarness)) {
+    throw new Error(
+      `Unsupported harness "${selectedHarness}". Supported harnesses: ${SUPPORTED_VERIFY_HARNESSES.join(", ")}`
+    );
+  }
+  if (!selectedHarness) {
+    selectedHarness = "claude";
+  }
+
+  const hostInfo = resolveHostHome({ harness: selectedHarness, userHome });
+  return {
+    selectedHarness,
+    agentDir: resolve(hostInfo.path),
+  };
+}
+function resolveInitialHarnessRoot(opts) {
+  if (opts.harnessRoot) return resolve(opts.harnessRoot);
+  if (opts.harness && (opts.harness.includes("/") || opts.harness.includes("\\") || existsSync(opts.harness))) {
+    return resolve(opts.harness);
+  }
+  return "";
+}
+
 export function resolveRoots(opts = {}) {
   const toolsDir = dirname(fileURLToPath(import.meta.url));
   const scriptParent = dirname(toolsDir);
   const parentOfScriptParent = dirname(scriptParent);
 
-  let harnessRoot = opts.harnessRoot ? resolve(opts.harnessRoot) : "";
-  if (!harnessRoot && opts.harness && (opts.harness.includes("/") || opts.harness.includes("\\") || existsSync(opts.harness))) {
-    harnessRoot = resolve(opts.harness);
-  }
+  let harnessRoot = resolveInitialHarnessRoot(opts);
   if (!harnessRoot) {
     if (existsSync(join(parentOfScriptParent, "agent", "AGENTS.md"))) {
       harnessRoot = parentOfScriptParent;
@@ -118,21 +151,7 @@ export function resolveRoots(opts = {}) {
   }
 
   const userHome = opts.userHome ? resolve(opts.userHome) : homedir();
-
-  // Harness resolution: claude | codex | opencode.
-  // Other 5 harnesses (omp, cursor, hermes, openclaw, openhuman) are OUT.
-  let selectedHarness = opts.harness || "";
-  if (selectedHarness && !SUPPORTED_VERIFY_HARNESSES.includes(selectedHarness)) {
-    throw new Error(
-      `Unsupported harness "${selectedHarness}". Supported harnesses: ${SUPPORTED_VERIFY_HARNESSES.join(", ")}`
-    );
-  }
-  if (!selectedHarness) {
-    selectedHarness = "claude";
-  }
-
-  const hostInfo = resolveHostHome({ harness: selectedHarness, userHome });
-  const agentDir = hostInfo.path;
+  const { selectedHarness, agentDir } = resolveVerifyHarness(opts, userHome);
 
   return {
     harness: selectedHarness,
