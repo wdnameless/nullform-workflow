@@ -297,7 +297,7 @@ export function recordAbandonedLane(root, prev, next, reason) {
     durationMs: Math.max(0, closedAt.getTime() - new Date(prev.startedAt || closedAt).getTime()),
     forced: true,
     reason: `replaced by new task '${next.task}' (${reason})`,
-    deviationKind: "replaced-lane",
+    deviationKind: "abandoned-lane",
     auto: prev.auto ?? null,
     artifactsCount: prev.artifacts ? Object.keys(prev.artifacts).length : 0,
   });

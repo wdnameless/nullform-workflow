@@ -96,6 +96,9 @@
     "rel": "tools/workflow-ci.mjs"
   },
   {
+    "rel": "tools/workflow-core.mjs"
+  },
+  {
     "rel": "tools/requirements.mjs"
   },
   {
