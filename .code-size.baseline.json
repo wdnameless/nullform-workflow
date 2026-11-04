@@ -42,7 +42,7 @@
       "reason": "Round1 cross-family selection + round2 assignChecker diversity gate"
     },
     "tools/sync.mjs": {
-      "lines": 740,
+      "lines": 698,
       "reason": ""
     },
     "tools/tests/benchmark.test.mjs": {
@@ -175,14 +175,14 @@
       "reason": ""
     },
     "tools/sync.mjs:main": {
-      "lines": 393,
+      "lines": 118,
       "file": "tools/sync.mjs",
       "name": "main",
-      "line": 336,
+      "line": 579,
       "reason": "Preflight all manifest and OMP law paths before sync mutation to prevent junction/symlink data loss"
     },
     "tools/usage-audit.mjs:auditUsage": {
-      "lines": 316,
+      "lines": 103,
       "file": "tools/usage-audit.mjs",
       "name": "auditUsage",
       "line": 237,

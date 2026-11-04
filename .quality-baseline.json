@@ -210,7 +210,7 @@
         "tools/sync-prune.mjs:findPruneCandidates": 20,
         "tools/sync-prune.mjs:deletePruneCandidates": 19,
         "tools/sync.mjs:parseArgs": 29,
-        "tools/sync.mjs:main": 315,
+        "tools/sync.mjs:main": 54,
         "tools/tests/bash-gates.test.mjs:resolveBashExecutable": 19,
         "tools/tests/bash-gates.test.mjs:extractWorkflowGateScript": 39,
         "tools/tests/install-harness.test.mjs:getBashPath": 19,
