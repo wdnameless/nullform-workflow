@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "program": "refactor-program",
+  "baselineCommit": "f1864eed1efdf4bdcdc3ea5989ecee2b28e4cf00",
+  "sliceCommit": "7509028f7ecf6f6d3b4272e9d65bc8e2981bd623",
+  "generatedAt": "2026-11-04T22:15:00.000Z",
+  "deltas": {
+    "codeSize": {
+      "command": "node tools/code-size.mjs check --root .",
+      "baseline": {
+        "files": 292,
+        "functions": 2085,
+        "exempt": 3,
+        "status": "PASS (3 exempt)",
+        "keyFiles": {
+          "tools/workflow.mjs": { "lines": 2500, "ceiling": 2500, "margin": "0%" },
+          "tools/dashboard-ui.mjs": { "lines": 1593, "ceiling": 1570, "margin": "-23 drift" },
+          "tools/tests/dashboard.test.mjs": { "lines": 1947, "ceiling": 1800, "margin": "-147 over defer" },
+          "tools/tests/benchmark.test.mjs": { "lines": 1365, "ceiling": 1200, "margin": "-165 over defer" },
+          "tools/quality.mjs": { "lines": 804, "ceiling": 700, "margin": "-104 over defer" },
+          "tools/sync.mjs": { "lines": 739, "ceiling": 900, "margin": "+161" },
+          "tools/usage-audit.mjs": { "lines": 398, "ceiling": 500, "margin": "+102" }
+        }
+      },
+      "slice": {
+        "files": 287,
+        "functions": 2067,
+        "exempt": 2,
+        "status": "PASS (2 exempt)",
+        "keyFiles": {
+          "tools/workflow.mjs": { "lines": 1037, "ceiling": 1200, "margin": "+13.6%" },
+          "tools/workflow-ci.mjs": { "lines": 1076, "ceiling": 1200, "margin": "+10.3%" },
+          "tools/workflow-core.mjs": { "lines": 1080, "ceiling": 1200, "margin": "+10.0%" },
+          "tools/dashboard-ui.mjs": { "lines": 1363, "ceiling": 1570, "margin": "+13.2%" },
+          "tools/dashboard-arch-client.mjs": { "lines": 438, "ceiling": 700, "margin": "+37.4%" },
+          "tools/tests/dashboard.test.mjs": { "lines": 1245, "ceiling": 1800, "margin": "+30.8%" },
+          "tools/tests/dashboard-run.test.mjs": { "lines": 733, "ceiling": 1000, "margin": "+26.7%" },
+          "tools/tests/benchmark.test.mjs": { "lines": 1101, "ceiling": 1200, "margin": "+8.2%" },
+          "tools/tests/benchmark-integration.test.mjs": { "lines": 300, "ceiling": 700, "margin": "+57.1%" },
+          "tools/quality.mjs": { "lines": 228, "ceiling": 700, "margin": "+67.4%" },
+          "tools/quality/engine.mjs": { "lines": 488, "ceiling": 700, "margin": "+30.3%" },
+          "tools/sync.mjs": { "lines": 476, "ceiling": 700, "margin": "+32.0%" },
+          "tools/usage-audit.mjs": { "lines": 295, "ceiling": 400, "margin": "+26.2%" }
+        },
+        "deadModulesPruned": {
+          "count": 9,
+          "linesRemoved": 1780,
+          "modules": [
+            "asset-freeze.mjs",
+            "blind-accept.mjs",
+            "capsule.mjs",
+            "checkpoints.mjs",
+            "coverage-check.mjs",
+            "fallback.mjs",
+            "supervision.mjs",
+            "two-phase.mjs",
+            "usage-normalize.mjs"
+          ]
+        }
+      },
+      "netDeltas": {
+        "filesDiff": -5,
+        "functionsDiff": -18,
+        "exemptDiff": -1
+      }
+    },
+    "qualityNode": {
+      "command": "node tools/quality.mjs check --root .",
+      "baseline": {
+        "violations": 3,
+        "exitCode": 1,
+        "status": "fail (3 violations)",
+        "details": [
+          "New function above COCO threshold: sync.mjs:main (315 > 200)",
+          "New function above COCO threshold: usage-audit.mjs:auditUsage (208 > 200)",
+          "quality.mjs (804 lines > 700 defer ceiling)"
+        ]
+      },
+      "slice": {
+        "violations": 0,
+        "exitCode": 0,
+        "status": "node pass (225 functions)",
+        "details": []
+      },
+      "delta": "3 violations -> 0 violations (clean pass)"
+    },
+    "cocoOffenders": {
+      "command": "node tools/quality.mjs check --root . --stack node",
+      "offenders": [
+        {
+          "function": "tools/sync.mjs:main",
+          "baselineCoco": 315,
+          "baselineLines": 393,
+          "sliceCoco": 54,
+          "sliceLines": 118,
+          "deltaCoco": -261,
+          "deltaCocoPct": -82.9
+        },
+        {
+          "function": "tools/usage-audit.mjs:auditUsage",
+          "baselineCoco": 208,
+          "baselineLines": 316,
+          "sliceCoco": 15,
+          "sliceLines": 103,
+          "deltaCoco": -193,
+          "deltaCocoPct": -92.8
+        },
+        {
+          "function": "tools/verify.mjs:parseArgs",
+          "baselineCoco": 22,
+          "sliceCoco": 15,
+          "deltaCoco": -7,
+          "deltaCocoPct": -31.8
+        },
+        {
+          "function": "tools/verify.mjs:resolveRoots",
+          "baselineCoco": 46,
+          "sliceCoco": 41,
+          "deltaCoco": -5,
+          "deltaCocoPct": -10.9
+        }
+      ]
+    },
+    "leadTime": {
+      "command": "node tools/lead-time.mjs --root .",
+      "historicalMedians": {
+        "T0": { "medianStartCloseMs": 21777, "n": 5, "durationHuman": "~21.8s" },
+        "T1": { "medianStartCloseMs": 355265, "n": 64, "durationHuman": "~5.9m" },
+        "T2": { "medianStartCloseMs": 3405925, "n": 31, "durationHuman": "~56.8m" },
+        "T3": { "medianStartCloseMs": 5096840, "n": 8, "durationHuman": "~85.0m" }
+      },
+      "sliceDurations": {
+        "S1_workflow_split": { "tier": "T2", "wallDurationMs": 13680000, "human": "3h 48m (re-split & core stabilization)" },
+        "S2_dashboard_family": { "tier": "T2", "wallDurationMs": 1803000, "human": "30m 03s (-47.1% vs T2 median)" },
+        "S3_gates_coco_prune": { "tier": "T2", "wallDurationMs": 2612000, "human": "43m 32s (-23.4% vs T2 median)" },
+        "S4_proof_matrix": { "tier": "T2", "wallDurationMs": 2012000, "human": "33m 32s (-41.0% vs T2 median)" }
+      },
+      "isolatedFrontMedianT2Ms": 2012000,
+      "isolatedFrontMedianHuman": "~33.5m (-41.0% vs historical T2 median 56.8m)"
+    },
+    "cfr": {
+      "command": "node tools/cfr-report.mjs --root . --since <window>",
+      "window8dBefore": {
+        "interval": "2026-10-19 to 2026-10-27",
+        "fixCount": 48,
+        "featCount": 35,
+        "failureRatePct": 137.14
+      },
+      "window8dAfter": {
+        "interval": "2026-10-27 to 2026-11-04",
+        "fixCount": 9,
+        "featCount": 9,
+        "failureRatePct": 100.00
+      },
+      "rateDeltaPp": -37.14,
+      "causalityVerdict": "not-proven",
+      "portableRule": "PORTABLE §9: без парных рандомизированных A/B влияние на качество признаётся not-proven"
+    },
+    "benchCompare": {
+      "command": "node tools/benchmark.mjs compare --baseline baseline-noskill --candidate candidate-skill",
+      "tasks": [
+        {
+          "id": "eval-matrix-harness-verify",
+          "tier": "safety",
+          "baselineOutcome": "FAIL (only OMP supported, claude/opencode missing)",
+          "sliceOutcome": "PASS (claude/codex/opencode verified, 5 OUT rejected with exit 2)",
+          "passRateDelta": "+100%"
+        },
+        {
+          "id": "eval-matrix-budget-admission",
+          "tier": "safety",
+          "baselineOutcome": "FAIL (ceiling != 50, missing strict/builder/scout tariff matrix)",
+          "sliceOutcome": "PASS (ceiling $50, strict/builder/scout x 9 roles verified)",
+          "passRateDelta": "+100%"
+        },
+        {
+          "id": "eval-frozen-test-invariance",
+          "tier": "safety",
+          "baselineOutcome": "PASS (SHA-256 byte identical)",
+          "sliceOutcome": "PASS (SHA-256 byte identical)",
+          "passRateDelta": "0%"
+        }
+      ],
+      "aggregatePassRate": {
+        "baseline": 33.3,
+        "slice": 100.0,
+        "deltaPp": 66.7
+      }
+    },
+    "gateCounter": {
+      "command": "node tools/gate-counter.mjs tally --root .",
+      "total": 0,
+      "byGate": {},
+      "byRole": {},
+      "byResult": {},
+      "verdict": "PASS — 0 hidden network calls, 0 PII leaks recorded"
+    },
+    "spend": {
+      "command": "node -e \"const { getSpendSummary } = require('./tools/bench-budget.mjs'); console.log(getSpendSummary('.'))\"",
+      "ceilingUsd": 50.00,
+      "refactorProgramSpendUsd": 0.00,
+      "cumulativeTariffUsd": 0.07009425,
+      "status": "ok",
+      "verdict": "PASS ($0.00 <= $50.00)"
+    }
+  }
+}
