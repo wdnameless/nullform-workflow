@@ -123,279 +123,24 @@ function requiredFor(tier) {
 
 /* --------------------------------------------------------------------- state */
 
-function statePath(root) { return join(root, DIR, FILE); }
-function budgetsPath(root) { return join(root, DIR, BUDGETS_FILE); }
-
-/** Plain object guard: `null`, arrays and scalars are not task state. */
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function loadBudgets(root) {
-  const p = budgetsPath(root);
-  if (!existsSync(p)) return { ...DEFAULT_BUDGETS };
-  try {
-    const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
-    return {
-      T0: typeof raw.T0 === "number" ? raw.T0 : DEFAULT_BUDGETS.T0,
-      T1: typeof raw.T1 === "number" ? raw.T1 : DEFAULT_BUDGETS.T1,
-      T2: typeof raw.T2 === "number" ? raw.T2 : DEFAULT_BUDGETS.T2,
-      T3: typeof raw.T3 === "number" ? raw.T3 : DEFAULT_BUDGETS.T3,
-    };
-  } catch {
-    return { ...DEFAULT_BUDGETS };
-  }
-}
-
-function load(root) {
-  const p = statePath(root);
-  if (!existsSync(p)) return null;
-  try {
-    const parsed = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
-    // Corrupt/foreign state (not an object, unknown tier) means "no task", not
-    // "a task with no requirements": otherwise `check` reports COMPLETE on `{}`
-    // and `status` dies with a TypeError on the missing artifacts map.
-    if (!isPlainObject(parsed) || !LADDER.includes(parsed.tier)) return null;
-    return {
-      mode: parsed.mode || "semi",
-      depth: parsed.depth || "normal",
-      ...parsed,
-      artifacts: isPlainObject(parsed.artifacts) ? parsed.artifacts : {},
-    };
-  }
-  catch { return null; }
-}
-
-function save(root, st) {
-  // Tool-written beat: every state mutation is a clock tick for honestTime.
-  // Best-effort (observability, never a gate); cap mirrors journal.mjs.
-  try {
-    if (st && typeof st === "object") {
-      if (!Array.isArray(st.beats)) st.beats = [];
-      st.beats.push(new Date().toISOString());
-      if (st.beats.length > 2000) st.beats.splice(0, st.beats.length - 2000);
-    }
-  } catch {}
-  // Atomic write: a crash mid-write must never leave a truncated state.json.
-  const target = statePath(root);
-  // Уникальное имя временного файла: два агента в одном проекте не должны
-  // затирать друг другу запись (раньше это был общий state.json.tmp).
-  const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  mkdirSync(dirname(target), { recursive: true });
-  assertWorkflowDirOwned(root);
-  writeFileSync(tmp, JSON.stringify(st, null, 2));
-  renameSync(tmp, target);
-  refreshSnapshot(root);
-}
-
-/**
- * Свежий снимок дашборда при каждом событии воркфлоу.
- *
- * Страница живёт своей жизнью: опрашивает state.js, пока сервер есть, и показывает
- * снимок, когда его нет. Если писать снимок только при старте сервера, вкладка,
- * открытая неделю назад, лжёт — был зафиксирован прогон на странице, который
- * давно закрыт. Вызов асинхронен и best-effort: сбор состояния никогда не должен
- * тормозить или ронять команду воркфлоу.
- *
- * Импорт ленивый и по кругу быть не может: dashboard.mjs не импортирует workflow.mjs.
- */
-function refreshSnapshot(root) {
-  if (process.env.NF_NO_DASHBOARD === "1") return;
-  import("./dashboard.mjs").then((dash) => {
-    try {
-      const data = dash.collectDashboardState ? dash.collectDashboardState(root) : null;
-      if (data) dash.writeSnapshot(root, data);
-    } catch {}
-  }).catch(() => {});
-}
-
-// S5: .workflow must be a real directory, never a planted symlink.
-// acquireLock's O_EXCL token logic is solid; this closes the path-redirection
-// hole (persistent planted symlink; a link swapped mid-call is out of scope).
-function assertWorkflowDirOwned(root) {
-  const dir = join(root, DIR);
-  let st = null;
-  try { st = lstatSync(dir); } catch { return; }
-  if (st.isSymbolicLink()) throw new Error(`workflow: refusing symlinked state dir: ${dir}`);
-}
-
-function appendMetric(root, record) {
-  const p = join(root, DIR, METRICS_FILE);
-  mkdirSync(dirname(p), { recursive: true });
-  const line = JSON.stringify(record) + "\n";
-  appendFileSync(p, line, "utf8");
-}
-
-function readMetricsRaw(root) {
-  const p = join(root, DIR, METRICS_FILE);
-  if (!existsSync(p)) return [];
-  const content = readFileSync(p, "utf8");
-  const lines = content.split("\n").map((l) => l.trim()).filter(Boolean);
-  const out = [];
-  for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line);
-      // "null" and scalars parse fine and then crash the aggregation.
-      if (isPlainObject(parsed)) out.push(parsed);
-    } catch {
-      // ignore malformed line
-    }
-  }
-  return out;
-}
-
-function buildMetricRecord(st) {
-  const closedMs = new Date(st.closedAt || new Date().toISOString()).getTime();
-  const startedMsRaw = st.startedAt ? new Date(st.startedAt).getTime() : NaN;
-  const startedMs = Number.isNaN(startedMsRaw) ? closedMs : startedMsRaw;
-  const durationMs = Math.max(0, closedMs - startedMs);
-  const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
-  const deviation = st.deviation?.forced ? st.deviation : null;
-  const record = {
-    task: st.task || "(untitled)",
-    tier: st.tier,
-    startedAt: st.startedAt || st.closedAt,
-    closedAt: st.closedAt,
-    durationMs,
-    forced: Boolean(deviation),
-    auto: st.auto ?? null,
-    artifactsCount,
-  };
-  if (deviation) {
-    // The reason lived only in state.json, and `start` replaces that file for the next
-    // task. A shortcut repeated three times therefore left no trace to correct the
-    // playbook from — the metric said `forced: true` and nothing else.
-    record.reason = String(deviation.reason || "(no reason recorded)");
-    record.deviationKind = deviation.replacedTask ? "replaced-lane" : "incomplete-close";
-  }
-  return record;
-}
-
-function reconcileMetrics(root, { lockHeld = false } = {}) {
-  const doReconcile = () => {
-    const st = load(root);
-    if (!st || st.status !== "closed") return null;
-
-    const records = readMetricsRaw(root);
-    const alreadyRecorded = records.some((m) =>
-      m.task === st.task &&
-      m.startedAt === (st.startedAt || st.closedAt) &&
-      m.closedAt === st.closedAt
-    );
-
-    if (!alreadyRecorded) {
-      const metricRecord = st.metric || buildMetricRecord(st);
-      appendMetric(root, metricRecord);
-      return metricRecord;
-    }
-    return null;
-  };
-
-  if (lockHeld) {
-    return doReconcile();
-  }
-  return withStateLock(root, doReconcile);
-}
-
-function loadMetrics(root) {
-  reconcileMetrics(root);
-  return readMetricsRaw(root);
-}
-
-function sleepSync(ms) {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  } catch {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {}
-  }
-}
-
-function acquireLock(root, timeoutMs = 5000, staleMs = 60000) {
-  const dir = join(root, DIR);
-  if (!existsSync(dir)) {
-    try { mkdirSync(dir, { recursive: true }); } catch {}
-  }
-  assertWorkflowDirOwned(root);
-  const lockFile = join(dir, "state.lock");
-  const deadline = Date.now() + timeoutMs;
-  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-  while (true) {
-    try {
-      const payload = JSON.stringify({ pid: process.pid, token, createdAt: Date.now() });
-      writeFileSync(lockFile, payload, { flag: "wx" });
-      return () => {
-        try {
-          if (existsSync(lockFile)) {
-            try {
-              const data = JSON.parse(readFileSync(lockFile, "utf8"));
-              if (data.token === token) {
-                rmSync(lockFile, { force: true });
-              }
-            } catch {}
-          }
-        } catch {}
-      };
-    } catch (err) {
-      if (err.code !== "EEXIST") {
-        throw err;
-      }
-      try {
-        if (existsSync(lockFile)) {
-          let info = null;
-          try {
-            const content = readFileSync(lockFile, "utf8");
-            info = JSON.parse(content);
-          } catch {
-            // Bounded wait on unparsable lock: only clean up if older than 1000ms
-            try {
-              const s = statSync(lockFile);
-              if (Date.now() - s.mtimeMs > 1000) {
-                rmSync(lockFile, { force: true });
-                continue;
-              }
-            } catch {}
-          }
-
-          if (info && info.pid && typeof info.pid === "number") {
-            let isDead = false;
-            try {
-              process.kill(info.pid, 0);
-            } catch (kErr) {
-              if (kErr.code === "ESRCH") isDead = true;
-            }
-            const isExpired = typeof staleMs === "number" && staleMs > 0 && (Date.now() - (info.createdAt || 0) > staleMs);
-            // Recover if process is verified dead OR if wall-clock stale fallback expired
-            if (isDead || isExpired) {
-              try { rmSync(lockFile, { force: true }); } catch {}
-              continue;
-            }
-          }
-        }
-      } catch {}
-
-      if (Date.now() >= deadline) {
-        return null;
-      }
-      sleepSync(25);
-    }
-  }
-}
-
-function withStateLock(root, fn, options = {}) {
-  const release = acquireLock(root, options.timeoutMs, options.staleMs);
-  if (!release) {
-    console.error("workflow: could not acquire state lock; timed out waiting for concurrent operation.");
-    return 1;
-  }
-  try {
-    return fn();
-  } finally {
-    release();
-  }
-}
-
+import {
+  statePath,
+  budgetsPath,
+  isPlainObject,
+  loadBudgets,
+  load,
+  save,
+  refreshSnapshot,
+  assertWorkflowDirOwned,
+  appendMetric,
+  readMetricsRaw,
+  buildMetricRecord,
+  reconcileMetrics,
+  loadMetrics,
+  sleepSync,
+  acquireLock,
+  withStateLock,
+} from "./workflow-core.mjs";
 function cmdMetrics(root) {
   const list = loadMetrics(root);
   if (list.length === 0) {
@@ -2486,7 +2231,7 @@ export function runWorkflowCli(argv = [], options = {}) {
 
 /* ---------------------------------------------------------------------- exports and main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, checkExperienceFresh, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass, cmdSettle };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, checkExperienceFresh, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, withStateLock, statePath, budgetsPath, isPlainObject, refreshSnapshot, assertWorkflowDirOwned, readMetricsRaw, buildMetricRecord, sleepSync, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass, cmdSettle };
 
 import { fileURLToPath } from "node:url";
 
