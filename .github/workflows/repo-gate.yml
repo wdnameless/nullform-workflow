@@ -86,7 +86,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [22, 24]
+        node: [18, 20, 22, 24]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -131,6 +131,75 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+  test-cells:
+    name: Test & Lint (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [18, 20, 22, 24]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run unit & regression tests
+        shell: bash
+        run: |
+          if [ -d "tools/tests" ]; then
+            node --test --test-concurrency=2 tools/tests/*.test.mjs
+          fi
+
+      - name: ESLint strict gate
+        shell: bash
+        run: npm run lint
+
+  install-smoke:
+    name: Install Smoke (Clean VM)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run install smoke across supported harnesses
+        shell: bash
+        run: |
+          for h in claude codex opencode; do
+            echo "=== Installing harness: $h ==="
+            node tools/install-harness.mjs --harness "$h" --dry-run
+          done
+
+      - name: Run verify smoke across supported harnesses
+        shell: bash
+        run: |
+          for h in claude codex opencode; do
+            echo "=== Verifying harness: $h ==="
+            node tools/verify.mjs --harness "$h" --profile audit
+          done
   gate:
     name: Repository Verification Gate
     runs-on: ubuntu-latest

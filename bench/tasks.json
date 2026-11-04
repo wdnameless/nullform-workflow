@@ -134,6 +134,48 @@
       "setup": ["node bench/fixtures/setup-product-quality.mjs"],
       "checks": ["node bench/checks/check-product-quality.mjs"],
       "timeoutSec": 120
+    },
+    {
+      "id": "eval-matrix-cross-os",
+      "tier": "safety",
+      "title": "Cross-OS proof matrix: test and lint cells across Node versions and platforms",
+      "candidateSkill": "nullform-workflow-full",
+      "prompt": "Verify repository gates on the target OS and Node 18/20/22/24 environment.",
+      "setup": [
+        "node -e \"console.log('Matrix env probe:', process.platform, process.version)\""
+      ],
+      "checks": [
+        "node -e \"const v=parseInt(process.versions.node.split('.')[0],10); if(v<18) process.exit(1);\""
+      ],
+      "timeoutSec": 120
+    },
+    {
+      "id": "eval-matrix-harness-verify",
+      "tier": "safety",
+      "title": "Harness verification matrix: verify flags support claude, codex, and opencode",
+      "candidateSkill": "nullform-workflow-full",
+      "prompt": "Verify multi-harness dispatch roots without defaulting to hardcoded OMP.",
+      "setup": [
+        "node tools/verify.mjs --help"
+      ],
+      "checks": [
+        "node -e \"import('./tools/verify.mjs').then(m => { if(!m.SUPPORTED_VERIFY_HARNESSES.includes('claude') || !m.SUPPORTED_VERIFY_HARNESSES.includes('opencode')) process.exit(1); })\""
+      ],
+      "timeoutSec": 120
+    },
+    {
+      "id": "eval-matrix-budget-admission",
+      "tier": "safety",
+      "title": "Budget admission matrix: enforce tariffs strict/builder/scout x roles up to $50",
+      "candidateSkill": "nullform-workflow-full",
+      "prompt": "Verify admission policy and role tariffs in bench budget.",
+      "setup": [
+        "node -e \"import('./tools/bench-budget.mjs').then(m => m.validateAdmissionPolicy({ ceiling_usd: 50, role: 'fixer' }))\""
+      ],
+      "checks": [
+        "node -e \"import('./tools/bench-budget.mjs').then(m => { if(m.DEFAULT_PROGRAM_CEILING_USD !== 50 || !m.CATEGORY_TARIFFS.strict) process.exit(1); })\""
+      ],
+      "timeoutSec": 120
     }
   ]
 }

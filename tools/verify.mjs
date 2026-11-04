@@ -19,12 +19,15 @@ import { fileURLToPath } from "node:url";
 
 import { runVerifyProfile } from "./verify-profile.mjs";
 import { runAuditProfile } from "./audit-profile.mjs";
+import { resolveHostHome } from "./installation/profiles.mjs";
 
+export const SUPPORTED_VERIFY_HARNESSES = ["claude", "codex", "opencode"];
 function parseArgs(argv) {
   const opts = {
     profile: "verify",
     root: "",
     harness: "",
+    harnessRoot: "",
     scope: [],
     userHome: "",
     json: false,
@@ -37,12 +40,14 @@ function parseArgs(argv) {
       opts.help = true;
     } else if (arg === "--json") {
       opts.json = true;
-    } else if (arg === "--profile") {
-      opts.profile = argv[++i] || "verify";
-    } else if (arg === "--root") {
-      opts.root = argv[++i] || "";
-    } else if (arg === "--harness" || arg === "--harness-root" || arg === "-HarnessRoot") {
-      opts.harness = argv[++i] || "";
+    } else if (arg === "--profile" || arg.startsWith("--profile=")) {
+      opts.profile = arg.startsWith("--profile=") ? arg.slice(10) : argv[++i] || "verify";
+    } else if (arg === "--root" || arg.startsWith("--root=")) {
+      opts.root = arg.startsWith("--root=") ? arg.slice(7) : argv[++i] || "";
+    } else if (arg === "--harness-root" || arg.startsWith("--harness-root=") || arg === "-HarnessRoot") {
+      opts.harnessRoot = arg.startsWith("--harness-root=") ? arg.slice(15) : argv[++i] || "";
+    } else if (arg === "--harness" || arg.startsWith("--harness=") || arg === "-Harness" || arg === "-harness") {
+      opts.harness = arg.startsWith("--harness=") ? arg.slice(10) : argv[++i] || "";
     } else if (arg === "--scope" || arg === "-Scope") {
       const val = argv[++i] || "";
       opts.scope = val.split(",").map((s) => s.trim()).filter(Boolean);
@@ -54,12 +59,15 @@ function parseArgs(argv) {
   return opts;
 }
 
-function resolveRoots(opts = {}) {
+export function resolveRoots(opts = {}) {
   const toolsDir = dirname(fileURLToPath(import.meta.url));
   const scriptParent = dirname(toolsDir);
   const parentOfScriptParent = dirname(scriptParent);
 
-  let harnessRoot = opts.harness ? resolve(opts.harness) : "";
+  let harnessRoot = opts.harnessRoot ? resolve(opts.harnessRoot) : "";
+  if (!harnessRoot && opts.harness && (opts.harness.includes("/") || opts.harness.includes("\\") || existsSync(opts.harness))) {
+    harnessRoot = resolve(opts.harness);
+  }
   if (!harnessRoot) {
     if (existsSync(join(parentOfScriptParent, "agent", "AGENTS.md"))) {
       harnessRoot = parentOfScriptParent;
@@ -110,9 +118,24 @@ function resolveRoots(opts = {}) {
   }
 
   const userHome = opts.userHome ? resolve(opts.userHome) : homedir();
-  const agentDir = join(userHome, ".omp", "agent");
+
+  // Harness resolution: claude | codex | opencode.
+  // Other 5 harnesses (omp, cursor, hermes, openclaw, openhuman) are OUT.
+  let selectedHarness = opts.harness || "";
+  if (selectedHarness && !SUPPORTED_VERIFY_HARNESSES.includes(selectedHarness)) {
+    throw new Error(
+      `Unsupported harness "${selectedHarness}". Supported harnesses: ${SUPPORTED_VERIFY_HARNESSES.join(", ")}`
+    );
+  }
+  if (!selectedHarness) {
+    selectedHarness = "claude";
+  }
+
+  const hostInfo = resolveHostHome({ harness: selectedHarness, userHome });
+  const agentDir = hostInfo.path;
 
   return {
+    harness: selectedHarness,
     harnessRoot: resolve(harnessRoot),
     repoRoot: resolve(repoRoot),
     userHome: resolve(userHome),
@@ -165,8 +188,9 @@ const USAGE = `Usage: node tools/verify.mjs [options]
 
 Options:
   --profile verify|audit   Profile to run (default: verify)
+  --harness <name>         Harness to verify: claude, codex, opencode (default: claude)
   --root <path>            Project/repo root directory
-  --harness <path>         Harness root directory
+  --harness-root <path>    Harness root directory
   --scope <list>           Scope for glossary/coverage check (e.g. agent,tools)
   --user-home <path>       Override user home directory
   --json                   Output results as JSON
@@ -242,11 +266,16 @@ async function main() {
 
   process.env.NF_NO_DASHBOARD = "1";
 
+  if (opts.harness && !SUPPORTED_VERIFY_HARNESSES.includes(opts.harness)) {
+    console.error(`Unsupported harness "${opts.harness}". Supported harnesses: ${SUPPORTED_VERIFY_HARNESSES.join(", ")}`);
+    process.exit(2);
+  }
+
   let ctx;
   try {
     ctx = { ...resolveRoots(opts), scope: opts.scope };
   } catch (err) {
-    console.error(`Failed to resolve roots: ${err.message}`);
+    console.error(err.message);
     process.exit(2);
   }
 
@@ -262,7 +291,7 @@ async function main() {
   process.exitCode = reportResults(results, opts, ctx);
 }
 
-if (process.argv[1] && (() => { try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })()) {
+if (process.argv[1] && (() => { try { const a = resolve(process.argv[1]).toLowerCase(), b = fileURLToPath(import.meta.url).toLowerCase(); return a === b || realpathSync(process.argv[1]).toLowerCase() === realpathSync(fileURLToPath(import.meta.url)).toLowerCase(); } catch { return false; } })()) {
   main().catch((err) => {
     console.error(`Unhandled error: ${err.stack || err.message}`);
     process.exitCode = 2;

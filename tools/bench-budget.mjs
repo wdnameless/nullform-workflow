@@ -2,20 +2,88 @@ import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
+export const DEFAULT_PROGRAM_CEILING_USD = 50.0;
 export const DEFAULT_MODEL = "nullform-gateway/gemini-3.8-flash-high";
 export const CAPS = Object.freeze({ contextBytes: 49152, inputTokens: 51200, outputTokens: 4096, workflowRequests: 6 });
-export const FIXED_TARIFFS = Object.freeze(Object.fromEntries(["3.8", "3.7"].map(v => [`nullform-gateway/gemini-${v}-flash-high`, { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 }])));
+
+export const ROLE_TO_CATEGORY = Object.freeze({
+  oracle: "strict",
+  reviewer: "strict",
+  orchestrator: "strict",
+  fixer: "builder",
+  designer: "builder",
+  explorer: "scout",
+  scout: "scout",
+  sonic: "scout",
+  librarian: "scout",
+});
+
+export const CATEGORY_TARIFFS = Object.freeze({
+  strict: Object.freeze({ input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 0 }),
+  builder: Object.freeze({ input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 }),
+  scout: Object.freeze({ input: 0.15, output: 0.60, cacheRead: 0.075, cacheWrite: 0 }),
+});
+
+export const ROLE_TARIFFS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(ROLE_TO_CATEGORY).map(([role, cat]) => [role, CATEGORY_TARIFFS[cat]])
+  )
+);
+
+export const FIXED_TARIFFS = Object.freeze({
+  ...Object.fromEntries(["3.8", "3.7"].map(v => [`nullform-gateway/gemini-${v}-flash-high`, { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 }])),
+  "anthropic/claude-3-5-sonnet": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
+  "openai/gpt-4o": { input: 2.50, output: 10.00, cacheRead: 1.25, cacheWrite: 0 },
+  "openai/gpt-4o-mini": { input: 0.15, output: 0.60, cacheRead: 0.075, cacheWrite: 0 },
+  "nullform-gateway/gemini-2.0-flash": { input: 0.10, output: 0.40, cacheRead: 0.025, cacheWrite: 0 },
+  "local/model": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+});
+
 export const LEDGER_FILE = "bench/runs/spend-ledger.json";
 export const REQUEST_RESERVE_USD = (CAPS.inputTokens * 0.75 + CAPS.outputTokens * 3.75) / 1e6;
 
+export function resolveTariff(selector) {
+  if (FIXED_TARIFFS[selector]) return FIXED_TARIFFS[selector];
+  if (CATEGORY_TARIFFS[selector]) return CATEGORY_TARIFFS[selector];
+  if (ROLE_TARIFFS[selector]) return ROLE_TARIFFS[selector];
+  return null;
+}
 export function computeTariffCost(usage, selector) {
-  const tariff = FIXED_TARIFFS[selector];
+  const tariff = resolveTariff(selector);
   if (!tariff) throw new Error("Unknown fixed SDK tariff/model");
   for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
     if (!Number.isSafeInteger(usage?.[key]) || usage[key] < 0) throw new Error(`Invalid native ${key} counter`);
   }
-  if (usage.cacheWrite !== 0 || usage.orchestration !== undefined || usage.server !== undefined || usage.credits !== undefined || usage.premiumRequests !== undefined) throw new Error("Unsupported billed token bucket");
-  return { tariff_usd: (usage.input * tariff.input + usage.output * tariff.output + usage.cacheRead * tariff.cacheRead) / 1e6 };
+  if ((usage.cacheWrite !== 0 && !tariff.cacheWrite) || usage.orchestration !== undefined || usage.server !== undefined || usage.credits !== undefined || usage.premiumRequests !== undefined) throw new Error("Unsupported billed token bucket");
+  return { tariff_usd: (usage.input * tariff.input + usage.output * tariff.output + usage.cacheRead * tariff.cacheRead + (usage.cacheWrite || 0) * (tariff.cacheWrite || 0)) / 1e6 };
+}
+
+export function validateAdmissionPolicy(policy) {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+    throw new Error("Invalid admission policy: expected an object");
+  }
+  const ceiling = Number(policy.ceiling_usd ?? policy.ceilingUsd ?? DEFAULT_PROGRAM_CEILING_USD);
+  if (!Number.isFinite(ceiling) || ceiling <= 0 || ceiling > DEFAULT_PROGRAM_CEILING_USD) {
+    throw new Error(`Admission policy ceiling must be positive and <= $${DEFAULT_PROGRAM_CEILING_USD}`);
+  }
+  const category = policy.category ? String(policy.category) : null;
+  if (category && !CATEGORY_TARIFFS[category]) {
+    throw new Error(`Unknown admission category "${category}". Allowed: strict, builder, scout`);
+  }
+  const role = policy.role ? String(policy.role) : null;
+  if (role && !ROLE_TO_CATEGORY[role]) {
+    throw new Error(`Unknown admission role "${role}"`);
+  }
+  const resolvedCategory = category || (role ? ROLE_TO_CATEGORY[role] : "builder");
+  const resolvedRole = role || (resolvedCategory === "strict" ? "oracle" : resolvedCategory === "scout" ? "scout" : "fixer");
+  return {
+    ceiling_usd: ceiling,
+    category: resolvedCategory,
+    role: resolvedRole,
+    selector: policy.selector || policy.model || DEFAULT_MODEL,
+    tariff: resolveTariff(resolvedCategory),
+    maxRequests: Number(policy.maxRequests ?? policy.max_requests ?? CAPS.workflowRequests),
+  };
 }
 
 export function validateNativeMessage(message, selector) {
@@ -37,9 +105,9 @@ export function validateNativeMessage(message, selector) {
 
 export function loadSpendLedger(root) {
   const path = join(root, LEDGER_FILE);
-  const ledger = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { version: 2, ceiling_usd: 1, cumulative_tariff_usd: 0, status: "ok", requests: [] };
-  if (ledger.version !== 2 || !Array.isArray(ledger.requests) || !["ok", "blocked_unknown_spend"].includes(ledger.status) || !Number.isFinite(ledger.cumulative_tariff_usd) || ledger.cumulative_tariff_usd < 0 || !Number.isFinite(ledger.ceiling_usd) || ledger.ceiling_usd <= 0 || ledger.ceiling_usd > 1) throw new Error("Malformed/legacy spend ledger; do not reset prior spending");
-  if (ledger.requests.some(r => !r || typeof r.id !== "string" || typeof r.runId !== "string" || !FIXED_TARIFFS[r.selector] || !["reserved", "settled"].includes(r.status) || r.reserve_usd !== REQUEST_RESERVE_USD) || new Set(ledger.requests.map(r => r.id)).size !== ledger.requests.length) throw new Error("Malformed durable request identity/reservation");
+  const ledger = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { version: 2, ceiling_usd: DEFAULT_PROGRAM_CEILING_USD, cumulative_tariff_usd: 0, status: "ok", requests: [] };
+  if (ledger.version !== 2 || !Array.isArray(ledger.requests) || !["ok", "blocked_unknown_spend"].includes(ledger.status) || !Number.isFinite(ledger.cumulative_tariff_usd) || ledger.cumulative_tariff_usd < 0 || !Number.isFinite(ledger.ceiling_usd) || ledger.ceiling_usd <= 0 || ledger.ceiling_usd > DEFAULT_PROGRAM_CEILING_USD) throw new Error("Malformed/legacy spend ledger; do not reset prior spending");
+  if (ledger.requests.some(r => !r || typeof r.id !== "string" || typeof r.runId !== "string" || !resolveTariff(r.selector) || !["reserved", "settled"].includes(r.status) || r.reserve_usd !== REQUEST_RESERVE_USD) || new Set(ledger.requests.map(r => r.id)).size !== ledger.requests.length) throw new Error("Malformed durable request identity/reservation");
   for (const row of ledger.requests.filter(r => r.status === "settled")) {
     const cost = computeTariffCost(row.usage, row.selector).tariff_usd;
     if (typeof row.sdk_tariff_usd !== "number" || !Number.isFinite(row.sdk_tariff_usd) || Math.abs(cost - row.sdk_tariff_usd) > 1e-8 || Math.abs(cost - row.tariff_usd) > 1e-8) throw new Error("Invalid settled SDK tariff provenance");
@@ -47,6 +115,17 @@ export function loadSpendLedger(root) {
   const settled = ledger.requests.filter(r => r.status === "settled");
   if (settled.some(r => !Number.isFinite(r.tariff_usd) || r.tariff_usd < 0) || Math.abs(settled.reduce((n,r) => n + r.tariff_usd, 0) - ledger.cumulative_tariff_usd) > 1e-9) throw new Error("Inconsistent spend ledger");
   return ledger;
+}
+
+export function getSpendSummary(root) {
+  const ledger = loadSpendLedger(root);
+  return {
+    cumulative_tariff_usd: ledger.cumulative_tariff_usd,
+    ceiling_usd: ledger.ceiling_usd,
+    status: ledger.status,
+    total_requests: ledger.requests.length,
+    settled_requests: ledger.requests.filter(r => r.status === "settled").length,
+  };
 }
 
 export function saveSpendLedger(root, ledger) {

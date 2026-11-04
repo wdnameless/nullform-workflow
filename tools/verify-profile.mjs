@@ -256,7 +256,7 @@ export async function runVerifyProfile(ctx) {
   // 9 mcp.json parses, entries well-formed
   results.push(
     await executeCheck(9, "mcp.json parses, entries well-formed", () => {
-      const servers = readMcpServers(false);
+      const servers = readMcpServers(true);
       const names = Object.keys(servers);
       if (names.length === 0) throw new Error("no MCP servers configured");
       const bad = [];
@@ -630,7 +630,7 @@ export async function runVerifyProfile(ctx) {
 
       if (!/name:\s*Workflow Gate/.test(content)) throw new Error("missing name: Workflow Gate");
       if (!/on:\s*(?:\r?\n)\s+push:/.test(content)) throw new Error("missing push trigger");
-      if (!/node-version:\s*20/.test(content)) throw new Error("missing node 20");
+      if (!/node-version:\s*(?:18|20|22|24)/.test(content)) throw new Error("missing node-version (18/20/22/24)");
       if (!/auto-review\.mjs/.test(content)) throw new Error("missing auto-review invocation");
       if (!/actions\/github-script/.test(content)) throw new Error("missing PR comment action");
       return `${stepIndents.length} steps, structurally sound`;
