@@ -17,12 +17,14 @@ import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs as utilParseArgs } from "node:util";
 
-const ALLOWED_STATUSES = [
+export const ALLOWED_STATUSES = [
   "DONE",
   "DONE_WITH_CONCERNS",
   "HANDOFF",
   "BLOCKED",
   "NEEDS_CONTEXT",
+  "INPUT GAP",
+  "INPUT_GAP",
 ];
 
 const REQUIRED_SECTIONS = [
@@ -33,6 +35,193 @@ const REQUIRED_SECTIONS = [
   "REQUIREMENTS",
   "CONCERNS",
 ];
+
+function findMissingFields(options, fields) {
+  return fields.filter((f) => {
+    const val = options[f];
+    return !val || (Array.isArray(val) ? val.length === 0 : !String(val).trim());
+  });
+}
+
+function formatList(val, delim = ", ") {
+  return Array.isArray(val) ? val.join(delim) : String(val ?? "").trim();
+}
+
+/**
+ * Create a complete worker brief ensuring all required inputs are present,
+ * explicit INPUT GAP instructions are included, and no third advisor is used.
+ */
+export function createWorkerBrief(options = {}) {
+  const missing = findMissingFields(options, ["task", "files", "requirements", "criteria"]);
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      status: "INPUT GAP",
+      error: `INPUT GAP: missing required inputs: ${missing.join(", ")}`,
+      missingInputs: missing,
+      brief: null,
+    };
+  }
+
+  const filesStr = formatList(options.files);
+  const reqsStr = formatList(options.requirements);
+  const critStr = formatList(options.criteria, "; ");
+  const ifaceStr = options.interfaces ? formatList(options.interfaces) : "none";
+  const constrStr = options.constraints ? formatList(options.constraints, "; ") : "none";
+
+  const briefText = [
+    `# Target`,
+    `Zone: ${filesStr}`,
+    `# Task`,
+    `${String(options.task).trim()}`,
+    `# Requirements`,
+    `${reqsStr}`,
+    `# Acceptance Criteria`,
+    `${critStr}`,
+    `# Interfaces`,
+    `${ifaceStr}`,
+    `# Constraints`,
+    `${constrStr}`,
+    `# Rules`,
+    `- Complete inputs required. If any required input is missing: state INPUT GAP; NEVER invent or assume missing context.`,
+    `- No third advisor: direct execution only.`,
+    `- Return contract (≤25 lines): STATUS (DONE | DONE_WITH_CONCERNS | HANDOFF | BLOCKED | NEEDS_CONTEXT | INPUT GAP) · FILES · TESTS · INTERFACES · REQUIREMENTS · CONCERNS.`,
+  ].join("\n");
+
+  return {
+    ok: true,
+    status: "OK",
+    error: null,
+    missingInputs: [],
+    brief: briefText,
+    task: String(options.task).trim(),
+    files: filesStr,
+    requirements: reqsStr,
+    criteria: critStr,
+  };
+}
+
+/**
+ * Validate a worker brief ensuring complete inputs, explicit INPUT GAP rule,
+ * and no third advisor invocation.
+ */
+export function validateWorkerBrief(brief) {
+  const errors = [];
+  const missingInputs = [];
+
+  const text = typeof brief === "string" ? brief : (brief?.brief || JSON.stringify(brief || ""));
+
+  const hasTargetOrZone = /#\s*Target\b|Zone\s*:/i.test(text);
+  const hasTask = /#\s*Task\b|Task\s*:/i.test(text);
+  const hasReqs = /#\s*Requirements\b|Requirements\s*:/i.test(text);
+  const hasCriteria = /#\s*Acceptance Criteria\b|Acceptance\s*:/i.test(text);
+
+  if (!hasTargetOrZone) missingInputs.push("files");
+  if (!hasTask) missingInputs.push("task");
+  if (!hasReqs) missingInputs.push("requirements");
+  if (!hasCriteria) missingInputs.push("criteria");
+
+  if (missingInputs.length > 0) {
+    errors.push(`INPUT GAP: missing required input sections: ${missingInputs.join(", ")}`);
+  }
+
+  if (!/\bINPUT[ _]GAP\b/i.test(text)) {
+    errors.push("Worker brief must contain explicit INPUT GAP rule.");
+  }
+
+  if (/(?<!\b(?:no|without|prohibit(?:ed)?|never)\s+(?:a\s+)?)(?:third[ _\-]?advisor|consult\s+(?:a\s+)?(?:third\s+)?advisor|advisor[ _\-]?model)/i.test(text)) {
+    errors.push("Third advisor prohibited: fresh redispatch must be direct without a third advisor.");
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    missingInputs,
+  };
+}
+
+/**
+ * Create a FIX fresh-redispatch brief carrying failed criterion, complete inputs,
+ * explicit INPUT GAP instruction, and strictly no third advisor.
+ */
+export function createRedispatchBrief(options = {}) {
+  if (options.advisor || options.thirdAdvisor || options.useAdvisor) {
+    return {
+      ok: false,
+      status: "ERROR",
+      error: "Third advisor prohibited: FIX fresh-redispatch must be direct without third advisor.",
+      missingInputs: [],
+      brief: null,
+      fresh: false,
+    };
+  }
+
+  const missing = findMissingFields(options, ["failedCriterion", "task", "files", "requirements"]);
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      status: "INPUT GAP",
+      error: `INPUT GAP: missing ${missing.includes("failedCriterion") ? "failed criterion for FIX fresh-redispatch" : "required inputs: " + missing.join(", ")}`,
+      missingInputs: missing,
+      brief: null,
+      fresh: false,
+    };
+  }
+
+  const filesStr = formatList(options.files);
+  const reqsStr = formatList(options.requirements);
+  const failedCrit = String(options.failedCriterion).trim();
+  const briefText = [
+    `# Target`,
+    `Zone: ${filesStr}`,
+    `# Task`,
+    `${String(options.task).trim()}`,
+    `# Requirements`,
+    `${reqsStr}`,
+    `# FIX FRESH-REDISPATCH`,
+    `FAILED CRITERION: ${failedCrit}`,
+    `# Rules`,
+    `- Complete inputs required. If any required input is missing: state INPUT GAP; NEVER invent or assume missing context.`,
+    `- Fresh redispatch: direct fix execution only; no third advisor.`,
+    `- Return contract (≤25 lines): STATUS (DONE | DONE_WITH_CONCERNS | HANDOFF | BLOCKED | NEEDS_CONTEXT | INPUT GAP) · FILES · TESTS · INTERFACES · REQUIREMENTS · CONCERNS.`,
+  ].join("\n");
+
+  return {
+    ok: true,
+    status: "OK",
+    error: null,
+    missingInputs: [],
+    brief: briefText,
+    fresh: true,
+    failedCriterion: failedCrit,
+  };
+}
+
+/**
+ * Validate a FIX fresh-redispatch ensuring it carries failed criterion,
+ * explicit INPUT GAP, and strictly no third advisor.
+ */
+export function validateRedispatch(brief) {
+  const errors = [];
+  const text = typeof brief === "string" ? brief : (brief?.brief || JSON.stringify(brief || ""));
+
+  if (!/FAILED CRITERION\s*:/i.test(text) && !brief?.failedCriterion) {
+    errors.push("FIX redispatch must carry explicit failed criterion.");
+  }
+
+  if (!/\bINPUT[ _]GAP\b/i.test(text)) {
+    errors.push("Redispatch brief must contain explicit INPUT GAP rule.");
+  }
+
+  if (/(?<!\b(?:no|without|prohibit(?:ed)?|never)\s+(?:a\s+)?)(?:third[ _\-]?advisor|consult\s+(?:a\s+)?(?:third\s+)?advisor|advisor[ _\-]?model)/i.test(text) || brief?.advisor) {
+    errors.push("Third advisor prohibited: FIX fresh-redispatch must be direct without a third advisor.");
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
 
 function parseArgs(args) {
   const { values, positionals } = utilParseArgs({
@@ -102,6 +291,7 @@ export function validateReturnContract(rawText) {
       if (status === "SUCCESS") status = "DONE";
       else if (status === "PARTIAL") status = "DONE_WITH_CONCERNS";
       else if (status === "FAILED") status = "BLOCKED";
+      else if (status === "INPUT_GAP") status = "INPUT GAP";
 
       const files = parsedJson.files_modified || parsedJson.files;
       const requirements = parsedJson.requirements || "";
@@ -110,15 +300,14 @@ export function validateReturnContract(rawText) {
 
       const testsVal = parsedJson.tests || (testsPassed === false ? "failed" : summary);
 
-      const lines = [
+      normalized = [
         `STATUS: ${status}`,
-        `FILES: ${Array.isArray(files) ? files.join(", ") : (files || "none")}`,
+        `FILES: ${formatList(files, ", ") || "none"}`,
         `TESTS: ${testsVal}`,
-        `INTERFACES: ${Array.isArray(interfaces) ? interfaces.join(", ") : (interfaces || "none")}`,
-        `REQUIREMENTS: ${Array.isArray(requirements) ? requirements.join(", ") : (requirements || "none")}`,
+        `INTERFACES: ${formatList(interfaces, ", ") || "none"}`,
+        `REQUIREMENTS: ${formatList(requirements, ", ") || "none"}`,
         `CONCERNS: ${concerns || (summary && !hasStatusInSummary ? summary : "none")}`,
-      ];
-      normalized = lines.join("\n");
+      ].join("\n");
     }
     // Rule: tests_passed: true with 'not-run(parent-owned)' must NEVER count as executed test evidence
     // And bare tests_passed: true without command/count evidence is not allowed
@@ -135,32 +324,11 @@ export function validateReturnContract(rawText) {
     }
   }
 
-  const rawLines = normalized.split("\n");
-  const lines = rawLines;
+  const lines = normalized.split("\n");
   if (lines.length > 25) {
     errors.push(`Превышен лимит строк: получено ${lines.length}, максимум 25.`);
   }
-  // Parse sections. They can be delimited by " · " or newlines or labels like "STATUS: ..." or "STATUS (DONE)"
-  // Let's inspect tokens/sections
-  // Standard format in agent instructions:
-  // STATUS (DONE | ...) · FILES (paths only) · TESTS (command → было→стало) · INTERFACES · REQUIREMENTS (R## mapping) · CONCERNS/BLOCKERS
-  // Sometimes formatted as:
-  // STATUS: DONE
-  // FILES:
-  // - path/to/file
-  // TESTS: node test.js -> было 0 -> стало 5
-  // or inline:
-  // STATUS: DONE · FILES: a.js, b.js · TESTS: not-run(parent-owned) · INTERFACES: none · REQUIREMENTS: R01 · CONCERNS: none
-
-  // Let's parse sections by searching for header occurrences or section markers.
-  // We look for STATUS, FILES, TESTS, INTERFACES, REQUIREMENTS, CONCERNS (or CONCERNS/BLOCKERS).
   const sectionContent = {};
-
-  // Check if text has sections
-  // Regex to match sections:
-  // We can look for markers like:
-  // /(?:^|[·\n\r])\s*(STATUS|FILES|TESTS|INTERFACES|REQUIREMENTS|CONCERNS(?:[\/_]BLOCKERS)?)\s*[:\-\(]/g
-  // or simple section parser:
   const sectionPattern = /(?:^|[·\n])\s*(STATUS|FILES|TESTS|INTERFACES|REQUIREMENTS|CONCERNS(?:[\/_]BLOCKERS)?)\b\s*[:\-\(]?/gi;
 
   const matches = [];
@@ -205,9 +373,9 @@ export function validateReturnContract(rawText) {
   // Look for one of ALLOWED_STATUSES in statusVal or anywhere near STATUS
   let foundStatus = null;
   for (const s of ALLOWED_STATUSES) {
-    const sRegex = new RegExp(`\\b${s}\\b`);
+    const sRegex = new RegExp(`\\b${s.replace(/\s+/g, "[ _]")}\\b`, "i");
     if (sRegex.test(statusVal) || sRegex.test(normalized.slice(0, 200))) {
-      foundStatus = s;
+      foundStatus = s === "INPUT_GAP" ? "INPUT GAP" : s;
       break;
     }
   }
@@ -235,9 +403,17 @@ export function validateReturnContract(rawText) {
     }
   }
 
+  // Contradiction check: DONE vs INPUT GAP reported in CONCERNS
+  const concernsVal = sectionContent["CONCERNS"] || "";
+  if (foundStatus === "DONE" && /\bINPUT[ _]GAP\b/i.test(concernsVal)) {
+    errors.push(`Противоречивый статус: обнаружен INPUT GAP в CONCERNS, но статус заявлен как DONE. Задача требует NEEDS_CONTEXT или INPUT GAP.`);
+  }
+
   // 3. Validate TESTS
   // TESTS numeric before→after (было N → стало M) or exact not-run(parent-owned)
   const testsVal = sectionContent["TESTS"] || "";
+  const isInputGapStatus = foundStatus === "INPUT GAP" || foundStatus === "NEEDS_CONTEXT" || foundStatus === "BLOCKED";
+  const isNotRunGap = isInputGapStatus && /not-run\((?:input-gap|missing-input|gap)\)|not-run|none/i.test(testsVal);
   const isNotRunParent = /not-run\(parent-owned\)/i.test(testsVal) || /not-run\(parent-owned\)/i.test(normalized);
   // Check for numeric before->after: (было \d+ → стало \d+) or (\d+ -> \d+) or similar
   const hasNumericTransition = /(?:было|before)\s*\:?\s*\d+\s*(?:→|->|to)\s*(?:стало|after)\s*\:?\s*\d+/i.test(testsVal) ||
@@ -256,7 +432,7 @@ export function validateReturnContract(rawText) {
     }
   }
 
-  if (!isNotRunParent && !hasNumericTransition) {
+  if (!isNotRunParent && !hasNumericTransition && !isNotRunGap) {
     errors.push(`Секция TESTS должна содержать либо численный переход (например: "было N → стало M"), либо точное значение "not-run(parent-owned)".`);
   }
 
