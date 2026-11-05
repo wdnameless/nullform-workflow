@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 export const DEFAULT_PROGRAM_CEILING_USD = 50.0;
+export const OPTIMIZER_MAX_ADDITIONAL_USD = 10.0;
 export const DEFAULT_MODEL = "nullform-gateway/gemini-3.8-flash-high";
 export const CAPS = Object.freeze({ contextBytes: 49152, inputTokens: 51200, outputTokens: 4096, workflowRequests: 6 });
 
