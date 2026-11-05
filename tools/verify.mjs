@@ -13,7 +13,7 @@ import {
   existsSync,
   realpathSync
 } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -82,14 +82,30 @@ function resolveVerifyHarness(opts, userHome) {
       `Unsupported harness "${selectedHarness}". Supported harnesses: ${SUPPORTED_VERIFY_HARNESSES.join(", ")}`
     );
   }
-  if (!selectedHarness || isPath) {
+  if (isPath) {
+    const pathTarget = resolve(selectedHarness);
+    let agentDir = opts.agentDir ? resolve(opts.agentDir) : "";
+    if (!agentDir) {
+      if (existsSync(join(pathTarget, ".harness-root")) || existsSync(join(pathTarget, "AGENTS.md"))) {
+        agentDir = pathTarget;
+      } else if (existsSync(join(pathTarget, "agent", "AGENTS.md"))) {
+        agentDir = join(pathTarget, "agent");
+      } else {
+        agentDir = pathTarget;
+      }
+    }
+    return {
+      selectedHarness: basename(pathTarget) || "custom",
+      agentDir,
+    };
+  }
+  if (!selectedHarness) {
     selectedHarness = "claude";
   }
-
   const hostInfo = resolveHostHome({ harness: selectedHarness, userHome });
   return {
     selectedHarness,
-    agentDir: resolve(hostInfo.path),
+    agentDir: opts.agentDir ? resolve(opts.agentDir) : resolve(hostInfo.path),
   };
 }
 function resolveInitialHarnessRoot(opts) {
