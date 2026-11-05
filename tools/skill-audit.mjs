@@ -13,6 +13,22 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, dirname, relative } from "node:path";
 
+import {
+  scanSkillSecurity,
+  auditSkillEvals,
+  lintSkillRegistry,
+  evaluateSkillTrigger,
+  evaluateSkillTriggerFixtures,
+} from "./skill-security.mjs";
+
+export {
+  scanSkillSecurity,
+  auditSkillEvals,
+  lintSkillRegistry,
+  evaluateSkillTrigger,
+  evaluateSkillTriggerFixtures,
+};
+
 const ENTRY_POINT_EXT = new Set([".py", ".cjs", ".mjs", ".js", ".sh", ".ps1", ".ts"]);
 
 /**
@@ -453,6 +469,18 @@ export function auditSkillFile(skillDir, options = {}) {
       });
     }
   }
+  // Check 7: Offline skill security scanner
+  if (!options.skipSecurity) {
+    const sec = scanSkillSecurity(skillDir, options);
+    findings.push(...sec.findings);
+  }
+
+  // Check 8: Deterministic per-skill evals audit
+  if (options.checkEvals || options.requireEvals) {
+    const ev = auditSkillEvals(skillDir, options);
+    findings.push(...ev.findings);
+  }
+
 
   const hasErrors = findings.some((f) => f.type === "error");
 
@@ -513,6 +541,14 @@ export function auditSkills(root, options = {}) {
       target: f.target ? relative(baseRoot, f.target).replace(/\\/g, "/") : undefined,
     })));
   }
+  if (options.lintRegistry) {
+    const reg = lintSkillRegistry(baseRoot, options);
+    allFindings.push(...reg.findings.map((f) => ({
+      ...f,
+      file: relative(baseRoot, f.file).replace(/\\/g, "/"),
+    })));
+  }
+
 
   const hasErrors = allFindings.some((f) => f.type === "error");
 
