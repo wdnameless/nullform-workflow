@@ -143,31 +143,17 @@ export async function runCandidateOptimizer(options = {}) {
   const baselineSource = readFileSync(targetPath, "utf8");
 
   // 1. Evaluate baseline
-  let baselineResult;
-  if (typeof options.evalFn === "function") {
-    baselineResult = await options.evalFn({
-      targetPath,
-      isCandidate: false,
-      root,
-    });
-  } else if (Array.isArray(options.checks) && options.checks.length > 0) {
-    baselineResult = runDeterministicChecks(options.checks, root);
-  } else {
-    baselineResult = { passed: true, score: 1.0, checks: [] };
-  }
+  const baselineResult = await runEvaluation({
+    evalFn: options.evalFn,
+    checks: options.checks,
+    targetPath,
+    isCandidate: false,
+    root,
+    cwd: root,
+  });
 
   // 2. Generate one mutation for candidate
-  let mutatedCode;
-  let mutationInfo;
-  if (typeof options.mutator === "function") {
-    const res = options.mutator(baselineSource);
-    mutatedCode = res.mutatedCode;
-    mutationInfo = res.mutation;
-  } else {
-    const res = generateOneMutation(baselineSource, { operator: options.operator });
-    mutatedCode = res.mutatedCode;
-    mutationInfo = res.mutation;
-  }
+  const { mutatedCode, mutationInfo } = produceMutation(baselineSource, options);
 
   // 3. Write candidate artifact (NEVER edit baseline file)
   const candidateId = `cand-${randomUUID().slice(0, 8)}`;
@@ -179,67 +165,32 @@ export async function runCandidateOptimizer(options = {}) {
   writeFileSync(candidateArtifactPath, mutatedCode, "utf8");
 
   // 4. Re-evaluate candidate
-  let candidateResult;
-  if (typeof options.evalFn === "function") {
-    candidateResult = await options.evalFn({
-      targetPath: candidateArtifactPath,
-      isCandidate: true,
-      root,
-    });
-  } else if (Array.isArray(options.checks) && options.checks.length > 0) {
-    candidateResult = runDeterministicChecks(options.checks, candidatesDir);
-  } else {
-    candidateResult = { passed: true, score: 1.0, checks: [] };
-  }
+  const candidateResult = await runEvaluation({
+    evalFn: options.evalFn,
+    checks: options.checks,
+    targetPath: candidateArtifactPath,
+    isCandidate: true,
+    root,
+    cwd: candidatesDir,
+  });
 
   // 5. Decision: keep vs revert
-  let decision = "revert";
-  const basePassed = Boolean(baselineResult.passed);
-  const candPassed = Boolean(candidateResult.passed);
-  const baseScore = Number(baselineResult.score ?? (basePassed ? 1.0 : 0.0));
-  const candScore = Number(candidateResult.score ?? (candPassed ? 1.0 : 0.0));
-
-  if (candPassed && !basePassed) {
-    decision = "keep";
-  } else if (candScore > baseScore) {
-    decision = "keep";
-  } else if (candScore === baseScore && candPassed && basePassed) {
-    const baseLines = baselineSource.split(/\r?\n/).length;
-    const candLines = mutatedCode.split(/\r?\n/).length;
-    if (candLines < baseLines) {
-      decision = "keep";
-    }
-  }
+  const { decision, basePassed, candPassed, baseScore, candScore } = decideKeepOrRevert({
+    baselineResult,
+    candidateResult,
+    baselineSource,
+    mutatedCode,
+  });
 
   // 6. Spend calculation & ledger tracking
-  let optimizerSpendUsd = Number(options.observedSpendUsd ?? 0.0);
-  if (options.recordRequest && options.recordRequest.usage) {
-    const req = options.recordRequest;
-    const cost = computeTariffCost(req.usage, model);
-    optimizerSpendUsd += cost.tariff_usd;
-
-    if (optimizerSpendUsd > maxAdditionalSpendUsd) {
-      throw new Error(`Budget ceiling exceeded: optimizer spend $${optimizerSpendUsd} > max $${maxAdditionalSpendUsd}`);
-    }
-
-    ledger.cumulative_tariff_usd += cost.tariff_usd;
-    ledger.requests.push({
-      id: randomUUID(),
-      runId: candidateId,
-      selector: model,
-      status: "settled",
-      reserve_usd: REQUEST_RESERVE_USD,
-      dispatchedAt: new Date().toISOString(),
-      settledAt: new Date().toISOString(),
-      usage: req.usage,
-      tariff_usd: cost.tariff_usd,
-      sdk_tariff_usd: cost.tariff_usd,
-      stopReason: "stop",
-    });
-    saveSpendLedger(root, ledger);
-  } else if (optimizerSpendUsd > maxAdditionalSpendUsd) {
-    throw new Error(`Budget ceiling exceeded: optimizer spend $${optimizerSpendUsd} > max $${maxAdditionalSpendUsd}`);
-  }
+  const optimizerSpendUsd = processOptimizerSpend({
+    options,
+    model,
+    candidateId,
+    maxAdditionalSpendUsd,
+    ledger,
+    root,
+  });
 
   // Verify baseline file invariance
   const currentBaselineSource = readFileSync(targetPath, "utf8");
@@ -286,6 +237,74 @@ export async function runCandidateOptimizer(options = {}) {
 
   writeFileSync(candidateManifestPath, JSON.stringify(output, null, 2) + "\n", "utf8");
   return output;
+}
+
+async function runEvaluation({ evalFn, checks, targetPath, isCandidate, root, cwd }) {
+  if (typeof evalFn === "function") {
+    return evalFn({ targetPath, isCandidate, root });
+  }
+  if (Array.isArray(checks) && checks.length > 0) {
+    return runDeterministicChecks(checks, cwd);
+  }
+  return { passed: true, score: 1.0, checks: [] };
+}
+
+function produceMutation(source, options) {
+  if (typeof options.mutator === "function") {
+    const res = options.mutator(source);
+    return { mutatedCode: res.mutatedCode, mutationInfo: res.mutation };
+  }
+  const res = generateOneMutation(source, { operator: options.operator });
+  return { mutatedCode: res.mutatedCode, mutationInfo: res.mutation };
+}
+
+function decideKeepOrRevert({ baselineResult, candidateResult, baselineSource, mutatedCode }) {
+  const basePassed = Boolean(baselineResult.passed);
+  const candPassed = Boolean(candidateResult.passed);
+  const baseScore = Number(baselineResult.score ?? (basePassed ? 1.0 : 0.0));
+  const candScore = Number(candidateResult.score ?? (candPassed ? 1.0 : 0.0));
+
+  let decision = "revert";
+  if (candPassed && !basePassed) {
+    decision = "keep";
+  } else if (candScore > baseScore) {
+    decision = "keep";
+  } else if (candScore === baseScore && candPassed && basePassed) {
+    const baseLines = baselineSource.split(/\r?\n/).length;
+    const candLines = mutatedCode.split(/\r?\n/).length;
+    if (candLines < baseLines) decision = "keep";
+  }
+  return { decision, basePassed, candPassed, baseScore, candScore };
+}
+
+function processOptimizerSpend({ options, model, candidateId, maxAdditionalSpendUsd, ledger, root }) {
+  let optimizerSpendUsd = Number(options.observedSpendUsd ?? 0.0);
+  if (options.recordRequest && options.recordRequest.usage) {
+    const req = options.recordRequest;
+    const cost = computeTariffCost(req.usage, model);
+    optimizerSpendUsd += cost.tariff_usd;
+    if (optimizerSpendUsd > maxAdditionalSpendUsd) {
+      throw new Error(`Budget ceiling exceeded: optimizer spend $${optimizerSpendUsd} > max $${maxAdditionalSpendUsd}`);
+    }
+    ledger.cumulative_tariff_usd += cost.tariff_usd;
+    ledger.requests.push({
+      id: randomUUID(),
+      runId: candidateId,
+      selector: model,
+      status: "settled",
+      reserve_usd: REQUEST_RESERVE_USD,
+      dispatchedAt: new Date().toISOString(),
+      settledAt: new Date().toISOString(),
+      usage: req.usage,
+      tariff_usd: cost.tariff_usd,
+      sdk_tariff_usd: cost.tariff_usd,
+      stopReason: "stop",
+    });
+    saveSpendLedger(root, ledger);
+  } else if (optimizerSpendUsd > maxAdditionalSpendUsd) {
+    throw new Error(`Budget ceiling exceeded: optimizer spend $${optimizerSpendUsd} > max $${maxAdditionalSpendUsd}`);
+  }
+  return optimizerSpendUsd;
 }
 
 function runDeterministicChecks(checks, cwd) {

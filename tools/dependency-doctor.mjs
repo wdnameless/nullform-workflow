@@ -192,83 +192,41 @@ function diagnosePythonDeclarations(rawDeclarations, filePath, manifestContext =
   for (const { line, text } of rawDeclarations) {
     const parsed = parseRequirementLine(text);
     if (!parsed) continue;
-
     dependencyCount++;
-    const { name, normalized, exactVersion, unpinned, raw } = parsed;
-
-    if (OBSOLETE_BACKPORTS[normalized]) {
-      findings.push({
-        category: "obsolete-backport",
-        severity: "warn",
-        file: filePath,
-        line,
-        dependency: name,
-        message: `Dependency '${name}' is an obsolete backport: ${OBSOLETE_BACKPORTS[normalized]}`,
-        detail: OBSOLETE_BACKPORTS[normalized],
-      });
-    } else if (PYTHON_STDLIB_MODULES.has(normalized)) {
-      findings.push({
-        category: "stdlib-shadowing",
-        severity: "warn",
-        file: filePath,
-        line,
-        dependency: name,
-        message: `Dependency '${name}' shadows Python standard library module`,
-        detail: "Standard library module built into Python",
-      });
-    }
-
-    if (unpinned) {
-      const suffix = manifestContext ? ` in ${manifestContext}` : "";
-      findings.push({
-        category: "unpinned",
-        severity: "warn",
-        file: filePath,
-        line,
-        dependency: raw,
-        message: `Dependency '${raw}' is unpinned${suffix}`,
-        detail: "Unpinned dependency risks non-reproducible installations and unexpected breaking updates",
-      });
-    }
-
-    if (!entriesByNorm.has(normalized)) {
-      entriesByNorm.set(normalized, []);
-    }
-    entriesByNorm.get(normalized).push({ line, name, exactVersion, raw });
+    checkPythonDeclFindings(parsed, line, filePath, manifestContext, findings);
+    if (!entriesByNorm.has(parsed.normalized)) entriesByNorm.set(parsed.normalized, []);
+    entriesByNorm.get(parsed.normalized).push({ line, name: parsed.name, exactVersion: parsed.exactVersion, raw: parsed.raw });
   }
 
+  checkPythonDuplicates(entriesByNorm, filePath, manifestContext, findings);
+  return { ok: findings.length === 0, dependencyCount, findings };
+}
+
+function checkPythonDeclFindings(parsed, line, filePath, manifestContext, findings) {
+  const { name, normalized, unpinned, raw } = parsed;
+  if (OBSOLETE_BACKPORTS[normalized]) {
+    findings.push({ category: "obsolete-backport", severity: "warn", file: filePath, line, dependency: name, message: `Dependency '${name}' is an obsolete backport: ${OBSOLETE_BACKPORTS[normalized]}`, detail: OBSOLETE_BACKPORTS[normalized] });
+  } else if (PYTHON_STDLIB_MODULES.has(normalized)) {
+    findings.push({ category: "stdlib-shadowing", severity: "warn", file: filePath, line, dependency: name, message: `Dependency '${name}' shadows Python standard library module`, detail: "Standard library module built into Python" });
+  }
+  if (unpinned) {
+    const suffix = manifestContext ? ` in ${manifestContext}` : "";
+    findings.push({ category: "unpinned", severity: "warn", file: filePath, line, dependency: raw, message: `Dependency '${raw}' is unpinned${suffix}`, detail: "Unpinned dependency risks non-reproducible installations and unexpected breaking updates" });
+  }
+}
+
+function checkPythonDuplicates(entriesByNorm, filePath, manifestContext, findings) {
   for (const [normName, declarations] of entriesByNorm.entries()) {
-    if (declarations.length > 1) {
-      const loc = declarations.map((d) => d.line).join(", ");
-      const suffix = manifestContext ? ` in ${manifestContext}` : ` (lines ${loc})`;
-      findings.push({
-        category: "duplicate",
-        severity: "warn",
-        file: filePath,
-        line: declarations[1].line,
-        dependency: declarations[1].name,
-        message: `Dependency '${declarations[1].name}' is declared multiple times${suffix}`,
-        detail: `Multiple declarations found for normalized package '${normName}'`,
-      });
-
-      const exactPins = declarations.filter((d) => d.exactVersion !== null);
-      const uniquePins = [...new Set(exactPins.map((d) => d.exactVersion))];
-      if (uniquePins.length > 1) {
-        findings.push({
-          category: "exact-conflict",
-          severity: "error",
-          file: filePath,
-          line: declarations[declarations.length - 1].line,
-          dependency: declarations[declarations.length - 1].name,
-          message: `Conflicting exact versions declared for '${normName}': ${uniquePins.join(" vs ")}`,
-          detail: `Declarations at lines ${declarations.map((d) => `${d.line} (${d.raw})`).join(", ")}`,
-        });
-      }
+    if (declarations.length <= 1) continue;
+    const loc = declarations.map((d) => d.line).join(", ");
+    const suffix = manifestContext ? ` in ${manifestContext}` : ` (lines ${loc})`;
+    findings.push({ category: "duplicate", severity: "warn", file: filePath, line: declarations[1].line, dependency: declarations[1].name, message: `Dependency '${declarations[1].name}' is declared multiple times${suffix}`, detail: `Multiple declarations found for normalized package '${normName}'` });
+    const exactPins = declarations.filter((d) => d.exactVersion !== null);
+    const uniquePins = [...new Set(exactPins.map((d) => d.exactVersion))];
+    if (uniquePins.length > 1) {
+      findings.push({ category: "exact-conflict", severity: "error", file: filePath, line: declarations[declarations.length - 1].line, dependency: declarations[declarations.length - 1].name, message: `Conflicting exact versions declared for '${normName}': ${uniquePins.join(" vs ")}`, detail: `Declarations at lines ${declarations.map((d) => `${d.line} (${d.raw})`).join(", ")}` });
     }
   }
-
-  const ok = findings.length === 0;
-  return { ok, dependencyCount, findings };
 }
 
 /**
@@ -299,15 +257,12 @@ export function diagnosePyproject(content, filePath = "pyproject.toml") {
   const norm = String(content).replace(/^\uFEFF/, "");
   const lines = norm.split(/\r?\n/);
   const rawRequirements = [];
-
   let currentSection = "";
   let inArray = false;
 
   for (let i = 0; i < lines.length; i++) {
     const lineNum = i + 1;
-    const rawLine = lines[i];
-    const trimmed = rawLine.trim();
-
+    const trimmed = lines[i].trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
 
     const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
@@ -316,65 +271,63 @@ export function diagnosePyproject(content, filePath = "pyproject.toml") {
       inArray = false;
       continue;
     }
+    if (!isPyprojectDepSection(currentSection)) continue;
 
-    const isDepSection =
-      currentSection === "project" ||
-      currentSection.startsWith("project.optional-dependencies") ||
-      currentSection === "tool.poetry.dependencies" ||
-      /^tool\.poetry\.group\.[^.]+\.dependencies$/.test(currentSection) ||
-      currentSection === "tool.flit.metadata";
-
-    if (!isDepSection) continue;
-
-    // Inside PEP 621 array: dependencies = [ ... ] or dev = [ ... ]
-    if (/^(dependencies|requires|[a-zA-Z0-9_.-]+)\s*=\s*\[/.test(trimmed)) {
-      inArray = true;
-      const inlineArrayMatch = trimmed.match(/=\s*\[(.*)\]/);
-      if (inlineArrayMatch) {
-        const items = inlineArrayMatch[1].split(",");
-        for (const it of items) {
-          const itemTrimmed = it.trim().replace(/^["']|["']$/g, "");
-          if (itemTrimmed) rawRequirements.push({ line: lineNum, text: itemTrimmed });
-        }
-        inArray = false;
-        continue;
-      }
-      continue;
-    }
-
-    if (inArray) {
-      if (trimmed.includes("]")) inArray = false;
-      const itemMatch = trimmed.match(/^["']([^"']+)["'],?/);
-      if (itemMatch) rawRequirements.push({ line: lineNum, text: itemMatch[1] });
-      continue;
-    }
-
-    // Poetry key-value format: requests = "^2.28.0" or requests = { version = "..." }
-    if (currentSection.includes("poetry")) {
-      const kvMatch = trimmed.match(/^([a-zA-Z0-9_.-]+)\s*=\s*(.*)$/);
-      if (kvMatch) {
-        const key = kvMatch[1];
-        if (key.toLowerCase() === "python") continue; // Python engine spec
-        const val = kvMatch[2].replace(/#.*$/, "").trim();
-        const strMatch = val.match(/^["']([^"']*)["']/);
-        if (strMatch) {
-          const spec = strMatch[1];
-          if (spec === "*") {
-            rawRequirements.push({ line: lineNum, text: key });
-          } else if (/^\d+\./.test(spec)) {
-            rawRequirements.push({ line: lineNum, text: `${key}==${spec}` });
-          } else {
-            rawRequirements.push({ line: lineNum, text: `${key}${spec}` });
-          }
-        } else if (val.startsWith("{")) {
-          const vMatch = val.match(/version\s*=\s*["']([^"']+)["']/);
-          rawRequirements.push({ line: lineNum, text: vMatch ? `${key}==${vMatch[1]}` : key });
-        }
-      }
-    }
+    inArray = processPyprojectLine(trimmed, lineNum, currentSection, inArray, rawRequirements);
   }
 
   return diagnosePythonDeclarations(rawRequirements, filePath, "pyproject.toml");
+}
+
+function isPyprojectDepSection(currentSection) {
+  return (
+    currentSection === "project" ||
+    currentSection.startsWith("project.optional-dependencies") ||
+    currentSection === "tool.poetry.dependencies" ||
+    /^tool\.poetry\.group\.[^.]+\.dependencies$/.test(currentSection) ||
+    currentSection === "tool.flit.metadata"
+  );
+}
+
+function processPyprojectLine(trimmed, lineNum, currentSection, inArray, rawRequirements) {
+  if (/^(dependencies|requires|[a-zA-Z0-9_.-]+)\s*=\s*\[/.test(trimmed)) {
+    const inline = trimmed.match(/=\s*\[(.*)\]/);
+    if (inline) {
+      for (const it of inline[1].split(",")) {
+        const item = it.trim().replace(/^["']|["']$/g, "");
+        if (item) rawRequirements.push({ line: lineNum, text: item });
+      }
+      return false;
+    }
+    return true;
+  }
+  if (inArray) {
+    const itemMatch = trimmed.match(/^["']([^"']+)["'],?/);
+    if (itemMatch) rawRequirements.push({ line: lineNum, text: itemMatch[1] });
+    return !trimmed.includes("]");
+  }
+  if (currentSection.includes("poetry")) {
+    parsePoetryDep(trimmed, lineNum, rawRequirements);
+  }
+  return false;
+}
+
+function parsePoetryDep(trimmed, lineNum, rawRequirements) {
+  const kvMatch = trimmed.match(/^([a-zA-Z0-9_.-]+)\s*=\s*(.*)$/);
+  if (!kvMatch) return;
+  const key = kvMatch[1];
+  if (key.toLowerCase() === "python") return;
+  const val = kvMatch[2].replace(/#.*$/, "").trim();
+  const strMatch = val.match(/^["']([^"']*)["']/);
+  if (strMatch) {
+    const spec = strMatch[1];
+    if (spec === "*") rawRequirements.push({ line: lineNum, text: key });
+    else if (/^\d+\./.test(spec)) rawRequirements.push({ line: lineNum, text: `${key}==${spec}` });
+    else rawRequirements.push({ line: lineNum, text: `${key}${spec}` });
+  } else if (val.startsWith("{")) {
+    const vMatch = val.match(/version\s*=\s*["']([^"']+)["']/);
+    rawRequirements.push({ line: lineNum, text: vMatch ? `${key}==${vMatch[1]}` : key });
+  }
 }
 
 /**
@@ -384,30 +337,8 @@ export function diagnosePyproject(content, filePath = "pyproject.toml") {
  * @returns {{ ok: boolean, dependencyCount: number, findings: Array<object> }}
  */
 export function diagnosePackageJson(pkgInput, filePath = "package.json") {
-  let pkg;
-  if (typeof pkgInput === "string") {
-    try {
-      pkg = JSON.parse(pkgInput.replace(/^\uFEFF/, ""));
-    } catch (e) {
-      return {
-        ok: false,
-        dependencyCount: 0,
-        findings: [
-          {
-            category: "syntax-error",
-            severity: "error",
-            file: filePath,
-            line: 1,
-            dependency: "package.json",
-            message: `Malformed package.json: ${e.message}`,
-            detail: e.stack || String(e),
-          },
-        ],
-      };
-    }
-  } else {
-    pkg = pkgInput || {};
-  }
+  const parsed = parsePackageJsonInput(pkgInput, filePath);
+  if (parsed.error) return parsed.error;
 
   const sections = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
   const findings = [];
@@ -415,94 +346,72 @@ export function diagnosePackageJson(pkgInput, filePath = "package.json") {
   let dependencyCount = 0;
 
   for (const section of sections) {
-    const deps = pkg[section];
+    const deps = parsed.pkg[section];
     if (!deps || typeof deps !== "object") continue;
-
     for (const [name, versionSpec] of Object.entries(deps)) {
       dependencyCount++;
-      const normName = name.trim().toLowerCase();
-      const spec = typeof versionSpec === "string" ? versionSpec.trim() : "";
-
-      // Check 1: Node.js stdlib shadowing
-      if (NODE_BUILTIN_MODULES.has(normName)) {
-        findings.push({
-          category: "stdlib-shadowing",
-          severity: "warn",
-          file: filePath,
-          section,
-          dependency: name,
-          message: `Dependency '${name}' in ${section} shadows Node.js built-in module`,
-          detail: "Built-in Node.js module; declaring it as an external package is redundant or dangerous",
-        });
-      }
-
-      // Check 2: Obsolete backports
-      if (OBSOLETE_BACKPORTS[normName]) {
-        findings.push({
-          category: "obsolete-backport",
-          severity: "warn",
-          file: filePath,
-          section,
-          dependency: name,
-          message: `Dependency '${name}' in ${section} is an obsolete backport: ${OBSOLETE_BACKPORTS[normName]}`,
-          detail: OBSOLETE_BACKPORTS[normName],
-        });
-      }
-
-      // Check 3: Unpinned
-      if (!spec || spec === "*" || spec.toLowerCase() === "latest") {
-        findings.push({
-          category: "unpinned",
-          severity: "warn",
-          file: filePath,
-          section,
-          dependency: name,
-          message: `Dependency '${name}' in ${section} is unpinned (${JSON.stringify(versionSpec)})`,
-          detail: "Unpinned npm dependency risks non-reproducible installations and supply-chain drift",
-        });
-      }
-
-      // Track exact versions for duplicate and conflict checks
-      const isExact = /^\d+\.\d+\.\d+([a-zA-Z0-9_.-]*)$/.test(spec);
-      const exactVersion = isExact ? spec : null;
-
-      if (!seenDeps.has(normName)) {
-        seenDeps.set(normName, []);
-      }
-      seenDeps.get(normName).push({ name, section, spec, exactVersion });
+      inspectPackageJsonDep(name, versionSpec, section, filePath, seenDeps, findings);
     }
   }
 
-  // Check 4 & 5: Duplicates & exact conflicts across sections
-  for (const [normName, declarations] of seenDeps.entries()) {
-    if (declarations.length > 1) {
-      const sectionNames = declarations.map((d) => d.section).join(" and ");
-      findings.push({
-        category: "duplicate",
-        severity: "warn",
-        file: filePath,
-        dependency: declarations[0].name,
-        message: `Dependency '${declarations[0].name}' is declared in multiple sections (${sectionNames})`,
-        detail: `Redundant declaration of '${normName}'`,
-      });
+  checkPackageJsonDuplicates(seenDeps, filePath, findings);
+  return { ok: findings.length === 0, dependencyCount, findings };
+}
 
-      const exacts = declarations.filter((d) => d.exactVersion !== null);
-      const uniqueExacts = [...new Set(exacts.map((d) => d.exactVersion))];
-      if (uniqueExacts.length > 1) {
-        findings.push({
-          category: "exact-conflict",
+function parsePackageJsonInput(pkgInput, filePath) {
+  if (typeof pkgInput !== "string") return { pkg: pkgInput || {}, error: null };
+  try {
+    return { pkg: JSON.parse(pkgInput.replace(/^\uFEFF/, "")), error: null };
+  } catch (e) {
+    return {
+      pkg: null,
+      error: {
+        ok: false,
+        dependencyCount: 0,
+        findings: [{
+          category: "syntax-error",
           severity: "error",
           file: filePath,
-          dependency: declarations[0].name,
-          message: `Exact version conflict for '${declarations[0].name}': declared as ${uniqueExacts.join(" vs ")} in ${sectionNames}`,
-          detail: declarations.map((d) => `${d.section}: ${d.spec}`).join(" | "),
-        });
-      }
-    }
+          line: 1,
+          dependency: "package.json",
+          message: `Malformed package.json: ${e.message}`,
+          detail: e.stack || String(e),
+        }],
+      },
+    };
+  }
+}
+
+function inspectPackageJsonDep(name, versionSpec, section, filePath, seenDeps, findings) {
+  const normName = name.trim().toLowerCase();
+  const spec = typeof versionSpec === "string" ? versionSpec.trim() : "";
+
+  if (NODE_BUILTIN_MODULES.has(normName)) {
+    findings.push({ category: "stdlib-shadowing", severity: "warn", file: filePath, section, dependency: name, message: `Dependency '${name}' in ${section} shadows Node.js built-in module`, detail: "Built-in Node.js module; declaring it as an external package is redundant or dangerous" });
+  }
+  if (OBSOLETE_BACKPORTS[normName]) {
+    findings.push({ category: "obsolete-backport", severity: "warn", file: filePath, section, dependency: name, message: `Dependency '${name}' in ${section} is an obsolete backport: ${OBSOLETE_BACKPORTS[normName]}`, detail: OBSOLETE_BACKPORTS[normName] });
+  }
+  if (!spec || spec === "*" || spec.toLowerCase() === "latest") {
+    findings.push({ category: "unpinned", severity: "warn", file: filePath, section, dependency: name, message: `Dependency '${name}' in ${section} is unpinned (${JSON.stringify(versionSpec)})`, detail: "Unpinned npm dependency risks non-reproducible installations and supply-chain drift" });
   }
 
-  const ok = findings.length === 0;
-  return { ok, dependencyCount, findings };
+  const isExact = /^\d+\.\d+\.\d+([a-zA-Z0-9_.-]*)$/.test(spec);
+  if (!seenDeps.has(normName)) seenDeps.set(normName, []);
+  seenDeps.get(normName).push({ name, section, spec, exactVersion: isExact ? spec : null });
+}
+
+function checkPackageJsonDuplicates(seenDeps, filePath, findings) {
+  for (const [normName, declarations] of seenDeps.entries()) {
+    if (declarations.length <= 1) continue;
+    const sectionNames = declarations.map((d) => d.section).join(" and ");
+    findings.push({ category: "duplicate", severity: "warn", file: filePath, dependency: declarations[0].name, message: `Dependency '${declarations[0].name}' is declared in multiple sections (${sectionNames})`, detail: `Redundant declaration of '${normName}'` });
+    const exacts = declarations.filter((d) => d.exactVersion !== null);
+    const uniqueExacts = [...new Set(exacts.map((d) => d.exactVersion))];
+    if (uniqueExacts.length > 1) {
+      findings.push({ category: "exact-conflict", severity: "error", file: filePath, dependency: declarations[0].name, message: `Exact version conflict for '${declarations[0].name}': declared as ${uniqueExacts.join(" vs ")} in ${sectionNames}`, detail: declarations.map((d) => `${d.section}: ${d.spec}`).join(" | ") });
+    }
+  }
 }
 
 const SKIP_DISCOVERY_DIRS = new Set([
@@ -516,118 +425,93 @@ const SKIP_DISCOVERY_DIRS = new Set([
  */
 export function diagnoseManifests(options = {}) {
   const root = options.root ? resolve(options.root) : process.cwd();
-  const manifestPaths = [];
-
-  if (Array.isArray(options.files) && options.files.length > 0) {
-    for (const f of options.files) {
-      const resolved = resolve(root, f);
-      if (existsSync(resolved)) manifestPaths.push(resolved);
-    }
-  } else if (existsSync(root)) {
-    const stat = statSync(root);
-    if (!stat.isDirectory()) {
-      manifestPaths.push(root);
-    } else {
-      const walk = (dir, depth = 0) => {
-        if (depth > 3) return;
-        let entries;
-        try {
-          entries = readdirSync(dir, { withFileTypes: true });
-        } catch {
-          return;
-        }
-        for (const entry of entries) {
-          if (entry.isDirectory()) {
-            if (!SKIP_DISCOVERY_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
-              walk(join(dir, entry.name), depth + 1);
-            }
-          } else if (entry.isFile()) {
-            const lower = entry.name.toLowerCase();
-            if (
-              lower === "package.json" ||
-              lower === "pyproject.toml" ||
-              lower === "requirements.txt" ||
-              (lower.startsWith("requirements") && lower.endsWith(".txt"))
-            ) {
-              manifestPaths.push(join(dir, entry.name));
-            }
-          }
-        }
-      };
-      walk(root);
-    }
-  }
+  const manifestPaths = collectManifestPaths(root, options.files);
 
   const allFindings = [];
   const manifestReports = [];
   let totalDependencies = 0;
 
   for (const manifestPath of manifestPaths) {
-    let content;
-    try {
-      content = readFileSync(manifestPath, "utf8");
-    } catch (e) {
-      allFindings.push({
-        category: "read-error",
-        severity: "error",
-        file: manifestPath,
-        message: `Failed to read manifest '${manifestPath}': ${e.message}`,
-        detail: e.stack || String(e),
-      });
-      continue;
-    }
-
-    const bName = basename(manifestPath).toLowerCase();
-    let report = null;
-
-    if (bName === "package.json") {
-      report = diagnosePackageJson(content, manifestPath);
-    } else if (bName === "pyproject.toml") {
-      report = diagnosePyproject(content, manifestPath);
-    } else if (bName.includes("requirements") && bName.endsWith(".txt")) {
-      report = diagnoseRequirements(content, manifestPath);
-    }
-
+    const report = diagnoseOneManifestFile(manifestPath, allFindings);
     if (report) {
-      manifestReports.push({
-        path: manifestPath,
-        type: bName === "package.json" ? "package.json" : bName === "pyproject.toml" ? "pyproject" : "requirements",
-        dependencyCount: report.dependencyCount,
-        findingCount: report.findings.length,
-      });
+      manifestReports.push(report);
       totalDependencies += report.dependencyCount;
-      allFindings.push(...report.findings);
     }
   }
 
-  const byCategory = {
-    "stdlib-shadowing": 0,
-    "obsolete-backport": 0,
-    "unpinned": 0,
-    "duplicate": 0,
-    "exact-conflict": 0,
-  };
-
-  for (const f of allFindings) {
-    if (Object.prototype.hasOwnProperty.call(byCategory, f.category)) {
-      byCategory[f.category]++;
-    }
-  }
-
-  const ok = allFindings.length === 0;
-
+  const byCategory = tallyFindingsByCategory(allFindings);
   return {
-    ok,
+    ok: allFindings.length === 0,
     manifests: manifestReports,
-    summary: {
-      manifestCount: manifestReports.length,
-      totalDependencies,
-      totalFindings: allFindings.length,
-      byCategory,
-    },
+    summary: { manifestCount: manifestReports.length, totalDependencies, totalFindings: allFindings.length, byCategory },
     findings: allFindings,
     disclaimer: DISCLAIMER,
   };
+}
+
+function collectManifestPaths(root, explicitFiles) {
+  const manifestPaths = [];
+  if (Array.isArray(explicitFiles) && explicitFiles.length > 0) {
+    for (const f of explicitFiles) {
+      const resolved = resolve(root, f);
+      if (existsSync(resolved)) manifestPaths.push(resolved);
+    }
+    return manifestPaths;
+  }
+  if (!existsSync(root)) return manifestPaths;
+  const stat = statSync(root);
+  if (!stat.isDirectory()) return [root];
+
+  const walk = (dir, depth = 0) => {
+    if (depth > 3) return;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.isDirectory() && !SKIP_DISCOVERY_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+        walk(join(dir, entry.name), depth + 1);
+      } else if (entry.isFile()) {
+        const lower = entry.name.toLowerCase();
+        if (lower === "package.json" || lower === "pyproject.toml" || lower === "requirements.txt" || (lower.startsWith("requirements") && lower.endsWith(".txt"))) {
+          manifestPaths.push(join(dir, entry.name));
+        }
+      }
+    }
+  };
+  walk(root);
+  return manifestPaths;
+}
+
+function diagnoseOneManifestFile(manifestPath, allFindings) {
+  let content;
+  try {
+    content = readFileSync(manifestPath, "utf8");
+  } catch (e) {
+    allFindings.push({ category: "read-error", severity: "error", file: manifestPath, message: `Failed to read manifest '${manifestPath}': ${e.message}`, detail: e.stack || String(e) });
+    return null;
+  }
+
+  const bName = basename(manifestPath).toLowerCase();
+  let report = null;
+  if (bName === "package.json") report = diagnosePackageJson(content, manifestPath);
+  else if (bName === "pyproject.toml") report = diagnosePyproject(content, manifestPath);
+  else if (bName.includes("requirements") && bName.endsWith(".txt")) report = diagnoseRequirements(content, manifestPath);
+
+  if (!report) return null;
+  allFindings.push(...report.findings);
+  return {
+    path: manifestPath,
+    type: bName === "package.json" ? "package.json" : bName === "pyproject.toml" ? "pyproject" : "requirements",
+    dependencyCount: report.dependencyCount,
+    findingCount: report.findings.length,
+  };
+}
+
+function tallyFindingsByCategory(findings) {
+  const byCategory = { "stdlib-shadowing": 0, "obsolete-backport": 0, "unpinned": 0, "duplicate": 0, "exact-conflict": 0 };
+  for (const f of findings) {
+    if (Object.prototype.hasOwnProperty.call(byCategory, f.category)) byCategory[f.category]++;
+  }
+  return byCategory;
 }
 
 /* ------------------------------------------------------------------ CLI Driver */
@@ -651,6 +535,14 @@ Disclaimer:
 }
 
 function runCli(argv = process.argv.slice(2)) {
+  const { root, json, check, targetFiles } = parseDoctorCliArgs(argv);
+  const report = diagnoseManifests({ root, files: targetFiles.length > 0 ? targetFiles : undefined });
+  printDoctorCliOutput(report, json);
+  if (check && !report.ok) process.exit(1);
+  process.exit(0);
+}
+
+function parseDoctorCliArgs(argv) {
   let root = ".";
   let json = false;
   let check = false;
@@ -658,59 +550,34 @@ function runCli(argv = process.argv.slice(2)) {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "-h" || arg === "--help") {
-      printUsage();
-      process.exit(0);
-    } else if (arg === "--json") {
-      json = true;
-    } else if (arg === "--check") {
-      check = true;
-    } else if (arg === "--root") {
-      root = argv[++i];
-    } else if (arg.startsWith("--root=")) {
-      root = arg.slice("--root=".length);
-    } else if (!arg.startsWith("-")) {
-      targetFiles.push(arg);
-    } else {
-      process.stderr.write(`Unknown option: ${arg}\n`);
-      process.exit(2);
-    }
+    if (arg === "-h" || arg === "--help") { printUsage(); process.exit(0); }
+    if (arg === "--json") { json = true; continue; }
+    if (arg === "--check") { check = true; continue; }
+    if (arg === "--root") { root = argv[++i]; continue; }
+    if (arg.startsWith("--root=")) { root = arg.slice("--root=".length); continue; }
+    if (!arg.startsWith("-")) { targetFiles.push(arg); continue; }
+    process.stderr.write(`Unknown option: ${arg}\n`);
+    process.exit(2);
   }
+  return { root, json, check, targetFiles };
+}
 
-  const report = diagnoseManifests({
-    root,
-    files: targetFiles.length > 0 ? targetFiles : undefined,
-  });
-
+function printDoctorCliOutput(report, json) {
   if (json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
-  } else {
-    process.stdout.write(`\n=== Dependency Manifest Diagnosis ===\n`);
-    process.stdout.write(`Manifests scanned: ${report.summary.manifestCount}\n`);
-    process.stdout.write(`Total dependencies: ${report.summary.totalDependencies}\n`);
-    process.stdout.write(`Total findings: ${report.summary.totalFindings}\n`);
-    process.stdout.write(`  - stdlib shadowing: ${report.summary.byCategory["stdlib-shadowing"]}\n`);
-    process.stdout.write(`  - obsolete backports: ${report.summary.byCategory["obsolete-backport"]}\n`);
-    process.stdout.write(`  - unpinned: ${report.summary.byCategory["unpinned"]}\n`);
-    process.stdout.write(`  - duplicates: ${report.summary.byCategory["duplicate"]}\n`);
-    process.stdout.write(`  - exact conflicts: ${report.summary.byCategory["exact-conflict"]}\n\n`);
-
-    if (report.findings.length > 0) {
-      for (const f of report.findings) {
-        const prefix = f.severity === "error" ? "🔴" : "⚠️";
-        process.stdout.write(`${prefix} [${f.category}] ${f.file}${f.line ? `:${f.line}` : ""}: ${f.message}\n`);
-      }
-      process.stdout.write("\n");
-    } else {
-      process.stdout.write("✨ All checked manifests are clean.\n\n");
+    return;
+  }
+  process.stdout.write(`\n=== Dependency Manifest Diagnosis ===\nManifests scanned: ${report.summary.manifestCount}\nTotal dependencies: ${report.summary.totalDependencies}\nTotal findings: ${report.summary.totalFindings}\n  - stdlib shadowing: ${report.summary.byCategory["stdlib-shadowing"]}\n  - obsolete backports: ${report.summary.byCategory["obsolete-backport"]}\n  - unpinned: ${report.summary.byCategory["unpinned"]}\n  - duplicates: ${report.summary.byCategory["duplicate"]}\n  - exact conflicts: ${report.summary.byCategory["exact-conflict"]}\n\n`);
+  if (report.findings.length > 0) {
+    for (const f of report.findings) {
+      const prefix = f.severity === "error" ? "🔴" : "⚠️";
+      process.stdout.write(`${prefix} [${f.category}] ${f.file}${f.line ? `:${f.line}` : ""}: ${f.message}\n`);
     }
-    process.stdout.write(`Notice: ${report.disclaimer}\n\n`);
+    process.stdout.write("\n");
+  } else {
+    process.stdout.write("✨ All checked manifests are clean.\n\n");
   }
-
-  if (check && !report.ok) {
-    process.exit(1);
-  }
-  process.exit(0);
+  process.stdout.write(`Notice: ${report.disclaimer}\n\n`);
 }
 
 const isDirectRun = Boolean(process.argv[1]) && (() => {
