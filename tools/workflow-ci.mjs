@@ -3,8 +3,9 @@
  * tools/workflow-ci.mjs — CI-гейты workflow (check-ci): вынесены из workflow.mjs 1:1.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, rmSync, realpathSync } from "node:fs";
 import { join, resolve, relative, dirname, basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import { checkCodeSize, loadConfig as loadCodeSizeConfig } from "./code-size.mjs";
 import { checkTripwire } from "./tripwire.mjs";
 import { scanRepo } from "./debt-ledger.mjs";
@@ -1075,26 +1076,30 @@ export function resolveSettleGitTargets(root, change, worktreePaths, branches) {
     const out = execFileSync("git", ["worktree", "list", "--porcelain"], {
       cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"], timeout: 5000,
     });
-    let currentPath = null;
+    const state = { currentPath: null };
     for (const line of out.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        currentPath = line.slice("worktree ".length).trim();
-        const resolvedPath = resolve(root, currentPath);
-        if (resolvedPath !== resolve(root) && isPathInsideRoot(root, resolvedPath) && existsSync(resolvedPath)) {
-          const base = basename(currentPath);
-          if (base === change || base === `feature${change}` || base === `feat-${change}` || currentPath.includes(change)) {
-            worktreePaths.add(resolvedPath);
-          }
-        }
-      } else if (line.startsWith("branch refs/heads/") && currentPath) {
-        const b = line.slice("branch refs/heads/".length).trim();
-        const resolvedPath = resolve(root, currentPath);
-        if (resolvedPath !== resolve(root) && worktreePaths.has(resolvedPath)) {
-          if (!isProtectedRefName(b)) branches.add(b);
-        }
-      }
+      parseWorktreeLine(line, root, change, worktreePaths, branches, state);
     }
   } catch {}
+}
+
+function parseWorktreeLine(line, root, change, worktreePaths, branches, state) {
+  if (line.startsWith("worktree ")) {
+    state.currentPath = line.slice("worktree ".length).trim();
+    const resolvedPath = resolve(root, state.currentPath);
+    if (resolvedPath !== resolve(root) && isPathInsideRoot(root, resolvedPath) && existsSync(resolvedPath)) {
+      const base = basename(state.currentPath);
+      if (base === change || base === `feature${change}` || base === `feat-${change}` || state.currentPath.includes(change)) {
+        worktreePaths.add(resolvedPath);
+      }
+    }
+  } else if (line.startsWith("branch refs/heads/") && state.currentPath) {
+    const b = line.slice("branch refs/heads/".length).trim();
+    const resolvedPath = resolve(root, state.currentPath);
+    if (resolvedPath !== resolve(root) && worktreePaths.has(resolvedPath)) {
+      if (!isProtectedRefName(b)) branches.add(b);
+    }
+  }
 }
 
 export function resolveSettleTargets(root, change) {
@@ -1111,71 +1116,76 @@ export function resolveSettleTargets(root, change) {
   }
 
   resolveSettleDocTargets(root, change, worktreePaths, branches);
-
-  const wtBase = join(root, ".tmp", "worktrees");
-  if (existsSync(wtBase)) {
-    try {
-      for (const entry of readdirSync(wtBase)) {
-        if (entry === change || entry === `feature${change}` || entry === `feat-${change}` || entry === `feat_${change}` || (change.length >= 3 && entry.includes(change))) {
-          const p = resolve(wtBase, entry);
-          if (existsSync(p) && isPathInsideRoot(root, p) && resolve(p) !== resolve(root)) {
-            worktreePaths.add(p);
-          }
-        }
-      }
-    } catch {}
-  }
-
+  resolveSettleDiskWorktrees(root, change, worktreePaths);
   resolveSettleGitTargets(root, change, worktreePaths, branches);
-
-  if (isInsideGitRepo(root)) {
-    const existingLocalBranches = getLocalBranches(root);
-    const candidateBranches = new Set([
-      `feat/${change}`,
-      `fix/${change}`,
-      `feat-${change}`,
-      `fix-${change}`,
-    ]);
-    if (/^(?:feat|fix|feature)[/-]/i.test(change)) {
-      candidateBranches.add(change);
-    }
-    for (const b of candidateBranches) {
-      if (existingLocalBranches.has(b)) {
-        branches.add(b);
-      }
-    }
-
-    for (const b of Array.from(branches)) {
-      if (!existingLocalBranches.has(b) || isProtectedRefName(b) || (currentBranch && isRefMatchingCurrentBranch(b, currentBranch))) {
-        branches.delete(b);
-      }
-    }
-  } else {
-    branches.clear();
-  }
+  resolveSettleBranchCandidates(root, change, currentBranch, branches);
 
   return { worktreePaths, branches };
+}
+
+function resolveSettleDiskWorktrees(root, change, worktreePaths) {
+  const wtBase = join(root, ".tmp", "worktrees");
+  if (!existsSync(wtBase)) return;
+  try {
+    for (const entry of readdirSync(wtBase)) {
+      if (entry === change || entry === `feature${change}` || entry === `feat-${change}` || entry === `feat_${change}` || (change.length >= 3 && entry.includes(change))) {
+        const p = resolve(wtBase, entry);
+        if (existsSync(p) && isPathInsideRoot(root, p) && resolve(p) !== resolve(root)) {
+          worktreePaths.add(p);
+        }
+      }
+    }
+  } catch {}
+}
+
+function resolveSettleBranchCandidates(root, change, currentBranch, branches) {
+  if (!isInsideGitRepo(root)) {
+    branches.clear();
+    return;
+  }
+  const existingLocalBranches = getLocalBranches(root);
+  const candidateBranches = new Set([
+    `feat/${change}`,
+    `fix/${change}`,
+    `feat-${change}`,
+    `fix-${change}`,
+  ]);
+  if (/^(?:feat|fix|feature)[/-]/i.test(change)) {
+    candidateBranches.add(change);
+  }
+  for (const b of candidateBranches) {
+    if (existingLocalBranches.has(b)) branches.add(b);
+  }
+  for (const b of Array.from(branches)) {
+    if (!existingLocalBranches.has(b) || isProtectedRefName(b) || (currentBranch && isRefMatchingCurrentBranch(b, currentBranch))) {
+      branches.delete(b);
+    }
+  }
 }
 
 export function removeSettleWorktrees(root, worktreePaths) {
   for (const wtPath of worktreePaths) {
     if (isPathInsideRoot(root, wtPath) && resolve(wtPath) !== resolve(root)) {
-      if (isInsideGitRepo(root)) {
-        try {
-          execFileSync("git", ["worktree", "remove", "--force", wtPath], {
-            cwd: root, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
-          });
-        } catch {}
-      }
-      try {
-        rmSync(wtPath, { recursive: true, force: true });
-      } catch (err) {
-        throw new Error(`failed to remove worktree at ${wtPath}: ${err.message}`);
-      }
-      if (existsSync(wtPath)) {
-        throw new Error(`failed to remove worktree at ${wtPath}: directory still exists`);
-      }
+      removeSingleSettleWorktree(root, wtPath);
     }
+  }
+}
+
+function removeSingleSettleWorktree(root, wtPath) {
+  if (isInsideGitRepo(root)) {
+    try {
+      execFileSync("git", ["worktree", "remove", "--force", wtPath], {
+        cwd: root, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+      });
+    } catch {}
+  }
+  try {
+    rmSync(wtPath, { recursive: true, force: true });
+  } catch (err) {
+    throw new Error(`failed to remove worktree at ${wtPath}: ${err.message}`);
+  }
+  if (existsSync(wtPath)) {
+    throw new Error(`failed to remove worktree at ${wtPath}: directory still exists`);
   }
 }
 
@@ -1236,4 +1246,7 @@ export function cmdSettle(root, flags = {}) {
   return 0;
 }
 
+if (process.argv[1] && (() => { try { const a = resolve(process.argv[1]).toLowerCase(), b = fileURLToPath(import.meta.url).toLowerCase(); return a === b || realpathSync(process.argv[1]).toLowerCase() === realpathSync(fileURLToPath(import.meta.url)).toLowerCase(); } catch { return false; } })()) {
+  // workflow-ci is a library module; direct invocation is a clean no-op
+}
 

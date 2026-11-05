@@ -128,104 +128,7 @@ export function scanSkillSecurity(skillDir, options = {}) {
   const files = walkFiles(skillDir, { ignoreFixtures: options.ignoreFixtures });
 
   for (const file of files) {
-    const rel = relative(root, file).replace(/\\/g, "/");
-    const skillRel = relative(skillDir, file).replace(/\\/g, "/");
-    const ext = "." + (file.split(".").pop() || "").toLowerCase();
-
-    // Skip non-text binaries
-    if (!TEXT_EXTENSIONS.has(ext) && !SCRIPT_EXTENSIONS.has(ext)) {
-      continue;
-    }
-
-    let content;
-    try {
-      content = readFileSync(file, "utf8");
-    } catch {
-      continue;
-    }
-
-    // 1. Shell Pipes
-    for (const pat of SHELL_PIPE_PATTERNS) {
-      if (pat.test(content)) {
-        findings.push({
-          skill: skillName,
-          file: rel,
-          type: "error",
-          rule: "security-shell-pipe",
-          message: `Dangerous shell pipe detected in ${skillRel}`,
-        });
-        break;
-      }
-    }
-
-    // 2. Credentials
-    for (const { rule, re } of CREDENTIAL_PATTERNS) {
-      if (re.test(content)) {
-        // Exclude dummy examples with placeholder markers
-        if (content.includes("AKIAIOSFODNN7EXAMPLE") || content.includes("EXAMPLEKEY")) continue;
-        findings.push({
-          skill: skillName,
-          file: rel,
-          type: "error",
-          rule: `security-credential-${rule}`,
-          message: `Potential hardcoded credential (${rule}) detected in ${skillRel}`,
-        });
-        break;
-      }
-    }
-
-    // 3. Env dumps
-    for (const { rule, re } of ENV_DUMP_PATTERNS) {
-      if (re.test(content)) {
-        findings.push({
-          skill: skillName,
-          file: rel,
-          type: "error",
-          rule: `security-env-dump`,
-          message: `Process environment dump detected (${rule}) in ${skillRel}`,
-        });
-        break;
-      }
-    }
-
-    // 4. Network calls in scripts
-    const isScript = SCRIPT_EXTENSIONS.has(ext) && (skillRel.startsWith("scripts/") || skillRel.startsWith("src/"));
-    if (isScript) {
-      // Check if script has an internal netguard / allowlist definition
-      const hasNetguard = content.includes("ALLOWED_HOSTS") || content.includes("ALLOWLIST") || content.includes("_netguard");
-      for (const pat of NETWORK_CALL_PATTERNS) {
-        if (pat.test(content)) {
-          if (!hasNetworkDeclaration && !hasNetguard) {
-            findings.push({
-              skill: skillName,
-              file: rel,
-              type: "error",
-              rule: "security-undeclared-network",
-              message: `Undeclared network call in ${skillRel} without frontmatter network declaration or host allowlist`,
-            });
-            break;
-          }
-        }
-      }
-    }
-
-    // 5. Obfuscation
-    for (const { rule, re } of OBFUSCATION_PATTERNS) {
-      if (re.test(content)) {
-        // Skip eval-function in non-scripts or doc references
-        if (rule === "eval-function") {
-          if (!isScript || skillRel.includes("test") || skillRel.includes("fixture")) continue;
-        }
-        findings.push({
-          skill: skillName,
-          file: rel,
-          type: "error",
-          rule: `security-obfuscation`,
-          message: `Potential code obfuscation or dynamic code execution (${rule}) in ${skillRel}`,
-        });
-        break;
-      }
-    }
+    scanFileSecurity(file, root, skillDir, skillName, hasNetworkDeclaration, findings);
   }
 
   const blocked = findings.some((f) => f.type === "error");
@@ -234,6 +137,77 @@ export function scanSkillSecurity(skillDir, options = {}) {
     blocked,
     findings,
   };
+}
+
+function scanFileSecurity(file, root, skillDir, skillName, hasNetworkDeclaration, findings) {
+  const rel = relative(root, file).replace(/\\/g, "/");
+  const skillRel = relative(skillDir, file).replace(/\\/g, "/");
+  const ext = "." + (file.split(".").pop() || "").toLowerCase();
+  if (!TEXT_EXTENSIONS.has(ext) && !SCRIPT_EXTENSIONS.has(ext)) return;
+
+  let content;
+  try {
+    content = readFileSync(file, "utf8");
+  } catch {
+    return;
+  }
+
+  checkShellPipes(content, rel, skillRel, skillName, findings);
+  checkCredentials(content, rel, skillRel, skillName, findings);
+  checkEnvDumps(content, rel, skillRel, skillName, findings);
+  const isScript = SCRIPT_EXTENSIONS.has(ext) && (skillRel.startsWith("scripts/") || skillRel.startsWith("src/"));
+  if (isScript) checkNetworkCalls(content, rel, skillRel, skillName, hasNetworkDeclaration, findings);
+  checkObfuscation(content, rel, skillRel, skillName, isScript, findings);
+}
+
+function checkShellPipes(content, rel, skillRel, skillName, findings) {
+  for (const pat of SHELL_PIPE_PATTERNS) {
+    if (pat.test(content)) {
+      findings.push({ skill: skillName, file: rel, type: "error", rule: "security-shell-pipe", message: `Dangerous shell pipe detected in ${skillRel}` });
+      break;
+    }
+  }
+}
+
+function checkCredentials(content, rel, skillRel, skillName, findings) {
+  for (const { rule, re } of CREDENTIAL_PATTERNS) {
+    if (re.test(content)) {
+      if (content.includes("AKIAIOSFODNN7EXAMPLE") || content.includes("EXAMPLEKEY")) continue;
+      findings.push({ skill: skillName, file: rel, type: "error", rule: `security-credential-${rule}`, message: `Potential hardcoded credential (${rule}) detected in ${skillRel}` });
+      break;
+    }
+  }
+}
+
+function checkEnvDumps(content, rel, skillRel, skillName, findings) {
+  for (const { rule, re } of ENV_DUMP_PATTERNS) {
+    if (re.test(content)) {
+      findings.push({ skill: skillName, file: rel, type: "error", rule: "security-env-dump", message: `Process environment dump detected (${rule}) in ${skillRel}` });
+      break;
+    }
+  }
+}
+
+function checkNetworkCalls(content, rel, skillRel, skillName, hasNetworkDeclaration, findings) {
+  const hasNetguard = content.includes("ALLOWED_HOSTS") || content.includes("ALLOWLIST") || content.includes("_netguard");
+  for (const pat of NETWORK_CALL_PATTERNS) {
+    if (pat.test(content)) {
+      if (!hasNetworkDeclaration && !hasNetguard) {
+        findings.push({ skill: skillName, file: rel, type: "error", rule: "security-undeclared-network", message: `Undeclared network call in ${skillRel} without frontmatter network declaration or host allowlist` });
+        break;
+      }
+    }
+  }
+}
+
+function checkObfuscation(content, rel, skillRel, skillName, isScript, findings) {
+  for (const { rule, re } of OBFUSCATION_PATTERNS) {
+    if (re.test(content)) {
+      if (rule === "eval-function" && (!isScript || skillRel.includes("test") || skillRel.includes("fixture"))) continue;
+      findings.push({ skill: skillName, file: rel, type: "error", rule: "security-obfuscation", message: `Potential code obfuscation or dynamic code execution (${rule}) in ${skillRel}` });
+      break;
+    }
+  }
 }
 
 /* ----------------------------------------------------------------- Evals Audit */
@@ -319,47 +293,10 @@ export function auditSkillEvals(skillDir, options = {}) {
 
   let validCases = 0;
   for (let i = 0; i < data.evals.length; i++) {
-    const ev = data.evals[i];
-    if (!ev || typeof ev !== "object") {
-      findings.push({
-        skill: skillName,
-        file: rel,
-        type: "error",
-        rule: "invalid-eval-contract",
-        message: `eval case at index ${i} is not an object`,
-      });
-      continue;
+    if (validateEvalItem(data.evals[i], i, skillName, rel, findings)) {
+      validCases++;
     }
-    if (!ev.prompt || typeof ev.prompt !== "string" || !ev.prompt.trim()) {
-      findings.push({
-        skill: skillName,
-        file: rel,
-        type: "error",
-        rule: "invalid-eval-contract",
-        message: `eval case ${ev.id || i} missing prompt string`,
-      });
-    }
-    if (!ev.expected_output || typeof ev.expected_output !== "string" || !ev.expected_output.trim()) {
-      findings.push({
-        skill: skillName,
-        file: rel,
-        type: "error",
-        rule: "invalid-eval-contract",
-        message: `eval case ${ev.id || i} missing expected_output string`,
-      });
-    }
-    if (!Array.isArray(ev.assertions) || ev.assertions.length === 0) {
-      findings.push({
-        skill: skillName,
-        file: rel,
-        type: "error",
-        rule: "invalid-eval-contract",
-        message: `eval case ${ev.id || i} must have a non-empty assertions array`,
-      });
-    }
-    validCases++;
   }
-
   return {
     ok: findings.length === 0,
     evalCount: validCases,
@@ -379,72 +316,20 @@ export function auditSkillEvals(skillDir, options = {}) {
  * @returns {object} { triggered: boolean, score: number, matchedTerms: string[], reason: string }
  */
 export function evaluateSkillTrigger(skill, prompt, options = {}) {
-  let name = "";
-  let description = "";
-
-  if (typeof skill === "string") {
-    const sFile = join(skill, "SKILL.md");
-    if (existsSync(sFile)) {
-      const parsed = parseSkillFrontmatter(readFileSync(sFile, "utf8"));
-      name = parsed.name || basename(skill);
-      description = parsed.description;
-    } else {
-      name = basename(skill);
-    }
-  } else if (skill && typeof skill === "object") {
-    name = skill.name || "";
-    description = skill.description || "";
-  }
-
+  const { name, description } = resolveSkillMeta(skill);
   const normPrompt = String(prompt || "").toLowerCase();
   const normDesc = String(description || "").toLowerCase();
-  const nameParts = name.toLowerCase().split(/[-_]/).filter((p) => p.length > 2);
+  const { terms, matchedTerms } = extractTriggerTerms(name, normDesc, normPrompt);
 
-  // Extract trigger guidance following "use when", "use for", "when...", etc.
-  const triggerMatch = /(?:use when|use for|use this when|useful for|when the user)\s+([^.]+)/i.exec(normDesc);
-  const triggerScope = triggerMatch ? triggerMatch[1] : normDesc;
-
-  // Key terms
-  const terms = Array.from(new Set([
-    ...nameParts,
-    ...triggerScope.match(/\b[a-z]{3,}\b/g) || [],
-  ])).filter((t) => !["the", "and", "for", "with", "when", "this", "that", "user"].includes(t));
-
-  const matchedTerms = [];
-  for (const term of terms) {
-    if (new RegExp(`\\b${term}`, "i").test(normPrompt) || (term.length >= 4 && normPrompt.includes(term))) {
-      matchedTerms.push(term);
-    }
-  }
-
-  // Exact phrase match in trigger scope
-  const hasPhraseMatch = terms.some((t) => normPrompt.includes(t));
   const exactNameMatch = normPrompt.includes(name.toLowerCase());
+  const { nearMiss, reason: nearMissReason } = checkTriggerNearMiss(normPrompt, options.nearMissIndicators);
 
-  // Near-miss negative indicators:
-  // If the prompt mentions only one sub-part of the name, but is in a completely different domain
-  let nearMiss = false;
-  let reason = "";
-
-  if (options.nearMissIndicators) {
-    for (const indicator of options.nearMissIndicators) {
-      if (normPrompt.includes(indicator.toLowerCase())) {
-        nearMiss = true;
-        reason = `Matches near-miss indicator '${indicator}'`;
-        break;
-      }
-    }
-  }
-
-  // Score calculation
   const score = exactNameMatch ? 1.0 : (matchedTerms.length / Math.max(1, terms.length / 3));
   const triggered = !nearMiss && (exactNameMatch || (matchedTerms.length >= 2 && score >= 0.5));
 
-  if (!reason) {
-    reason = triggered
-      ? `Triggered with matches: ${matchedTerms.join(", ")}`
-      : (matchedTerms.length > 0 ? `Near-miss: matched only ${matchedTerms.join(", ")} below trigger threshold` : "No matching terms");
-  }
+  const reason = nearMissReason || (triggered
+    ? `Triggered with matches: ${matchedTerms.join(", ")}`
+    : (matchedTerms.length > 0 ? `Near-miss: matched only ${matchedTerms.join(", ")} below trigger threshold` : "No matching terms"));
 
   return {
     triggered,
@@ -515,131 +400,146 @@ export function lintSkillRegistry(root, options = {}) {
     return { ok: false, findings };
   }
 
-  // 1. Membership: unique directories and SKILL.md existence
+  lintSkillDirectories(skillsDir, findings);
+  lintSkillsLock(baseRoot, findings);
+  lintReadmeSkills(baseRoot, findings);
+
+  const hasErrors = findings.some((f) => f.type === "error");
+  return { ok: !hasErrors, findings };
+}
+
+function validateEvalItem(ev, i, skillName, rel, findings) {
+  if (!ev || typeof ev !== "object") {
+    findings.push({ skill: skillName, file: rel, type: "error", rule: "invalid-eval-contract", message: `eval case at index ${i} is not an object` });
+    return false;
+  }
+  if (!ev.prompt || typeof ev.prompt !== "string" || !ev.prompt.trim()) {
+    findings.push({ skill: skillName, file: rel, type: "error", rule: "invalid-eval-contract", message: `eval case ${ev.id || i} missing prompt string` });
+  }
+  if (!ev.expected_output || typeof ev.expected_output !== "string" || !ev.expected_output.trim()) {
+    findings.push({ skill: skillName, file: rel, type: "error", rule: "invalid-eval-contract", message: `eval case ${ev.id || i} missing expected_output string` });
+  }
+  if (!Array.isArray(ev.assertions) || ev.assertions.length === 0) {
+    findings.push({ skill: skillName, file: rel, type: "error", rule: "invalid-eval-contract", message: `eval case ${ev.id || i} must have a non-empty assertions array` });
+  }
+  return true;
+}
+
+function resolveSkillMeta(skill) {
+  if (typeof skill === "string") {
+    const sFile = join(skill, "SKILL.md");
+    if (existsSync(sFile)) {
+      const parsed = parseSkillFrontmatter(readFileSync(sFile, "utf8"));
+      return { name: parsed.name || basename(skill), description: parsed.description || "" };
+    }
+    return { name: basename(skill), description: "" };
+  }
+  if (skill && typeof skill === "object") {
+    return { name: skill.name || "", description: skill.description || "" };
+  }
+  return { name: "", description: "" };
+}
+
+function extractTriggerTerms(name, normDesc, normPrompt) {
+  const nameParts = name.toLowerCase().split(/[-_]/).filter((p) => p.length > 2);
+  const triggerMatch = /(?:use when|use for|use this when|useful for|when the user)\s+([^.]+)/i.exec(normDesc);
+  const triggerScope = triggerMatch ? triggerMatch[1] : normDesc;
+  const terms = Array.from(new Set([
+    ...nameParts,
+    ...triggerScope.match(/\b[a-z]{3,}\b/g) || [],
+  ])).filter((t) => !["the", "and", "for", "with", "when", "this", "that", "user"].includes(t));
+
+  const matchedTerms = [];
+  for (const term of terms) {
+    if (new RegExp(`\\b${term}`, "i").test(normPrompt) || (term.length >= 4 && normPrompt.includes(term))) {
+      matchedTerms.push(term);
+    }
+  }
+  return { terms, matchedTerms };
+}
+
+function checkTriggerNearMiss(normPrompt, indicators) {
+  if (!indicators) return { nearMiss: false, reason: "" };
+  for (const indicator of indicators) {
+    if (normPrompt.includes(indicator.toLowerCase())) {
+      return { nearMiss: true, reason: `Matches near-miss indicator '${indicator}'` };
+    }
+  }
+  return { nearMiss: false, reason: "" };
+}
+
+function lintSkillDirectories(skillsDir, findings) {
   const entries = readdirSync(skillsDir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && !e.name.startsWith("."))
     .map((e) => e.name);
 
   const seenNames = new Map();
   for (const dirName of entries) {
-    const sDir = join(skillsDir, dirName);
-    const sFile = join(sDir, "SKILL.md");
-    if (!existsSync(sFile)) {
-      findings.push({
-        skill: dirName,
-        file: `skills/${dirName}`,
-        type: "error",
-        rule: "orphan-skill-directory",
-        message: `Directory skills/${dirName} does not contain a SKILL.md`,
-      });
-      continue;
-    }
-
-    try {
-      const text = readFileSync(sFile, "utf8");
-      const { name, description } = parseSkillFrontmatter(text);
-      const declared = name || dirName;
-
-      if (seenNames.has(declared)) {
-        findings.push({
-          skill: dirName,
-          file: `skills/${dirName}/SKILL.md`,
-          type: "error",
-          rule: "duplicate-skill-name",
-          message: `Skill name '${declared}' already declared by skills/${seenNames.get(declared)}`,
-        });
-      } else {
-        seenNames.set(declared, dirName);
-      }
-
-      // 4. Trigger lint on description
-      if (!description) {
-        findings.push({
-          skill: dirName,
-          file: `skills/${dirName}/SKILL.md`,
-          type: "error",
-          rule: "trigger-lint-empty",
-          message: `Skill '${dirName}' is missing frontmatter description for routing`,
-        });
-      } else if (!/(?:use when|use for|when|use to|useful for)/i.test(description)) {
-        findings.push({
-          skill: dirName,
-          file: `skills/${dirName}/SKILL.md`,
-          type: "recommendation",
-          rule: "trigger-lint-directive",
-          message: `Description for '${dirName}' lacks an actionable trigger directive ('Use when...', 'Use for...')`,
-        });
-      }
-    } catch (err) {
-      findings.push({
-        skill: dirName,
-        file: `skills/${dirName}/SKILL.md`,
-        type: "error",
-        rule: "unreadable-skill-file",
-        message: `Cannot parse SKILL.md: ${err.message}`,
-      });
-    }
+    lintOneSkillDir(dirName, skillsDir, seenNames, findings);
   }
+}
 
-  // 2. Lock lint: skills-lock.json integrity
+function lintOneSkillDir(dirName, skillsDir, seenNames, findings) {
+  const sDir = join(skillsDir, dirName);
+  const sFile = join(sDir, "SKILL.md");
+  if (!existsSync(sFile)) {
+    findings.push({ skill: dirName, file: `skills/${dirName}`, type: "error", rule: "orphan-skill-directory", message: `Directory skills/${dirName} does not contain a SKILL.md` });
+    return;
+  }
+  try {
+    const text = readFileSync(sFile, "utf8");
+    const { name, description } = parseSkillFrontmatter(text);
+    const declared = name || dirName;
+    if (seenNames.has(declared)) {
+      findings.push({ skill: dirName, file: `skills/${dirName}/SKILL.md`, type: "error", rule: "duplicate-skill-name", message: `Skill name '${declared}' already declared by skills/${seenNames.get(declared)}` });
+    } else {
+      seenNames.set(declared, dirName);
+    }
+    lintSkillDescription(dirName, description, findings);
+  } catch (err) {
+    findings.push({ skill: dirName, file: `skills/${dirName}/SKILL.md`, type: "error", rule: "unreadable-skill-file", message: `Cannot parse SKILL.md: ${err.message}` });
+  }
+}
+
+function lintSkillDescription(dirName, description, findings) {
+  if (!description) {
+    findings.push({ skill: dirName, file: `skills/${dirName}/SKILL.md`, type: "error", rule: "trigger-lint-empty", message: `Skill '${dirName}' is missing frontmatter description for routing` });
+  } else if (!/(?:use when|use for|when|use to|useful for)/i.test(description)) {
+    findings.push({ skill: dirName, file: `skills/${dirName}/SKILL.md`, type: "recommendation", rule: "trigger-lint-directive", message: `Description for '${dirName}' lacks an actionable trigger directive ('Use when...', 'Use for...')` });
+  }
+}
+
+function lintSkillsLock(baseRoot, findings) {
   const lockPath = join(baseRoot, "skills-lock.json");
-  if (existsSync(lockPath)) {
-    try {
-      const lock = JSON.parse(readFileSync(lockPath, "utf8"));
-      if (lock.version !== 1) {
-        findings.push({
-          skill: "registry",
-          file: "skills-lock.json",
-          type: "error",
-          rule: "invalid-lock-version",
-          message: `skills-lock.json version must be 1 (got ${lock.version})`,
-        });
-      }
-      const skillsObj = lock.skills || {};
-      for (const [sKey, sVal] of Object.entries(skillsObj)) {
-        if (!sVal || typeof sVal !== "object") continue;
-        const hash = sVal.computedHash || sVal.hash || sVal.sha256;
-        if (!hash || !/^[a-f0-9]{64}$/i.test(hash)) {
-          findings.push({
-            skill: sKey,
-            file: "skills-lock.json",
-            type: "error",
-            rule: "invalid-lock-hash",
-            message: `Invalid or missing SHA-256 hash for locked skill '${sKey}'`,
-          });
-        }
-      }
-    } catch (err) {
-      findings.push({
-        skill: "registry",
-        file: "skills-lock.json",
-        type: "error",
-        rule: "invalid-lock-json",
-        message: `Failed to parse skills-lock.json: ${err.message}`,
-      });
+  if (!existsSync(lockPath)) return;
+  try {
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    if (lock.version !== 1) {
+      findings.push({ skill: "registry", file: "skills-lock.json", type: "error", rule: "invalid-lock-version", message: `skills-lock.json version must be 1 (got ${lock.version})` });
     }
-  }
-
-  // 3. README lint: root README mentions skills
-  const readmePath = join(baseRoot, "README.md");
-  if (existsSync(readmePath)) {
-    try {
-      const readme = readFileSync(readmePath, "utf8");
-      if (!readme.includes("skills") && !readme.includes("skills.sh")) {
-        findings.push({
-          skill: "registry",
-          file: "README.md",
-          type: "recommendation",
-          rule: "readme-skills-reference",
-          message: `Root README.md does not mention skills or the skills registry`,
-        });
+    const skillsObj = lock.skills || {};
+    for (const [sKey, sVal] of Object.entries(skillsObj)) {
+      if (!sVal || typeof sVal !== "object") continue;
+      const hash = sVal.computedHash || sVal.hash || sVal.sha256;
+      if (!hash || !/^[a-f0-9]{64}$/i.test(hash)) {
+        findings.push({ skill: sKey, file: "skills-lock.json", type: "error", rule: "invalid-lock-hash", message: `Invalid or missing SHA-256 hash for locked skill '${sKey}'` });
       }
-    } catch {}
+      if (!existsSync(join(baseRoot, "skills", sKey))) {
+        findings.push({ skill: sKey, file: "skills-lock.json", type: "error", rule: "orphan-locked-skill", message: `Locked skill '${sKey}' is listed in skills-lock.json but not found in skills/` });
+      }
+    }
+  } catch (err) {
+    findings.push({ skill: "registry", file: "skills-lock.json", type: "error", rule: "invalid-lock-json", message: `Failed to parse skills-lock.json: ${err.message}` });
   }
+}
 
-  const hasErrors = findings.some((f) => f.type === "error");
-  return {
-    ok: !hasErrors,
-    findings,
-  };
+function lintReadmeSkills(baseRoot, findings) {
+  const readmePath = join(baseRoot, "README.md");
+  if (!existsSync(readmePath)) return;
+  try {
+    const readme = readFileSync(readmePath, "utf8");
+    if (!readme.includes("skills") && !readme.includes("skills.sh")) {
+      findings.push({ skill: "registry", file: "README.md", type: "recommendation", rule: "readme-skills-reference", message: "Root README.md does not mention skills or the skills registry" });
+    }
+  } catch {}
 }

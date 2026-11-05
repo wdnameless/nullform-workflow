@@ -645,11 +645,28 @@ async function _ensureDashboardImpl(absRoot, key, { open = true, port = null } =
   }
 
   // 2. Рантайм-файл потерян, а дашборд проекта жив (осиротевший демон):
-  //    усыновляем его вместо запуска второго сервера на соседнем порту.
+  const adopted = await adoptOrphanDashboard(absRoot, key, chosenPort, openSystem);
+  if (adopted) return adopted;
+
+  const selfPath = fileURLToPath(import.meta.url);
+  // cwd НЕ ставим в корень проекта: на Windows это блокирует удаление каталога,
+  // пока жив демон. Абсолютный --root делает cwd ненужным.
+  const child = spawn(process.execPath, [selfPath, "--serve", "--no-open", "--root", absRoot, "--port", String(chosenPort), "--session", key], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+
+  return waitForDashboardReady(absRoot, key, existing, openSystem);
+}
+
+async function adoptOrphanDashboard(absRoot, key, chosenPort, openSystem) {
   for (let p = chosenPort; p < chosenPort + 64; p++) {
     const probed = await probeDashboard(p, 400);
     if (isCompatibleDashboard(probed, absRoot, key)) {
-      writeRuntime(absRoot, { key,
+      writeRuntime(absRoot, {
+        key,
         pid: probed.pid,
         port: p,
         url: `http://127.0.0.1:${p}`,
@@ -662,16 +679,10 @@ async function _ensureDashboardImpl(absRoot, key, { open = true, port = null } =
       return { url, port: p, started: false, adopted: true };
     }
   }
-  const selfPath = fileURLToPath(import.meta.url);
-  // cwd НЕ ставим в корень проекта: на Windows это блокирует удаление каталога,
-  // пока жив демон. Абсолютный --root делает cwd ненужным.
-  const child = spawn(process.execPath, [selfPath, "--serve", "--no-open", "--root", absRoot, "--port", String(chosenPort), "--session", key], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.unref();
+  return null;
+}
 
+async function waitForDashboardReady(absRoot, key, existing, openSystem) {
   for (let i = 0; i < 25; i++) {
     await new Promise((r) => setTimeout(r, 200));
     const info = readRuntime(absRoot, key);

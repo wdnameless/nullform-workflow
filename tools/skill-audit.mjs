@@ -372,103 +372,13 @@ export function auditSkillFile(skillDir, options = {}) {
   const directReferences = new Set(referencedFiles);
 
   // Check 4: Deep audit of local referenced markdown files
-  for (const refPath of directReferences) {
-    if (existsSync(refPath) && refPath.endsWith(".md")) {
-      try {
-        const refContent = readFileSync(refPath, "utf8");
-        const refLines = refContent.split("\n").length;
-
-        // Long reference navigation (>100 lines) check
-        if (refLines > 100 && !hasNavigableHeadingIndex(refContent)) {
-          findings.push({
-            skill: skillName,
-            file: refPath,
-            type: "recommendation",
-            rule: "long-reference-navigation",
-            message: `Reference file '${relative(skillDir, refPath).replace(/\\/g, "/")}' exceeds 100 lines (${refLines} lines) without a navigable heading index`,
-          });
-        }
-
-        // Sub-references validation
-        const sub = checkMarkdownReferences(refPath, refContent, skillName);
-        findings.push(...sub.findings);
-      } catch (err) {
-        findings.push({
-          skill: skillName,
-          file: refPath,
-          type: "error",
-          rule: "broken-reference",
-          message: `Failed to inspect reference file: ${err.message}`,
-        });
-      }
-    }
-  }
+  auditDirectReferences(directReferences, skillDir, skillName, findings);
 
   // Check 5: Direct resource discovery for files in references/
-  // Recursive: nested catalogs (references/verbs/, references/style-recipes/) are real
-  // resources, and the old flat scan never saw them at all.
-  const referencesDir = join(skillDir, "references");
-  if (existsSync(referencesDir) && statSync(referencesDir).isDirectory()) {
-    try {
-      for (const fullPath of collectFiles(referencesDir, ".md")) {
-        const relPath = relative(skillDir, fullPath).replace(/\\/g, "/");
-        const dirRel = `${relPath.slice(0, relPath.lastIndexOf("/"))}/`;
-        const indexText = ["INDEX.md", "README.md"]
-          .map((name) => readTextOrNull(join(skillDir, dirRel, name)))
-          .filter(Boolean)
-          .join("\n");
-        if (isPathReachable(rawContent, relPath, { indexText: indexText || null })) continue;
-        findings.push({
-          skill: skillName,
-          file: fullPath,
-          type: "recommendation",
-          rule: "resource-discovery",
-          message: `Reference file '${relPath}' is not referenced from SKILL.md (by path, basename, or a listing index)`,
-        });
-      }
-    } catch {
-      // Ignore unreadable references dir
-    }
-  }
+  auditReferencesDir(skillDir, rawContent, skillName, findings);
 
-  // Check 6: scripts/ and assets/ entry points nobody names. A script shipped in a
-  // skill but mentioned in no file of that skill cannot be reached by a prompt, so
-  // it is dead weight the registry still carries. Test files, fixtures and dependency
-  // manifests are not prompt resources — flagging them buries the real orphans.
-  for (const dirName of ["scripts", "assets"]) {
-    const dir = join(skillDir, dirName);
-    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
-    let corpus = rawContent;
-    try {
-      for (const f of collectFiles(skillDir, null)) {
-        if (f === skillFile) continue;
-        if (statSync(f).size > 512 * 1024) continue;
-        try { corpus += `\n${readFileSync(f, "utf8")}`; } catch { /* binary or unreadable */ }
-      }
-    } catch { /* keep SKILL body only */ }
-    for (const fullPath of collectFiles(dir, null)) {
-      const relPath = relative(skillDir, fullPath).replace(/\\/g, "/");
-      const name = relPath.slice(relPath.lastIndexOf("/") + 1);
-      if (name.startsWith("_") || name.startsWith(".")) continue;
-      if (!ENTRY_POINT_EXT.has(name.slice(name.lastIndexOf(".")))) continue;
-      if (relPath.split("/").some((part) => part === "tests" || part === "fixtures")) continue;
-      const self = readTextOrNull(fullPath);
-      if (self === null) continue;
-      // Subtract the file's own text: a script naming itself is not discovery.
-      const mentioned = [corpus, ...[]].some((text) => {
-        const withoutSelf = text.replace(self, "");
-        return withoutSelf.includes(relPath) || withoutSelf.includes(name);
-      });
-      if (mentioned) continue;
-      findings.push({
-        skill: skillName,
-        file: fullPath,
-        type: "recommendation",
-        rule: "resource-discovery",
-        message: `File '${relPath}' is not named by any file in this skill`,
-      });
-    }
-  }
+  // Check 6: scripts/ and assets/ entry points nobody names
+  auditEntryPoints(skillDir, skillFile, rawContent, skillName, findings);
   // Check 7: Offline skill security scanner
   if (!options.skipSecurity) {
     const sec = scanSkillSecurity(skillDir, options);
@@ -493,6 +403,101 @@ export function auditSkillFile(skillDir, options = {}) {
     valid: !hasErrors,
     findings,
   };
+}
+
+function auditDirectReferences(directReferences, skillDir, skillName, findings) {
+  for (const refPath of directReferences) {
+    if (existsSync(refPath) && refPath.endsWith(".md")) {
+      try {
+        const refContent = readFileSync(refPath, "utf8");
+        const refLines = refContent.split("\n").length;
+        if (refLines > 100 && !hasNavigableHeadingIndex(refContent)) {
+          findings.push({
+            skill: skillName,
+            file: refPath,
+            type: "recommendation",
+            rule: "long-reference-navigation",
+            message: `Reference file '${relative(skillDir, refPath).replace(/\\/g, "/")}' exceeds 100 lines (${refLines} lines) without a navigable heading index`,
+          });
+        }
+        const sub = checkMarkdownReferences(refPath, refContent, skillName);
+        findings.push(...sub.findings);
+      } catch (err) {
+        findings.push({
+          skill: skillName,
+          file: refPath,
+          type: "error",
+          rule: "broken-reference",
+          message: `Failed to inspect reference file: ${err.message}`,
+        });
+      }
+    }
+  }
+}
+
+function auditReferencesDir(skillDir, rawContent, skillName, findings) {
+  const referencesDir = join(skillDir, "references");
+  if (existsSync(referencesDir) && statSync(referencesDir).isDirectory()) {
+    try {
+      for (const fullPath of collectFiles(referencesDir, ".md")) {
+        const relPath = relative(skillDir, fullPath).replace(/\\/g, "/");
+        const dirRel = `${relPath.slice(0, relPath.lastIndexOf("/"))}/`;
+        const indexText = ["INDEX.md", "README.md"]
+          .map((name) => readTextOrNull(join(skillDir, dirRel, name)))
+          .filter(Boolean)
+          .join("\n");
+        if (isPathReachable(rawContent, relPath, { indexText: indexText || null })) continue;
+        findings.push({
+          skill: skillName,
+          file: fullPath,
+          type: "recommendation",
+          rule: "resource-discovery",
+          message: `Reference file '${relPath}' is not referenced from SKILL.md (by path, basename, or a listing index)`,
+        });
+      }
+    } catch {}
+  }
+}
+
+function auditEntryPoints(skillDir, skillFile, rawContent, skillName, findings) {
+  const corpus = buildSkillCorpus(skillDir, skillFile, rawContent);
+  for (const dirName of ["scripts", "assets"]) {
+    const dir = join(skillDir, dirName);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
+    for (const fullPath of collectFiles(dir, null)) {
+      checkEntryPointFile(fullPath, skillDir, corpus, skillName, findings);
+    }
+  }
+}
+
+function buildSkillCorpus(skillDir, skillFile, rawContent) {
+  let corpus = rawContent;
+  try {
+    for (const f of collectFiles(skillDir, null)) {
+      if (f === skillFile || statSync(f).size > 512 * 1024) continue;
+      try { corpus += `\n${readFileSync(f, "utf8")}`; } catch {}
+    }
+  } catch {}
+  return corpus;
+}
+
+function checkEntryPointFile(fullPath, skillDir, corpus, skillName, findings) {
+  const relPath = relative(skillDir, fullPath).replace(/\\/g, "/");
+  const name = relPath.slice(relPath.lastIndexOf("/") + 1);
+  if (name.startsWith("_") || name.startsWith(".")) return;
+  if (!ENTRY_POINT_EXT.has(name.slice(name.lastIndexOf(".")))) return;
+  if (relPath.split("/").some((part) => part === "tests" || part === "fixtures")) return;
+  const self = readTextOrNull(fullPath);
+  if (self === null) return;
+  const withoutSelf = corpus.replace(self, "");
+  if (withoutSelf.includes(relPath) || withoutSelf.includes(name)) return;
+  findings.push({
+    skill: skillName,
+    file: fullPath,
+    type: "recommendation",
+    rule: "resource-discovery",
+    message: `File '${relPath}' is not named by any file in this skill`,
+  });
 }
 
 /**

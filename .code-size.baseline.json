@@ -62,20 +62,20 @@
       "reason": ""
     },
     "tools/tests/workflow-gate.test.mjs": {
-      "lines": 1475,
-      "reason": "Committed fixture grows (d8ccafb) + omh-model-routing T2: 4 reported/verified gate tests (2026-10-30) + experience close-gate T1: 5 tests (2026-11-04) + split #16 (2026-11-04)"
+      "lines": 1562,
+      "reason": "Committed fixture grows (d8ccafb) + omh-model-routing T2: 4 reported/verified gate tests (2026-10-30) + experience close-gate T1: 5 tests (2026-11-04) + split #16 (2026-11-04) + adoption A1 settle & B2 experience validation tests (2026-11-05)"
     },
     "tools/workflow.mjs": {
       "lines": 1038,
       "reason": "split #16 (2026-11-04)"
     },
     "tools/workflow-ci.mjs": {
-      "lines": 1077,
-      "reason": "split #16 (2026-11-04)"
+      "lines": 1253,
+      "reason": "split #16 (2026-11-04) + adoption A1 safe settle target resolution and protected refs (2026-11-05) + R06 shebang no-op"
     },
     "tools/workflow-core.mjs": {
-      "lines": 1081,
-      "reason": "split #16 (2026-11-04)"
+      "lines": 1098,
+      "reason": "split #16 (2026-11-04) + adoption B2 experience fresh cue/lesson/evidence validation (2026-11-05)"
     },
     "tools/review/evidence.mjs": {
       "lines": 704,

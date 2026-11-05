@@ -164,58 +164,63 @@ export function parseUnifiedDiff(diffText) {
   let current = null;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.startsWith("diff --git ")) {
-      const parts = line.slice("diff --git ".length).split(" ");
-      const oldPath = parts[0] ? parts[0].replace(/^[ab]\//, "") : null;
-      const newPath = parts[1] ? parts[1].replace(/^[ab]\//, "") : null;
-      current = makeFileEntry(oldPath, newPath);
-      files.push(current);
-      continue;
-    }
-
-    if (line.startsWith("--- ")) {
-      if (!current || current.hunks > 0 || current.additions > 0 || current.deletions > 0) {
-        current = makeFileEntry();
-        files.push(current);
-      }
-      const p = line.slice(4).trim();
-      if (p !== "/dev/null") {
-        current.oldPath = p.replace(/^[ab]\//, "");
-        if (!current.file) current.file = current.oldPath;
-      }
-      continue;
-    }
-
-    if (!current) continue;
-
-    if (line.startsWith("rename from ")) {
-      current.isRename = true;
-      current.renameFrom = line.slice("rename from ".length).trim();
-      current.oldPath = current.renameFrom;
-    } else if (line.startsWith("rename to ")) {
-      current.isRename = true;
-      current.renameTo = line.slice("rename to ".length).trim();
-      current.newPath = current.renameTo;
-      current.file = current.renameTo;
-    } else if (line.startsWith("+++ ")) {
-      const p = line.slice(4).trim();
-      if (p !== "/dev/null") {
-        current.newPath = p.replace(/^[ab]\//, "");
-        current.file = current.newPath;
-      }
-    } else if (line.startsWith("@@ ")) {
-      current.hunks++;
-    } else if (line.startsWith("+") && !line.startsWith("+++")) {
-      current.additions++;
-      current.addedLines.push(line.slice(1));
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      current.deletions++;
-      current.deletedLines.push(line.slice(1));
-    }
+    current = parseDiffLine(lines[i], current, files);
   }
-
   return files.filter(f => f.file != null);
+}
+
+function parseDiffLine(line, current, files) {
+  if (line.startsWith("diff --git ")) {
+    const parts = line.slice("diff --git ".length).split(" ");
+    const oldPath = parts[0] ? parts[0].replace(/^[ab]\//, "") : null;
+    const newPath = parts[1] ? parts[1].replace(/^[ab]\//, "") : null;
+    const entry = makeFileEntry(oldPath, newPath);
+    files.push(entry);
+    return entry;
+  }
+  if (line.startsWith("--- ")) {
+    let entry = current;
+    if (!entry || entry.hunks > 0 || entry.additions > 0 || entry.deletions > 0) {
+      entry = makeFileEntry();
+      files.push(entry);
+    }
+    const p = line.slice(4).trim();
+    if (p !== "/dev/null") {
+      entry.oldPath = p.replace(/^[ab]\//, "");
+      if (!entry.file) entry.file = entry.oldPath;
+    }
+    return entry;
+  }
+  if (!current) return null;
+  applyHunkOrRename(line, current);
+  return current;
+}
+
+function applyHunkOrRename(line, current) {
+  if (line.startsWith("rename from ")) {
+    current.isRename = true;
+    current.renameFrom = line.slice("rename from ".length).trim();
+    current.oldPath = current.renameFrom;
+  } else if (line.startsWith("rename to ")) {
+    current.isRename = true;
+    current.renameTo = line.slice("rename to ".length).trim();
+    current.newPath = current.renameTo;
+    current.file = current.renameTo;
+  } else if (line.startsWith("+++ ")) {
+    const p = line.slice(4).trim();
+    if (p !== "/dev/null") {
+      current.newPath = p.replace(/^[ab]\//, "");
+      current.file = current.newPath;
+    }
+  } else if (line.startsWith("@@ ")) {
+    current.hunks++;
+  } else if (line.startsWith("+") && !line.startsWith("+++")) {
+    current.additions++;
+    current.addedLines.push(line.slice(1));
+  } else if (line.startsWith("-") && !line.startsWith("---")) {
+    current.deletions++;
+    current.deletedLines.push(line.slice(1));
+  }
 }
 
 function extractNewDeps(parsedFiles) {
@@ -223,31 +228,37 @@ function extractNewDeps(parsedFiles) {
   for (const f of parsedFiles) {
     const isPackageJson = f.file === "package.json" || f.file.endsWith("/package.json");
     if (isPackageJson) {
-      for (const line of f.addedLines) {
-        const m = line.match(/"(@?[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)?)"\s*:\s*["^~>=<0-9]/i);
-        if (m) {
-          const name = m[1];
-          if (!name.startsWith("@types/") && !["scripts", "name", "version", "description", "main", "type"].includes(name)) {
-            deps.add(name);
-          }
-        }
-      }
+      scanPackageJsonDeps(f.addedLines, deps);
     } else {
-      for (const line of f.addedLines) {
-        const impMatch = line.match(/(?:import\s+(?:.*?from\s+)?|require\()\s*["']([^"']+)["']/);
-        if (impMatch) {
-          const spec = impMatch[1];
-          if (!spec.startsWith(".") && !spec.startsWith("/") && !spec.startsWith("node:")) {
-            const rootPkg = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
-            if (!isBuiltin(rootPkg)) {
-              deps.add(rootPkg);
-            }
-          }
-        }
-      }
+      scanCodeImports(f.addedLines, deps);
     }
   }
   return Array.from(deps).sort();
+}
+
+function scanPackageJsonDeps(addedLines, deps) {
+  for (const line of addedLines) {
+    const m = line.match(/"(@?[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)?)"\s*:\s*["^~>=<0-9]/i);
+    if (m) {
+      const name = m[1];
+      if (!name.startsWith("@types/") && !["scripts", "name", "version", "description", "main", "type"].includes(name)) {
+        deps.add(name);
+      }
+    }
+  }
+}
+
+function scanCodeImports(addedLines, deps) {
+  for (const line of addedLines) {
+    const impMatch = line.match(/(?:import\s+(?:.*?from\s+)?|require\()\s*["']([^"']+)["']/);
+    if (impMatch) {
+      const spec = impMatch[1];
+      if (!spec.startsWith(".") && !spec.startsWith("/") && !spec.startsWith("node:")) {
+        const rootPkg = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+        if (!isBuiltin(rootPkg)) deps.add(rootPkg);
+      }
+    }
+  }
 }
 
 function extractApiRenames(parsedFiles) {
@@ -256,29 +267,33 @@ function extractApiRenames(parsedFiles) {
     if (f.isRename && f.renameFrom && f.renameTo) {
       renames.push({ file: f.file, from: f.renameFrom, to: f.renameTo, type: "file" });
     }
-    const removedExports = [];
-    const addedExports = [];
-    const exportRe = /export\s+(?:async\s+)?(?:function|class|const|let|var)\s+([a-zA-Z0-9_$]+)/;
-    for (const line of f.deletedLines) {
-      const m = line.match(exportRe);
-      if (m) removedExports.push(m[1]);
-    }
-    for (const line of f.addedLines) {
-      const m = line.match(exportRe);
-      if (m) addedExports.push(m[1]);
-    }
-    for (let i = 0; i < Math.min(removedExports.length, addedExports.length); i++) {
-      if (removedExports[i] !== addedExports[i]) {
-        renames.push({
-          file: f.file,
-          from: removedExports[i],
-          to: addedExports[i],
-          type: "export",
-        });
-      }
-    }
+    scanExportRenames(f, renames);
   }
   return renames;
+}
+
+function scanExportRenames(f, renames) {
+  const removedExports = [];
+  const addedExports = [];
+  const exportRe = /export\s+(?:async\s+)?(?:function|class|const|let|var)\s+([a-zA-Z0-9_$]+)/;
+  for (const line of f.deletedLines) {
+    const m = line.match(exportRe);
+    if (m) removedExports.push(m[1]);
+  }
+  for (const line of f.addedLines) {
+    const m = line.match(exportRe);
+    if (m) addedExports.push(m[1]);
+  }
+  for (let i = 0; i < Math.min(removedExports.length, addedExports.length); i++) {
+    if (removedExports[i] !== addedExports[i]) {
+      renames.push({
+        file: f.file,
+        from: removedExports[i],
+        to: addedExports[i],
+        type: "export",
+      });
+    }
+  }
 }
 
 function normalizeIntent(intent) {
@@ -343,11 +358,7 @@ export function classifyScope(diffOrOpts, maybeIntent = null) {
     totalAdditions += pf.additions;
     totalDeletions += pf.deletions;
     totalHunks += pf.hunks;
-
-    if (CONFIG_FILE_RE.test(pf.file)) {
-      config_edits.push(pf.file);
-    }
-
+    if (CONFIG_FILE_RE.test(pf.file)) config_edits.push(pf.file);
     if (hasIntent && matchIntent(pf.file, patterns)) {
       in_scope.push(pf.file);
     } else {
@@ -367,18 +378,7 @@ export function classifyScope(diffOrOpts, maybeIntent = null) {
     likely_creep: likely_creep.length,
   };
 
-  let advisory = "keep";
-  if (parsedFiles.length === 0) {
-    advisory = "keep";
-  } else if (in_scope.length > 0 && likely_creep.length > 0) {
-    advisory = "split";
-  } else if (likely_creep.length > 0 && in_scope.length === 0) {
-    advisory = "justify";
-  } else if (new_deps.length > 0 || api_renames.length > 0) {
-    advisory = "justify";
-  } else {
-    advisory = "keep";
-  }
+  const advisory = determineScopeAdvisory(parsedFiles.length, in_scope.length, likely_creep.length, new_deps.length, api_renames.length);
 
   return {
     in_scope,
@@ -389,6 +389,14 @@ export function classifyScope(diffOrOpts, maybeIntent = null) {
     stats,
     advisory,
   };
+}
+
+function determineScopeAdvisory(fileCount, inScopeCount, creepCount, newDepsCount, renamesCount) {
+  if (fileCount === 0) return "keep";
+  if (inScopeCount > 0 && creepCount > 0) return "split";
+  if (creepCount > 0 && inScopeCount === 0) return "justify";
+  if (newDepsCount > 0 || renamesCount > 0) return "justify";
+  return "keep";
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
