@@ -1360,6 +1360,63 @@ test("experience gate: checkExperienceFresh detects missing dir, stale files, an
     rmSync(root, { recursive: true, force: true });
   }
 });
+test("experience gate: rejects empty experience file or missing cue|lesson|evidence even if mtime is fresh", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-exp-empty-"));
+  try {
+    const now = new Date().toISOString();
+    const expDir = join(root, ".workflow", "experience");
+    mkdirSync(expDir, { recursive: true });
+    const emptyFile = join(expDir, "general.md");
+    writeFileSync(emptyFile, "", "utf8");
+    const future = (Date.now() + 10000) / 1000;
+    utimesSync(emptyFile, future, future);
+    assert.deepEqual(checkExperienceFresh(root, now), { ok: false, checked: 1 }, "empty file must be rejected");
+
+    writeFileSync(emptyFile, "# Experience\nSome notes without lesson format\n", "utf8");
+    utimesSync(emptyFile, future, future);
+    assert.deepEqual(checkExperienceFresh(root, now), { ok: false, checked: 1 }, "header-only must be rejected");
+
+    writeFileSync(emptyFile, "cue | | evidence\n", "utf8");
+    utimesSync(emptyFile, future, future);
+    assert.deepEqual(checkExperienceFresh(root, now), { ok: false, checked: 1 }, "missing lesson field must be rejected");
+
+    writeFileSync(emptyFile, "my-cue | my-lesson | my-evidence\n", "utf8");
+    utimesSync(emptyFile, future, future);
+    assert.deepEqual(checkExperienceFresh(root, now), { ok: true }, "valid lesson must be accepted");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("experience gate: T2 close refuses fresh but empty experience file", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-exp-close-empty-"));
+  const errors = [];
+  const origErr = console.error;
+  console.error = (...args) => { errors.push(args.join(" ")); origErr(...args); };
+  try {
+    setupT2Exp(root);
+    cmdStart(root, { tier: "T2", task: "experience-empty-refusal" });
+    cmdArtifact(root, { kind: "recon", detail: "mapped boundaries; acceptance: tests pass" });
+    cmdArtifact(root, { kind: "manifest", path: "openspec/changes/feat-x/manifest.md", detail: "captured R01 verbatim from brief" });
+    cmdArtifact(root, { kind: "openspec", path: "openspec/changes/feat-x", detail: "change proposal validated" });
+    cmdArtifact(root, { kind: "interfaces", path: "openspec/changes/feat-x/interfaces.md", detail: "public signatures recorded: fn() -> void, plus invariants" });
+    cmdArtifact(root, { kind: "oracle", detail: "ACCEPT: verified all requirements" });
+
+    const expDir = join(root, ".workflow", "experience");
+    mkdirSync(expDir, { recursive: true });
+    const file = join(expDir, "general.md");
+    writeFileSync(file, "", "utf8");
+    const future = (Date.now() + 10000) / 1000;
+    utimesSync(file, future, future);
+
+    const code = cmdClose(root, {});
+    assert.equal(code, 1, "close must exit 1 when experience file is empty");
+    assert.equal(load(root).status, "open", "task must stay open");
+  } finally {
+    console.error = origErr;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function setupT2Exp(root) {
   setupT2(root, { evidence: false });
