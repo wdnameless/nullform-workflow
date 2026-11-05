@@ -19,6 +19,8 @@ import {
   checkExperienceFresh,
   load,
   save,
+  cmdSettle,
+  runWorkflowCli,
 } from "../workflow.mjs";
 import { writeEvidence as writeValidEvidence, prepareEvidence } from "./fixtures/review-execution.mjs";
 
@@ -1468,6 +1470,34 @@ test("experience gate: (d) T0 and T1 close without experience lessons", () => {
     assert.equal(cmdArtifact(root, { kind: "recon", detail: "files a.mjs; acceptance: node --test passes" }), 0);
     assert.equal(cmdClose(root, {}), 0, "T1 close must succeed without experience files");
     assert.equal(load(root).status, "closed");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("settle: refusing protected refs and missing target, accepting positional settle", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-gate-settle-"));
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  try {
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(root, "file.txt"), "hello\n", "utf8");
+    git("add", "file.txt");
+    git("commit", "-qm", "init");
+
+    // 1. Refuse protected main
+    assert.equal(cmdSettle(root, { change: "main", yes: true }), 1, "settle main must fail");
+    assert.equal(cmdSettle(root, { change: "feat/main", yes: true }), 1, "settle feat/main must fail");
+
+    // 2. Refuse missing target
+    assert.equal(cmdSettle(root, { change: "missing-target", yes: true }), 1, "missing target must fail");
+
+    // 3. Positional settle works identically to --change
+    const wtDir = join(root, ".tmp", "worktrees", "pos-feat");
+    mkdirSync(wtDir, { recursive: true });
+    writeFileSync(join(wtDir, "dummy.txt"), "content\n", "utf8");
+    assert.equal(existsSync(wtDir), true);
+    assert.equal(runWorkflowCli(["settle", "pos-feat", "--yes", "--root", root]), 0);
+    assert.equal(existsSync(wtDir), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
