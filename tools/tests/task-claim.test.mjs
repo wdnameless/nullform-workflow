@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { claimTask, releaseTask, readClaim, contextPacket, isClaimed } from "../workflow/claims.mjs";
-import { cmdSettle, runWorkflowCli } from "../workflow.mjs";
+import { cmdSettle, runWorkflowCli, removeSettleBranches, removeSettleWorktrees } from "../workflow.mjs";
 
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "task-claim-"));
@@ -404,4 +404,90 @@ test("settle with --yes removes fixture worktree", (t) => {
   const cliCode = runWorkflowCli(["settle", "--change", change2, "--yes", "--root", f.root]);
   assert.equal(cliCode, 0);
   assert.equal(existsSync(wtDir2), false);
+});
+
+test("settle refuses raw change matching protected master and leaves branch intact", (t) => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "--quiet", "-b", "master");
+  git("add", "src/report.mjs");
+  git("-c", "user.name=Claim Fixture", "-c", "user.email=claim@example.invalid", "commit", "--quiet", "-m", "fixture");
+  git("checkout", "-qb", "feature-work");
+
+  const code = cmdSettle(f.root, { change: "master", yes: true });
+  assert.equal(code, 1, "settle on raw change 'master' must fail");
+  const branches = git("branch", "--list", "master");
+  assert.match(branches, /master/, "protected branch 'master' must survive");
+});
+
+test("settle refuses change matching feat/master and leaves protected master intact", (t) => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "--quiet", "-b", "master");
+  git("add", "src/report.mjs");
+  git("-c", "user.name=Claim Fixture", "-c", "user.email=claim@example.invalid", "commit", "--quiet", "-m", "fixture");
+  git("checkout", "-qb", "feature-work");
+
+  const code = cmdSettle(f.root, { change: "feat/master", yes: true });
+  assert.equal(code, 1, "settle on 'feat/master' must fail");
+  const branches = git("branch", "--list", "master");
+  assert.match(branches, /master/, "protected branch 'master' must survive");
+});
+
+test("settle fails when no existing worktree or branch target is found", (t) => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "--quiet", "-b", "main");
+  git("add", "src/report.mjs");
+  git("-c", "user.name=Claim Fixture", "-c", "user.email=claim@example.invalid", "commit", "--quiet", "-m", "fixture");
+
+  const code = cmdSettle(f.root, { change: "missing-target-change", yes: true });
+  assert.equal(code, 1, "settle must fail when target does not exist");
+});
+
+test("settle refuses current branch and leaves current ref intact", (t) => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "--quiet", "-b", "main");
+  git("add", "src/report.mjs");
+  git("-c", "user.name=Claim Fixture", "-c", "user.email=claim@example.invalid", "commit", "--quiet", "-m", "fixture");
+  git("checkout", "-qb", "feat/active-task");
+
+  const code = cmdSettle(f.root, { change: "active-task", yes: true });
+  assert.equal(code, 1, "settle on current branch must fail");
+  const current = git("rev-parse", "--abbrev-ref", "HEAD");
+  assert.equal(current, "feat/active-task", "current branch must survive");
+});
+
+test("settle positional form works identically to --change", (t) => {
+  const f = fixture(t);
+  const change = "test-positional";
+  const wtDir = join(f.root, ".tmp", "worktrees", change);
+  mkdirSync(wtDir, { recursive: true });
+  writeFileSync(join(wtDir, "file.txt"), "hello");
+  assert.equal(existsSync(wtDir), true);
+
+  const cliCode = runWorkflowCli(["settle", change, "--yes", "--root", f.root]);
+  assert.equal(cliCode, 0, "positional settle must succeed");
+  assert.equal(existsSync(wtDir), false, "positional settle must remove worktree");
+});
+
+test("removeSettleBranches throws failure on deletion errors rather than swallowing", (t) => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "--quiet", "-b", "main");
+  git("add", "src/report.mjs");
+  git("-c", "user.name=Claim Fixture", "-c", "user.email=claim@example.invalid", "commit", "--quiet", "-m", "fixture");
+
+  assert.throws(() => removeSettleBranches(f.root, new Set(["nonexistent-branch-to-delete"])), /failed to delete branch/i);
+});
+
+test("removeSettleBranches refuses to delete protected or current branch and throws", (t) => {
+  const f = fixture(t);
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "--quiet", "-b", "master");
+  git("add", "src/report.mjs");
+  git("-c", "user.name=Claim Fixture", "-c", "user.email=claim@example.invalid", "commit", "--quiet", "-m", "fixture");
+
+  assert.throws(() => removeSettleBranches(f.root, new Set(["master"])), /cannot delete protected branch/i);
 });
