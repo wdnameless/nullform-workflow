@@ -18,6 +18,8 @@ import {
   getChangedLines,
   findMatchingSuite,
   filterCandidateFiles,
+  classifyScope,
+  parseUnifiedDiff,
 } from "../changed-scope.mjs";
 import { loadScope } from "../clone-coverage.mjs";
 
@@ -194,4 +196,71 @@ test("loadScope: loads .clone.json {scope:[...]} from root, falls back to DEFAUL
   } finally {
     cleanup();
   }
+});
+
+test("classifyScope: mixed diff triggers split advisory, separates in_scope and likely_creep, detects config and deps/renames", () => {
+  const sampleDiff = `diff --git a/tools/changed-scope.mjs b/tools/changed-scope.mjs
+index 1111..2222 100644
+--- a/tools/changed-scope.mjs
++++ b/tools/changed-scope.mjs
+@@ -10,2 +10,3 @@
+-export function legacyScopeResolver() {}
++export function modernScopeResolver() {}
+diff --git a/docs/unrelated.md b/docs/unrelated.md
+new file mode 100644
+--- /dev/null
++++ b/docs/unrelated.md
+@@ -0,0 +1,2 @@
++# Notes
++Random doc creep.
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -15,1 +15,2 @@
+   "dependencies": {
++    "fast-glob": "^3.3.2"
+`;
+
+  const intent = { zone: ["tools/changed-scope.mjs"] };
+  const report = classifyScope(sampleDiff, intent);
+
+  assert.deepEqual(report.in_scope, ["tools/changed-scope.mjs"]);
+  assert.deepEqual(report.likely_creep, ["docs/unrelated.md", "package.json"]);
+  assert.deepEqual(report.config_edits, ["package.json"]);
+  assert.deepEqual(report.new_deps, ["fast-glob"]);
+  assert.equal(report.api_renames.length, 1);
+  assert.equal(report.api_renames[0].from, "legacyScopeResolver");
+  assert.equal(report.api_renames[0].to, "modernScopeResolver");
+  assert.equal(report.advisory, "split");
+  assert.equal(report.stats.files, 3);
+  assert.equal(report.stats.in_scope, 1);
+  assert.equal(report.stats.likely_creep, 2);
+  assert.ok(report.stats.additions > 0);
+  assert.ok(report.stats.deletions > 0);
+});
+
+test("classifyScope: empty signals handling — empty diff yields keep, empty intent yields justify", () => {
+  // Empty diff -> keep
+  const emptyReport = classifyScope("", { zone: ["tools/changed-scope.mjs"] });
+  assert.deepEqual(emptyReport.in_scope, []);
+  assert.deepEqual(emptyReport.likely_creep, []);
+  assert.deepEqual(emptyReport.new_deps, []);
+  assert.deepEqual(emptyReport.api_renames, []);
+  assert.deepEqual(emptyReport.config_edits, []);
+  assert.equal(emptyReport.stats.files, 0);
+  assert.equal(emptyReport.advisory, "keep");
+
+  // Non-empty diff with empty/missing intent -> justify
+  const diff = `diff --git a/tools/demo.mjs b/tools/demo.mjs
+--- a/tools/demo.mjs
++++ b/tools/demo.mjs
+@@ -1,1 +1,2 @@
+ const x = 1;
++const y = 2;
+`;
+  const noIntentReport = classifyScope(diff, null);
+  assert.deepEqual(noIntentReport.in_scope, []);
+  assert.deepEqual(noIntentReport.likely_creep, ["tools/demo.mjs"]);
+  assert.equal(noIntentReport.stats.files, 1);
+  assert.equal(noIntentReport.advisory, "justify");
 });
