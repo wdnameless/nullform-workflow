@@ -23,7 +23,7 @@
 ## Phase C
 - [ ] C1 (R07): scope classifier. Zone: tools/changed-scope.mjs, focused tests,
   CLI/docs references.
-- [ ] C2 (R08): skill security scanner, per-skill evals, trigger fixtures,
+- [x] C2 (R08): skill security scanner, per-skill evals, trigger fixtures,
   registry lint. Zone: tools/skills-doctor.mjs or existing skill audit seam,
   focused tests, skills metadata/evals, CI relevant step.
 - [ ] C3 (R09): worker brief/input-gap/FIX fresh-redispatch contract. Zone:
