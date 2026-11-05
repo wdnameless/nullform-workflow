@@ -203,8 +203,9 @@ async function cmdRecord(cassettePath, port, target, filter) {
   });
 
   server.listen(port, () => {
-    console.log(`replay: recording http://127.0.0.1:${port} -> ${target}`);
-    console.log(`  point the product under test at http://127.0.0.1:${port}`);
+    const boundPort = server.address()?.port ?? port;
+    console.log(`replay: recording http://127.0.0.1:${boundPort} -> ${target}`);
+    console.log(`  point the product under test at http://127.0.0.1:${boundPort}`);
     console.log(`  Ctrl-C to finish.\n`);
   });
 
@@ -264,7 +265,8 @@ function cmdReplay(cassettePath, port, strict) {
   });
 
   server.listen(port, () => {
-    console.log(`replay: serving cassette on http://127.0.0.1:${port}${strict ? "  (strict)" : ""}`);
+    const boundPort = server.address()?.port ?? port;
+    console.log(`replay: serving cassette on http://127.0.0.1:${boundPort}${strict ? "  (strict)" : ""}`);
     console.log(`  ${cassette.interactions.length} interaction(s), target ${cassette.target || "unknown"}`);
     console.log(`  Ctrl-C to stop.\n`);
   });
@@ -405,8 +407,8 @@ for (let i = 0; i < argv.length; i++) {
 const cmd = opts._[0];
 let code;
 switch (cmd) {
-  case "record": code = await cmdRecord(opts.cassette, opts.port || 8899, opts.target, opts.filter); break;
-  case "replay": code = cmdReplay(opts.cassette, opts.port || 8899, opts.strict); break;
+  case "record": code = await cmdRecord(opts.cassette, opts.port != null ? opts.port : 8899, opts.target, opts.filter); break;
+  case "replay": code = cmdReplay(opts.cassette, opts.port != null ? opts.port : 8899, opts.strict); break;
   case "verify": code = cmdVerify(opts.cassette); break;
   case "show":   code = cmdShow(opts.cassette); break;
   default:

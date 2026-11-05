@@ -96,7 +96,7 @@ function tryListen(port, absRoot, session = null, options = {}) {
   return new Promise((resolvePort) => {
     const server = createServer((req, res) => handleRequest(req, res, absRoot, session, options));
     server.once("error", () => resolvePort(null));
-    server.once("listening", () => resolvePort({ server, port }));
+    server.once("listening", () => resolvePort({ server, port: server.address().port }));
     server.listen(port, "127.0.0.1");
   });
 }
@@ -589,6 +589,11 @@ function handleRequest(req, res, absRoot, session = null, options = {}) {
 export async function startLiveServer(root, port = 4200, { maxAttempts = 64, session = null, pollMs = 2000 } = {}) {
   const absRoot = resolve(root);
   const activeSession = sessionKey(session || SERVER_SESSION);
+  if (port === 0) {
+    const bound = await tryListen(0, absRoot, activeSession, { pollMs });
+    if (bound) return bound;
+    throw new Error("не удалось занять порт 0");
+  }
   for (let p = port; p < port + maxAttempts; p++) {
     const bound = await tryListen(p, absRoot, activeSession, { pollMs });
     if (bound) return bound;
@@ -625,7 +630,7 @@ export async function ensureDashboard(root, { open = true, port = null, session 
 }
 
 async function _ensureDashboardImpl(absRoot, key, { open = true, port = null } = {}) {
-  const chosenPort = port || portForSession(key);
+  const chosenPort = port != null ? port : portForSession(key);
   // В Paseo системный браузер не открываем: страницу показывает встроенный браузер IDE (browser_new_tab).
   const openSystem = Boolean(open) && !isPaseoWorkspace() && process.env.NF_NO_OPEN !== "1";
   // 1. Рантайм-файл: быстрый путь.
@@ -854,7 +859,7 @@ export function parseArgs(argv = []) {
       options.output = arg.startsWith("--output=") ? arg.slice("--output=".length) : argv[++i];
     else if (arg === "--port" || arg.startsWith("--port=")) {
       const idx = [i];
-      takeRangedNumber(argv, idx, arg, 1, 65535,
+      takeRangedNumber(argv, idx, arg, 0, 65535,
         { errors: options.errors, set: (v) => { options.port = v; } },
         (raw) => `--port требует валидный номер порта (получено: ${JSON.stringify(raw)})`);
       i = idx[0];

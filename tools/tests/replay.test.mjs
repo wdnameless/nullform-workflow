@@ -16,16 +16,6 @@ import {
   redactBody,
 } from "../replay.mjs";
 
-function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.listen(0, "127.0.0.1", () => {
-      const port = s.address().port;
-      s.close(() => resolve(port));
-    });
-    s.on("error", reject);
-  });
-}
 
 test("requestKey and redaction helpers behave deterministically", () => {
   const key = requestKey("POST", "/v1/chat/completions?model=test", '{"query":"hello"}');
@@ -61,12 +51,11 @@ test("cmdRecord sets upstream Host header to base.host and records cassette", as
     res.end(JSON.stringify({ status: "ok", upstreamReceivedHost: receivedHost }));
   });
 
-  const upstreamPort = await getFreePort();
-  await new Promise((resolve) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve));
-
-  const proxyPort = await getFreePort();
+  await new Promise((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = upstreamServer.address().port;
   const targetUrl = `http://127.0.0.1:${upstreamPort}`;
-  const proxyServer = await cmdRecord(cassettePath, proxyPort, targetUrl, null);
+  const proxyServer = await cmdRecord(cassettePath, 0, targetUrl, null);
+  const proxyPort = proxyServer.address().port;
 
   try {
     const res = await fetch(`http://127.0.0.1:${proxyPort}/api/test`, {
@@ -105,12 +94,11 @@ test("cmdRecord filter pass-through routes without recording and preserves upstr
     res.end("filtered-passthrough");
   });
 
-  const upstreamPort = await getFreePort();
-  await new Promise((resolve) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve));
-
-  const proxyPort = await getFreePort();
+  await new Promise((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = upstreamServer.address().port;
   const targetUrl = `http://127.0.0.1:${upstreamPort}`;
-  const proxyServer = await cmdRecord(cassettePath, proxyPort, targetUrl, "^/recorded");
+  const proxyServer = await cmdRecord(cassettePath, 0, targetUrl, "^/recorded");
+  const proxyPort = proxyServer.address().port;
 
   try {
     const res = await fetch(`http://127.0.0.1:${proxyPort}/passthrough/auth`, { method: "GET" });
@@ -144,8 +132,8 @@ test("cmdReplay serves recorded responses deterministically without upstream", a
   };
   writeFileSync(cassettePath, JSON.stringify(cassetteContent, null, 2));
 
-  const replayPort = await getFreePort();
-  const replayServer = cmdReplay(cassettePath, replayPort, true);
+  const replayServer = cmdReplay(cassettePath, 0, true);
+  const replayPort = replayServer.address().port;
 
   try {
     const res = await fetch(`http://127.0.0.1:${replayPort}/mock/resource`);
@@ -202,12 +190,11 @@ test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer
     res.end(compressed);
   });
 
-  const upstreamPort = await getFreePort();
-  await new Promise((resolve) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve));
-
-  const proxyPort = await getFreePort();
+  await new Promise((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = upstreamServer.address().port;
   const targetUrl = `http://127.0.0.1:${upstreamPort}`;
-  const proxyServer = await cmdRecord(cassettePath, proxyPort, targetUrl, null);
+  const proxyServer = await cmdRecord(cassettePath, 0, targetUrl, null);
+  const proxyPort = proxyServer.address().port;
 
   try {
     const res = await fetch(`http://127.0.0.1:${proxyPort}/api/v1/models`);
@@ -224,8 +211,8 @@ test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer
     upstreamServer.close();
   }
 
-  const replayPort = await getFreePort();
-  const replayServer = cmdReplay(cassettePath, replayPort, true);
+  const replayServer = cmdReplay(cassettePath, 0, true);
+  const replayPort = replayServer.address().port;
   try {
     const replayRes = await fetch(`http://127.0.0.1:${replayPort}/api/v1/models`);
     assert.equal(replayRes.status, 200);
@@ -286,6 +273,66 @@ test("cmdVerify catches malformed JSON body when content-type is application/jso
     assert.equal(cmdVerify(malformedPath), 1, "Malformed JSON body must fail cmdVerify");
     assert.equal(cmdVerify(ssePath), 0, "Valid SSE stream must pass cmdVerify");
   } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("R03: parallel replay and record servers obtain race-free OS-assigned listeners concurrently", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "replay-parallel-"));
+  const N = 8;
+  const servers = [];
+  try {
+    // 1. Parallel upstream servers on OS-assigned ports
+    const upstreams = await Promise.all(
+      Array.from({ length: N }, async (_, i) => {
+        const s = createServer((req, res) => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ index: i, port: s.address().port }));
+        });
+        await new Promise((resolve) => s.listen(0, "127.0.0.1", resolve));
+        servers.push(s);
+        return s;
+      })
+    );
+
+    const upstreamPorts = upstreams.map((s) => s.address().port);
+    assert.equal(new Set(upstreamPorts).size, N, "all upstream ports must be unique");
+    for (const p of upstreamPorts) assert.ok(p > 0, "port must be positive");
+
+    // 2. Parallel proxy/record servers pointing to upstreams with port 0
+    const proxies = await Promise.all(
+      upstreams.map(async (upstream, i) => {
+        const cPath = join(tmpDir, `cassette-${i}.json`);
+        const target = `http://127.0.0.1:${upstream.address().port}`;
+        const p = await cmdRecord(cPath, 0, target, null);
+        servers.push(p);
+        return p;
+      })
+    );
+
+    const proxyPorts = proxies.map((s) => s.address().port);
+    assert.equal(new Set(proxyPorts).size, N, "all proxy ports must be unique");
+    for (const p of proxyPorts) assert.ok(p > 0, "port must be positive");
+
+    // Overlap between proxy ports and upstream ports must be zero
+    const allPorts = [...upstreamPorts, ...proxyPorts];
+    assert.equal(new Set(allPorts).size, N * 2, "all 2*N active ports must be distinct");
+
+    // 3. Concurrently ping all proxies
+    const responses = await Promise.all(
+      proxyPorts.map(async (port, i) => {
+        const res = await fetch(`http://127.0.0.1:${port}/test-${i}`);
+        assert.equal(res.status, 200);
+        return res.json();
+      })
+    );
+    for (let i = 0; i < N; i++) {
+      assert.equal(responses[i].index, i);
+    }
+  } finally {
+    for (const s of servers) {
+      try { s.close(); } catch {}
+    }
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });

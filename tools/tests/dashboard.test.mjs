@@ -313,6 +313,10 @@ test("parseArgs: валидация аргументов CLI, включая --c
   assert.equal(clean.noOpen, true);
   assert.equal(clean.errors.length, 0);
 
+  const portZero = parseArgs(["--port", "0"]);
+  assert.equal(portZero.port, 0);
+  assert.equal(portZero.errors.length, 0);
+
   assert.ok(parseArgs(["--port", "nope"]).errors.some((e) => e.includes("--port")));
   assert.ok(parseArgs(["--bad-flag"]).errors.some((e) => e.includes("неизвестный параметр")));
 });
@@ -992,16 +996,6 @@ test("R01: сервер с отличающимся build ID отвергает�
 
 /* ---------------------------------------------- R06, R07 regressions */
 
-function getFreePort() {
-  return new Promise((res, rej) => {
-    const s = createServer();
-    s.listen(0, "127.0.0.1", () => {
-      const port = s.address().port;
-      s.close(() => res(port));
-    });
-    s.on("error", rej);
-  });
-}
 
 test("R06: writeRuntime и runtimePath отказывают ключам с выходом за каталог, оставляя внешние файлы нетронутыми", () => {
   const tmp = createTempDir();
@@ -1058,15 +1052,14 @@ test("R06: writeRuntime и runtimePath отказывают ключам с вы
 
 test("R07: CLI --ensure и --url учитывают --session, создавая файл сессии вместо local", async () => {
   const tmp = createTempDir();
-  const port = await getFreePort();
   let spawnedPid = null;
   try {
     mkdirSync(join(tmp, ".workflow"), { recursive: true });
 
-    // Вызов CLI --ensure --session alpha
+    // Вызов CLI --ensure --session alpha с --port 0 (без TOCTOU гонки свободного порта)
     const runEnsure = spawnSync(
       process.execPath,
-      [CLI_PATH, "--ensure", "--no-open", "--session", "alpha", "--port", String(port), "--root", tmp],
+      [CLI_PATH, "--ensure", "--no-open", "--session", "alpha", "--port", "0", "--root", tmp],
       { encoding: "utf8", env: { ...process.env, NF_NO_OPEN: "1" }, timeout: 15000 }
     );
     assert.equal(runEnsure.status, 0, `CLI --ensure завершился с ошибкой: ${runEnsure.stderr}`);
@@ -1074,7 +1067,7 @@ test("R07: CLI --ensure и --url учитывают --session, создавая 
     // Проверяем, что создан рантайм alpha, а local НЕ создан
     const alphaRuntime = readRuntime(tmp, "alpha");
     assert.ok(alphaRuntime, "файл .workflow/dashboards/alpha.json должен существовать");
-    assert.equal(alphaRuntime.port, port);
+    assert.ok(alphaRuntime.port > 0, "сервер должен получить активный порт от ОС");
     spawnedPid = alphaRuntime.pid;
 
     const localRuntime = readRuntime(tmp, "local");
@@ -1087,7 +1080,7 @@ test("R07: CLI --ensure и --url учитывают --session, создавая 
       { encoding: "utf8", env: { ...process.env, NF_NO_OPEN: "1" }, timeout: 15000 }
     );
     assert.equal(runUrl.status, 0, `CLI --url завершился с ошибкой: ${runUrl.stderr}`);
-    assert.match(runUrl.stdout.trim(), new RegExp(`http://(?:localhost|127\\.0\\.0\\.1):${port}`), "--url должен вернуть URL alpha");
+    assert.match(runUrl.stdout.trim(), new RegExp(`http://(?:localhost|127\\.0\\.0\\.1):${alphaRuntime.port}`), "--url должен вернуть URL alpha");
   } finally {
     if (spawnedPid) {
       try { process.kill(spawnedPid); } catch {}
@@ -1099,17 +1092,16 @@ test("R07: CLI --ensure и --url учитывают --session, создавая 
 
 test("R07: две разные сессии получают разные серверы и не усыновляют друг друга, а та же сессия переиспользуется", async () => {
   const tmp = createTempDir();
-  const portA = await getFreePort();
-  await getFreePort();
   let pidA = null;
   let pidB = null;
   try {
     mkdirSync(join(tmp, ".workflow"), { recursive: true });
 
-    // 1. Запуск сессии alpha
-    const infoA = await ensureDashboard(tmp, { open: false, session: "alpha", port: portA });
+    // 1. Запуск сессии alpha на активном OS-assigned порту (port 0)
+    const infoA = await ensureDashboard(tmp, { open: false, session: "alpha", port: 0 });
     assert.ok(infoA.url, "alpha должен запуститься");
     assert.equal(infoA.started, true);
+    assert.ok(infoA.port > 0, "alpha должен получить активный порт от ОС");
     const recA = readRuntime(tmp, "alpha");
     assert.ok(recA);
     pidA = recA.pid;
@@ -1118,8 +1110,8 @@ test("R07: две разные сессии получают разные сер
     const healthA = await (await fetch(`http://127.0.0.1:${infoA.port}/api/health`)).json();
     assert.equal(healthA.session, "alpha", "/api/health должен содержать session: alpha");
 
-    // 2. Запуск сессии beta с ТЕМ ЖЕ portA: orphan scan не должен усыновить сервер alpha!
-    const infoB = await ensureDashboard(tmp, { open: false, session: "beta", port: portA });
+    // 2. Запуск сессии beta с ТЕМ ЖЕ infoA.port: orphan scan не должен усыновить сервер alpha!
+    const infoB = await ensureDashboard(tmp, { open: false, session: "beta", port: infoA.port });
     assert.ok(infoB.url, "beta должен запуститься");
     assert.equal(infoB.started, true, "beta должен запуститься новым сервером, а не усыновить alpha");
     assert.notEqual(infoB.adopted, true, "beta не должен быть помечен как adopted");
@@ -1137,7 +1129,7 @@ test("R07: две разные сессии получают разные сер
     assert.equal(healthB.session, "beta", "/api/health должен содержать session: beta");
 
     // 3. Повторный вызов alpha идемпотентно переиспользует тот же сервер alpha
-    const againA = await ensureDashboard(tmp, { open: false, session: "alpha", port: portA });
+    const againA = await ensureDashboard(tmp, { open: false, session: "alpha", port: infoA.port });
     assert.equal(againA.started, false, "повторный вызов alpha должен переиспользовать сервер");
     assert.equal(againA.port, infoA.port);
   } finally {
@@ -1220,10 +1212,9 @@ test("R07: /api/diff для мегабайтного неотслеживаем�
     };
     syncBuiltinESMExports();
 
-    const port = await getFreePort();
-    bound = await startLiveServer(tmp, port, { maxAttempts: 10 });
+    bound = await startLiveServer(tmp, 0);
 
-    const res = await fetch(`http://127.0.0.1:${port}/api/diff?file=${fileName}`);
+    const res = await fetch(`http://127.0.0.1:${bound.port}/api/diff?file=${fileName}`);
     assert.equal(res.status, 200);
     const body = await res.text();
 
@@ -1238,6 +1229,44 @@ test("R07: /api/diff для мегабайтного неотслеживаем�
     syncBuiltinESMExports();
     if (bound) {
       await new Promise((r) => bound.server.close(r));
+    }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("R03: параллельные вызовы startLiveServer(0) выделяют уникальные порты без TOCTOU гонки", async () => {
+  const tmp = createTempDir("dashboard-parallel-");
+  const N = 8;
+  const servers = [];
+  try {
+    const boundList = await Promise.all(
+      Array.from({ length: N }, () => startLiveServer(tmp, 0))
+    );
+    servers.push(...boundList);
+
+    const ports = boundList.map((b) => b.port);
+    assert.equal(new Set(ports).size, N, "все N портов должны быть строго уникальными");
+    for (const p of ports) {
+      assert.ok(p > 0, "каждый порт должен быть положительным числом");
+    }
+
+    // Все серверы одновременно активны и отвечают на запросы
+    const healthChecks = await Promise.all(
+      ports.map(async (p) => {
+        const res = await fetch(`http://127.0.0.1:${p}/api/health`);
+        assert.equal(res.status, 200);
+        return res.json();
+      })
+    );
+    assert.equal(healthChecks.length, N);
+    for (const h of healthChecks) {
+      assert.equal(h.ok, true);
+    }
+  } finally {
+    for (const b of servers) {
+      if (b?.server) {
+        try { await new Promise((r) => b.server.close(r)); } catch {}
+      }
     }
     rmSync(tmp, { recursive: true, force: true });
   }
