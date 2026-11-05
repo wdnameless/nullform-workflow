@@ -782,10 +782,27 @@ export function getSessionConsumption(root, flags = {}) {
   return { tokens: t !== null && !Number.isNaN(t) ? t : parsed.tokens, calls: c !== null && !Number.isNaN(c) ? c : parsed.calls };
 }
 
+export function hasValidExperienceLesson(text) {
+  if (typeof text !== "string" || !text.trim()) return false;
+  return text.split(/\r?\n/).some((line) => {
+    const parts = line.split("|").map((p) => p.trim());
+    if (parts.length < 3) return false;
+    const cue = parts[0].replace(/^[-*]\s*/, "").trim();
+    return cue.length > 0 && parts[1].length > 0 && parts[2].length > 0;
+  });
+}
+
 export function checkExperienceFresh(root, startedAt) {
   try {
     const dir = join(root, DIR, "experience"), files = readdirSync(dir).filter((f) => f.endsWith(".md")), startMs = startedAt ? new Date(startedAt).getTime() : 0;
-    return files.some((f) => statSync(join(dir, f), { throwIfNoEntry: false })?.mtimeMs > startMs) ? { ok: true } : { ok: false, checked: files.length };
+    return files.some((f) => {
+      const st = statSync(join(dir, f), { throwIfNoEntry: false });
+      if (!st || st.mtimeMs <= startMs) return false;
+      try {
+        const text = readFileSync(join(dir, f), "utf8");
+        return hasValidExperienceLesson(text);
+      } catch { return false; }
+    }) ? { ok: true } : { ok: false, checked: files.length };
   } catch { return { ok: false, checked: 0 }; }
 }
 

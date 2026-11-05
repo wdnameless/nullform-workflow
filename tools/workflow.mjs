@@ -107,6 +107,7 @@ import {
   suggestTier,
   cmdSuggest,
   checkExperienceFresh,
+  hasValidExperienceLesson,
   findAcceptanceStaleness,
   loadSoftBudgets,
   getSessionConsumption,
@@ -1025,7 +1026,7 @@ export function runWorkflowCli(argv = [], options = {}) {
 
 /* ---------------------------------------------------------------------- exports and main */
 
-export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, checkExperienceFresh, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, withStateLock, statePath, budgetsPath, isPlainObject, refreshSnapshot, assertWorkflowDirOwned, readMetricsRaw, buildMetricRecord, sleepSync, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass, cmdSettle, confirmSettle, resolveSettleDocTargets, resolveSettleGitTargets, resolveSettleTargets, removeSettleWorktrees, removeSettleBranches, isProtectedRefName, PROTECTED_BRANCH_RE };
+export { suggestTier, loadBudgets, DEFAULT_BUDGETS, BUDGET_WARN_RATIO, BUDGET_WARN_DEFAULT_TOKENS, BUDGET_WARN_DEFAULT_CALLS, cmdStart, cmdArtifact, cmdCheck, cmdStatus, cmdCheckBudget, cmdEscalate, cmdClose, checkExperienceFresh, hasValidExperienceLesson, cmdMetrics, loadMetrics, appendMetric, reconcileMetrics, acquireLock, withStateLock, statePath, budgetsPath, isPlainObject, refreshSnapshot, assertWorkflowDirOwned, readMetricsRaw, buildMetricRecord, sleepSync, load, save, parse, cmdCheckCi, cmdReviewRun, cmdStageB, cmdBrief, printWorkflowHelp, ALLOWED_MODES, ALLOWED_DEPTHS, recordStage, setStageVerified, recordGatePass, getReportedStages, cmdStage, cmdGatePass, cmdSettle, confirmSettle, resolveSettleDocTargets, resolveSettleGitTargets, resolveSettleTargets, removeSettleWorktrees, removeSettleBranches, isProtectedRefName, PROTECTED_BRANCH_RE };
 
 import { fileURLToPath } from "node:url";
 
