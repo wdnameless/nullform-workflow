@@ -120,6 +120,32 @@ Mandatory lenses to evaluate on every review:
   A new gate/skill/rule owes one measured run proving it fires and what it costs — else finding (P1 minimum).
 </lenses>
 
+## Review modes
+
+### `--mode adversarial`
+Goal is **falsification, not confirmation**. Confirmatory "looks correct" output is
+invalid in this mode. Produce at least three failure scenarios for the change, each
+with:
+
+- the concrete trigger (input, state, ordering, concurrency, resource limit);
+- the observable wrong outcome;
+- the evidence path — a reproducing command with its raw output, an existing test
+  that would fail, or an explicit `UNVERIFIED: <what could not be checked>`.
+
+If a scenario cannot be demonstrated, say so plainly with its reason; do not
+downgrade it into a vague risk sentence. After the three scenarios, state which
+one is most likely and what single guard would eliminate it.
+
+### Performance check for hot paths
+When the diff touches a hot path — `dashboard*.mjs`, any `*http*` module, or any
+`*collector*` module — the review MUST carry one of:
+
+- `perf: <before> -> <after>` with the command and raw numbers;
+- `perf: n/a — <why this change cannot affect runtime>` (for example, a comment-only edit).
+
+Documentation-only, test-only, and comment-only diffs never trigger this rule.
+Missing perf evidence on a hot path is a finding at P1.
+
 <cross-boundary>
 Every patch-introduced type, variant, or value crossing a function or module boundary (event, message, command, frame, enum variant, queue item, IPC payload):
 1. Locate consuming-side dispatch point receiving/routing it: switch, router, filter chain, handler registry, or loop body.

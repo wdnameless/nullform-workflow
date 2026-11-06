@@ -913,6 +913,23 @@ export function checkProviderAdmitted(provider, policy = null, env = process.env
   return false;
 }
 
+/**
+ * Resolve and validate the review mode before any model dispatch.
+ * Adversarial is reviewer-only: for the oracle, hunting counterexamples is already
+ * the default stance, so accepting the flag there would imply a second, different
+ * behaviour that does not exist.
+ */
+export function resolveReviewMode(rawMode, role) {
+  const mode = rawMode === undefined || rawMode === null ? "default" : String(rawMode).trim() || "default";
+  if (!["default", "adversarial"].includes(mode)) {
+    throw new Error(`review-run: unknown --mode '${mode}'; allowed: default adversarial`);
+  }
+  if (mode === "adversarial" && role !== "reviewer") {
+    throw new Error("review-run: --mode adversarial is only supported for --role reviewer");
+  }
+  return mode;
+}
+
 export function cmdReviewRun(root, flags, positionals = 0) {
   try {
     const rawCrossModel = flags?.["cross-model"] ?? flags?.crossModel ?? null;
@@ -935,6 +952,12 @@ export function cmdReviewRun(root, flags, positionals = 0) {
     delete cleanFlags.env;
     delete cleanFlags.mockMissingProvider;
     delete cleanFlags.returnResult;
+
+    // Adversarial review is a mode, not a second role: the same reviewer must prove
+    // the change can fail instead of confirming it works. Validation lives in its own
+    // function so the admission rule is testable without a model dispatch.
+    const mode = resolveReviewMode(flags?.mode, flags?.role);
+    delete cleanFlags.mode;
 
     const { redo, dryRun } = assertReviewRunFlags(cleanFlags, positionals);
     const gate = validateReviewCapability(flags.harness, { dryRun: true, userHome: flags["user-home"] });
@@ -963,13 +986,16 @@ export function cmdReviewRun(root, flags, positionals = 0) {
 
     if (dryRun) {
       if (crossModel) res.crossModel = crossModel;
+      if (mode !== "default") res.mode = mode;
       console.log(JSON.stringify(res, null, 2));
       return flags.returnResult ? res : 0;
     }
 
     if (!crossModel) {
-      console.log(`workflow review-run: recorded ${flags.role} execution for '${flags.change}'.`);
-      return flags.returnResult ? res : (res.ok ? 0 : 1);
+      const out = { ...res, mode };
+      if (flags.returnResult) return out;
+      console.log(`workflow review-run: recorded ${flags.role} execution for '${flags.change}'${mode === "adversarial" ? " (adversarial mode)" : ""}.`);
+      return res.ok ? 0 : 1;
     }
 
     // Cross-model evaluation for oracle

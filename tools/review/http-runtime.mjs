@@ -333,7 +333,7 @@ export function createHttpExecutor({ root, policy, env = process.env, timeoutMs 
 }
 
 const REVIEW_RUN_FLAGS = ['root', 'harness', 'user-home', 'change', 'role', 'model', 'base-ref', 'product-command',
-  'redo', 'dry-run', 'dryRun', 'admission-policy', 'resume-session'];
+  'redo', 'dry-run', 'dryRun', 'admission-policy', 'resume-session', 'mode', 'cross-model'];
 const BOOLEAN_FLAGS = ['redo', 'dry-run', 'dryRun'];
 
 /**
