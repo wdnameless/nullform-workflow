@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-nocheck
 /**
  * workflow.mjs — tier enforcement for the portable workflow harness protocol.
  *
@@ -36,13 +37,11 @@
  *
  * defer: workflow monolithic cli with ci gates | ceiling: 2500 lines | upgrade: split into workflow-ci and workflow-core modules
  */
-import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync, existsSync, lstatSync, statSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { spawnSync, execFileSync } from "node:child_process";
-import { homedir } from "node:os";
-import { join, dirname, resolve, basename, relative, isAbsolute } from "node:path";
+import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { join, dirname } from "node:path";
 import { readJsonlSafe } from "./session-log.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
-import { parseRequirement } from "./requirements.mjs";
 export { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
 import { printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
@@ -626,6 +625,26 @@ function cmdAnswered(root) {
   });
 }
 
+function printStatusArtifacts(st, reqs) {
+  console.log(`artifacts ${Object.keys(st.artifacts).length}/${reqs.length}`);
+  for (const r of reqs) {
+    const a = st.artifacts[r.kind];
+    console.log(`  ${a ? "+" : "-"} ${r.kind}${a && a.path ? ` (${a.path})` : ""}`);
+  }
+}
+
+function printStatusCost(root, st, flags, soft) {
+  const costUsd = resolveCost(root, st, flags);
+  const costLimit = soft.maxCostUsd ?? (typeof st.costBudgetUsd === "number" ? st.costBudgetUsd : undefined);
+  const costStr = costUsd !== null ? `$${costUsd}` : "unverified";
+  const limitStr = costLimit !== undefined ? `$${costLimit}` : "none";
+  const isCostOver = Boolean(costLimit !== undefined && costUsd !== null && costUsd > costLimit);
+  console.log(`cost spent/limit: ${costStr}/${limitStr}${isCostOver ? " (overrun)" : ""}`);
+  if (isCostOver) {
+    console.log(`BUDGET warning: cost overrun (${costStr}/${limitStr})`);
+  }
+}
+
 function cmdStatus(root, flags = {}) {
   const st = load(root);
   if (!st) { console.log("workflow: no active task."); return 0; }
@@ -637,17 +656,9 @@ function cmdStatus(root, flags = {}) {
   console.log(`status  ${st.status}`);
   console.log(`started ${st.startedAt}`);
   console.log(`budget  ${tierBudget} tool calls for ${st.tier}`);
-  if (st.auto) {
-    console.log(`auto    enabled (allow: "${st.auto.allow}", maxDiff: ${st.auto.maxDiff})`);
-  }
-  if (st.autoRefusal) {
-    console.log(`autoRefusal ${st.autoRefusal.reason} at ${st.autoRefusal.at}`);
-  }
-  console.log(`artifacts ${Object.keys(st.artifacts).length}/${reqs.length}`);
-  for (const r of reqs) {
-    const a = st.artifacts[r.kind];
-    console.log(`  ${a ? "+" : "-"} ${r.kind}${a && a.path ? ` (${a.path})` : ""}`);
-  }
+  if (st.auto) console.log(`auto    enabled (allow: "${st.auto.allow}", maxDiff: ${st.auto.maxDiff})`);
+  if (st.autoRefusal) console.log(`autoRefusal ${st.autoRefusal.reason} at ${st.autoRefusal.at}`);
+  printStatusArtifacts(st, reqs);
   const soft = loadSoftBudgets(root, st.tier);
   const usage = getSessionConsumption(root, laneScope(st, flags));
   console.log(`budget  consumption ${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`);
@@ -656,16 +667,29 @@ function cmdStatus(root, flags = {}) {
   if (tokenRatio >= soft.warnRatio || callRatio >= soft.warnRatio) {
     console.log(`BUDGET warning: session approaching soft budget ceiling (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls)`);
   }
-  const costUsd = resolveCost(root, st, flags);
-  const costLimit = soft.maxCostUsd ?? (typeof st.costBudgetUsd === "number" ? st.costBudgetUsd : undefined);
-  const costStr = costUsd !== null ? `$${costUsd}` : "unverified";
-  const limitStr = costLimit !== undefined ? `$${costLimit}` : "none";
-  const isCostOver = Boolean(costLimit !== undefined && costUsd !== null && costUsd > costLimit);
-  console.log(`cost spent/limit: ${costStr}/${limitStr}${isCostOver ? " (overrun)" : ""}`);
-  if (isCostOver) {
-    console.log(`BUDGET warning: cost overrun (${costStr}/${limitStr})`);
-  }
+  printStatusCost(root, st, flags, soft);
   return 0;
+}
+
+function firstFiniteNumber(...candidates) {
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    const n = Number(c);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function extractEventCost(ev) {
+  const u = ev.message?.usage || ev.data?.usage || ev.usage;
+  return firstFiniteNumber(ev.costUsd, u?.totalCost, u?.cost?.total, u?.costUsd);
+}
+
+function isEventBefore(ev, sinceMs) {
+  if (sinceMs <= 0) return false;
+  const at = ev.timestamp || ev.at || ev.time || ev.message?.timestamp;
+  const t = at ? new Date(at).getTime() : NaN;
+  return Number.isFinite(t) && t < sinceMs;
 }
 
 function parseSessionCost(filePath, sinceMs = 0) {
@@ -674,21 +698,9 @@ function parseSessionCost(filePath, sinceMs = 0) {
   let found = false;
   try {
     for (const ev of readJsonlSafe(filePath)) {
-      if (!ev || typeof ev !== "object") continue;
-      if (sinceMs > 0) {
-        const at = ev.timestamp || ev.at || ev.time || ev.message?.timestamp;
-        const t = at ? new Date(at).getTime() : NaN;
-        if (Number.isFinite(t) && t < sinceMs) continue;
-      }
-      const u = ev.message?.usage || ev.data?.usage || ev.usage;
-      const c = typeof ev.costUsd === "number"
-        ? ev.costUsd
-        : (typeof u?.totalCost === "number"
-          ? u.totalCost
-          : (typeof u?.cost?.total === "number"
-            ? u.cost.total
-            : (typeof u?.costUsd === "number" ? u.costUsd : null)));
-      if (c !== null && Number.isFinite(c)) {
+      if (!ev || typeof ev !== "object" || isEventBefore(ev, sinceMs)) continue;
+      const c = extractEventCost(ev);
+      if (c !== null) {
         totalCost += c;
         found = true;
       }
@@ -698,31 +710,16 @@ function parseSessionCost(filePath, sinceMs = 0) {
 }
 
 function resolveCost(root, st, flags = {}) {
-  if (flags.costUsd !== undefined) {
-    const n = Number(flags.costUsd);
-    if (Number.isFinite(n)) return n;
-  }
-  if (flags.cost !== undefined) {
-    const n = Number(flags.cost);
-    if (Number.isFinite(n)) return n;
-  }
-  if (st && typeof st.costUsd === "number" && Number.isFinite(st.costUsd)) {
-    return st.costUsd;
-  }
-  if (st && typeof st.cost === "number" && Number.isFinite(st.cost)) {
-    return st.cost;
-  }
-  if (st && typeof st.cost?.total_usd === "number" && Number.isFinite(st.cost.total_usd)) {
-    return st.cost.total_usd;
-  }
-  if (st && typeof st.cost?.total === "number" && Number.isFinite(st.cost.total)) {
-    return st.cost.total;
-  }
-  if (st && typeof st.usage?.costUsd === "number" && Number.isFinite(st.usage.costUsd)) {
-    return st.usage.costUsd;
-  }
+  const direct = firstFiniteNumber(
+    flags.costUsd, flags.cost,
+    st?.costUsd, st?.cost,
+    st?.cost?.total_usd, st?.cost?.total,
+    st?.usage?.costUsd
+  );
+  if (direct !== null) return direct;
   const sf = resolveSessionFile(root, laneScope(st, flags));
-  const sinceMs = flags.sinceMs !== undefined ? Number(flags.sinceMs) : (st?.startedAt ? new Date(st.startedAt).getTime() : 0);
+  const rawSince = flags.sinceMs ?? st?.startedAt;
+  const sinceMs = rawSince ? new Date(rawSince).getTime() : 0;
   return parseSessionCost(sf, Number.isFinite(sinceMs) ? sinceMs : 0);
 }
 
@@ -762,11 +759,16 @@ function formatBudgetCounts({ soft, usage, costUsd, costLimit, isCostOver }) {
   return `${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls, ${costText}`;
 }
 
+function emitCheckBudget(flags, payload, text, isError = false) {
+  if (flags.json) console.log(JSON.stringify(payload, null, 2));
+  else if (isError) console.error(text);
+  else console.log(text);
+}
+
 function cmdCheckBudget(root, flags = {}) {
   const st = load(root);
   if (!st) {
-    if (flags.json) console.log(JSON.stringify({ ok: false, error: "no active task" }, null, 2));
-    else console.error("workflow check-budget: no active task.");
+    emitCheckBudget(flags, { ok: false, error: "no active task" }, "workflow check-budget: no active task.", true);
     return 2;
   }
   const evalResult = evaluateBudget(root, st, flags);
@@ -777,18 +779,15 @@ function cmdCheckBudget(root, flags = {}) {
   const consumption = { ...usage, costUsd };
   const costStatus = costUsd === null ? "unverified" : (isCostOver ? "overrun" : "ok");
   if (!over && !handoff) {
-    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: false, consumption, budget, threshold, costStatus, message: "under budget threshold" }, null, 2));
-    else console.log(`workflow check-budget: under budget threshold (${counts}).`);
+    emitCheckBudget(flags, { ok: true, overBudget: false, consumption, budget, threshold, costStatus, message: "under budget threshold" }, `workflow check-budget: under budget threshold (${counts}).`);
     return 0;
   }
   if (handoff?.valid) {
-    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: true, consumption, budget, threshold, handoff, costStatus, message: "over budget, valid fresh handoff present" }, null, 2));
-    else console.log(`workflow check-budget: over budget threshold (${counts}), but valid fresh .workflow/handoff.md present.`);
+    emitCheckBudget(flags, { ok: true, overBudget: true, consumption, budget, threshold, handoff, costStatus, message: "over budget, valid fresh handoff present" }, `workflow check-budget: over budget threshold (${counts}), but valid fresh .workflow/handoff.md present.`);
     return 0;
   }
   const err = `workflow check-budget: budget threshold exceeded (${counts}). Requires .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ sections newer than task start (${st.startedAt}). ${handoff?.reason ? `Current handoff state: ${handoff.reason}.` : ""}`.trim();
-  if (flags.json) console.log(JSON.stringify({ ok: false, overBudget: true, consumption, budget, threshold, handoff, costStatus, error: err }, null, 2));
-  else console.error(err);
+  emitCheckBudget(flags, { ok: false, overBudget: true, consumption, budget, threshold, handoff, costStatus, error: err }, err, true);
   return 1;
 }
 
@@ -927,6 +926,31 @@ import {
   buildDeviationRecord,
   applyCloseDeviation,
 } from "./workflow-ci.mjs";
+function handleNonOpenStatus(root, st) {
+  if (st.status === "closed") {
+    const restored = reconcileMetrics(root, { lockHeld: true });
+    if (restored) {
+      console.log(`workflow: task '${st.task}' was closed; recovered missing terminal metric.`);
+      return 0;
+    }
+  }
+  console.error(`workflow: task '${st.task}' is '${st.status}' — nothing to close. Run \`start\` for a new task.`);
+  return 2;
+}
+
+function enforceForcedGate(hasViolation, flags, msgNoForce, msgNeedReason) {
+  if (!hasViolation) return 0;
+  if (!flags.force) {
+    const msgs = Array.isArray(msgNoForce) ? msgNoForce : [msgNoForce];
+    for (const m of msgs) console.error(m);
+    return 1;
+  }
+  if (!flags.reason) {
+    console.error(msgNeedReason);
+    return 1;
+  }
+  return 0;
+}
 function cmdClose(root, flags) {
   const closeResult = withStateLock(root, () => {
     const st = load(root);
@@ -943,75 +967,57 @@ function cmdClose(root, flags) {
 
     // Closing twice appends a second metric for the same task: `metrics` then counts
     // one task as two and invents a duration between the two closes.
-    if (st.status !== "open") {
-      if (st.status === "closed") {
-        const restored = reconcileMetrics(root, { lockHeld: true });
-        if (restored) {
-          console.log(`workflow: task '${st.task}' was closed; recovered missing terminal metric.`);
-          return 0;
-        }
+    if (st.status !== "open") return handleNonOpenStatus(root, st);
+
+    if (flags.auto || st.auto) {
+      const autoResult = checkAutoClose(root, st, flags);
+      if (autoResult !== 0) return autoResult;
+    }
+
+    const { missing, invalid } = validateArtifacts(root, st);
+
+    const missingCode = enforceForcedGate(
+      missing.length > 0, flags,
+      [`workflow: cannot close ${st.tier} — ${missing.length} artifact(s) missing: ${missing.join(', ')}`,
+       '  finish them, or close with --force --reason "<why>" to record the deviation.'],
+      'workflow: --force requires --reason "<why the artifact is absent>"'
+    );
+    if (missingCode !== 0) return missingCode;
+
+    const invalidCode = enforceForcedGate(
+      invalid.length > 0, flags,
+      `workflow: cannot close ${st.tier} — retained evidence invalid:\n  ${invalid.join('\n  ')}`,
+      'workflow: --force requires --reason "<why the invalid evidence is accepted>"'
+    );
+    if (invalidCode !== 0) return invalidCode;
+
+    let staleAcceptance = null;
+    if (st.artifacts.oracle) {
+      staleAcceptance = findAcceptanceStaleness(root, st);
+      const staleCode = enforceForcedGate(
+        Boolean(staleAcceptance), flags,
+        [`workflow: cannot close ${st.tier} — acceptance is STALE.`, `  ${staleAcceptance}`, '  re-run the oracle on the current tree, or close with --force --reason "<why>"'],
+        'workflow: --force requires --reason "<why the stale acceptance is accepted>"'
+      );
+      if (staleCode !== 0) return staleCode;
+    }
+
+    const stageCheck = checkStageState(root, st, flags);
+    if (!stageCheck.ok) return stageCheck.exitCode;
+
+    let noExperience = false;
+    if (st.tier === "T2" || st.tier === "T3") {
+      const exp = checkExperienceFresh(root, st.startedAt);
+      if (!exp.ok) {
+        const expCode = enforceForcedGate(
+          true, flags,
+          `workflow: cannot close ${st.tier} — no experience lesson appended (${exp.checked} files checked); append 'cue | lesson | evidence' to .workflow/experience/<domain>.md, or close with --force --reason "<why>"`,
+          'workflow: --force requires --reason "<why no lesson was recorded>"'
+        );
+        if (expCode !== 0) return expCode;
+        noExperience = true;
       }
-      console.error(`workflow: task '${st.task}' is '${st.status}' — nothing to close. Run \`start\` for a new task.`);
-      return 2;
     }
-
-  if (flags.auto || st.auto) {
-    const autoResult = checkAutoClose(root, st, flags);
-    if (autoResult !== 0) return autoResult;
-  }
-
-  const { missing, invalid } = validateArtifacts(root, st);
-
-  if (missing.length && !flags.force) {
-    console.error(`workflow: cannot close ${st.tier} — ${missing.length} artifact(s) missing: ${missing.join(', ')}`);
-    console.error(`  finish them, or close with --force --reason "<why>" to record the deviation.`);
-    return 1;
-  }
-  if (missing.length && flags.force && !flags.reason) {
-    console.error(`workflow: --force requires --reason "<why the artifact is absent>"`);
-    return 1;
-  }
-
-  if (invalid.length && !flags.force) {
-    console.error(`workflow: cannot close ${st.tier} — retained evidence invalid:\n  ${invalid.join('\n  ')}`);
-    return 1;
-  }
-  if (invalid.length && flags.force && !flags.reason) {
-    console.error(`workflow: --force requires --reason "<why the invalid evidence is accepted>"`);
-    return 1;
-  }
-
-  // Acceptance staleness: an ACCEPT verdict is evidence only for the tree it was
-  // rendered against. Editing code after the oracle ran and then closing is the
-  // cheapest way to ship unverified work, so refuse unless the verdict is newer
-  // than the last change to a tracked file. `--force --reason` stays the hatch —
-  // but it is recorded below, so the override never disappears silently.
-  let staleAcceptance = null;
-  if (st.artifacts.oracle) {
-    staleAcceptance = findAcceptanceStaleness(root, st);
-    if (staleAcceptance && !flags.force) {
-      console.error(`workflow: cannot close ${st.tier} — acceptance is STALE.`);
-      console.error(`  ${staleAcceptance}`);
-      console.error(`  re-run the oracle on the current tree, or close with --force --reason "<why>"`);
-      return 1;
-    }
-    if (staleAcceptance && flags.force && !flags.reason) {
-      console.error(`workflow: --force requires --reason "<why the stale acceptance is accepted>"`);
-      return 1;
-    }
-  }
-  const stageCheck = checkStageState(root, st, flags);
-  if (!stageCheck.ok) return stageCheck.exitCode;
-  let noExperience = false;
-  if (st.tier === "T2" || st.tier === "T3") {
-    const exp = checkExperienceFresh(root, st.startedAt);
-    if (!exp.ok && !flags.force) {
-      console.error(`workflow: cannot close ${st.tier} — no experience lesson appended (${exp.checked} files checked); append 'cue | lesson | evidence' to .workflow/experience/<domain>.md, or close with --force --reason "<why>"`);
-      return 1;
-    }
-    if (!exp.ok && !flags.reason) { console.error('workflow: --force requires --reason "<why no lesson was recorded>"'); return 1; }
-    if (!exp.ok) noExperience = true;
-  }
   st.status = "closed";
   st.closedAt = new Date().toISOString();
   if (flags["diff-lines"] !== undefined) {

@@ -19,24 +19,18 @@ import {
   isSupersededOracleArtifact,
   recordStageB,
   runReviewRecord,
-  loadReviewEvidence,
-  saveReviewEvidence,
 } from "./review/evidence.mjs";
+import { checkProviderAdmitted, resolveReviewMode, parseCrossModelFlag, cleanReviewRunFlags, runCrossModelReview, initReviewExecution, parseProductCommand, handleDryRunResult, handleSinglePassResult } from "./review/cross-model.mjs";
+export { checkProviderAdmitted, resolveReviewMode };
 import { repairBudget } from "./review/arbitrate.mjs";
-import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review/http-runtime.mjs";
+import { assertReviewRunFlags } from "./review/http-runtime.mjs";
 import { validateReviewCapability } from "./installation/capabilities.mjs";
 import { runBriefRounds, appendAddenda } from "./brief-rounds.mjs";
 import { oracleInput } from "./brief.mjs";
 import { validateReviewEvidenceAtRevision } from "./review/evidence-history.mjs";
 import { isPathInsideRoot, isRealPathInsideRoot, isStructuralExcludedPath } from "./worktree-snapshot.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries, gitIgnoredPaths, lastTouchingRevision, hasReconEvidence } from "./workflow-shared.mjs";
-import {
-  isPlainObject,
-  withStateLock,
-  load,
-  save,
-  logEvent,
-} from "./workflow-core.mjs";
+import { isPlainObject, withStateLock, load, save, logEvent } from "./workflow-core.mjs";
 
 export function resolveChangedFilesAgainstBase(root, baseRef) {
   const run = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, timeout: 10000 });
@@ -742,23 +736,14 @@ export function checkStageObject(id, s) {
 }
 
 export function extractReportedFromArray(stages) {
-  const list = [];
-  for (const s of stages) {
-    if (!s) continue;
-    const id = String(s.id || s.name || s.stage || "unknown");
-    const status = s.status || (s.done ? "done" : "pending");
-    if (isStageReported(status, s.verified === true)) list.push(id);
-  }
-  return list;
+  return stages
+    .filter(Boolean)
+    .filter((s) => isStageReported(s.status || (s.done ? "done" : "pending"), s.verified === true))
+    .map((s) => String(s.id || s.name || s.stage || "unknown"));
 }
 
 export function extractReportedFromObject(stages) {
-  const list = [];
-  for (const [id, s] of Object.entries(stages)) {
-    const hit = checkStageObject(id, s);
-    if (hit) list.push(hit);
-  }
-  return list;
+  return Object.entries(stages).map(([id, s]) => checkStageObject(id, s)).filter(Boolean);
 }
 
 export function hasOracleStage(stages) {
@@ -868,13 +853,12 @@ export function formatDeviationParts(dev) {
 
 export function buildDeviationRecord(reason, { missing, invalid, staleAcceptance, unverifiedStages, noExperience }) {
   const dev = { forced: true, reason: String(reason) };
-  let hasAny = false;
-  if (missing?.length) { dev.missing = [...missing]; hasAny = true; }
-  if (invalid?.length) { dev.invalid = [...invalid]; hasAny = true; }
-  if (staleAcceptance) { dev.staleAcceptance = staleAcceptance; hasAny = true; }
-  if (unverifiedStages?.length) { dev.unverifiedStages = [...unverifiedStages]; hasAny = true; }
-  if (noExperience) { dev.noExperience = true; hasAny = true; }
-  return hasAny ? dev : null;
+  if (missing?.length) dev.missing = [...missing];
+  if (invalid?.length) dev.invalid = [...invalid];
+  if (staleAcceptance) dev.staleAcceptance = staleAcceptance;
+  if (unverifiedStages?.length) dev.unverifiedStages = [...unverifiedStages];
+  if (noExperience) dev.noExperience = true;
+  return Object.keys(dev).length > 2 ? dev : null;
 }
 
 export function applyCloseDeviation(st, flags, details) {
@@ -897,193 +881,31 @@ export function reviewAttempts(root, changeId) {
     return { repairs: 0, retries: 0, reReviews: cycles };
   } catch { return { repairs: 0, retries: 0, reReviews: 0 }; }
 }
-export function checkProviderAdmitted(provider, policy = null, env = process.env) {
-  if (!provider || typeof provider !== "string") return false;
-  const p = provider.trim();
-  if (p === "nullform-gateway") {
-    return Boolean(env.NULLFORM_GATEWAY_API_KEY || (policy && policy.provider === "nullform-gateway"));
-  }
-  if (p === "openai") {
-    return Boolean(env.OPENAI_API_KEY || (policy && policy.provider === "openai"));
-  }
-  if (policy && policy.provider === p) {
-    const credKey = policy.credentialEnv || "OPENAI_API_KEY";
-    return Boolean(env[credKey]);
-  }
-  return false;
-}
-
-/**
- * Resolve and validate the review mode before any model dispatch.
- * Adversarial is reviewer-only: for the oracle, hunting counterexamples is already
- * the default stance, so accepting the flag there would imply a second, different
- * behaviour that does not exist.
- */
-export function resolveReviewMode(rawMode, role) {
-  const mode = rawMode === undefined || rawMode === null ? "default" : String(rawMode).trim() || "default";
-  if (!["default", "adversarial"].includes(mode)) {
-    throw new Error(`review-run: unknown --mode '${mode}'; allowed: default adversarial`);
-  }
-  if (mode === "adversarial" && role !== "reviewer") {
-    throw new Error("review-run: --mode adversarial is only supported for --role reviewer");
-  }
-  return mode;
-}
-
 export function cmdReviewRun(root, flags, positionals = 0) {
   try {
-    const rawCrossModel = flags?.["cross-model"] ?? flags?.crossModel ?? null;
-    if (rawCrossModel === true) {
-      throw new Error("review-run: '--cross-model' requires a '<provider/model>' argument");
-    }
-    const crossModel = rawCrossModel ? String(rawCrossModel).trim() : null;
-    if (crossModel && flags.role !== "oracle") {
-      throw new Error("review-run: --cross-model is only supported for --role oracle");
-    }
-    if (crossModel && !/^[^/\s]+\/\S+$/.test(crossModel)) {
-      throw new Error("review-run: --cross-model requires '<provider/model>' format");
-    }
-
-    const cleanFlags = { ...flags };
-    delete cleanFlags["cross-model"];
-    delete cleanFlags.crossModel;
-    delete cleanFlags.ompRunner;
-    delete cleanFlags.crossModelRunner;
-    delete cleanFlags.env;
-    delete cleanFlags.mockMissingProvider;
-    delete cleanFlags.returnResult;
-
-    // Adversarial review is a mode, not a second role: the same reviewer must prove
-    // the change can fail instead of confirming it works. Validation lives in its own
-    // function so the admission rule is testable without a model dispatch.
+    const crossModel = parseCrossModelFlag(flags);
     const mode = resolveReviewMode(flags?.mode, flags?.role);
-    delete cleanFlags.mode;
+    const cleanFlags = cleanReviewRunFlags(flags);
 
     const { redo, dryRun } = assertReviewRunFlags(cleanFlags, positionals);
     const gate = validateReviewCapability(flags.harness, { dryRun: true, userHome: flags["user-home"] });
     if (!gate.ok) throw new Error(gate.error);
-    // The re-review ceiling from CONTEXT.md ("one initial review plus two re-reviews")
-    // was a documented rule with no enforcement: the attempt count is already in the
-    // evidence history, so it is counted here instead of being asserted in prose.
-    const attempts = reviewAttempts(root, flags.change);
-    repairBudget(attempts);
-    const rawProductCmd = flags["product-command"] ?? flags.productCommand ?? null;
-    const productCommand = rawProductCmd ? (typeof rawProductCmd === "string" ? JSON.parse(rawProductCmd) : rawProductCmd) : null;
-    let policy = null, httpExecutor = null;
-    if (!dryRun && !flags["resume-session"] && !flags.ompRunner) {
-      if (!flags["admission-policy"]) throw new Error('No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON');
-      policy = validatePolicy(JSON.parse(readFileSync(resolve(root, flags["admission-policy"]), "utf8")));
-      resolveNodeRuntime({});
-      httpExecutor = createHttpExecutor({ root, policy });
-    }
+
+    repairBudget(reviewAttempts(root, flags.change));
+    const productCommand = parseProductCommand(flags);
+    const { policy, httpExecutor } = initReviewExecution(root, flags, dryRun);
     const res = runReviewRecord({
       root, changeId: flags.change, role: flags.role, model: flags.model,
       baseRef: flags["base-ref"] || flags.baseRef, prompt: flags.prompt, redo,
-      productCommand, admissionPolicy: flags["admission-policy"] || flags.admissionPolicy, resumeSessionDir: flags["resume-session"] ?? flags.resumeSession ?? null,
+      productCommand, admissionPolicy: flags["admission-policy"] || flags.admissionPolicy,
+      resumeSessionDir: flags["resume-session"] ?? flags.resumeSession ?? null,
       dryRun, harness: gate.harness, httpExecutor, policy,
       ompRunner: flags.ompRunner,
     });
 
-    if (dryRun) {
-      if (crossModel) res.crossModel = crossModel;
-      if (mode !== "default") res.mode = mode;
-      console.log(JSON.stringify(res, null, 2));
-      return flags.returnResult ? res : 0;
-    }
-
-    if (!crossModel) {
-      const out = { ...res, mode };
-      if (flags.returnResult) return out;
-      console.log(`workflow review-run: recorded ${flags.role} execution for '${flags.change}'${mode === "adversarial" ? " (adversarial mode)" : ""}.`);
-      return res.ok ? 0 : 1;
-    }
-
-    // Cross-model evaluation for oracle
-    const [crossProvider] = crossModel.split("/");
-    const env = flags.env || process.env;
-    const isAdmitted = checkProviderAdmitted(crossProvider, policy, env) && !flags.mockMissingProvider;
-
-    const changeDir = join(root, "openspec", "changes", flags.change);
-    const evidence = loadReviewEvidence(changeDir);
-
-    if (!isAdmitted) {
-      // Provider unavailable or credential absent -> UNVERIFIED, never simulated
-      if (evidence) {
-        evidence.crossModel = {
-          status: "unverified",
-          model: crossModel,
-          provider: crossProvider,
-          verdict: "UNVERIFIED",
-          reason: "provider unavailable or credential absent",
-        };
-        evidence.unverified = true;
-        evidence.verdict = "UNVERIFIED";
-        saveReviewEvidence(changeDir, evidence);
-      }
-      console.log(`workflow review-run: cross-model UNVERIFIED for '${flags.change}': provider unavailable or credential absent.`);
-      return flags.returnResult ? { ok: false, unverified: true, verdict: "UNVERIFIED", record: res.record } : 1;
-    }
-
-    // Second pass with that model through the admitted transport only
-    const crossRunner = flags.crossModelRunner || flags.ompRunner || null;
-    const res2 = runReviewRecord({
-      root, changeId: flags.change, role: flags.role, model: crossModel,
-      baseRef: flags["base-ref"] || flags.baseRef, prompt: flags.prompt, redo: false,
-      productCommand, admissionPolicy: flags["admission-policy"] || flags.admissionPolicy, resumeSessionDir: null,
-      dryRun: false, harness: gate.harness, httpExecutor, policy,
-      ompRunner: crossRunner,
-    });
-
-    if (!res2.ok) {
-      console.error(`workflow review-run: cross-model execution failed for '${flags.change}'.`);
-      return flags.returnResult ? { ok: false, error: "cross-model pass failed" } : 1;
-    }
-
-    const verdict1 = res.record?.verdict;
-    const verdict2 = res2.record?.verdict;
-    const updatedEvidence = loadReviewEvidence(changeDir);
-
-    if (verdict1 === verdict2) {
-      // Equal verdicts -> one verdict
-      if (updatedEvidence) {
-        updatedEvidence.verdict = verdict1;
-        updatedEvidence.crossModel = { model: crossModel, verdict: verdict2, matches: true };
-        saveReviewEvidence(changeDir, updatedEvidence);
-      }
-      const ok = verdict1 === "ACCEPT";
-      console.log(`workflow review-run: recorded ${flags.role} execution for '${flags.change}'. Cross-model agreed: ${verdict1}.`);
-      return flags.returnResult ? { ok, verdict: verdict1, record: res.record, crossRecord: res2.record } : (ok ? 0 : 1);
-    } else {
-      // Different verdicts -> escalate, record both verdicts and mark change escalated (no ACCEPT)
-      if (updatedEvidence) {
-        updatedEvidence.escalated = true;
-        updatedEvidence.escalation = {
-          reason: "cross-model verdict disagreement",
-          verdicts: [verdict1, verdict2],
-          at: new Date().toISOString(),
-        };
-        updatedEvidence.verdicts = [verdict1, verdict2];
-        updatedEvidence.crossModel = { model: crossModel, verdict: verdict2, matches: false, escalated: true };
-        updatedEvidence.verdict = "ESCALATED";
-        saveReviewEvidence(changeDir, updatedEvidence);
-      }
-
-      try {
-        const st = load(root);
-        if (st && st.status === "open") {
-          st.escalated = true;
-          st.escalatedAt = new Date().toISOString();
-          st.escalations = [
-            ...(st.escalations || []),
-            { reason: "cross-model verdict disagreement", verdicts: [verdict1, verdict2], at: st.escalatedAt },
-          ];
-          save(root, st);
-        }
-      } catch {}
-
-      console.log(`workflow review-run: cross-model verdict divergence (${verdict1} vs ${verdict2}) -> escalated (no ACCEPT).`);
-      return flags.returnResult ? { ok: false, escalated: true, verdicts: [verdict1, verdict2], record: res.record, crossRecord: res2.record } : 1;
-    }
+    if (dryRun) return handleDryRunResult(res, crossModel, mode, flags.returnResult);
+    if (!crossModel) return handleSinglePassResult(res, mode, flags);
+    return runCrossModelReview({ root, flags, res, crossModel, policy, gate, httpExecutor, productCommand });
   } catch (err) {
     console.error(`workflow review-run error: ${err.message}`);
     return 1;
@@ -1307,14 +1129,9 @@ function resolveSettleBranchCandidates(root, change, currentBranch, branches) {
   }
   const existingLocalBranches = getLocalBranches(root);
   const candidateBranches = new Set([
-    `feat/${change}`,
-    `fix/${change}`,
-    `feat-${change}`,
-    `fix-${change}`,
+    `feat/${change}`, `fix/${change}`, `feat-${change}`, `fix-${change}`,
+    ...(/^(?:feat|fix|feature)[/-]/i.test(change) ? [change] : []),
   ]);
-  if (/^(?:feat|fix|feature)[/-]/i.test(change)) {
-    candidateBranches.add(change);
-  }
   for (const b of candidateBranches) {
     if (existingLocalBranches.has(b)) branches.add(b);
   }

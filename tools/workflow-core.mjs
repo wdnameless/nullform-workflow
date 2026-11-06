@@ -38,12 +38,8 @@ export function loadBudgets(root) {
   if (!existsSync(p)) return { ...DEFAULT_BUDGETS };
   try {
     const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
-    return {
-      T0: typeof raw.T0 === "number" ? raw.T0 : DEFAULT_BUDGETS.T0,
-      T1: typeof raw.T1 === "number" ? raw.T1 : DEFAULT_BUDGETS.T1,
-      T2: typeof raw.T2 === "number" ? raw.T2 : DEFAULT_BUDGETS.T2,
-      T3: typeof raw.T3 === "number" ? raw.T3 : DEFAULT_BUDGETS.T3,
-    };
+    const get = (k) => typeof raw[k] === "number" ? raw[k] : DEFAULT_BUDGETS[k];
+    return { T0: get("T0"), T1: get("T1"), T2: get("T2"), T3: get("T3") };
   } catch {
     return { ...DEFAULT_BUDGETS };
   }
@@ -111,47 +107,46 @@ export function readMetricsRaw(root) {
   const p = join(root, DIR, METRICS_FILE);
   if (!existsSync(p)) return [];
   const content = readFileSync(p, "utf8");
-  const lines = content.split("\n").map((l) => l.trim()).filter(Boolean);
   const out = [];
-  for (const line of lines) {
+  for (const line of content.split("\n").map((l) => l.trim()).filter(Boolean)) {
     try {
       const parsed = JSON.parse(line);
       if (isPlainObject(parsed)) out.push(parsed);
-    } catch {
-      // ignore malformed line
-    }
+    } catch {}
   }
   return out;
 }
 
-export function buildMetricRecord(st) {
-  const closedMs = new Date(st.closedAt || new Date().toISOString()).getTime();
-  const startedMsRaw = st.startedAt ? new Date(st.startedAt).getTime() : NaN;
-  const startedMs = Number.isNaN(startedMsRaw) ? closedMs : startedMsRaw;
-  const durationMs = Math.max(0, closedMs - startedMs);
-  const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
-  const deviation = st.deviation?.forced ? st.deviation : null;
-  const costUsd = typeof st.costUsd === "number" && Number.isFinite(st.costUsd)
-    ? st.costUsd
-    : (typeof st.cost === "number" && Number.isFinite(st.cost) ? st.cost : null);
-  const costBudgetUsd = typeof st.costBudgetUsd === "number" && Number.isFinite(st.costBudgetUsd)
-    ? st.costBudgetUsd
-    : (typeof st.maxCostUsd === "number" && Number.isFinite(st.maxCostUsd) ? st.maxCostUsd : null);
+function toFiniteNumber(...vals) {
+  for (const v of vals) if (Number.isFinite(v)) return v;
+  return null;
+}
+
+function resolveMetricCost(st) {
+  const costUsd = toFiniteNumber(st.costUsd, st.cost);
+  const costBudgetUsd = toFiniteNumber(st.costBudgetUsd, st.maxCostUsd);
   const costOverrun = Boolean(costUsd !== null && costBudgetUsd !== null && costUsd > costBudgetUsd);
   const costStatus = costUsd === null ? "unverified" : (costOverrun ? "overrun" : "ok");
+  return { costUsd, costBudgetUsd, costOverrun, costStatus };
+}
+
+function computeDurationMs(st, closedMs) {
+  const startedMsRaw = st.startedAt ? new Date(st.startedAt).getTime() : NaN;
+  const startedMs = Number.isNaN(startedMsRaw) ? closedMs : startedMsRaw;
+  return Math.max(0, closedMs - startedMs);
+}
+
+export function buildMetricRecord(st) {
+  const closedMs = new Date(st.closedAt || new Date().toISOString()).getTime();
+  const durationMs = computeDurationMs(st, closedMs);
+  const deviation = st.deviation?.forced ? st.deviation : null;
+  const { costUsd, costBudgetUsd, costOverrun, costStatus } = resolveMetricCost(st);
   const record = {
-    task: st.task || "(untitled)",
-    tier: st.tier,
-    startedAt: st.startedAt || st.closedAt,
-    closedAt: st.closedAt,
-    durationMs,
-    forced: Boolean(deviation),
-    auto: st.auto ?? null,
-    artifactsCount,
-    costUsd,
-    costBudgetUsd,
-    costStatus,
-    costOverrun,
+    task: st.task || "(untitled)", tier: st.tier,
+    startedAt: st.startedAt || st.closedAt, closedAt: st.closedAt,
+    durationMs, forced: Boolean(deviation), auto: st.auto ?? null,
+    artifactsCount: st.artifacts ? Object.keys(st.artifacts).length : 0,
+    costUsd, costBudgetUsd, costStatus, costOverrun,
   };
   if (deviation) {
     record.reason = String(deviation.reason || "(no reason recorded)");
@@ -415,32 +410,14 @@ export function extractSignalKeywords(taskStr) {
   const matched = new Set();
   const lower = taskStr.toLowerCase();
 
-  const t3Literals = [
-    "multi-feature", "несколько фич", "множество задач",
-    "параллельн", "мульти-фич", "программа",
-  ];
-  for (const token of t3Literals) {
-    if (lower.includes(token)) {
-      matched.add(token);
-    }
-  }
-  if (VERB_PAIR_T3.test(taskStr)) {
-    matched.add("verb-pair-t3");
-  }
-
+  const t3Literals = ["multi-feature", "несколько фич", "множество задач", "параллельн", "мульти-фич", "программа"];
+  for (const token of t3Literals) if (lower.includes(token)) matched.add(token);
+  if (VERB_PAIR_T3.test(taskStr)) matched.add("verb-pair-t3");
   const t2Regexes = [
     /\b(?:schema|migration|database|db|architectur\w*|redesign|refactor-all)\b/gi,
     /(?:схем\w*|миграц\w*|архитектур\w*|баз[аы]\s+данных|редизайн\w*)/gi,
   ];
-  for (const re of t2Regexes) {
-    const hits = taskStr.match(re);
-    if (hits) {
-      for (const h of hits) {
-        matched.add(h.toLowerCase());
-      }
-    }
-  }
-
+  for (const re of t2Regexes) for (const h of taskStr.match(re) || []) matched.add(h.toLowerCase());
   return [...matched];
 }
 
@@ -534,6 +511,18 @@ export function cmdSuggest(flags) {
   return 0;
 }
 
+function resolveTierCalls(tierEntry) {
+  if (!tierEntry) return null;
+  if (typeof tierEntry.calls === "number" && tierEntry.calls > 0) return tierEntry.calls;
+  return Number.isInteger(tierEntry) && tierEntry > 0 ? tierEntry : null;
+}
+
+function resolveMaxCostUsd(raw, tierEntry) {
+  if (Number.isFinite(tierEntry)) return tierEntry;
+  if (Number.isFinite(tierEntry?.maxCostUsd)) return tierEntry.maxCostUsd;
+  return Number.isFinite(raw?.maxCostUsd) ? raw.maxCostUsd : undefined;
+}
+
 export function loadSoftBudgets(root, tier = null) {
   const p = budgetsPath(root);
   const tierCalls = tier && DEFAULT_BUDGETS[tier] ? DEFAULT_BUDGETS[tier] : BUDGET_WARN_DEFAULT_CALLS;
@@ -542,20 +531,12 @@ export function loadSoftBudgets(root, tier = null) {
   try {
     const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
     const tierEntry = tier && raw.tiers ? raw.tiers[tier] : undefined;
-    const tierOverride = tierEntry && typeof tierEntry.calls === "number" && tierEntry.calls > 0
-      ? tierEntry.calls
-      : (typeof tierEntry === "number" && tierEntry > 0 && Number.isInteger(tierEntry) ? tierEntry : null);
-    const tierCost = typeof tierEntry === "number" && Number.isFinite(tierEntry)
-      ? tierEntry
-      : (tierEntry && typeof tierEntry.maxCostUsd === "number" && Number.isFinite(tierEntry.maxCostUsd) ? tierEntry.maxCostUsd : undefined);
-    const maxCostUsd = typeof tierCost === "number" && Number.isFinite(tierCost)
-      ? tierCost
-      : (typeof raw.maxCostUsd === "number" && Number.isFinite(raw.maxCostUsd) ? raw.maxCostUsd : undefined);
+    const pos = (val, fb) => typeof val === "number" && val > 0 ? val : fb;
     return {
-      tokens: typeof raw.tokens === "number" && raw.tokens > 0 ? raw.tokens : def.tokens,
-      calls: tierOverride ?? (typeof raw.calls === "number" && raw.calls > 0 ? raw.calls : def.calls),
-      warnRatio: typeof raw.warnRatio === "number" && raw.warnRatio > 0 ? raw.warnRatio : def.warnRatio,
-      maxCostUsd,
+      tokens: pos(raw.tokens, def.tokens),
+      calls: resolveTierCalls(tierEntry) ?? pos(raw.calls, def.calls),
+      warnRatio: pos(raw.warnRatio, def.warnRatio),
+      maxCostUsd: resolveMaxCostUsd(raw, tierEntry),
     };
   } catch { return def; }
 }
@@ -845,21 +826,15 @@ export function checkHandoffFile(root, startedAt) {
 export const ACCEPTANCE_RE = /(accept|verif|check|prove|proof|proven|test(?:s|ed)?\b|pass(?:es|ed)?\b|green|criteria|criterion|exit\s*code|repro|assert|smoke|suite|\d+\s*\/\s*\d+|провер|приёмк|приемк|критери|тест|готов)/i;
 
 export const REQUIREMENTS = {
-  T0: [
-    { kind: "lane", label: "lane declared (start --tier)", auto: true },
-  ],
-  T1: [
-    { kind: "recon", label: "recon notes: files touched + acceptance check", path: null, minDetail: 20, detailMustContain: ACCEPTANCE_RE },
-  ],
+  T0: [{ kind: "lane", label: "lane declared (start --tier)", auto: true }],
+  T1: [{ kind: "recon", label: "recon notes: files touched + acceptance check", path: null, minDetail: 20, detailMustContain: ACCEPTANCE_RE }],
   T2: [
     { kind: "manifest", label: "manifest.md with R## rows + verbatim user quotes", path: "openspec/changes/<name>/manifest.md", requiresPath: true, mustContain: /R\d\d/ },
     { kind: "openspec", label: "openspec change validated", path: "openspec/changes/<name>", requiresPath: true },
     { kind: "interfaces", label: "interfaces.md: boundaries + signatures + owners", path: "openspec/changes/<name>/interfaces.md", requiresPath: true, minDetail: 40 },
     { kind: "oracle", label: "oracle verdict + its reasons", path: null, minDetail: 30, mustContain: /ACCEPT|REJECT/i },
   ],
-  T3: [
-    { kind: "worktree", label: "isolated worktree per major slice (worktrees.md: slice, path, branch)", path: "openspec/changes/<name>/worktrees.md", requiresPath: true, minDetail: 40, detailMustContain: /worktree/i },
-  ],
+  T3: [{ kind: "worktree", label: "isolated worktree per major slice (worktrees.md: slice, path, branch)", path: "openspec/changes/<name>/worktrees.md", requiresPath: true, minDetail: 40, detailMustContain: /worktree/i }],
 };
 
 /** Everything required at `tier`, in ladder order. */

@@ -58,6 +58,37 @@ function extractType(id, candidateType) {
   }
   return null;
 }
+function filterOuterEmpty(cells) {
+  return cells.filter((c, idx) => (idx !== 0 || c !== "") && (idx !== cells.length - 1 || c !== ""));
+}
+
+function findStatus(cols) {
+  for (let i = cols.length - 1; i >= 0; i--) {
+    const s = cols[i].replace(/[*_`]/g, "").trim().toLowerCase();
+    if (ALLOWED_STATUSES.includes(s)) return s;
+  }
+  return null;
+}
+
+function extractVerify(cols, header) {
+  if (header === undefined || header === null) return undefined;
+  const vIdx = getHeaderVerifyIndex(header);
+  if (vIdx < 0) return undefined;
+  const raw = cols[vIdx] !== undefined ? cols[vIdx].trim() : "";
+  return raw.replace(/^`+|`+$/g, "").trim();
+}
+
+function toRowList(rows) {
+  if (Array.isArray(rows)) return rows;
+  if (typeof rows === "string") return rows.split(/\r?\n/);
+  return [];
+}
+
+function toRequirement(item, vIdx) {
+  if (typeof item === "string") return parseRequirement(item, vIdx);
+  if (item && typeof item === "object" && item.id) return item;
+  return null;
+}
 
 /**
  * Find the zero-based index of the 'verify' column in the header row cells.
@@ -67,11 +98,7 @@ export function getHeaderVerifyIndex(header) {
   if (header === null || header === undefined) return -1;
   if (typeof header === "number") return header;
   const rawCols = typeof header === "string" ? splitRow(header) : Array.isArray(header) ? header : [];
-  const cols = rawCols.filter((c, idx) => {
-    if (idx === 0 && c === "") return false;
-    if (idx === rawCols.length - 1 && c === "") return false;
-    return true;
-  });
+  const cols = filterOuterEmpty(rawCols);
   return cols.findIndex((c) => {
     const clean = String(c || "").replace(/[*_`: ]/g, "").trim().toLowerCase();
     return clean === "verify";
@@ -85,25 +112,10 @@ export function getHeaderVerifyIndex(header) {
  */
 export function parseRequirement(row, header) {
   if (typeof row !== "string" || !row.trim()) return null;
-  const rawCols = splitRow(row);
-  const cols = rawCols.filter((c, idx) => {
-    // Drop outer empty cells from leading/trailing pipe
-    if (idx === 0 && c === "") return false;
-    if (idx === rawCols.length - 1 && c === "") return false;
-    return true;
-  });
-
+  const cols = filterOuterEmpty(splitRow(row));
   if (cols.length < 2) return null;
 
-  // Status is located from right to left
-  let status = null;
-  for (let i = cols.length - 1; i >= 0; i--) {
-    const s = cols[i].replace(/[*_`]/g, "").trim().toLowerCase();
-    if (ALLOWED_STATUSES.includes(s)) {
-      status = s;
-      break;
-    }
-  }
+  const status = findStatus(cols);
   if (!status) return null;
 
   const idCol = cols[0].replace(/[*_`]/g, "").trim();
@@ -114,12 +126,9 @@ export function parseRequirement(row, header) {
   if (!type) return null;
 
   const res = { id: idCol, type, status };
-  if (header !== undefined && header !== null) {
-    const vIdx = getHeaderVerifyIndex(header);
-    if (vIdx >= 0) {
-      const raw = cols[vIdx] !== undefined ? cols[vIdx].trim() : "";
-      res.verify = raw.replace(/^`+|`+$/g, "").trim();
-    }
+  const verify = extractVerify(cols, header);
+  if (verify !== undefined) {
+    res.verify = verify;
   }
   return res;
 }
@@ -133,26 +142,13 @@ export function validateManifestVerify(headerRow, rows) {
   const vIdx = getHeaderVerifyIndex(headerRow);
   if (vIdx < 0) return null;
 
-  const rowList = Array.isArray(rows)
-    ? rows
-    : typeof rows === "string"
-      ? rows.split(/\r?\n/)
-      : [];
-
-  for (const item of rowList) {
+  for (const item of toRowList(rows)) {
     if (!item) continue;
-    let req;
-    if (typeof item === "string") {
-      req = parseRequirement(item, vIdx);
-      if (!req) continue;
-    } else if (typeof item === "object" && item.id) {
-      req = item;
-    } else {
-      continue;
-    }
+    const req = toRequirement(item, vIdx);
+    if (!req) continue;
 
     const clean = String(req.verify || "").replace(/^`+|`+$/g, "").trim();
-    if (!clean || clean.length < 4) {
+    if (clean.length < 4) {
       return `row '${req.id}' missing verify criterion`;
     }
   }
