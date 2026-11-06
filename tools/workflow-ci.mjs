@@ -19,6 +19,8 @@ import {
   isSupersededOracleArtifact,
   recordStageB,
   runReviewRecord,
+  loadReviewEvidence,
+  saveReviewEvidence,
 } from "./review/evidence.mjs";
 import { repairBudget } from "./review/arbitrate.mjs";
 import { assertReviewRunFlags, createHttpExecutor, resolveNodeRuntime, validatePolicy } from "./review/http-runtime.mjs";
@@ -895,10 +897,46 @@ export function reviewAttempts(root, changeId) {
     return { repairs: 0, retries: 0, reReviews: cycles };
   } catch { return { repairs: 0, retries: 0, reReviews: 0 }; }
 }
+export function checkProviderAdmitted(provider, policy = null, env = process.env) {
+  if (!provider || typeof provider !== "string") return false;
+  const p = provider.trim();
+  if (p === "nullform-gateway") {
+    return Boolean(env.NULLFORM_GATEWAY_API_KEY || (policy && policy.provider === "nullform-gateway"));
+  }
+  if (p === "openai") {
+    return Boolean(env.OPENAI_API_KEY || (policy && policy.provider === "openai"));
+  }
+  if (policy && policy.provider === p) {
+    const credKey = policy.credentialEnv || "OPENAI_API_KEY";
+    return Boolean(env[credKey]);
+  }
+  return false;
+}
 
 export function cmdReviewRun(root, flags, positionals = 0) {
   try {
-    const { redo, dryRun } = assertReviewRunFlags(flags, positionals);
+    const rawCrossModel = flags?.["cross-model"] ?? flags?.crossModel ?? null;
+    if (rawCrossModel === true) {
+      throw new Error("review-run: '--cross-model' requires a '<provider/model>' argument");
+    }
+    const crossModel = rawCrossModel ? String(rawCrossModel).trim() : null;
+    if (crossModel && flags.role !== "oracle") {
+      throw new Error("review-run: --cross-model is only supported for --role oracle");
+    }
+    if (crossModel && !/^[^/\s]+\/\S+$/.test(crossModel)) {
+      throw new Error("review-run: --cross-model requires '<provider/model>' format");
+    }
+
+    const cleanFlags = { ...flags };
+    delete cleanFlags["cross-model"];
+    delete cleanFlags.crossModel;
+    delete cleanFlags.ompRunner;
+    delete cleanFlags.crossModelRunner;
+    delete cleanFlags.env;
+    delete cleanFlags.mockMissingProvider;
+    delete cleanFlags.returnResult;
+
+    const { redo, dryRun } = assertReviewRunFlags(cleanFlags, positionals);
     const gate = validateReviewCapability(flags.harness, { dryRun: true, userHome: flags["user-home"] });
     if (!gate.ok) throw new Error(gate.error);
     // The re-review ceiling from CONTEXT.md ("one initial review plus two re-reviews")
@@ -906,9 +944,10 @@ export function cmdReviewRun(root, flags, positionals = 0) {
     // evidence history, so it is counted here instead of being asserted in prose.
     const attempts = reviewAttempts(root, flags.change);
     repairBudget(attempts);
-    const productCommand = flags["product-command"] ? JSON.parse(flags["product-command"]) : null;
+    const rawProductCmd = flags["product-command"] ?? flags.productCommand ?? null;
+    const productCommand = rawProductCmd ? (typeof rawProductCmd === "string" ? JSON.parse(rawProductCmd) : rawProductCmd) : null;
     let policy = null, httpExecutor = null;
-    if (!dryRun && !flags["resume-session"]) {
+    if (!dryRun && !flags["resume-session"] && !flags.ompRunner) {
       if (!flags["admission-policy"]) throw new Error('No model spending authority: supply --admission-policy PROJECT_RELATIVE_JSON');
       policy = validatePolicy(JSON.parse(readFileSync(resolve(root, flags["admission-policy"]), "utf8")));
       resolveNodeRuntime({});
@@ -916,12 +955,109 @@ export function cmdReviewRun(root, flags, positionals = 0) {
     }
     const res = runReviewRecord({
       root, changeId: flags.change, role: flags.role, model: flags.model,
-      baseRef: flags["base-ref"], prompt: flags.prompt, redo,
-      productCommand, admissionPolicy: flags["admission-policy"], resumeSessionDir: flags["resume-session"] ?? null,
+      baseRef: flags["base-ref"] || flags.baseRef, prompt: flags.prompt, redo,
+      productCommand, admissionPolicy: flags["admission-policy"] || flags.admissionPolicy, resumeSessionDir: flags["resume-session"] ?? flags.resumeSession ?? null,
       dryRun, harness: gate.harness, httpExecutor, policy,
+      ompRunner: flags.ompRunner,
     });
-    console.log(res.dryRun ? JSON.stringify(res, null, 2) : `workflow review-run: recorded ${flags.role} execution for '${flags.change}'.`);
-    return res.ok ? 0 : 1;
+
+    if (dryRun) {
+      if (crossModel) res.crossModel = crossModel;
+      console.log(JSON.stringify(res, null, 2));
+      return flags.returnResult ? res : 0;
+    }
+
+    if (!crossModel) {
+      console.log(`workflow review-run: recorded ${flags.role} execution for '${flags.change}'.`);
+      return flags.returnResult ? res : (res.ok ? 0 : 1);
+    }
+
+    // Cross-model evaluation for oracle
+    const [crossProvider] = crossModel.split("/");
+    const env = flags.env || process.env;
+    const isAdmitted = checkProviderAdmitted(crossProvider, policy, env) && !flags.mockMissingProvider;
+
+    const changeDir = join(root, "openspec", "changes", flags.change);
+    const evidence = loadReviewEvidence(changeDir);
+
+    if (!isAdmitted) {
+      // Provider unavailable or credential absent -> UNVERIFIED, never simulated
+      if (evidence) {
+        evidence.crossModel = {
+          status: "unverified",
+          model: crossModel,
+          provider: crossProvider,
+          verdict: "UNVERIFIED",
+          reason: "provider unavailable or credential absent",
+        };
+        evidence.unverified = true;
+        evidence.verdict = "UNVERIFIED";
+        saveReviewEvidence(changeDir, evidence);
+      }
+      console.log(`workflow review-run: cross-model UNVERIFIED for '${flags.change}': provider unavailable or credential absent.`);
+      return flags.returnResult ? { ok: false, unverified: true, verdict: "UNVERIFIED", record: res.record } : 1;
+    }
+
+    // Second pass with that model through the admitted transport only
+    const crossRunner = flags.crossModelRunner || flags.ompRunner || null;
+    const res2 = runReviewRecord({
+      root, changeId: flags.change, role: flags.role, model: crossModel,
+      baseRef: flags["base-ref"] || flags.baseRef, prompt: flags.prompt, redo: false,
+      productCommand, admissionPolicy: flags["admission-policy"] || flags.admissionPolicy, resumeSessionDir: null,
+      dryRun: false, harness: gate.harness, httpExecutor, policy,
+      ompRunner: crossRunner,
+    });
+
+    if (!res2.ok) {
+      console.error(`workflow review-run: cross-model execution failed for '${flags.change}'.`);
+      return flags.returnResult ? { ok: false, error: "cross-model pass failed" } : 1;
+    }
+
+    const verdict1 = res.record?.verdict;
+    const verdict2 = res2.record?.verdict;
+    const updatedEvidence = loadReviewEvidence(changeDir);
+
+    if (verdict1 === verdict2) {
+      // Equal verdicts -> one verdict
+      if (updatedEvidence) {
+        updatedEvidence.verdict = verdict1;
+        updatedEvidence.crossModel = { model: crossModel, verdict: verdict2, matches: true };
+        saveReviewEvidence(changeDir, updatedEvidence);
+      }
+      const ok = verdict1 === "ACCEPT";
+      console.log(`workflow review-run: recorded ${flags.role} execution for '${flags.change}'. Cross-model agreed: ${verdict1}.`);
+      return flags.returnResult ? { ok, verdict: verdict1, record: res.record, crossRecord: res2.record } : (ok ? 0 : 1);
+    } else {
+      // Different verdicts -> escalate, record both verdicts and mark change escalated (no ACCEPT)
+      if (updatedEvidence) {
+        updatedEvidence.escalated = true;
+        updatedEvidence.escalation = {
+          reason: "cross-model verdict disagreement",
+          verdicts: [verdict1, verdict2],
+          at: new Date().toISOString(),
+        };
+        updatedEvidence.verdicts = [verdict1, verdict2];
+        updatedEvidence.crossModel = { model: crossModel, verdict: verdict2, matches: false, escalated: true };
+        updatedEvidence.verdict = "ESCALATED";
+        saveReviewEvidence(changeDir, updatedEvidence);
+      }
+
+      try {
+        const st = load(root);
+        if (st && st.status === "open") {
+          st.escalated = true;
+          st.escalatedAt = new Date().toISOString();
+          st.escalations = [
+            ...(st.escalations || []),
+            { reason: "cross-model verdict disagreement", verdicts: [verdict1, verdict2], at: st.escalatedAt },
+          ];
+          save(root, st);
+        }
+      } catch {}
+
+      console.log(`workflow review-run: cross-model verdict divergence (${verdict1} vs ${verdict2}) -> escalated (no ACCEPT).`);
+      return flags.returnResult ? { ok: false, escalated: true, verdicts: [verdict1, verdict2], record: res.record, crossRecord: res2.record } : 1;
+    }
   } catch (err) {
     console.error(`workflow review-run error: ${err.message}`);
     return 1;

@@ -48,5 +48,11 @@ Rules:
     - `generic`: review pass on green gates.
     Missing `criticality` field in manifest MUST be treated as `core`.
 15. REALITY CHECKER: default NEEDS-WORK; a zero-issue report or A+ self-rating is a red flag — demand proof or REJECT.
+16. CROSS-MODEL CRITIQUE & ESCALATION:
+    When invoked with `--cross-model <provider/model>`, a second independent oracle pass runs using that model through the admitted transport only.
+    - If both oracle passes yield identical verdicts (e.g. both ACCEPT or both REJECT), that single verdict stands.
+    - If verdicts differ (e.g. one ACCEPT and one REJECT), escalate: record both verdicts in evidence and mark the change as escalated; no automatic ACCEPT is granted.
+    - If the cross-model provider is unavailable or credentials are absent, record the second pass as UNVERIFIED; never simulate or fabricate model responses.
+    - Without the `--cross-model` flag, single-pass oracle execution remains unchanged.
 
 
