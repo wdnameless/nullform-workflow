@@ -60,10 +60,30 @@ function extractType(id, candidateType) {
 }
 
 /**
+ * Find the zero-based index of the 'verify' column in the header row cells.
+ * Returns -1 if no verify column is present.
+ */
+export function getHeaderVerifyIndex(header) {
+  if (header === null || header === undefined) return -1;
+  if (typeof header === "number") return header;
+  const rawCols = typeof header === "string" ? splitRow(header) : Array.isArray(header) ? header : [];
+  const cols = rawCols.filter((c, idx) => {
+    if (idx === 0 && c === "") return false;
+    if (idx === rawCols.length - 1 && c === "") return false;
+    return true;
+  });
+  return cols.findIndex((c) => {
+    const clean = String(c || "").replace(/[*_`: ]/g, "").trim().toLowerCase();
+    return clean === "verify";
+  });
+}
+
+/**
  * Extract { id, type, status } from a manifest table row.
  * Returns null if the row is not a valid requirement row.
+ * If header names a verify column, also exposes `verify`.
  */
-export function parseRequirement(row) {
+export function parseRequirement(row, header) {
   if (typeof row !== "string" || !row.trim()) return null;
   const rawCols = splitRow(row);
   const cols = rawCols.filter((c, idx) => {
@@ -93,7 +113,51 @@ export function parseRequirement(row) {
   const type = extractType(idCol, explicitType);
   if (!type) return null;
 
-  return { id: idCol, type, status };
+  const res = { id: idCol, type, status };
+  if (header !== undefined && header !== null) {
+    const vIdx = getHeaderVerifyIndex(header);
+    if (vIdx >= 0) {
+      const raw = cols[vIdx] !== undefined ? cols[vIdx].trim() : "";
+      res.verify = raw.replace(/^`+|`+$/g, "").trim();
+    }
+  }
+  return res;
+}
+
+/**
+ * Validate that every requirement row carries a non-empty verify criterion (min length 4)
+ * when the manifest header declares a verify column.
+ * Returns null if valid, or an error string describing the failing row.
+ */
+export function validateManifestVerify(headerRow, rows) {
+  const vIdx = getHeaderVerifyIndex(headerRow);
+  if (vIdx < 0) return null;
+
+  const rowList = Array.isArray(rows)
+    ? rows
+    : typeof rows === "string"
+      ? rows.split(/\r?\n/)
+      : [];
+
+  for (const item of rowList) {
+    if (!item) continue;
+    let req;
+    if (typeof item === "string") {
+      req = parseRequirement(item, vIdx);
+      if (!req) continue;
+    } else if (typeof item === "object" && item.id) {
+      req = item;
+    } else {
+      continue;
+    }
+
+    const clean = String(req.verify || "").replace(/^`+|`+$/g, "").trim();
+    if (!clean || clean.length < 4) {
+      return `row '${req.id}' missing verify criterion`;
+    }
+  }
+
+  return null;
 }
 
 /**

@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readJsonlSafe } from "./session-log.mjs";
 import { scanWorktree, isSecretOrCredentialPath, isPathInsideRoot, isRealPathInsideRoot } from "./worktree-snapshot.mjs";
-import { parseRequirement } from "./requirements.mjs";
+import { parseRequirement, validateManifestVerify } from "./requirements.mjs";
 import { validateOracleArtifact, validateReviewEvidence, isPositiveOracleVerdict } from "./review/evidence.mjs";
 
 export const DIR = ".workflow";
@@ -966,12 +966,15 @@ export function validatePlanCoverage(tasksBody) {
 
 export function validateManifestRows(body) {
   const rows = String(body || "").split(/\r?\n/).filter((line) => /^\s*\|/.test(line));
-  const parsed = rows.map(parseRequirement).filter(Boolean);
+  const headerRow = rows[0] || "";
+  const parsed = rows.map((r) => parseRequirement(r, headerRow)).filter(Boolean);
   if (parsed.length === 0) return "no requirement rows parse (expected | R01 | <verbatim quote> | ... | <status> |)";
   const ids = new Set(parsed.map((r) => r.id));
   if (ids.size !== parsed.length) return "duplicate requirement IDs";
+  const verifyProblem = validateManifestVerify(headerRow, rows);
+  if (verifyProblem) return verifyProblem;
   for (const row of rows) {
-    const req = parseRequirement(row);
+    const req = parseRequirement(row, headerRow);
     if (!req) continue;
     const cells = row.split("|").map((c) => c.trim()).filter(Boolean);
     const quote = cells.filter((c) => c !== req.id && !/^(open|in-spec|in-ticket|done|placeholder|deferred|dropped)$/i.test(c));
