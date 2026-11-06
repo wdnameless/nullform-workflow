@@ -54,6 +54,7 @@ When the user or project explicitly activates the strict Nullform development wo
 ## 8. ON-DEMAND DISCIPLINES & SPECIALIZED TOOLS
 Read when relevant to the task (via `rule://...` / `skill://...` where supported, otherwise `<HARNESS>/rules/...` / `<HARNESS>/skills/...`):
 - `rule://enterprise-directives` — git/PR isolation, dynamic ports, DB migrations.
+- `rule://web-performance` — web/UI and HTTP performance checklist (compression, caching, render scope, parallel work).
 - `skill://domain-modeling` — `CONTEXT.md` glossary and ubiquitous language.
 - `skill://codebase-design` — deep modules, narrow interfaces, seams on consumer side.
 - `skill://diagnosing-bugs` — reproducible failure before editing.

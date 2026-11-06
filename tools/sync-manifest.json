@@ -66,6 +66,17 @@
     "liveRoot": "@agents"
   },
   {
+    "rel": "rules/web-performance.md"
+  },
+  {
+    "rel": "rules/web-performance.md",
+    "liveRoot": "@agentdir"
+  },
+  {
+    "rel": "rules/web-performance.md",
+    "liveRoot": "@agents"
+  },
+  {
     "rel": "tools/codemap.mjs"
   },
   {
