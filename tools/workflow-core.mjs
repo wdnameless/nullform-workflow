@@ -131,6 +131,14 @@ export function buildMetricRecord(st) {
   const durationMs = Math.max(0, closedMs - startedMs);
   const artifactsCount = st.artifacts ? Object.keys(st.artifacts).length : 0;
   const deviation = st.deviation?.forced ? st.deviation : null;
+  const costUsd = typeof st.costUsd === "number" && Number.isFinite(st.costUsd)
+    ? st.costUsd
+    : (typeof st.cost === "number" && Number.isFinite(st.cost) ? st.cost : null);
+  const costBudgetUsd = typeof st.costBudgetUsd === "number" && Number.isFinite(st.costBudgetUsd)
+    ? st.costBudgetUsd
+    : (typeof st.maxCostUsd === "number" && Number.isFinite(st.maxCostUsd) ? st.maxCostUsd : null);
+  const costOverrun = Boolean(costUsd !== null && costBudgetUsd !== null && costUsd > costBudgetUsd);
+  const costStatus = costUsd === null ? "unverified" : (costOverrun ? "overrun" : "ok");
   const record = {
     task: st.task || "(untitled)",
     tier: st.tier,
@@ -140,6 +148,10 @@ export function buildMetricRecord(st) {
     forced: Boolean(deviation),
     auto: st.auto ?? null,
     artifactsCount,
+    costUsd,
+    costBudgetUsd,
+    costStatus,
+    costOverrun,
   };
   if (deviation) {
     record.reason = String(deviation.reason || "(no reason recorded)");
@@ -525,15 +537,25 @@ export function cmdSuggest(flags) {
 export function loadSoftBudgets(root, tier = null) {
   const p = budgetsPath(root);
   const tierCalls = tier && DEFAULT_BUDGETS[tier] ? DEFAULT_BUDGETS[tier] : BUDGET_WARN_DEFAULT_CALLS;
-  const def = { tokens: BUDGET_WARN_DEFAULT_TOKENS, calls: tierCalls, warnRatio: BUDGET_WARN_RATIO };
+  const def = { tokens: BUDGET_WARN_DEFAULT_TOKENS, calls: tierCalls, warnRatio: BUDGET_WARN_RATIO, maxCostUsd: undefined };
   if (!existsSync(p)) return def;
   try {
     const raw = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
-    const tierOverride = tier && raw.tiers && typeof raw.tiers[tier] === "number" && raw.tiers[tier] > 0 ? raw.tiers[tier] : null;
+    const tierEntry = tier && raw.tiers ? raw.tiers[tier] : undefined;
+    const tierOverride = tierEntry && typeof tierEntry.calls === "number" && tierEntry.calls > 0
+      ? tierEntry.calls
+      : (typeof tierEntry === "number" && tierEntry > 0 && Number.isInteger(tierEntry) ? tierEntry : null);
+    const tierCost = typeof tierEntry === "number" && Number.isFinite(tierEntry)
+      ? tierEntry
+      : (tierEntry && typeof tierEntry.maxCostUsd === "number" && Number.isFinite(tierEntry.maxCostUsd) ? tierEntry.maxCostUsd : undefined);
+    const maxCostUsd = typeof tierCost === "number" && Number.isFinite(tierCost)
+      ? tierCost
+      : (typeof raw.maxCostUsd === "number" && Number.isFinite(raw.maxCostUsd) ? raw.maxCostUsd : undefined);
     return {
       tokens: typeof raw.tokens === "number" && raw.tokens > 0 ? raw.tokens : def.tokens,
       calls: tierOverride ?? (typeof raw.calls === "number" && raw.calls > 0 ? raw.calls : def.calls),
       warnRatio: typeof raw.warnRatio === "number" && raw.warnRatio > 0 ? raw.warnRatio : def.warnRatio,
+      maxCostUsd,
     };
   } catch { return def; }
 }

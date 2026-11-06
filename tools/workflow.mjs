@@ -112,6 +112,7 @@ import {
   loadSoftBudgets,
   getSessionConsumption,
   checkHandoffFile,
+  resolveSessionFile,
 } from "./workflow-core.mjs";
 export { ACCEPTANCE_RE, REQUIREMENTS, requiredFor, openspecDirProblems, openspecFileProblems, runOpenspecValidate, validateOpenspecArtifact, isChangeScopedKind, changeDirOf, parsePlanTickets, missingPlanDep, planCycleFrom, validatePlanCoverage, validateManifestRows, validateArtifacts, markOracleVerified, createArtifactRecord };
 /* ----------------------------------------------------------------------- cli */
@@ -655,7 +656,74 @@ function cmdStatus(root, flags = {}) {
   if (tokenRatio >= soft.warnRatio || callRatio >= soft.warnRatio) {
     console.log(`BUDGET warning: session approaching soft budget ceiling (${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls)`);
   }
+  const costUsd = resolveCost(root, st, flags);
+  const costLimit = soft.maxCostUsd ?? (typeof st.costBudgetUsd === "number" ? st.costBudgetUsd : undefined);
+  const costStr = costUsd !== null ? `$${costUsd}` : "unverified";
+  const limitStr = costLimit !== undefined ? `$${costLimit}` : "none";
+  const isCostOver = Boolean(costLimit !== undefined && costUsd !== null && costUsd > costLimit);
+  console.log(`cost spent/limit: ${costStr}/${limitStr}${isCostOver ? " (overrun)" : ""}`);
+  if (isCostOver) {
+    console.log(`BUDGET warning: cost overrun (${costStr}/${limitStr})`);
+  }
   return 0;
+}
+
+function parseSessionCost(filePath, sinceMs = 0) {
+  if (!filePath || !existsSync(filePath)) return null;
+  let totalCost = 0;
+  let found = false;
+  try {
+    for (const ev of readJsonlSafe(filePath)) {
+      if (!ev || typeof ev !== "object") continue;
+      if (sinceMs > 0) {
+        const at = ev.timestamp || ev.at || ev.time || ev.message?.timestamp;
+        const t = at ? new Date(at).getTime() : NaN;
+        if (Number.isFinite(t) && t < sinceMs) continue;
+      }
+      const u = ev.message?.usage || ev.data?.usage || ev.usage;
+      const c = typeof ev.costUsd === "number"
+        ? ev.costUsd
+        : (typeof u?.totalCost === "number"
+          ? u.totalCost
+          : (typeof u?.cost?.total === "number"
+            ? u.cost.total
+            : (typeof u?.costUsd === "number" ? u.costUsd : null)));
+      if (c !== null && Number.isFinite(c)) {
+        totalCost += c;
+        found = true;
+      }
+    }
+  } catch {}
+  return found ? Number(totalCost.toFixed(4)) : null;
+}
+
+function resolveCost(root, st, flags = {}) {
+  if (flags.costUsd !== undefined) {
+    const n = Number(flags.costUsd);
+    if (Number.isFinite(n)) return n;
+  }
+  if (flags.cost !== undefined) {
+    const n = Number(flags.cost);
+    if (Number.isFinite(n)) return n;
+  }
+  if (st && typeof st.costUsd === "number" && Number.isFinite(st.costUsd)) {
+    return st.costUsd;
+  }
+  if (st && typeof st.cost === "number" && Number.isFinite(st.cost)) {
+    return st.cost;
+  }
+  if (st && typeof st.cost?.total_usd === "number" && Number.isFinite(st.cost.total_usd)) {
+    return st.cost.total_usd;
+  }
+  if (st && typeof st.cost?.total === "number" && Number.isFinite(st.cost.total)) {
+    return st.cost.total;
+  }
+  if (st && typeof st.usage?.costUsd === "number" && Number.isFinite(st.usage.costUsd)) {
+    return st.usage.costUsd;
+  }
+  const sf = resolveSessionFile(root, laneScope(st, flags));
+  const sinceMs = flags.sinceMs !== undefined ? Number(flags.sinceMs) : (st?.startedAt ? new Date(st.startedAt).getTime() : 0);
+  return parseSessionCost(sf, Number.isFinite(sinceMs) ? sinceMs : 0);
 }
 
 /**
@@ -679,10 +747,19 @@ function evaluateBudget(root, st, flags = {}) {
   const usage = getSessionConsumption(root, laneScope(st, flags));
   const warnTokens = Math.floor(soft.tokens * soft.warnRatio);
   const warnCalls = Math.floor(soft.calls * soft.warnRatio);
-  const isOver = usage.tokens >= warnTokens || usage.calls >= warnCalls;
+  const costUsd = resolveCost(root, st, flags);
+  const costLimit = soft.maxCostUsd ?? (typeof st.costBudgetUsd === "number" ? st.costBudgetUsd : undefined);
+  const isCostOver = Boolean(costLimit !== undefined && costUsd !== null && costUsd > costLimit);
+  const isOver = usage.tokens >= warnTokens || usage.calls >= warnCalls || isCostOver;
   const handoff = isOver ? checkHandoffFile(root, st.startedAt) : null;
   const over = isOver && !handoff?.valid;
-  return { soft, usage, warnTokens, warnCalls, isOver, handoff, over };
+  return { soft, usage, warnTokens, warnCalls, costUsd, costLimit, isCostOver, isOver, handoff, over };
+}
+function formatBudgetCounts({ soft, usage, costUsd, costLimit, isCostOver }) {
+  const costStr = costUsd !== null ? `$${costUsd}` : "unverified";
+  const limitStr = costLimit !== undefined ? `$${costLimit}` : "none";
+  const costText = `cost spent/limit: ${costStr}/${limitStr}${isCostOver ? " (overrun)" : ""}`;
+  return `${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls, ${costText}`;
 }
 
 function cmdCheckBudget(root, flags = {}) {
@@ -692,22 +769,25 @@ function cmdCheckBudget(root, flags = {}) {
     else console.error("workflow check-budget: no active task.");
     return 2;
   }
-  const { soft, usage, warnTokens, warnCalls, handoff, over } = evaluateBudget(root, st, flags);
-  const budget = { tokens: soft.tokens, calls: soft.calls };
-  const threshold = { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio };
-  const counts = `${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`;
+  const evalResult = evaluateBudget(root, st, flags);
+  const { soft, usage, warnTokens, warnCalls, costUsd, costLimit, isCostOver, handoff, over } = evalResult;
+  const budget = { tokens: soft.tokens, calls: soft.calls, maxCostUsd: soft.maxCostUsd ?? null };
+  const threshold = { tokens: warnTokens, calls: warnCalls, ratio: soft.warnRatio, maxCostUsd: costLimit ?? null };
+  const counts = formatBudgetCounts(evalResult);
+  const consumption = { ...usage, costUsd };
+  const costStatus = costUsd === null ? "unverified" : (isCostOver ? "overrun" : "ok");
   if (!over && !handoff) {
-    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: false, consumption: usage, budget, threshold, message: "under budget threshold" }, null, 2));
+    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: false, consumption, budget, threshold, costStatus, message: "under budget threshold" }, null, 2));
     else console.log(`workflow check-budget: under budget threshold (${counts}).`);
     return 0;
   }
   if (handoff?.valid) {
-    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: true, consumption: usage, budget, threshold, handoff, message: "over budget, valid fresh handoff present" }, null, 2));
+    if (flags.json) console.log(JSON.stringify({ ok: true, overBudget: true, consumption, budget, threshold, handoff, costStatus, message: "over budget, valid fresh handoff present" }, null, 2));
     else console.log(`workflow check-budget: over budget threshold (${counts}), but valid fresh .workflow/handoff.md present.`);
     return 0;
   }
   const err = `workflow check-budget: budget threshold exceeded (${counts}). Requires .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ sections newer than task start (${st.startedAt}). ${handoff?.reason ? `Current handoff state: ${handoff.reason}.` : ""}`.trim();
-  if (flags.json) console.log(JSON.stringify({ ok: false, overBudget: true, consumption: usage, budget, threshold, handoff, error: err }, null, 2));
+  if (flags.json) console.log(JSON.stringify({ ok: false, overBudget: true, consumption, budget, threshold, handoff, costStatus, error: err }, null, 2));
   else console.error(err);
   return 1;
 }
@@ -716,11 +796,11 @@ function cmdCheckBudget(root, flags = {}) {
 function checkBudgetState(root, st, flags = {}) {
   // flags carries --tokens/--calls: dropping them made the gate ignore an explicitly
   // stated consumption and pass an exhausted lane.
-  const { soft, usage, handoff, over } = evaluateBudget(root, { ...st, tier: st.tier }, flags);
-  if (!over) return 0;
-  const counts = `${usage.tokens}/${soft.tokens} tokens, ${usage.calls}/${soft.calls} calls`;
+  const evalResult = evaluateBudget(root, { ...st, tier: st.tier }, flags);
+  if (!evalResult.over) return 0;
+  const counts = formatBudgetCounts(evalResult);
   console.error(`workflow: cannot close ${st.tier} — budget threshold exceeded (${counts}).`);
-  console.error(`  write .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ (${handoff?.reason || "missing"}),`);
+  console.error(`  write .workflow/handoff.md with РЕШЕНИЯ / ТУПИКИ / ДАЛЬШЕ (${evalResult.handoff?.reason || "missing"}),`);
   console.error(`  or close with --force --reason "<why the budget overrun is accepted>".`);
   logEvent(root, "budget-refusal", `${st.tier} — ${st.task} (${counts})`);
   return 1;
@@ -950,6 +1030,13 @@ function cmdClose(root, flags) {
   } else {
     logEvent(root, "close", `${st.tier} — ${st.task}`);
     console.log(`workflow: ${st.tier} task closed, all artifacts present.`);
+  }
+  const soft = loadSoftBudgets(root, st.tier);
+  if (st.costBudgetUsd === undefined && soft.maxCostUsd !== undefined) {
+    st.costBudgetUsd = soft.maxCostUsd;
+  }
+  if (st.costUsd === undefined) {
+    st.costUsd = resolveCost(root, st, flags);
   }
   const metricRecord = buildMetricRecord(st);
   st.metric = metricRecord;
