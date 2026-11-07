@@ -209,7 +209,12 @@ process.stdout.write(JSON.stringify({gate:validateReviewEvidence({root:input.roo
 }
 
 function success(result) {
-  assert.equal(result.status, 0, result.reply.error || result.stderr);
+  // The driver writes its own failure into stdout as JSON; stderr stays empty when it
+  // dies before that write. Report every channel, or a bare exit code reads like a
+  // product failure with no cause.
+  assert.equal(result.status, 0, result.reply.error
+    || [result.stderr, result.stdout].filter(Boolean).join('\n')
+    || `driver exited ${result.status} with no output`);
   assert.equal(result.reply.ok, true);
   return result.reply.result;
 }
