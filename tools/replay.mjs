@@ -132,7 +132,15 @@ function readBody(req) {
 
 async function cmdRecord(cassettePath, port, target, filter) {
   if (!target) { console.error("replay: --target is required for record"); return 2; }
-  const base = new URL(target);
+  // A malformed --target used to throw an unhandled TypeError and print a stack
+  // trace instead of telling the operator what is wrong.
+  let base;
+  try {
+    base = new URL(target);
+  } catch {
+    console.error(`replay: --target is not a valid absolute URL: ${target}`);
+    return 2;
+  }
   const isHttps = base.protocol === "https:";
   const upstreamPort = base.port ? Number(base.port) : (isHttps ? 443 : 80);
   const upstreamRequest = isHttps ? httpsRequest : httpRequest;
@@ -202,7 +210,7 @@ async function cmdRecord(cassettePath, port, target, filter) {
     upstream.end();
   });
 
-  server.listen(port, () => {
+  server.listen(port, "127.0.0.1", () => {
     const boundPort = server.address()?.port ?? port;
     console.log(`replay: recording http://127.0.0.1:${boundPort} -> ${target}`);
     console.log(`  point the product under test at http://127.0.0.1:${boundPort}`);
@@ -264,7 +272,7 @@ function cmdReplay(cassettePath, port, strict) {
     console.log(`  HIT   ${key}`);
   });
 
-  server.listen(port, () => {
+  server.listen(port, "127.0.0.1", () => {
     const boundPort = server.address()?.port ?? port;
     console.log(`replay: serving cassette on http://127.0.0.1:${boundPort}${strict ? "  (strict)" : ""}`);
     console.log(`  ${cassette.interactions.length} interaction(s), target ${cassette.target || "unknown"}`);
@@ -419,6 +427,11 @@ switch (cmd) {
     console.log("  node replay.mjs show   --cassette c.json     # list interactions");
     code = 0;
 }
-if (cmd === "record" || cmd === "replay") { /* servers keep the loop alive */ }
+if (cmd === "record" || cmd === "replay") {
+  // These commands keep the loop alive only when the server actually starts. An
+  // early refusal (bad --target, unreadable cassette) must still surface its code,
+  // otherwise a broken invocation looks like a successful run.
+  if (code !== 0) process.exit(code);
+}
 else process.exit(code);
 }

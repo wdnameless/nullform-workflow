@@ -1073,7 +1073,9 @@ function parseWorktreeLine(line, root, change, worktreePaths, branches, state) {
     const resolvedPath = resolve(root, state.currentPath);
     if (resolvedPath !== resolve(root) && isPathInsideRoot(root, resolvedPath) && existsSync(resolvedPath)) {
       const base = basename(state.currentPath);
-      if (base === change || base === `feature${change}` || base === `feat-${change}` || state.currentPath.includes(change)) {
+      // Exact identity only. A substring match made `settle --change feat-a` resolve
+      // an unrelated `feat-abc` worktree and destroy its uncommitted work.
+      if (base === change || base === `feature${change}` || base === `feat-${change}` || base === `feat_${change}`) {
         worktreePaths.add(resolvedPath);
       }
     }
@@ -1112,7 +1114,8 @@ function resolveSettleDiskWorktrees(root, change, worktreePaths) {
   if (!existsSync(wtBase)) return;
   try {
     for (const entry of readdirSync(wtBase)) {
-      if (entry === change || entry === `feature${change}` || entry === `feat-${change}` || entry === `feat_${change}` || (change.length >= 3 && entry.includes(change))) {
+      // Same exactness rule as parseWorktreeLine: `feat-a` must never resolve `feat-abc`.
+      if (entry === change || entry === `feature${change}` || entry === `feat-${change}` || entry === `feat_${change}`) {
         const p = resolve(wtBase, entry);
         if (existsSync(p) && isPathInsideRoot(root, p) && resolve(p) !== resolve(root)) {
           worktreePaths.add(p);

@@ -33,6 +33,12 @@ export function redactSecrets(text) {
   out = out.replace(/\bBearer\s+(?!\[REDACTED)([A-Za-z0-9._~+/-]{10,})\b/g, "Bearer [REDACTED:BEARER_TOKEN]");
   // Generic api_key assignments (value only, quotes preserved)
   out = out.replace(/(?<=\bapi[_-]?key\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]{8,}(?=["']?(?:\s|$))/gi, "[REDACTED:API_KEY]");
+  // Azure Storage connection strings carry a base64 AccountKey that matches no other rule.
+  out = out.replace(/(?<=\bAccountKey\s*=\s*)[A-Za-z0-9+/=]{16,}/gi, "[REDACTED:AZURE_ACCOUNT_KEY]");
+  // Long hex tokens are only secrets next to a key/token/secret label. A bare
+  // 64-char hex string in this repo is almost always a SHA-256 evidence digest,
+  // and redacting it would destroy the audit trail.
+  out = out.replace(/(?<=\b(?:key|token|secret|password|passwd|pwd)\s*[:=]\s*["']?)[0-9a-f]{32,}(?=["']?(?:\s|$))/gi, "[REDACTED:HEX_TOKEN]");
   return out;
 }
 

@@ -12,15 +12,17 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rmSync, writeFileSync, mkdirSync, mkdtempSync } from "node:fs";
+import { rmSync, writeFileSync, mkdirSync, mkdtempSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import {
   isGitRepo,
+  hasGitRemote,
   collectDomainFiles,
   collectDecisions,
   collectDomainContext,
+  collectRecentCommits,
   formatRussianOutput,
 } from "../domain-context.mjs";
 import { createTempDir } from "./test-helpers.mjs";
@@ -259,6 +261,49 @@ test('domain-context CLI: --max-files 0/-1/abc отклоняются (exit 2), 
     const data = JSON.parse(ok.stdout);
     assert.equal(data.files.length, 1);
     assert.equal(data.truncated, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/**
+ * B1 regression: filenames and domain names are attacker-controlled in any
+ * cloned repository. A quote or shell metacharacter in them must never become
+ * a second command executed through cmd.exe.
+ */
+test("collectRecentCommits: shell metacharacters in a filename cannot inject a command", () => {
+  const tmp = createTempDir();
+  try {
+    const git = (...args) => spawnSync("git", args, {
+      cwd: tmp, encoding: "utf8", windowsHide: true,
+      env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+    });
+    git("init", "-q", ".");
+    const marker = join(tmp, "pwned.txt");
+    // `&` and `%VAR%` are legal in Windows filenames; a double quote is legal on POSIX
+    // only. Both must reach git as data, never as a second command.
+    const evil = process.platform === "win32"
+      ? "a&echo PWNED&%PATH%b.md"
+      : 'a" & echo PWNED > "' + marker.replace(/\\/g, "/") + '" & "b.md';
+    writeFileSync(join(tmp, evil), "x", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+
+    const res = collectRecentCommits(tmp, [evil]);
+    assert.ok(Array.isArray(res.commits), "collector must return a commits array");
+    assert.equal(existsSync(marker), false, "no injected command may execute");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("isGitRepo and hasGitRemote survive a root path with shell metacharacters", () => {
+  const tmp = createTempDir();
+  try {
+    const weird = join(tmp, "dir & echo X &");
+    mkdirSync(weird, { recursive: true });
+    assert.equal(typeof isGitRepo(weird), "boolean");
+    assert.equal(typeof hasGitRemote(weird), "boolean");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

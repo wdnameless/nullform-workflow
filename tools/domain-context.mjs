@@ -21,7 +21,7 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve, relative, sep } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_MAX_FILES = 15;
@@ -165,7 +165,7 @@ export function collectDomainFiles(root, domain, maxFiles = DEFAULT_MAX_FILES) {
  */
 export function isGitRepo(root) {
   try {
-    const out = execSync("git rev-parse --is-inside-work-tree", {
+    const out = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
@@ -182,7 +182,7 @@ export function isGitRepo(root) {
  */
 export function hasGitRemote(root) {
   try {
-    const remotes = execSync("git remote", {
+    const remotes = execFileSync("git", ["remote"], {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
@@ -205,14 +205,13 @@ export function collectRecentCommits(root, files) {
   }
 
   try {
-    let cmd = "git log --oneline -8";
-    if (files && files.length > 0) {
-      // Передаем файлы с относительными путями в git log
-      const quotedFiles = files.map((f) => `"${f.replace(/"/g, '\\"')}"`).join(" ");
-      cmd += ` -- ${quotedFiles}`;
-    }
+    // Arguments go through execFileSync as an array: a filename or domain may contain
+    // quotes or shell metacharacters, and cmd.exe does not honour backslash-escaped
+    // quotes the way a shell string assumed. Array form removes the shell entirely.
+    const args = ["log", "--oneline", "-8"];
+    if (files && files.length > 0) args.push("--", ...files);
 
-    const output = execSync(cmd, {
+    const output = execFileSync("git", args, {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
@@ -240,7 +239,7 @@ export function collectRecentCommits(root, files) {
  */
 export function isGhAvailable() {
   try {
-    execSync("gh --version", {
+    execFileSync("gh", ["--version"], {
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
       windowsHide: true,
@@ -278,8 +277,7 @@ export function collectGhIssues(root, domain, allowGh = true) {
   }
 
   try {
-    const cmd = `gh issue list --search "${domain.replace(/"/g, '\\"')}" --limit 5 --json number,title,state,url`;
-    const output = execSync(cmd, {
+    const output = execFileSync("gh", ["issue", "list", "--search", String(domain), "--limit", "5", "--json", "number,title,state,url"], {
       cwd: root,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",

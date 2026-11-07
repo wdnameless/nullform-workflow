@@ -384,3 +384,22 @@ test("recount: reflects status updates without manual tally", () => {
   assert.equal(updatedCounts.done, 1);
   assert.equal(updatedCounts["in-spec"], 1);
 });
+
+// B6 regression: Azure AccountKey and label-adjacent hex tokens are secrets.
+test("redactSecrets: masks Azure AccountKey and labelled hex tokens", () => {
+  assert.equal(
+    redactSecrets("AccountKey=abc123def456ghi789jkl012mno345pqr678==").includes("[REDACTED:AZURE_ACCOUNT_KEY]"),
+    true,
+  );
+  assert.equal(
+    redactSecrets("token: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").includes("[REDACTED:HEX_TOKEN]"),
+    true,
+  );
+});
+
+// Evidence digests must survive: they are the audit trail, not secrets.
+test("redactSecrets: keeps bare SHA-256 evidence digests readable", () => {
+  const digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  assert.equal(redactSecrets(`sha256=${digest}`).includes(digest), true);
+  assert.equal(redactSecrets(`evidence hash ${digest}`).includes(digest), true);
+});

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -414,5 +414,39 @@ test("executeReplayTurn preserves recorded historical usage while returning clea
     assert.equal(res.usage.cost.total, 0.001);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * B2 regression: a cassette is untrusted input. A `files` entry with `..` must not
+ * write outside the benchmark clone.
+ */
+test("executeReplayTurn refuses cassette file paths that escape the repo", () => {
+  const dir = createTempDir();
+  try {
+    const repoDir = join(dir, "clone");
+    mkdirSync(repoDir, { recursive: true });
+    const outside = join(dir, "escaped.txt");
+    const cassettePath = join(dir, "c.json");
+    writeFileSync(cassettePath, JSON.stringify({
+      version: 1,
+      model: "m",
+      recordedAt: new Date().toISOString(),
+      turns: [{
+        promptHash: hashPrompt("go"),
+        prompt: "go",
+        response: "ok",
+        files: { "../escaped.txt": "owned" },
+      }],
+    }), "utf8");
+
+    assert.throws(
+      () => executeReplayTurn({ repoDir, replay: cassettePath, absRoot: dir, prompt: "go" }),
+      /escapes|outside|inside/i,
+      "traversal entry must be rejected",
+    );
+    assert.equal(existsSync(outside), false, "nothing may be written outside the clone");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

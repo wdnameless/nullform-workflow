@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { claimTask, releaseTask, readClaim, contextPacket, isClaimed } from "../workflow/claims.mjs";
 import { cmdSettle, runWorkflowCli, removeSettleBranches, removeSettleWorktrees } from "../workflow.mjs";
 
@@ -490,4 +490,33 @@ test("removeSettleBranches refuses to delete protected or current branch and thr
   git("-c", "user.name=Claim Fixture", "-c", "user.email=claim@example.invalid", "commit", "--quiet", "-m", "fixture");
 
   assert.throws(() => removeSettleBranches(f.root, new Set(["master"])), /cannot delete protected branch/i);
+});
+
+/**
+ * B4 regression: `settle --change feat-a` must not resolve an unrelated `feat-abc`
+ * worktree. The identity check is exact, never a substring match.
+ */
+test("settle does not resolve a longer change name that merely contains the target", () => {
+  const root = mkdtempSync(join(tmpdir(), "settle-exact-"));
+  try {
+    const git = (...args) => execFileSync("git", args, {
+      cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+    });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(root, "a.txt"), "x\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+
+    // An unrelated worktree whose path merely contains the requested change name.
+    const decoy = join(root, ".tmp", "worktrees", "feature-feat-abc");
+    mkdirSync(decoy, { recursive: true });
+    git("branch", "feat-abc");
+
+    const code = cmdSettle(root, { change: "feat-a", yes: true });
+    assert.notEqual(code, 0, "settle must refuse when no exact target exists");
+    assert.equal(existsSync(decoy), true, "the decoy worktree directory must survive");
+    assert.match(git("branch", "--list", "feat-abc"), /feat-abc/, "the decoy branch must survive");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

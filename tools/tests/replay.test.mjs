@@ -336,3 +336,25 @@ test("R03: parallel replay and record servers obtain race-free OS-assigned liste
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// B3 regression: the recorder is an unauthenticated forwarding proxy. Binding it to
+// all interfaces would expose the product's traffic to the LAN, so it must bind loopback.
+test("replay record/replay servers bind loopback only", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../replay.mjs", import.meta.url), "utf8");
+  const listens = [...src.matchAll(/server\.listen\(([^)]*)\)/g)].map((m) => m[1]);
+  assert.ok(listens.length >= 2, "both record and replay servers must be found");
+  for (const args of listens) {
+    assert.match(args, /"127\.0\.0\.1"/, `listen(${args}) must bind loopback explicitly`);
+  }
+});
+
+test("replay --target rejects a malformed URL without a stack trace", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const cli = fileURLToPath(new URL("../replay.mjs", import.meta.url));
+  const res = spawnSync(process.execPath, [cli, "record", "--cassette", "c.json", "--target", "not-a-url"], { encoding: "utf8", windowsHide: true });
+  assert.notEqual(res.status, 0, `expected nonzero exit, got ${res.status}`);
+  assert.match(res.stderr + res.stdout, /not a valid absolute URL/i);
+  assert.doesNotMatch(res.stderr, /\bat Object\.|at Module\./, "must not print a stack trace");
+});

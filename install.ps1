@@ -430,6 +430,9 @@ if (-not $SkipMcp) {
       }
     }
     WriteText $mcpTarget ($mcp | ConvertTo-Json -Depth 30)
+    # mcp.json carries provider/PAT/bearer values from the example template, so it
+    # needs the same restrictive permissions as models.yml and config.yml.
+    LockSecretsFile $mcpTarget
     $kept = ($mcp.mcpServers.PSObject.Properties.Name) -join ', '
     Ok "mcp.json -> $mcpTarget (kept: $kept)"
     if ($drop.Count) { Warn "dropped unconfigured: $($drop -join ', ') - re-run with values to add them" }
