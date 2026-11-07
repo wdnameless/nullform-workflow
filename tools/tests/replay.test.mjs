@@ -17,6 +17,14 @@ import {
 } from "../replay.mjs";
 
 
+function waitListening(server) {
+  if (!server || server.listening) return Promise.resolve(server);
+  return new Promise((resolve, reject) => {
+    server.once("listening", () => resolve(server));
+    server.once("error", reject);
+  });
+}
+
 test("requestKey and redaction helpers behave deterministically", () => {
   const key = requestKey("POST", "/v1/chat/completions?model=test", '{"query":"hello"}');
   assert.match(key, /^POST \/v1\/chat\/completions\?model=test \[[a-f0-9]{12}\]$/);
@@ -54,7 +62,7 @@ test("cmdRecord sets upstream Host header to base.host and records cassette", as
   await new Promise((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
   const upstreamPort = upstreamServer.address().port;
   const targetUrl = `http://127.0.0.1:${upstreamPort}`;
-  const proxyServer = await cmdRecord(cassettePath, 0, targetUrl, null);
+  const proxyServer = await waitListening(await cmdRecord(cassettePath, 0, targetUrl, null));
   const proxyPort = proxyServer.address().port;
 
   try {
@@ -97,7 +105,7 @@ test("cmdRecord filter pass-through routes without recording and preserves upstr
   await new Promise((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
   const upstreamPort = upstreamServer.address().port;
   const targetUrl = `http://127.0.0.1:${upstreamPort}`;
-  const proxyServer = await cmdRecord(cassettePath, 0, targetUrl, "^/recorded");
+  const proxyServer = await waitListening(await cmdRecord(cassettePath, 0, targetUrl, "^/recorded"));
   const proxyPort = proxyServer.address().port;
 
   try {
@@ -132,7 +140,7 @@ test("cmdReplay serves recorded responses deterministically without upstream", a
   };
   writeFileSync(cassettePath, JSON.stringify(cassetteContent, null, 2));
 
-  const replayServer = cmdReplay(cassettePath, 0, true);
+  const replayServer = await waitListening(cmdReplay(cassettePath, 0, true));
   const replayPort = replayServer.address().port;
 
   try {
@@ -193,7 +201,7 @@ test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer
   await new Promise((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
   const upstreamPort = upstreamServer.address().port;
   const targetUrl = `http://127.0.0.1:${upstreamPort}`;
-  const proxyServer = await cmdRecord(cassettePath, 0, targetUrl, null);
+  const proxyServer = await waitListening(await cmdRecord(cassettePath, 0, targetUrl, null));
   const proxyPort = proxyServer.address().port;
 
   try {
@@ -211,7 +219,7 @@ test("cmdRecord preserves gzip compressed upstream and cmdReplay serves consumer
     upstreamServer.close();
   }
 
-  const replayServer = cmdReplay(cassettePath, 0, true);
+  const replayServer = await waitListening(cmdReplay(cassettePath, 0, true));
   const replayPort = replayServer.address().port;
   try {
     const replayRes = await fetch(`http://127.0.0.1:${replayPort}/api/v1/models`);
@@ -304,7 +312,9 @@ test("R03: parallel replay and record servers obtain race-free OS-assigned liste
       upstreams.map(async (upstream, i) => {
         const cPath = join(tmpDir, `cassette-${i}.json`);
         const target = `http://127.0.0.1:${upstream.address().port}`;
-        const p = await cmdRecord(cPath, 0, target, null);
+        // cmdRecord returns the server before it is listening; the OS-assigned port
+        // exists only after the 'listening' event.
+        const p = await waitListening(await cmdRecord(cPath, 0, target, null));
         servers.push(p);
         return p;
       })
