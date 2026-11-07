@@ -41,7 +41,9 @@ const gitIn = (cwd, env, ...args) => {
 };
 // Independent statement of the shared-authority contract: the fixture must read the
 // budget where the production resolver must put it, not where a reset would be cheap.
-const sharedLedgerPath = (cwd, env) => join(realpathSync(resolve(cwd, gitIn(cwd, env, 'rev-parse', '--git-common-dir'))), LEDGER_FILE);
+// native folds Windows 8.3 spellings (RUNNER~1 -> runneradmin), which the budget
+// authority also resolves through, so both sides name one directory.
+const sharedLedgerPath = (cwd, env) => join(realpathSync.native(resolve(cwd, gitIn(cwd, env, 'rev-parse', '--git-common-dir'))), LEDGER_FILE);
 
 // Every wait in this file is bounded: a stale build that refuses admission
 // immediately must fail a test, never hang it.
@@ -476,9 +478,9 @@ test('controlled HTTP: one project budget is shared across real Git worktrees an
   t.after(() => rmSync(plain, { recursive: true, force: true }));
   const plainAuthority = runtime.resolveBudgetAuthority(plain);
   assert.equal(plainAuthority.kind, 'root');
-  assert.equal(plainAuthority.authority, realpathSync(plain));
+  assert.equal(plainAuthority.authority, realpathSync.native(plain));
   // Non-Git operational state lives under .workflow/, which the source snapshot excludes.
-  assert.equal(plainAuthority.ledgerPath, join(realpathSync(plain), '.workflow', LEDGER_FILE));
+  assert.equal(plainAuthority.ledgerPath, join(realpathSync.native(plain), '.workflow', LEDGER_FILE));
   assert.equal(runtime.admitSession({ root: plain, policy }).reservedNanoUsd, RESERVE_NANO_USD);
   assert.equal(existsSync(plainAuthority.ledgerPath), true);
 });
