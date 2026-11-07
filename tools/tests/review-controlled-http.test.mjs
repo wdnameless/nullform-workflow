@@ -413,7 +413,9 @@ test('controlled HTTP: one project budget is shared across real Git worktrees an
   const policy = { ...POLICY };
   const primary = runtime.resolveBudgetAuthority(root), secondary = runtime.resolveBudgetAuthority(worktree);
   assert.equal(primary.kind, 'git-common'); assert.equal(secondary.kind, 'git-common');
-  assert.equal(primary.authority, realpathSync(resolve(root, gitIn(root, env, 'rev-parse', '--git-common-dir'))));
+  // Windows may spell the same temp directory as RUNNER~1 or runneradmin; native realpath
+  // folds both, so the expectation uses the same canonicalization as the authority.
+  assert.equal(primary.authority, realpathSync.native(resolve(root, gitIn(root, env, 'rev-parse', '--git-common-dir'))));
   assert.equal(secondary.authority, primary.authority);
   assert.equal(secondary.ledgerPath, primary.ledgerPath);
   assert.equal(primary.ledgerPath, join(primary.authority, LEDGER_FILE));

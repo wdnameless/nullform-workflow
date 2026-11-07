@@ -236,7 +236,7 @@ function runGitDiscovery(root) {
  * a hard failure, never a second root-level ceiling.
  */
 export function resolveBudgetAuthority(root) {
-  const canonicalRoot = realpathSync(validateRootPath(root));
+  const canonicalRoot = realpathSync.native(validateRootPath(root));
   const fallbackLedger = join(canonicalRoot, BUDGET_LEDGER_DIR, BUDGET_LEDGER_FILE);
   // R1: Reject foreign or non-directory .git at the root BEFORE discovery.
   const rootGit = join(canonicalRoot, '.git');
@@ -267,7 +267,7 @@ export function resolveBudgetAuthority(root) {
   const discovery = runGitDiscovery(canonicalRoot);
   if (discovery.ok) {
     if (!discovery.commonDir) throw new Error('Git discovery returned an empty common directory; refusing an unverified budget authority (fail closed)');
-    const commonDir = realpathSync(resolve(canonicalRoot, discovery.commonDir));
+    const commonDir = realpathSync.native(resolve(canonicalRoot, discovery.commonDir));
     assertPlainAuthority(commonDir, canonicalRoot, 'Git common directory');
     // The shared authority is the repository's own Git metadata directory, nothing else.
     if (basename(commonDir) !== '.git') throw new Error(`Git common directory '${commonDir}' is not a '.git' metadata directory; refusing an unscoped budget authority`);

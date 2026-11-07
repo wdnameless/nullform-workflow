@@ -21,8 +21,14 @@ function commonDirectory(root) {
 }
 function projectRoot(root) {
   const path = realpathSync(validateRootPath(root));
-  if (realpathSync(git(path, ['rev-parse', '--show-toplevel']).trim()) !== path) throw new Error('--root must be the integration checkout root');
+  // Git prints a forward-slash path, and Windows may spell the same temporary directory
+  // as an 8.3 short name (RUNNER~1) while realpath resolves the long form (runneradmin).
+  // Only realpathSync.native folds both spellings, so compare native paths.
+  if (nativePath(git(path, ['rev-parse', '--show-toplevel']).trim()) !== nativePath(path)) throw new Error('--root must be the integration checkout root');
   return path;
+}
+function nativePath(value) {
+  try { return realpathSync.native(value); } catch { return resolve(value); }
 }
 function featurePath(root, feature) {
   if (typeof feature !== 'string' || !SLUG.test(feature)) throw new Error('--feature must be a lowercase alphanumeric/hyphen slug (1-64 characters)');
