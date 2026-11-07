@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 const CLI = fileURLToPath(new URL("../sync.mjs", import.meta.url));
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "sync-regression-"));
+  // The CLI reports the harness root after resolving it. macOS keeps /var as a symlink
+  // to /private/var, so expectations built from the raw mkdtemp path would never match.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "sync-regression-")));
   const repo = join(root, "repo"), harness = join(root, "harness");
   const agentDir = join(root, "omp", "agent"), agentsRoot = join(root, "agents");
   mkdirSync(join(repo, "agent"), { recursive: true });
