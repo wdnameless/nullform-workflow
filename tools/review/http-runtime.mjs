@@ -98,7 +98,10 @@ export function resolveNodeRuntime({ env = process.env } = {}) {
 
 function executionDirectory(root, sessionDir) {
   const canonical = realpathSync(validateRootPath(root));
-  const full = resolve(canonical, sessionDir);
+  // The session directory arrives as the caller spelled it. macOS keeps /var as a
+  // symlink to /private/var, so comparing a canonical root against an uncanonical
+  // session path reports an escape that did not happen. Canonicalize both sides.
+  const full = realpathSync(resolve(canonical, sessionDir));
   if (!isPathInsideRoot(canonical, full) || !validatePathWithinScope(full, canonical)) throw new Error('Retained HTTP execution escapes the workspace');
   if (!statSync(full).isDirectory() || lstatSync(full).isSymbolicLink()) throw new Error('Retained HTTP execution directory is a link or not a directory');
   return full;
