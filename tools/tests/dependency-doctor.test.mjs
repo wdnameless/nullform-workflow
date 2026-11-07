@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { createTempDir } from "./-helpers.mjs";
+import { createTempDir } from "./test-helpers.mjs";
 import {
   diagnoseManifests,
   diagnoseRequirements,
@@ -12,7 +12,8 @@ import {
   diagnosePackageJson,
   parseRequirementLine,
   normalizePackageName,
-  DISCLAIMER } from "../dependency-doctor.mjs";
+  DISCLAIMER,
+} from "../dependency-doctor.mjs";
 
 const CLI_PATH = join(fileURLToPath(new URL(".", import.meta.url)), "../dependency-doctor.mjs");
 
