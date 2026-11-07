@@ -191,7 +191,10 @@ function countUntrackedLines(absRoot, safe) {
   let fd = null;
   try {
     const full = realpathSync(join(absRoot, safe));
-    const rel = relative(absRoot, full);
+    // realpathSync resolves platform links (macOS: /var -> /private/var), so the root
+    // must be canonical too. Otherwise relative() yields an escaping path and a file
+    // inside the repository is reported as outside it.
+    const rel = relative(realpathSync(absRoot), full);
     if (rel.startsWith("..") || isAbsolute(rel)) return 0;
     fd = openSync(full, "r");
     const buf = Buffer.alloc(65536);
