@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, symlinkSync, renameSync } from "node:fs";
+
+// Windows may report the same directory as an 8.3 short name (RUNNER~1) or the long
+// form (runneradmin); both are the same place. Canonical native form flattens that.
+function nativeRoot(p) {
+  try { return realpathSync.native(p).toLowerCase(); } catch { return realpathSync(p).toLowerCase(); }
+}
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -127,9 +133,10 @@ test("context returns only pinned task requirements files checks and workspace i
   assert.deepEqual(result.contract, f.contract);
   assert.deepEqual(result.scope.files, f.contract.files);
   assert.deepEqual(result.verification, f.contract.checks);
-  // Windows is case-insensitive and realpathSync.native lowercases the on-disk casing
-  // ("...\Local\temp" vs "...\Local\Temp"). Identity must be stable across both forms.
-  assert.equal(result.workspaceRoot.toLowerCase(), realpathSync(f.root).toLowerCase());
+  // Windows is case-insensitive and can expose the same directory under an 8.3 short
+  // name (RUNNER~1) while realpathSync.native resolves the long form (runneradmin).
+  // Compare canonical native paths so neither spelling is mistaken for a mismatch.
+  assert.equal(nativeRoot(result.workspaceRoot), nativeRoot(f.root));
   assert.equal(result.baseCommit, null);
   assert.equal(claim.contractDigest, digest(readFileSync(join(f.root, f.contractPath))));
   assert.equal(result.claim.generation, claim.generation);

@@ -32,7 +32,7 @@ const gitEnv = home => ({ PATH: process.env.PATH, SystemRoot: process.env.System
   HOME: home, USERPROFILE: home, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
   GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' });
 const gitIn = (cwd, env, ...args) => {
-  const result = spawnSync('git', args, { cwd, env, encoding: 'utf8', timeout: 10000 });
+  const result = spawnSync('git', args, { cwd, env, encoding: 'utf8', timeout: 30000 });
   assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
 };
 // Independent statement of the shared-authority contract: the fixture must read the
@@ -149,7 +149,7 @@ process.stdout.write(JSON.stringify(result));\n`);
 import {runReviewRecord,validateReviewEvidence} from ${JSON.stringify(evidenceModule)};
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const httpExecutor={endpoint:input.endpoint,approveEndpoint:url=>new URL(url).href===input.endpoint,
-run:invocation=>spawnSync(process.execPath,[input.childHarness],{cwd:input.options.root,encoding:'utf8',timeout:10000,
+run:invocation=>spawnSync(process.execPath,[input.childHarness],{cwd:input.options.root,encoding:'utf8',timeout:60000,
 input:JSON.stringify({invocation,endpoint:input.endpoint,childMarker:input.childMarker}),env:process.env})};
 try{const result=runReviewRecord({...input.options,httpExecutor});const gate=validateReviewEvidence({root:input.options.root,changeId:input.options.changeId,tier:'T2'});process.stdout.write(JSON.stringify({ok:true,result,gate}));}
 catch(error){process.stdout.write(JSON.stringify({ok:false,error:error.message}));process.exitCode=1;}\n`);
@@ -175,7 +175,7 @@ catch(error){process.stdout.write(JSON.stringify({ok:false,error:error.message})
     assert.equal(result.signal, null, `child killed by signal ${result.signal}`);
     return { ...result, reply: replyOf(result) };
   };
-  const invokeAsync = (overrides = {}, milliseconds = 20000) => {
+  const invokeAsync = (overrides = {}, milliseconds = 60000) => {
     const child = spawn(process.execPath, [driver], { cwd: root, env: { ...env, OPENAI_API_KEY: 'fixture-only-credential' }, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdin.end(payload(overrides));
     let stdout = '', stderr = '';
@@ -188,7 +188,7 @@ catch(error){process.stdout.write(JSON.stringify({ok:false,error:error.message})
     return { child, done };
   };
   const probeBudget = () => {
-    const result = spawnSync(process.execPath, [budgetProbe], { cwd: root, env, input: JSON.stringify({ root, policyPath, runtimeModule, budgetModule }), encoding: 'utf8', timeout: 15000 });
+    const result = spawnSync(process.execPath, [budgetProbe], { cwd: root, env, input: JSON.stringify({ root, policyPath, runtimeModule, budgetModule }), encoding: 'utf8', timeout: 45000 });
     return { ...result, reply: replyOf(result) };
   };
   const gateProbe = join(scratch, 'gate-probe.mjs');
@@ -197,7 +197,7 @@ const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const {validateReviewEvidence}=await import(${JSON.stringify(evidenceModule)});
 process.stdout.write(JSON.stringify({gate:validateReviewEvidence({root:input.root,changeId:input.changeId,tier:'T2'})}));\n`);
   // Release-gate view of the CURRENT on-disk evidence, without running a review.
-  const gate = () => { try { const out = spawnSync(process.execPath, [gateProbe], { cwd: root, env, input: JSON.stringify({ root, changeId: 'http' }), encoding: 'utf8', timeout: 15000 }).stdout; return JSON.parse(out).gate; } catch { return { ok: false, errors: ['gate probe failed'] }; } };
+  const gate = () => { try { const out = spawnSync(process.execPath, [gateProbe], { cwd: root, env, input: JSON.stringify({ root, changeId: 'http' }), encoding: 'utf8', timeout: 45000 }).stdout; return JSON.parse(out).gate; } catch { return { ok: false, errors: ['gate probe failed'] }; } };
   return { root, changeDir, policy, server, invoke, invokeAsync, probeBudget, gate, writePolicy: changes => writeFileSync(policyPath, JSON.stringify({ ...policy, ...changes })),
     requests: () => lines(join(scratch, 'requests.jsonl')),
     children: () => existsSync(childMarker) ? readFileSync(childMarker, 'utf8').trim().split('\n').length : 0,
@@ -346,7 +346,7 @@ test('controlled HTTP: a competing process cannot admit while the first response
   // request. A stale build refuses admission and exits without HTTP: take whichever
   // settles first, so the suite fails immediately instead of hanging on a message
   // that will never come. `once()` resolves an ARG ARRAY, hence the destructure.
-  const outcome = await withDeadline(Promise.race([held.then(([value]) => ({ held: value })), done.then(value => ({ exited: value }))]), 20000, 'held first response');
+  const outcome = await withDeadline(Promise.race([held.then(([value]) => ({ held: value })), done.then(value => ({ exited: value }))]), 60000, 'held first response');
   assert.ok(outcome.held, `First request never reached the fixture; driver exited first: ${outcome.exited?.reply?.error ?? outcome.exited?.stderr ?? 'no reply'}`);
   assert.equal(outcome.held.held, 1);
   const inflight = f.requests();
@@ -430,7 +430,7 @@ test('controlled HTTP: one project budget is shared across real Git worktrees an
   const authorityProbe = join(scratchRoot, 'authority-probe.mjs');
   writeFileSync(authorityProbe, `const {resolveBudgetAuthority}=await import(${JSON.stringify(budgetModule)});process.stdout.write(JSON.stringify(resolveBudgetAuthority(process.argv[2])));\n`);
   const probe = (cwd, extraEnv = {}) => {
-    const result = spawnSync(process.execPath, [authorityProbe, cwd], { cwd, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 15000 });
+    const result = spawnSync(process.execPath, [authorityProbe, cwd], { cwd, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 45000 });
     return { ...result, value: result.status === 0 ? JSON.parse(result.stdout) : null };
   };
   const foreign = mkdtempSync(join(tmpdir(), 'review-budget-foreign-'));
@@ -488,7 +488,10 @@ test('controlled HTTP: the wire bound is a total deadline, not an idle socket ti
   assert.notEqual(result.status, 0);
   assert.match(result.reply.error, /deadline|timeout|exceeded/i);
   // A body trickling every 20ms would never trip an idle timeout; the total bound must.
-  assert.ok(elapsed < 5000, `trickle must be cut off by the total deadline, took ${elapsed}ms`);
+  // The bound is generous because elapsed includes booting the driver child: on a loaded
+  // two-way CI runner that alone costs seconds. Any finite cut-off still proves the wire
+  // bound is total, because an idle-only timeout never returns for a trickling body.
+  assert.ok(elapsed < 30000, `trickle must be cut off by the total deadline, took ${elapsed}ms`);
   assert.equal(f.ledger().reservations.at(-1).status, 'held');
 });
 

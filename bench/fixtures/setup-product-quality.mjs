@@ -10,7 +10,7 @@
 // environment, and only THIS fixture's manifest.md + src/order-summary.mjs are
 // staged/committed. Ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE cannot redirect
 // this fixture's writes outside its consumer cwd.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -35,11 +35,17 @@ const gitDir = git(["rev-parse", "--absolute-git-dir"]);
 if (gitDir.status !== 0) throw new Error(`not a git repository: ${root} (${gitDir.stderr.trim()})`);
 const toplevel = git(["rev-parse", "--show-toplevel"]);
 if (toplevel.status !== 0) throw new Error(`cannot resolve git toplevel for ${root}: ${toplevel.stderr.trim()}`);
-if (resolve(toplevel.stdout.trim()) !== root) {
+// Git prints the toplevel with forward slashes, and on Windows a temporary path may
+// carry an 8.3 short name (RUNNER~1) while realpath resolves it to the long form.
+// Compare canonical real paths so neither form is mistaken for a redirect.
+function canonical(p) {
+  try { return realpathSync.native(p); } catch { return resolve(p); }
+}
+if (canonical(toplevel.stdout.trim()) !== canonical(root)) {
   throw new Error(`refusing to run: git toplevel ${toplevel.stdout.trim()} is not ${root}`);
 }
 const expectedGitDir = resolve(root, ".git");
-if (resolve(gitDir.stdout.trim()) !== expectedGitDir) {
+if (canonical(gitDir.stdout.trim()) !== canonical(expectedGitDir)) {
   throw new Error(`refusing to run: git dir ${gitDir.stdout.trim()} is not ${expectedGitDir}`);
 }
 
