@@ -4,9 +4,9 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { claimTask, releaseTask, readClaim, contextPacket, isClaimed } from "../workflow/claims.mjs";
-import { cmdSettle, runWorkflowCli, removeSettleBranches, removeSettleWorktrees } from "../workflow.mjs";
+import { cmdSettle, runWorkflowCli, removeSettleBranches } from "../workflow.mjs";
 
 function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "task-claim-"));
@@ -502,7 +502,11 @@ test("settle does not resolve a longer change name that merely contains the targ
     const git = (...args) => execFileSync("git", args, {
       cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
     });
+    // A fresh CI runner has no global git identity, and this repository must never
+    // assume the host's config: set it per invocation.
     git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@t.t");
+    git("config", "user.name", "t");
     writeFileSync(join(root, "a.txt"), "x\n", "utf8");
     git("add", "-A");
     git("commit", "-qm", "init");

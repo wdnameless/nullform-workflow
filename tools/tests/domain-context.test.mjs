@@ -280,11 +280,13 @@ test("collectRecentCommits: shell metacharacters in a filename cannot inject a c
     });
     git("init", "-q", ".");
     const marker = join(tmp, "pwned.txt");
-    // `&` and `%VAR%` are legal in Windows filenames; a double quote is legal on POSIX
-    // only. Both must reach git as data, never as a second command.
+    // One portable hostile name: `&`, spaces and a quote are legal here on both
+    // platforms and would each end an argument if the command were assembled as a
+    // shell string. Redirection (`>`) and separators (`/`) are excluded on purpose —
+    // they are not legal in a filename on every platform.
     const evil = process.platform === "win32"
       ? "a&echo PWNED&%PATH%b.md"
-      : 'a" & echo PWNED > "' + marker.replace(/\\/g, "/") + '" & "b.md';
+      : 'a" & echo PWNED & b.md';
     writeFileSync(join(tmp, evil), "x", "utf8");
     git("add", "-A");
     git("commit", "-qm", "init");

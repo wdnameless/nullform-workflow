@@ -27,11 +27,10 @@ import {
   statSync,
   realpathSync,
 } from "node:fs";
-import { dirname, resolve, isAbsolute, join } from "node:path";
+import { dirname, resolve, isAbsolute, join, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { isPathInsideRoot } from "./worktree-snapshot.mjs";
 
 export const SECRET_BODY_KEYS = /("(?:api_?key|token|secret|password|access_?token|refresh_?token|signature|apiKey|apiSecret)"\s*:\s*")(?:\\.|[^"\\])*"/gi;
 export const SECRET_QUERY = /([?&](?:api_?key|token|secret|password|signature|access_?token)=)[^&]*/gi;
@@ -401,7 +400,9 @@ export function executeReplayTurn({ replay, absRoot, prompt, repoDir }) {
     const rootResolved = resolve(repoDir);
     for (const [relPath, content] of Object.entries(hit.files)) {
       const dest = resolve(rootResolved, relPath);
-      if (!isPathInsideRoot(rootResolved, dest)) {
+      // Containment is checked here rather than imported: this module ships in the
+      // tools-only install, where a helper sibling may be absent.
+      if (dest !== rootResolved && !dest.startsWith(rootResolved + sep)) {
         throw new Error(`cassette file path escapes the repo: ${relPath}`);
       }
       mkdirSync(dirname(dest), { recursive: true });
