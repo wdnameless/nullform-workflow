@@ -17,10 +17,10 @@ function gitPath(root, name) {
   return resolve(root, git(root, ['rev-parse', '--git-path', name]).trim());
 }
 function commonDirectory(root) {
-  return realpathSync(resolve(root, git(root, ['rev-parse', '--git-common-dir']).trim()));
+  return nativePath(resolve(root, git(root, ['rev-parse', '--git-common-dir']).trim()));
 }
 function projectRoot(root) {
-  const path = realpathSync(validateRootPath(root));
+  const path = nativePath(validateRootPath(root));
   // Git prints a forward-slash path, and Windows may spell the same temporary directory
   // as an 8.3 short name (RUNNER~1) while realpath resolves the long form (runneradmin).
   // Only realpathSync.native folds both spellings, so compare native paths.
@@ -61,21 +61,27 @@ function assertAncestor(root, base, head) {
 }
 function loadRegistration(root, feature) {
   const cwd = featurePath(root, feature);
-  if (lstatSync(cwd).isSymbolicLink() || realpathSync(cwd) !== cwd) throw new Error('Feature cwd is a symlink/junction or was moved');
+  // A moved directory is one whose recorded worktree top-level no longer resolves to it.
+  const top = git(cwd, ['rev-parse', '--show-toplevel']).trim();
+  if (lstatSync(cwd).isSymbolicLink() || nativePath(top) !== nativePath(cwd)) throw new Error('Feature cwd is a symlink/junction or was moved');
   const file = join(cwd, REGISTRATION);
   if (!validatePathWithinScope(file, cwd) || lstatSync(file).isSymbolicLink()) throw new Error('Registration escapes the feature cwd');
   const body = readFileSync(file, 'utf8');
-  const record = JSON.parse(body);
+  let record;
+  try { record = JSON.parse(body); }
+  catch { throw new Error('Foreign or tampered workspace registration'); }
   const commonDir = commonDirectory(root);
   if (record.version !== 1 || record.feature !== feature || record.cwd !== cwd || record.root !== root || record.commonDir !== commonDir || commonDirectory(cwd) !== commonDir) throw new Error('Foreign or tampered workspace registration');
-  if (realpathSync(git(cwd, ['rev-parse', '--show-toplevel']).trim()) !== cwd || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(record.base) || typeof record.integrationBranch !== 'string') throw new Error('Invalid workspace registration');
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(record.base) || typeof record.integrationBranch !== 'string') throw new Error('Invalid workspace registration');
   const anchor = gitPath(cwd, ANCHOR);
   if (!validatePathWithinScope(anchor, commonDir) || readFileSync(anchor, 'utf8') !== body) throw new Error('Tampered workspace registration');
   return record;
 }
 function managedUntracked(root, path) {
   if (path === REGISTRATION) {
-    const record = JSON.parse(readFileSync(join(root, REGISTRATION), 'utf8'));
+    let record;
+    try { record = JSON.parse(readFileSync(join(root, REGISTRATION), 'utf8')); }
+    catch { return false; }
     return loadRegistration(record.root, record.feature).cwd === root;
   }
   const match = /^\.tmp\/worktrees\/feature([a-z0-9-]+)\/$/.exec(path);
