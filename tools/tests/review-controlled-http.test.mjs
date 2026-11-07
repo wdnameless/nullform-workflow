@@ -166,9 +166,13 @@ catch(error){process.stdout.write(JSON.stringify({ok:false,error:error.message})
   const payload = overrides => JSON.stringify({ options: { ...options, ...overrides }, endpoint, childMarker, childHarness, root, policyPath, runtimeModule, budgetModule });
   const replyOf = result => { try { return JSON.parse(result.stdout); } catch { return { ok: false, error: result.stderr || `driver produced no reply (status ${result.status})` }; } };
   const invoke = (overrides = {}, credential = true) => {
+    // Each invoke spawns a fresh child that boots the review runtime. A 15s budget was
+    // enough on an idle machine but killed the child under load, and the resulting
+    // ETIMEDOUT was reported as a product failure rather than a budget overrun.
     const result = spawnSync(process.execPath, [driver], { cwd: root, env: { ...env, ...(credential ? { OPENAI_API_KEY: 'fixture-only-credential' } : {}) },
-      input: payload(overrides), encoding: 'utf8', timeout: 15000 });
-    assert.equal(result.error, undefined, result.error?.message);
+      input: payload(overrides), encoding: 'utf8', timeout: 60000 });
+    assert.equal(result.error?.code, undefined, result.error?.message);
+    assert.equal(result.signal, null, `child killed by signal ${result.signal}`);
     return { ...result, reply: replyOf(result) };
   };
   const invokeAsync = (overrides = {}, milliseconds = 20000) => {
