@@ -344,6 +344,9 @@
     "rel": "tools/review/evidence.mjs"
   },
   {
+    "rel": "tools/review/cross-model.mjs"
+  },
+  {
     "rel": "tools/review/native-tools.mjs"
   },
   {

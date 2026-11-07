@@ -38,7 +38,7 @@
  * defer: workflow monolithic cli with ci gates | ceiling: 2500 lines | upgrade: split into workflow-ci and workflow-core modules
  */
 import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { readJsonlSafe } from "./session-log.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
