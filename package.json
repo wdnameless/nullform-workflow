@@ -21,7 +21,7 @@
     "quality:baseline": "node tools/quality.mjs baseline"
   },
   "engines": {
-    "node": ">=18.19.0"
+    "node": ">=20.19.0"
   },
   "dependencies": {
     "json5": "2.2.3",

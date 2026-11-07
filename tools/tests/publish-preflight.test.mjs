@@ -22,7 +22,7 @@ function createValidCandidateTarball(baseDir, name = "nullform-workflow", versio
     name,
     version,
     bin: { nullform: "bin/nullform.mjs" },
-    engines: { node: ">=18.19.0" },
+    engines: { node: ">=20.19.0" },
     dependencies: {
       json5: "2.2.3",
       "jsonc-parser": "3.3.1",

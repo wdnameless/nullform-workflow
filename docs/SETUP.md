@@ -3,7 +3,7 @@
 Три способа установки: от одной команды (skill) до полного CLI. Каждый шаг
 оканчивается проверкой — вы всегда знаете, что установка удалась.
 
-Требования: **Node.js ≥ 18.19** (для установки рекомендуются 22/24 LTS),
+Требования: **Node.js ≥ 20.19** (для установки рекомендуются 22/24 LTS),
 Git в PATH (для T3 worktrees), интернет для npm/skills.
 После нескольких T3-слайсов проверяйте `node tools/worktree-doctor.mjs`: рабочие деревья
 копится, а Git отказывается удалять ветку, пока её держит worktree. `--prune` убирает только
@@ -143,7 +143,7 @@ nullform update --yes       # обновить пакет и перепрове�
 
 | Симптом | Причина | Действие |
 |---|---|---|
-| `node not found` | Нет Node.js в PATH | Установите Node 18+ с nodejs.org |
+| `node not found` | Нет Node.js в PATH | Установите Node 20.19+ с nodejs.org |
 | doctor FAIL на tools-syntax | Битый checkout | Переустановите: `npm install -g --ignore-scripts nullform-workflow` |
 | `version-alignment` WARN | Пакет новее установки | `nullform update --yes` |
 | Skill не виден агенту | Нет рестарта | Перезапустите агент после `npx skills add` |
