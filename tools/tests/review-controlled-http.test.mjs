@@ -153,8 +153,12 @@ process.stdout.write(JSON.stringify(result));\n`);
 import {runReviewRecord,validateReviewEvidence} from ${JSON.stringify(evidenceModule)};
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const httpExecutor={endpoint:input.endpoint,approveEndpoint:url=>new URL(url).href===input.endpoint,
-run:invocation=>spawnSync(process.execPath,[input.childHarness],{cwd:input.options.root,encoding:'utf8',timeout:60000,
-input:JSON.stringify({invocation,endpoint:input.endpoint,childMarker:input.childMarker}),env:process.env})};
+run:invocation=>{const r=spawnSync(process.execPath,[input.childHarness],{cwd:input.options.root,encoding:'utf8',timeout:60000,
+input:JSON.stringify({invocation,endpoint:input.endpoint,childMarker:input.childMarker}),env:process.env});
+// The child reports its own refusal as JSON on stdout; when it dies earlier only stderr
+// carries the cause. Preserve both so the driver's reason is never empty.
+if(r.status!==0&&!r.stdout)r.stdout=JSON.stringify({reason:[r.stderr,r.error&&r.error.message].filter(Boolean).join(' | ')||('child exited '+r.status+' with no output')});
+return r;}};
 try{const result=runReviewRecord({...input.options,httpExecutor});const gate=validateReviewEvidence({root:input.options.root,changeId:input.options.changeId,tier:'T2'});process.stdout.write(JSON.stringify({ok:true,result,gate}));}
 catch(error){process.stdout.write(JSON.stringify({ok:false,error:error.message}));process.exitCode=1;}\n`);
   // The budget probe is the production admission decision in its own process, with no
