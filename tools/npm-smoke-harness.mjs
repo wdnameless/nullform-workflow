@@ -159,6 +159,10 @@ export async function verifyHarnessInit(ctx, harness, fixture, customRoot, harne
 export async function verifyHarnessDoctor(ctx, harness, harnessHome) {
   const docArgs = ["doctor", "--user-home", harnessHome, "--json", ...(harness === "omp" ? ["--skip-plugin-check"] : [])];
   const docRes = await ctx.runInstalledBin(docArgs);
+  // A killed child leaves stdout empty. Parsing it produced "Unexpected end of JSON input",
+  // which hid the real cause: the doctor run exceeded its deadline. Report the timeout.
+  assert.equal(docRes.timedOut, false, `R03: doctor timed out after ${docRes.elapsedMs}ms for ${harness}`);
+  assert.notEqual(docRes.stdout.trim(), "", `R03: doctor produced no JSON for ${harness} (exit ${docRes.status}): ${docRes.stderr.slice(0, 300)}`);
   const docJson = JSON.parse(docRes.stdout);
   assert.equal(docJson.targetHarness, harness, `R03/R05: doctor targetHarness must equal persisted ${harness}`);
   const failedChecks = (docJson.checks || []).filter((c) => c.status === "fail");
