@@ -6,11 +6,9 @@ import { join } from "node:path";
 import {
   scanSkillSecurity,
   auditSkillEvals,
-  evaluateSkillTrigger,
   evaluateSkillTriggerFixtures,
-  lintSkillRegistry,
-} from "../skill-security.mjs";
-import { auditSkillFile, auditSkills } from "../skill-audit.mjs";
+  lintSkillRegistry } from "../skill-security.mjs";
+import { auditSkillFile } from "../skill-audit.mjs";
 
 function createFixtureDir(prefix = "skill-sec-") {
   return mkdtempSync(join(tmpdir(), prefix));

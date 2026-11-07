@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,8 +10,7 @@ import {
   validateAdmissionPolicy,
   loadSpendLedger,
   getSpendSummary,
-  DEFAULT_PROGRAM_CEILING_USD,
-} from "../bench-budget.mjs";
+  DEFAULT_PROGRAM_CEILING_USD } from "../bench-budget.mjs";
 
 test("CATEGORY_TARIFFS defines strict, builder, and scout tariffs", () => {
   assert.ok(CATEGORY_TARIFFS.strict);

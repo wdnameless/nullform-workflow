@@ -22,8 +22,7 @@ import {
   writeFileSync,
   mkdirSync,
   readFileSync,
-  existsSync,
-} from "node:fs";
+  existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -39,14 +38,10 @@ import {
   formatReport,
   formatCompare,
   computePassK,
-  validateTasks,
-  runSmoke,
   findRecentSessionTranscript,
-  parseArgs,
-} from "../benchmark.mjs";
+  parseArgs } from "../benchmark.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../benchmark.mjs", import.meta.url));
-import { recordCassette, loadCassette, hashPrompt } from "../lm-replay.mjs";
 import { createTempDir, createGitRepo } from "./test-helpers.mjs";
 
 
@@ -1096,6 +1091,3 @@ test("summarizeRuns: tier-фильтр считает pass@k и pass^k толь�
     rmSync(repoDir, { recursive: true, force: true });
   }
 });
-
-const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
-

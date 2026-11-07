@@ -10,23 +10,16 @@ import {
   rmSync,
   writeFileSync,
   mkdirSync,
-  readFileSync,
-  existsSync,
-} from "node:fs";
+  existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
   TASKS_FILE,
-  RUNS_DIR,
-  initBenchmark,
-  loadTasks,
   runBenchmark,
   validateTasks,
-  runSmoke,
-  parseArgs,
-} from "../benchmark.mjs";
+  runSmoke } from "../benchmark.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../benchmark.mjs", import.meta.url));
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));

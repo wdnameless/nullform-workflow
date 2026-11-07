@@ -18,9 +18,7 @@ import {
   getChangedLines,
   findMatchingSuite,
   filterCandidateFiles,
-  classifyScope,
-  parseUnifiedDiff,
-} from "../changed-scope.mjs";
+  classifyScope } from "../changed-scope.mjs";
 import { loadScope } from "../clone-coverage.mjs";
 
 function makeGitRepo() {

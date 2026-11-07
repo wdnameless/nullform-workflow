@@ -1,10 +1,10 @@
-import test, { describe, it } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, readFileSync, rmSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { createTempDir } from "./test-helpers.mjs";
+import { createTempDir } from "./-helpers.mjs";
 import {
   diagnoseManifests,
   diagnoseRequirements,
@@ -12,11 +12,7 @@ import {
   diagnosePackageJson,
   parseRequirementLine,
   normalizePackageName,
-  PYTHON_STDLIB_MODULES,
-  NODE_BUILTIN_MODULES,
-  OBSOLETE_BACKPORTS,
-  DISCLAIMER,
-} from "../dependency-doctor.mjs";
+  DISCLAIMER } from "../dependency-doctor.mjs";
 
 const CLI_PATH = join(fileURLToPath(new URL(".", import.meta.url)), "../dependency-doctor.mjs");
 

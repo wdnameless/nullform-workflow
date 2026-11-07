@@ -16,7 +16,6 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
-  statSync,
 } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import { randomUUID } from "node:crypto";

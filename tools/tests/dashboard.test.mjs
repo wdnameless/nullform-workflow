@@ -8,7 +8,7 @@ delete process.env.OMP_SESSION_ID;
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs, { rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import fs, { rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer, request as httpRequest } from "node:http";
 import { join, resolve } from "node:path";
@@ -38,14 +38,7 @@ import {
   projectToken,
   isAllowedHost,
   isCompatibleDashboard,
-  probeDashboard,
-  collectRunState,
-  parseManifestRequirements,
-  computeGates,
-  sanitizeHttpState,
-  esc,
-  embedSnapshot,
-} from "../dashboard.mjs";
+  probeDashboard } from "../dashboard.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../dashboard.mjs", import.meta.url)));
 import { createTempDir, createGitRepo } from "./test-helpers.mjs";

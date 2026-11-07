@@ -18,15 +18,11 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   loadSoftBudgets,
-  buildMetricRecord,
-} from "../workflow-core.mjs";
+  buildMetricRecord } from "../workflow-core.mjs";
 import {
   cmdStart,
-  cmdStatus,
-  cmdCheckBudget,
   load,
-  save,
-} from "../workflow.mjs";
+  save } from "../workflow.mjs";
 
 const CLI_PATH = fileURLToPath(new URL("../workflow.mjs", import.meta.url));
 

@@ -43,7 +43,7 @@ import { join, dirname } from "node:path";
 import { readJsonlSafe } from "./session-log.mjs";
 import { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
 export { isWorkflowPath, isInsideGitRepo, getPorcelainEntries } from "./workflow-shared.mjs";
-import { scanWorktree, isPathInsideRoot, isRealPathInsideRoot, isSecretOrCredentialPath } from "./worktree-snapshot.mjs";
+import { isPathInsideRoot, isRealPathInsideRoot } from "./worktree-snapshot.mjs";
 import { printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capabilities.mjs";
 import { runWorkspaceCommand } from "./workflow/workspaces.mjs";
 import { runClaimCommand } from "./workflow/claims.mjs";
@@ -55,10 +55,6 @@ function printWorkflowHelp() {
   console.log("  brief: --rounds N (default 2, max 5) --manifest PATH [--brief TEXT|PATH] runs interactive briefing rounds.");
   console.log("  settle: --change <name> --yes removes change worktree and branch after acceptance.");
 }
-const DIR = ".workflow";
-const FILE = "state.json";
-const BUDGETS_FILE = "budgets.json";
-const METRICS_FILE = "metrics.jsonl";
 const DEFAULT_BUDGETS = { T0: 10, T1: 25, T2: 45, T3: 45 };
 const BUDGET_WARN_RATIO = 0.8;
 const BUDGET_WARN_DEFAULT_TOKENS = 200_000;
@@ -909,12 +905,6 @@ function checkAutoClose(root, st, flags) {
 }
 
 import {
-  isStageReported,
-  checkStageObject,
-  extractReportedFromArray,
-  extractReportedFromObject,
-  hasOracleStage,
-  checkUnverifiedOracleArtifact,
   getReportedStages,
   checkStageState,
   recordStage,
@@ -922,8 +912,6 @@ import {
   recordGatePass,
   cmdStage,
   cmdGatePass,
-  formatDeviationParts,
-  buildDeviationRecord,
   applyCloseDeviation,
 } from "./workflow-ci.mjs";
 function handleNonOpenStatus(root, st) {
@@ -1055,7 +1043,6 @@ function cmdClose(root, flags) {
 }
 import {
   cmdCheckCi,
-  reviewAttempts,
   cmdReviewRun,
   cmdStageB,
   cmdBrief,

@@ -10,10 +10,9 @@
  *
  * Zero external dependencies. Never executes scanned code.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve, relative, basename } from "node:path";
-import { createHash } from "node:crypto";
-import { parseSkillFrontmatter, extractSkillBody } from "./skill-audit.mjs";
+import { parseSkillFrontmatter } from "./skill-audit.mjs";
 
 /* ----------------------------------------------------------------- Constants */
 
@@ -115,8 +114,6 @@ export function scanSkillSecurity(skillDir, options = {}) {
       fmText = readFileSync(skillFile, "utf8");
     } catch {}
   }
-  const fm = parseSkillFrontmatter(fmText);
-
   // Check if network is declared in frontmatter or metadata
   const hasNetworkDeclaration = Boolean(
     /network:\s*(\[|\n|true)/i.test(fmText) ||
@@ -384,7 +381,7 @@ export function evaluateSkillTriggerFixtures(skill, fixtures) {
  * @param {object} options - Options
  * @returns {object} { ok: boolean, findings: Array }
  */
-export function lintSkillRegistry(root, options = {}) {
+export function lintSkillRegistry(root, _options = {}) {
   const findings = [];
   const baseRoot = resolve(root || process.cwd());
   const skillsDir = join(baseRoot, "skills");

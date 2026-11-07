@@ -8,7 +8,7 @@ delete process.env.OMP_SESSION_ID;
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs, { rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -20,14 +20,12 @@ import {
   sanitizeHttpState,
   generateDashboardHtml,
   parseArgs,
-  main,
   esc,
   embedSnapshot,
-  ensureDashboard,
-} from "../dashboard.mjs";
+  ensureDashboard } from "../dashboard.mjs";
 
 const CLI_PATH = resolve(fileURLToPath(new URL("../dashboard.mjs", import.meta.url)));
-import { createTempDir, createGitRepo } from "./test-helpers.mjs";
+import { createTempDir } from "./test-helpers.mjs";
 
 /* ---------------------------------------------- D01, D02: Run View and --freeze */
 
