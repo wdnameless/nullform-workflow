@@ -28,7 +28,11 @@ const lines = path => existsSync(path) ? readFileSync(path, 'utf8').trim().split
 const POLICY = { schemaVersion: 1, provider: 'openai', model: MODEL, transport: EXECUTOR, endpoint: ENDPOINT,
   ceilingUsd: 0.07, maxRequests: 3, maxContextBytes: 65536, maxResponseBytes: 65536, maxOutputTokens: 256, timeoutMs: 250,
   tariffsUsdPerMillion: { input: 0.15, output: 0.60, cacheRead: 0.075, cacheWrite: 0 } };
-const gitEnv = home => ({ PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP,
+// POSIX reads TMPDIR and Windows reads TEMP/TMP. Passing only the Windows names left
+// macOS children without a temp directory, so the driver died before its first request
+// and the fixture never saw the call it was asserting on.
+const gitEnv = home => ({ PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+  TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR,
   HOME: home, USERPROFILE: home, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
   GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' });
 const gitIn = (cwd, env, ...args) => {

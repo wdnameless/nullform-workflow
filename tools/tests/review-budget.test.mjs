@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as budget from '../review/budget.mjs';
@@ -73,10 +73,13 @@ function readLedgerFromDisk(root) {
 
 test('non-Git root resolves to .workflow fallback', () => {
   const dir = makeTempDir();
+  // macOS keeps /var as a symlink to /private/var, so the authority is canonical while
+  // the fixture path is not. Compare canonical forms instead of the literal spelling.
+  const canonical = p => { try { return realpathSync.native(p); } catch { return p; } };
   try { nonGitDir(dir); const a = resolveBudgetAuthority(dir);
     assert.equal(a.kind, 'root');
-    assert.equal(a.stateDir, join(dir, BUDGET_LEDGER_DIR));
-    assert.equal(a.ledgerPath, join(dir, BUDGET_LEDGER_DIR, BUDGET_LEDGER_FILE));
+    assert.equal(canonical(a.stateDir), canonical(join(dir, BUDGET_LEDGER_DIR)));
+    assert.equal(canonical(a.ledgerPath), canonical(join(dir, BUDGET_LEDGER_DIR, BUDGET_LEDGER_FILE)));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
