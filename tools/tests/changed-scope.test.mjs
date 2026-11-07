@@ -32,6 +32,22 @@ function makeGitRepo() {
   return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+/**
+ * The resolver deliberately honours BASE_REF / GITHUB_BASE_REF so CI can pass the
+ * target branch. A unit test that asserts the default HEAD~1 fallback must therefore
+ * run with those variables cleared, otherwise the runner's own CI env leaks in and
+ * the assertion sees "master" instead of "HEAD~1".
+ */
+const CI_BASE_ENV = ["BASE_REF", "GITHUB_BASE_REF", "EVENT_NAME", "GITHUB_EVENT_NAME", "PUSH_BASE", "GITHUB_EVENT_BEFORE"];
+
+function withoutCiBase(fn) {
+  const saved = new Map(CI_BASE_ENV.map((k) => [k, process.env[k]]));
+  for (const k of CI_BASE_ENV) delete process.env[k];
+  try { return fn(); } finally {
+    for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+
 test("resolveBaseRef: explicit ref wins, HEAD~1 fallback, null on empty", () => {
   const { root, git, cleanup } = makeGitRepo();
   try {
@@ -42,7 +58,7 @@ test("resolveBaseRef: explicit ref wins, HEAD~1 fallback, null on empty", () => 
     writeFileSync(join(root, "b.mjs"), "export const b = 2;\n");
     git("add", "-A");
     git("commit", "-qm", "two");
-    assert.equal(resolveBaseRef(root), "HEAD~1");
+    assert.equal(withoutCiBase(() => resolveBaseRef(root)), "HEAD~1");
   } finally {
     cleanup();
   }
