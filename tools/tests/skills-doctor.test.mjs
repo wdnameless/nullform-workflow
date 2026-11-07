@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
-const TOOL = resolve(import.meta.dirname, "../skills-doctor.mjs");
+const TOOL = resolve(fileURLToPath(new URL(".", import.meta.url)), "../skills-doctor.mjs");
 
 const skillMd = (name) => `---\nname: ${name}\ndescription: "Fixture skill ${name}"\n---\n\nBody of ${name}\n`;
 
@@ -292,7 +293,7 @@ test("sync.sh does not execute command substitution in skill name or detail", ()
   const tmp = mkdtempSync(join(tmpdir(), "skills-sec-"));
   try {
     const canary = join(tmp, "evil-executed.txt");
-    const SYNC_SH = resolve(import.meta.dirname, "../sync.sh");
+    const SYNC_SH = resolve(fileURLToPath(new URL(".", import.meta.url)), "../sync.sh");
     const bashCandidates = [
       "C:\\Program Files\\Git\\usr\\bin\\sh.exe",
       "C:\\Program Files\\Git\\bin\\bash.exe",

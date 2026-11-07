@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, symlinkSyn
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve, basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import { testTierGate } from "../verify.mjs";
 import {
   cmdStart,
@@ -463,7 +464,7 @@ test("start prints a responding dashboard URL, not a stale file with a live PID"
   writeFileSync(runtime, JSON.stringify({ pid: process.pid, port: 1, url: "http://localhost:1", root }));
   try {
     const res = spawnSync(process.execPath, [
-      join(import.meta.dirname, "..", "workflow.mjs"), "start", "--tier", "T0",
+      join(fileURLToPath(new URL(".", import.meta.url)), "..", "workflow.mjs"), "start", "--tier", "T0",
       "--task", "dashboard-probe", "--root", root,
     ], {
       encoding: "utf8", timeout: 45000, windowsHide: true,
@@ -498,7 +499,7 @@ test("check-ci: rejects invalid changeId containing path traversal or illegal ch
 });
 
 test("verify: testTierGate passes probe with subprocess status assertions", () => {
-  const harnessRoot = resolve(import.meta.dirname, "../..");
+  const harnessRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
   const res = testTierGate(harnessRoot, true);
   assert.equal(res, "T0 passes, T2 blocks, fake paths rejected, forced close recorded");
 });

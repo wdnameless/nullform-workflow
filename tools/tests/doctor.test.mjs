@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, cpSync, chmodSync, existsSync, symlinkSync } from "node:fs";
 import { join, resolve, dirname, delimiter } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { spawnSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -20,7 +21,7 @@ import {
 
 import { checkConfigs } from "../doctor-checks.mjs";
 import { doctorLite } from "../doctor-lite.mjs";
-const REPO_ROOT = resolve(import.meta.dirname, "../..");
+const REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
 const DOCTOR_PATH = resolve(REPO_ROOT, "tools/doctor.mjs");
 
 function setupOmpShim() {

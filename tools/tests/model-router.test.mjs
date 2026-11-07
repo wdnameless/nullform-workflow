@@ -17,6 +17,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import yaml from "yaml";
@@ -32,7 +33,7 @@ import {
   applyCategories,
 } from "../model-router.mjs";
 
-const CLI_PATH = resolve(import.meta.dirname, "../model-router.mjs");
+const CLI_PATH = resolve(fileURLToPath(new URL(".", import.meta.url)), "../model-router.mjs");
 
 function createTempDir(prefix = "model-router-test-") {
   return mkdtempSync(join(tmpdir(), prefix));

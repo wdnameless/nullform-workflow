@@ -377,8 +377,8 @@ const home = process.env.USERPROFILE || process.env.HOME || "";
 installedRoot = installedRoot || join(home, ".agents", "skills");
 agentsHome = agentsHome || dirname(installedRoot);
 
-const scriptDir = typeof import.meta.dirname === "string"
-  ? import.meta.dirname
+const scriptDir = typeof fileURLToPath(new URL(".", import.meta.url)) === "string"
+  ? fileURLToPath(new URL(".", import.meta.url))
   : dirname(fileURLToPath(import.meta.url));
 
 if (!repoRoot) {

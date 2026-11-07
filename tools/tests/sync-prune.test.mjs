@@ -16,13 +16,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { findPruneCandidates, deletePruneCandidates } from "../sync-prune.mjs";
 
-const PRUNE_PATH = resolve(import.meta.dirname, "../sync-prune.mjs");
-const REPO_ROOT = resolve(import.meta.dirname, "../..");
+const PRUNE_PATH = resolve(fileURLToPath(new URL(".", import.meta.url)), "../sync-prune.mjs");
+const REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
 
 function writeFiles(root, files) {
   for (const rel of files) {

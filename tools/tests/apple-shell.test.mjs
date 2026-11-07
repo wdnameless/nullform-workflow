@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { collectNeeded, collectBlind, checksAge, runStatusOf } from "../dashboard-needed.mjs";
 import { SHELL_CSS, SHELL_CLIENT_JS } from "../dashboard-shell-client.mjs";
 
-const WORKFLOW = join(import.meta.dirname, "..", "workflow.mjs");
+const WORKFLOW = join(fileURLToPath(new URL(".", import.meta.url)), "..", "workflow.mjs");
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "apple-shell-"));

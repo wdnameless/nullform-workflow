@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { executeControl, parseControlArgs } from "../jev-control.mjs";
@@ -355,7 +356,7 @@ test("jev-control --help returns exit 0 with usage", () => {
   const parsed = parseControlArgs(["--help"]);
   assert.strictEqual(parsed.help, true);
 
-  const scriptPath = join(import.meta.dirname, "../jev-control.mjs");
+  const scriptPath = join(fileURLToPath(new URL(".", import.meta.url)), "../jev-control.mjs");
   const res = spawnSync(process.execPath, [scriptPath, "--help"], { encoding: "utf8" });
   assert.strictEqual(res.status, 0);
   assert.match(res.stdout, /Usage: jev-control\.mjs/);

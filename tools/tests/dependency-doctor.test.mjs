@@ -2,6 +2,7 @@ import test, { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync, readFileSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createTempDir } from "./test-helpers.mjs";
 import {
@@ -17,7 +18,7 @@ import {
   DISCLAIMER,
 } from "../dependency-doctor.mjs";
 
-const CLI_PATH = join(import.meta.dirname, "../dependency-doctor.mjs");
+const CLI_PATH = join(fileURLToPath(new URL(".", import.meta.url)), "../dependency-doctor.mjs");
 
 describe("Dependency Doctor Unit Functions", () => {
   it("normalizes package names per PEP 503 and npm", () => {

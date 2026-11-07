@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
@@ -19,7 +20,7 @@ function parseFrontmatter(text) {
   return out;
 }
 
-const WORKTREE_ROOT = resolve(import.meta.dirname, "../..");
+const WORKTREE_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
 const SKILLS_DOCTOR_TOOL = resolve(WORKTREE_ROOT, "tools/skills-doctor.mjs");
 const NULLFORM_SKILL_PATH = resolve(WORKTREE_ROOT, "skills/nullform/SKILL.md");
 

@@ -14,6 +14,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { spawnSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -22,7 +23,7 @@ import {
   resolveOracleModel,
 } from "../oracle-model.mjs";
 
-const ORACLE_PATH = resolve(import.meta.dirname, "../oracle-model.mjs");
+const ORACLE_PATH = resolve(fileURLToPath(new URL(".", import.meta.url)), "../oracle-model.mjs");
 
 test("models.yml parsing: declared providers, models (- id:), discovery type, baseUrl, apiKey", () => {
   const sampleYaml = `
