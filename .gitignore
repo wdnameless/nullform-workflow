@@ -32,3 +32,6 @@ jev-events.jsonl
 # Quality gate: sidecar analyzer configs are generated per machine/profile.
 # The baseline is NOT ignored — it is the ratchet state and belongs in the repo.
 .quality/
+
+# Python virtualenv used only for the local pylint analyzer
+.venv/
