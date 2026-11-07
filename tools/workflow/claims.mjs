@@ -3,7 +3,7 @@ import {
   constants, lstatSync, statSync, mkdirSync, readdirSync, openSync, closeSync,
   fstatSync, readSync, writeFileSync, fsyncSync, renameSync, rmdirSync,
 } from "node:fs";
-import { join, resolve, relative, dirname, isAbsolute, win32 } from "node:path";
+import { join, resolve, relative, isAbsolute, win32 } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -40,12 +40,13 @@ function samePath(a, b) {
 }
 function workspace(root) {
   const full = validateRootPath(root);
-  // Inspect the selection's ancestors as well as its leaf before following them.
-  for (let path = full; ; path = dirname(path)) {
-    const info = entry(path);
-    if (!info?.isDirectory() || info.isSymbolicLink()) fail("Workspace ancestor is not a plain directory; symlink/junction refused", "EPATH");
-    if (dirname(path) === path) break;
-  }
+  // The selected root must be a real directory, never a link to somewhere else.
+  const info = entry(full);
+  if (!info?.isDirectory() || info.isSymbolicLink()) fail("Workspace ancestor is not a plain directory; symlink/junction refused", "EPATH");
+  // Ancestors above the root belong to the platform, not to this project: macOS makes
+  // /var a symlink to /private/var, so inspecting them refuses every workspace on that
+  // platform while protecting nothing the caller chose. The canonical resolution below
+  // still folds whatever the platform does above it.
   const canonical = resolveRealPath(full);
   if (!canonical) fail("Workspace is not resolvable", "EPATH");
   return canonical;

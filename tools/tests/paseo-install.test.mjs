@@ -30,6 +30,18 @@ function canonicalizePath(p) {
     : resolved;
 }
 
+function resolveOnPath(name) {
+  const dirs = (process.env.PATH || "").split(process.platform === "win32" ? ";" : ":");
+  const exts = process.platform === "win32" ? (process.env.PATHEXT || ".EXE").split(";") : [""];
+  for (const dir of dirs.filter(Boolean)) {
+    for (const ext of exts) {
+      const candidate = join(dir, name + ext);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return name;
+}
+
 function getPowerShellPath() {
   const candidates = process.platform === "win32"
     ? [
@@ -52,7 +64,11 @@ function getPowerShellPath() {
         windowsHide: true,
       });
       if (res.status === 0 && (res.stdout || "").includes("ps-ok")) {
-        return c;
+        // Return an absolute path. Tests rebuild PATH for child installs; a bare name
+        // like "pwsh" would no longer resolve there (GitHub's macOS image keeps pwsh in
+        // /usr/local/bin, which a minimal PATH may omit), and the child would fail with
+        // ENOENT and an empty message instead of the installer's own diagnostic.
+        return c.includes("/") || c.includes("\\") ? c : resolveOnPath(c);
       }
     } catch {}
   }
