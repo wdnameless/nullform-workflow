@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from 'node:os';
 import * as budget from '../review/budget.mjs';
 
@@ -75,7 +75,22 @@ test('non-Git root resolves to .workflow fallback', () => {
   const dir = makeTempDir();
   // macOS keeps /var as a symlink to /private/var, so the authority is canonical while
   // the fixture path is not. Compare canonical forms instead of the literal spelling.
-  const canonical = p => { try { return realpathSync.native(p); } catch { return p; } };
+  // The .workflow directory does not exist yet, so resolve the deepest existing ancestor
+  // and re-attach the remaining segments; otherwise the failed lookup falls back to the
+  // unresolved spelling and the comparison is meaningless.
+  const canonical = p => {
+    const rest = [];
+    let head = p;
+    for (;;) {
+      try { return join(realpathSync.native(head), ...rest.reverse()); }
+      catch {
+        const parent = dirname(head);
+        if (parent === head) return p;
+        rest.push(basename(head));
+        head = parent;
+      }
+    }
+  };
   try { nonGitDir(dir); const a = resolveBudgetAuthority(dir);
     assert.equal(a.kind, 'root');
     assert.equal(canonical(a.stateDir), canonical(join(dir, BUDGET_LEDGER_DIR)));
