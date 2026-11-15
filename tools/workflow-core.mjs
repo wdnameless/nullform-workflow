@@ -951,9 +951,10 @@ export function declaresSkipSpecs(changeDir) {
 export function changeScopeProblem(root, st, kind, fullPath) {
   if (!isChangeScopedKind(kind)) return null;
   const boundChange = changeDirOf(st);
-  if (!boundChange) {
-    return `${kind} must live inside the change directory, but no openspec change is recorded yet; record \`openspec\` first`;
-  }
+  // No change recorded yet: the operator may legitimately record the manifest first and the
+  // openspec change second, and `check` binds the two once both exist. Refusing here would
+  // impose an ordering the tier contract never stated.
+  if (!boundChange) return null;
   const relFromChange = relative(join(root, boundChange), fullPath).replace(/\\/g, "/");
   if (relFromChange.startsWith("..") || isAbsolute(relFromChange)) {
     return `${kind}: '${relative(root, fullPath).replace(/\\/g, "/")}' is outside the change directory '${boundChange}'; put it at ${boundChange}/<name>.md`;

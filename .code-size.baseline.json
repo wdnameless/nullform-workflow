@@ -74,7 +74,7 @@
       "reason": "split #16 (2026-11-04) + adoption A1 safe settle target resolution and protected refs (2026-11-05) + R06 shebang no-op"
     },
     "tools/workflow-core.mjs": {
-      "lines": 1183,
+      "lines": 1184,
       "reason": "split #16 (2026-11-04) + adoption B2 experience fresh cue/lesson/evidence validation (2026-11-05) + audit fix (2026-11-15): single state reader, corrupt-state quarantine, change-scope + skip_specs helpers"
     },
     "tools/review/evidence.mjs": {
