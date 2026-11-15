@@ -536,11 +536,14 @@ function printStatusCost(root, st, flags, soft) {
 function cmdStatus(root, flags = {}) {
   const st = load(root);
   if (!st) {
+    // `status` is the diagnostic command: it must survive a damaged state file and report
+    // what it found, rather than failing like `check`/`start`. Exit stays 0 so any wrapper
+    // can always call it.
     const reason = stateCorruption(root);
     if (reason) {
-      console.error(`workflow: ${reason}`);
-      console.error(`  the lane is unreadable, not absent; inspect .workflow/state.json before starting a new one.`);
-      return 1;
+      console.log(`workflow: ${reason}`);
+      console.log(`  the lane is unreadable, not absent; inspect .workflow/state.json before starting a new one.`);
+      return 0;
     }
     console.log("workflow: no active task.");
     return 0;
