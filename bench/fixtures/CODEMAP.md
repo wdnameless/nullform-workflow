@@ -1,7 +1,7 @@
 # bench/fixtures/
 
 ## Responsibility
-Scenario construction, fixture factories, deterministic behavioral controls, and regression test data for the benchmark harness. Materializes starting Git repository states (synthetic requirements manifests, seeded source trees, two-stage commit histories, and frozen tests) inside isolated runner workspaces for model evaluation, provides hand-written positive and negative behavioral control implementations that prove downstream checkers discriminate defects without model dispatch, and supplies canned run-score fixtures for harness smoke testing.
+Scenario construction, fixture factories, deterministic behavioral controls, and regression test data for the benchmark harness. Materializes starting Git repository states (synthetic requirements manifests R01–R05, seeded source trees, bounded maintenance consumers with canonical Git boundary validation, two-stage commit histories, and frozen tests) inside isolated runner workspaces for model evaluation, provides hand-written positive and negative behavioral control implementations that prove downstream checkers discriminate defects without model dispatch, and supplies canned run-score fixtures for harness smoke testing.
 
 ## Design Patterns
 - **Fixture Factory / Scenario Builder (`setup-*.mjs`)**: Standalone CLI scripts executed in target `process.cwd()` that write `manifest.md` declarations and commit deterministic Git revisions:
@@ -9,7 +9,7 @@ Scenario construction, fixture factories, deterministic behavioral controls, and
   - `setup-near-negative.mjs` (`eval-review-near-negative`): Seeds clean single-commit Git repository (`HEAD` with working `src/cli.mjs` printing hello and exiting 0) and tabular `manifest.md` (R01–R02 marked done).
   - `setup-defect-outcome.mjs` (`eval-review-defect-outcome`): Seeds two-stage Git history (`HEAD~1` with `ExportCsv`/`ExportJson` in `src/commands.ts`, `src/router.ts`, `src/utils.ts`; `HEAD` commit adding unhandled `ExportReport` command in `src/commands.ts` and JSON-serializing `shallowOrDeepCopy` in `src/utils.ts`).
   - `setup-workflow-outcome.mjs` (`eval-workflow-execution-outcome`): Seeds repository with stubbed `src/calc.mjs` (working `add`, throwing `multiply`), immutable test suite `tests/calc.test.mjs`, and `manifest.md` (R01–R03).
-  - `setup-product-quality.mjs` (`eval-product-quality-consumer`): Seeds bounded maintenance consumer with verified Git root boundaries, `manifest.md` (R01–R05), and initial working baseline `src/order-summary.mjs` (summarizes positive orders; refunds unimplemented). Commits strictly these two files.
+  - `setup-product-quality.mjs` (`eval-product-quality-consumer`): Seeds bounded maintenance consumer inside target Git repository, validating canonical root and `.git` boundaries against ambient redirection using `realpathSync.native` (normalizing Windows 8.3 short paths). Sanitizes ambient `GIT_*` environment variables, writes synthetic specification `manifest.md` (R01–R05), and seeds initial working baseline `src/order-summary.mjs` (summarizes positive orders with 20% tax and item validation; refunds unimplemented), staging and committing strictly these two files.
 - **Deterministic Behavioral Control Runner (`control-product-quality.mjs`)**: CLI harness (`--dir <consumer> --variant <variant>`) exercising `check-product-quality.mjs` against four hand-written behaviors without model dispatch:
   - Positive control: `valid` variant (implements `summarizeOrder` and `applyRefund` with safe-integer arithmetic, bounds checking, and immutability; expects exit 0, `requirementsSatisfied: true`, 0 failures).
   - Negative controls: `baseline` variant (unextended module; fails `R02-refund-export`), `broken-total` variant (omits refund deduction; fails `R02-refund-total`), and `broken-boundary` variant (omits input guards; fails `R03-reject-refund-unknown-item`, `R02-over-remaining-refusal`).
@@ -25,7 +25,7 @@ Scenario construction, fixture factories, deterministic behavioral controls, and
 1. **Benchmark Model Run Setup**:
    - `tools/benchmark.mjs` or `tools/run-skill-benefit-eval.mjs` creates an isolated run directory and workspace.
    - Runner iterates `task.setup` array from `bench/tasks.json`, spawning `node bench/fixtures/setup-*.mjs` with `cwd: repoDir`.
-   - Setup script creates files (`manifest.md`, `src/*`, optional `tests/*`) and commits deterministic Git revisions.
+   - Setup script validates Git repository boundaries (e.g. `setup-product-quality.mjs` strips `GIT_*` environment variables and compares canonical real paths via `realpathSync.native` against Windows 8.3 short-path mismatches), creates files (`manifest.md` declaring scenario requirements such as R01–R05, `src/*` including baseline working order summary or defect-seeded modules, optional `tests/*`), and commits deterministic Git revisions (strictly staging declared files).
    - Runner records `baseSha` (`git rev-parse HEAD`), writes `prompt.txt`, and dispatches to model runner (`tools/bench-session-runner.ts`).
    - Post-run, the corresponding checker in `bench/checks/` (`check-positive.mjs`, `check-near-negative.mjs`, `check-defect-outcome.mjs`, `check-workflow-outcome.mjs`, `check-product-quality.mjs`) grades workspace artifacts into `bench/runs/`.
 2. **Behavioral Control Execution**:

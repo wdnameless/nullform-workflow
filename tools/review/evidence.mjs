@@ -622,8 +622,43 @@ function validateRecord(record, role, current, errors, root, text = null) {
     if (record.testFilesHash !== current.tests) throw new Error('Frozen Stage-A tests mismatch');
   } catch (error) { errors.push(`review-evidence: ${role}: ${error.message}`); }
 }
+const REVIEW_TIERS = Object.freeze(['T2', 'T3']);
+/** Tiers below T2 carry no review obligation: their gates are artifacts, not evidence. */
+const TIERS_WITHOUT_REVIEW = Object.freeze(['T0', 'T1']);
+/**
+ * Every Stage-B invariant in one place: identity binding, frozen command/tests, the
+ * reviewer -> Stage-B -> current digest chain, disposition, and timestamp order.
+ * Returns the violations; an empty array means the disposition execution is trustworthy.
+ */
+function stageBProblems(sb, reviewer, current) {
+  const problems = [];
+  // Bind Stage-B to the reviewer's explicit identity; HTTP records have an executionId
+  // and no sessionId, and `undefined === undefined` must never pass this check.
+  if (!sb?.before || !sb?.after || !sb.executedAt || !sb.testCmd || sb.exitCode !== 0 || !recordKey(reviewer) || sb.reviewerSessionId !== recordKey(reviewer)) {
+    problems.push('Missing or invalid Stage-B disposition execution');
+    return problems;
+  }
+  for (const e of [sb.before, sb.after]) {
+    if (e.exitCode !== 0 || e.testCmd !== sb.testCmd || e.testFilesHash !== current.tests || timestamp(e.completedAt) < timestamp(e.startedAt)) problems.push('Invalid frozen Stage-B execution');
+  }
+  if (sb.before.sourceDigest !== reviewer.sourceDigest || sb.sourceDigestBefore !== reviewer.sourceDigest || sb.after.sourceDigest !== current.source || sb.sourceDigestAfter !== current.source) problems.push('Source digest chain reviewer -> Stage-B -> current is broken');
+  if (sb.testFilesHashBefore !== current.tests || sb.testFilesHashAfter !== current.tests) problems.push('Stage-B frozen tests modified');
+  if (!['lean-already', 'simplified'].includes(sb.disposition) || (sb.disposition === 'lean-already') !== (sb.sourceDigestBefore === sb.sourceDigestAfter)) problems.push('Invalid Stage-B source disposition');
+  if (timestamp(sb.before.startedAt) < timestamp(reviewer.completedAt) || timestamp(sb.after.startedAt) < timestamp(sb.before.completedAt) || timestamp(sb.executedAt) !== timestamp(sb.after.completedAt)) problems.push('Stage-B timestamp inversion');
+  return problems;
+}
+
 export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = null }) {
-  if (!['T2', 'T3'].includes(tier)) return { ok: true, errors: [] };
+  if (TIERS_WITHOUT_REVIEW.includes(tier)) return { ok: true, errors: [] };
+  // A gate must never answer "fine" to a question it did not understand. `['T2']`, `'t2'`,
+  // `null` and `2` all used to fall through this check as "not T2/T3" and return ok:true,
+  // silently disabling the review gate for any caller that misspelled the tier.
+  if (!REVIEW_TIERS.includes(tier)) {
+    return {
+      ok: false,
+      errors: [`review-evidence: tier must be exactly one of T0, T1, T2, T3 (got ${JSON.stringify(tier)}); a gate cannot certify an unreadable tier`],
+    };
+  }
   const errors = [];
   try {
     const dir = changeDirectory(root, changeId), data = loadReviewEvidence(dir);
@@ -632,7 +667,17 @@ export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = n
       // rewrites can retroactively produce a native execution record. Retire it
       // explicitly instead of leaving the push gate permanently red: the marker file
       // states the exemption so it is visible, not silent.
-      if (existsSync(join(dir, LEGACY_MARKER))) {
+      const marker = join(dir, LEGACY_MARKER);
+      if (existsSync(marker)) {
+        // Existence alone made this a one-touch bypass: a zero-byte file disabled the
+        // review gate for any change. The whole point of the marker is that it STATES a
+        // reason a human can audit, so an empty or placeholder marker is not evidence.
+        let reason = '';
+        try { reason = readFileSync(marker, "utf8").trim(); } catch { reason = ''; }
+        const words = reason.split(/\s+/).filter(Boolean);
+        if (words.length < 5) {
+          return { ok: false, errors: [`${LEGACY_MARKER} exists but states no reason (${words.length} word(s)); write why this change predates native review evidence, e.g. "accepted 2026-10-01 before review-evidence.json existed"`] };
+        }
         return { ok: true, errors: [], legacy: true };
       }
       return { ok: false, errors: [`missing review execution evidence (static ACCEPT markdown alone is not accepted); if this change predates the mechanism, add ${LEGACY_MARKER} with the reason`] };
@@ -643,18 +688,7 @@ export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = n
     current.model = data.reviewer?.model ?? data.reviewer?.requestedModel?.split('/').slice(1).join('/') ?? null;
     validateRecord(data.reviewer, 'reviewer', current, errors, root, retainedTranscript(root, data.reviewer));
     const sb = data.stageB, reviewer = data.reviewer;
-    // Bind Stage-B to the reviewer's explicit identity; HTTP records have an executionId
-    // and no sessionId, and `undefined === undefined` must never pass this check.
-    if (!sb?.before || !sb?.after || !sb.executedAt || !sb.testCmd || sb.exitCode !== 0 || !recordKey(reviewer) || sb.reviewerSessionId !== recordKey(reviewer)) errors.push('Missing or invalid Stage-B disposition execution');
-    else {
-      for (const e of [sb.before, sb.after]) {
-        if (e.exitCode !== 0 || e.testCmd !== sb.testCmd || e.testFilesHash !== current.tests || timestamp(e.completedAt) < timestamp(e.startedAt)) errors.push('Invalid frozen Stage-B execution');
-      }
-      if (sb.before.sourceDigest !== reviewer.sourceDigest || sb.sourceDigestBefore !== reviewer.sourceDigest || sb.after.sourceDigest !== current.source || sb.sourceDigestAfter !== current.source) errors.push('Source digest chain reviewer -> Stage-B -> current is broken');
-      if (sb.testFilesHashBefore !== current.tests || sb.testFilesHashAfter !== current.tests) errors.push('Stage-B frozen tests modified');
-      if (!['lean-already', 'simplified'].includes(sb.disposition) || (sb.disposition === 'lean-already') !== (sb.sourceDigestBefore === sb.sourceDigestAfter)) errors.push('Invalid Stage-B source disposition');
-      if (timestamp(sb.before.startedAt) < timestamp(reviewer.completedAt) || timestamp(sb.after.startedAt) < timestamp(sb.before.completedAt) || timestamp(sb.executedAt) !== timestamp(sb.after.completedAt)) errors.push('Stage-B timestamp inversion');
-    }
+    errors.push(...stageBProblems(sb, reviewer, current));
     const oracles = data.oracles || [];
     if (!Array.isArray(oracles) || !oracles.length) errors.push('Missing independent oracle acceptance record(s)');
     const historical = (data.history || []).flatMap(c => [c.reviewer, ...(c.oracles || [])]).filter(Boolean);

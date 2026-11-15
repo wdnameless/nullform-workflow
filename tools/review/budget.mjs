@@ -46,28 +46,10 @@ function rateNanoPerToken(usdPerMillion) { return Math.round(usdPerMillion * 100
 
 /** Pinned tariff in integer nano-USD per token, for callers that price observed usage. */
 export function pinnedTariffsNanoPerToken() { return Object.fromEntries(COUNTERS.map(key => [key, rateNanoPerToken(PINNED_TARIFFS_USD_PER_MILLION[key])])); }
-export function redactSecret(text, secret) {
-  const value = typeof text === 'string' ? text : '';
-  if (typeof secret !== 'string' || secret.length < 8) return value;
-  return value.split(secret).join('[REDACTED_PROVIDER_CREDENTIAL]');
-}
-
-/**
- * Redact every known provider credential from text: the policy-named one
- * plus the two historical pinned names (defense in depth, env may carry
- * several keys). Never throws, never requires any key to exist.
- */
-export function redactPolicySecrets(text, policy = null, env = process.env) {
-  let value = typeof text === 'string' ? text : '';
-  const names = new Set(['OPENAI_API_KEY', 'NULLFORM_GATEWAY_API_KEY']);
-  const named = policy && typeof policy.credentialEnv === 'string' ? policy.credentialEnv : '';
-  if (/^[A-Z][A-Z0-9_]{2,63}$/.test(named)) names.add(named);
-  for (const name of names) {
-    const secret = env ? env[name] : undefined;
-    if (typeof secret === 'string' && secret.length >= 8) value = value.split(secret).join('[REDACTED_PROVIDER_CREDENTIAL]');
-  }
-  return value;
-}
+// Redaction lives in its own module so this ledger keeps one responsibility and stays
+// inside its size ceiling. Re-exported here because callers already import it from budget.
+export { redactSecret, redactPolicySecrets } from './redact.mjs';
+import { redactPolicySecrets } from './redact.mjs';
 
 /**
  * Non-throwing boundary report for --dry-run: explains WHY dispatch is unavailable
@@ -441,17 +423,25 @@ export function admitSession({ root, policy }) {
 }
 
 /** Every mutation re-resolves authority and re-reads the ledger under the cross-process lock. */
-function withReservation(root, reservationId, apply) {
+function withReservationInStatus(root, reservationId, requiredStatus, apply) {
   const authority = resolveBudgetAuthority(root);
   return withLedgerLock(authority, () => {
     const ledger = readLedger(authority.ledgerPath);
     const reservation = ledger.reservations.find(row => row.reservationId === reservationId);
     if (!reservation) throw new Error('Unknown review reservation; refusing to touch missing durable authority');
-    if (reservation.status !== 'reserved') throw new Error(`Review reservation is already ${reservation.status}`);
+    if (reservation.status !== requiredStatus) {
+      throw new Error(requiredStatus === 'reserved'
+        ? `Review reservation is already ${reservation.status}`
+        : `Only a ${requiredStatus} reservation can be changed this way; this one is ${reservation.status}`);
+    }
     const result = apply(reservation, ledger);
     writeLedger(authority.ledgerPath, ledger);
     return result;
   });
+}
+
+function withReservation(root, reservationId, apply) {
+  return withReservationInStatus(root, reservationId, 'reserved', apply);
 }
 
 /** Each physical wire call consumes one reserved request BEFORE it is sent. */
@@ -488,6 +478,36 @@ export function holdReservation({ root, reservationId, reason, policy = null }) 
     reservation.heldReason = redactPolicySecrets(String(reason || 'unknown outcome'), policy).slice(0, MAX_HELD_REASON_CHARS);
     reservation.heldAt = new Date().toISOString();
     return { reservationId, heldNanoUsd: reservation.reservedNanoUsd };
+  });
+}
+
+/**
+ * Settle a held reservation to a known amount, with an operator-supplied reason.
+ *
+ * A held reservation blocks every future admission regardless of ceiling (its spend is
+ * unknown, so admitting more would be spending against an unmeasured balance). That is
+ * correct, but it left no audited way out: the only escape was hand-editing the ledger,
+ * which the same policy forbids. This is that escape, made explicit: the caller must name
+ * a reason, the reason is recorded on the reservation, and the settled amount is bounded by
+ * the reservation's own reserve exactly like `settleReservation`.
+ */
+export function releaseHeldReservation({ root, reservationId, settledNanoUsd, reason, policy = null }) {
+  const note = String(reason || '').trim();
+  if (note.length < 12) throw new Error('Releasing a held reservation requires --reason "<what the real spend was and why it is now known>" (>= 12 chars)');
+  if (!Number.isSafeInteger(settledNanoUsd) || settledNanoUsd < 0) throw new Error('Releasing a held reservation requires a non-negative integer nanoUSD amount');
+  return withReservationInStatus(root, reservationId, 'held', (reservation, ledger) => {
+    if (settledNanoUsd > reservation.reservedNanoUsd) {
+      throw new Error(`Released spend ${settledNanoUsd} exceeds the ${reservation.reservedNanoUsd} nanoUSD this reservation authorized; it was never allowed to spend that much`);
+    }
+    const newTotal = ledger.settledNanoUsd + settledNanoUsd;
+    if (!Number.isSafeInteger(newTotal)) throw new Error('Settlement would produce unsafe integer; refusing');
+    reservation.status = 'settled';
+    reservation.settledNanoUsd = settledNanoUsd;
+    reservation.settledAt = new Date().toISOString();
+    reservation.releasedFromHeld = true;
+    reservation.releaseReason = redactPolicySecrets(note, policy).slice(0, MAX_HELD_REASON_CHARS);
+    ledger.settledNanoUsd = newTotal;
+    return { reservationId, settledNanoUsd, totalSettledNanoUsd: ledger.settledNanoUsd, reason: reservation.releaseReason };
   });
 }
 

@@ -1,0 +1,10 @@
+- [x] T-01 Record-time rejection of change-scoped artifacts outside the change dir
+- [x] T-02 Honour openspec skip_specs instead of demanding specs/ unconditionally
+- [x] T-03 Document the seven dispatchable commands missing from --help
+- [x] T-04 Quarantine a corrupt state file and refuse to overwrite the lane
+- [x] T-05 Refuse an unreadable tier in validateReviewEvidence, keep T0/T1 exempt
+- [x] T-06 budget-release: audited recovery from a held reservation
+- [x] T-07 Name the remedy when doctor finds a stale installation
+- [x] T-08 Legacy marker must state a reason; redaction covers base64 and split keys
+- [x] T-09 Fix refreshSnapshot calling exports that never existed
+- [x] T-10 Adopt surgical-diff and do-not-touch rules into agent/AGENTS.md

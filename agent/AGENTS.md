@@ -14,31 +14,36 @@ Bias: minimal, fast, grounded action. Keep instructions lean and use native clie
 - No unrequested abstractions, no empty boilerplate, no scaffolding "for later".
 - Never rewrite or replace working code without explicit user approval.
 
-## 3. HONEST VERIFICATION
+## 3. SURGICAL DIFF
+- The diff contains only lines the task needs. Reformatting, re-wrapping, or "tidying" untouched code is a defect, not an improvement: it destroys `git blame` and hides the real change. The reviewer reports it, the parent rejects it.
+- Clean up after yourself: deleting a function obliges deleting its now-unused import, export, and caller. Leftovers are part of the diff's cost, not a follow-up.
+- **Do not touch** unless the task says otherwise: vendored or third-party files copied into the repo, generated artifacts and lockfiles, another agent's or lane's paths, and build output. If a prohibition here goes stale, delete it — a rule that no longer applies dilutes the ones that do.
+
+## 4. HONEST VERIFICATION
 - Never claim work done without executed verification (run tests, build, diagnostics, or command output).
 - Subagent outputs are unverified claims until inspected; never report completion based on status claims alone.
 - Executors never edit checkers, verifiers, or frozen tests to make them green; a red checker is a product finding. Fixing the checker itself needs human/parent approval.
 - If blocked or missing prerequisites, state exactly what is missing and what was tried.
 
-## 4. HUMAN STATE & SAFE BOUNDARIES
+## 5. HUMAN STATE & SAFE BOUNDARIES
 - Prompt surfaces, user configurations, and identities belong to the human. Never edit system prompts, agent instructions, or configs without explicit user consent.
 - Workspace containment: all work, temporary files, and caches must reside inside current working directory (`<cwd>/.tmp/` gitignored) or the OS temporary directory. Never create files outside `cwd`.
 - Safe destructive-action boundaries: never execute file-overwriting git operations (file-overwriting `git checkout -- <file>`, `git restore`, `git reset`, stash drops) without explicit user authorization; harmless branch switching (`git checkout <branch>`) is permitted.
 - Never request or log secrets; redact pasted tokens to `[REDACTED:<VAR>]`.
 
-## 5. MULTIPLE WRITERS & FLEET CONTRACT
+## 6. MULTIPLE WRITERS & FLEET CONTRACT
 - Maintain strictly disjoint ownership: one writer per file/worktree.
 - Native-first: use host task delegation and worktree isolation if actually available.
 - When a worktree gap exists or portable feature workspaces are explicitly requested: allocate a private detached worktree from committed HEAD via `nullform workflow workspace --feature <slug>`. Duplicate allocation refuses. Commit prerequisites before allocation.
 - A single parent integrator merges clean feature commits via `nullform workflow integrate --feature <slug>`. Never use automatic reset, stash, or ours/theirs on merge conflicts; leave conflicts for manual resolution.
 - Every subagent spawn requires bounded scope, acceptance criteria, and a concise return contract (≤25 lines: STATUS, FILES, TESTS `было→стало`, INTERFACES, REQUIREMENTS, CONCERNS/BLOCKERS).
 
-## 6. TRUTHFUL LIMITS & OBSERVABILITY
+## 7. TRUTHFUL LIMITS & OBSERVABILITY
 - Model instructions guide behavior; they do not form an operating system sandbox or guarantee model obedience.
 - No unconditional paid model calls or background token expenditure.
 - When `nullform workflow start` is explicitly called, the observability dashboard auto-opens by default unless `--no-dashboard` (or `NF_NO_DASHBOARD=1`) is passed. Routine requests do not call `workflow start`, so there is no every-turn dashboard tax. Check URL via `node tools/dashboard.mjs --url`.
 
-## 7. STRICT WORKFLOW ACTIVATION (OPT-IN)
+## 8. STRICT WORKFLOW ACTIVATION (OPT-IN)
 When the user or project explicitly activates the strict Nullform development workflow:
 - Canonical protocol: read `<HARNESS>/core/PORTABLE.md` (harness root recorded in `~/.omp/agent/.harness-root` or install root) for the complete 4-Wave SDD specification, Stage B frozen-test simplification, and blind Oracle acceptance.
 - Stable CLI gating:
@@ -51,7 +56,7 @@ When the user or project explicitly activates the strict Nullform development wo
   - `skill://tier-enforcement` — executable tier gating CLI.
   - `skill://deepwork` — gated multi-phase delivery for high-risk changes.
 
-## 8. ON-DEMAND DISCIPLINES & SPECIALIZED TOOLS
+## 9. ON-DEMAND DISCIPLINES & SPECIALIZED TOOLS
 Read when relevant to the task (via `rule://...` / `skill://...` where supported, otherwise `<HARNESS>/rules/...` / `<HARNESS>/skills/...`):
 - `rule://enterprise-directives` — git/PR isolation, dynamic ports, DB migrations.
 - `rule://web-performance` — web/UI and HTTP performance checklist (compression, caching, render scope, parallel work).
@@ -61,7 +66,7 @@ Read when relevant to the task (via `rule://...` / `skill://...` where supported
 - `skill://codemap` — hierarchical repository cartography (`tools/codemap.mjs`).
 - Tool routing: `codebase-context` / `grep` for discovery; `lsp` for symbols and diagnostics; `context7` for external library docs; `dap-debugger` for interactive debugging.
 
-## 9. CHANGE DISCIPLINE (agent-driven development)
+## 10. CHANGE DISCIPLINE (agent-driven development)
 - Every change starts from an issue/ticket with WHY; PR links it; never reopen a closed issue — open a new one.
 - Red master first: if master/main is red, fix it before starting any feature; never branch from red.
 - Commit per increment: hundreds of tiny commits per day, each green-step documented.

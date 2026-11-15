@@ -208,6 +208,13 @@ export function printWorkflowHelp() {
   console.log("  node workflow.mjs metrics [--root .]");
   console.log("  nullform workflow workspace --feature SLUG [--root PROJECT]  # new detached writer");
   console.log("  nullform workflow integrate --feature SLUG [--root PROJECT]  # serialized native merge");
+  console.log("  nullform workflow claim --task <id> --owner <who> --contract <file>   # acquire an isolated writer lease");
+  console.log("  nullform workflow release --task <id> --token <token>                # end the lease and record history");
+  console.log("  nullform workflow context [--task <id>] [--change <name>]            # what this writer is allowed to see");
+  console.log("  nullform workflow ask --kind <briefing|spec|plan|design|action|stop> --text \"...\"  # open a user wait");
+  console.log("  nullform workflow answered [--text \"...\"]                            # close the wait");
+  console.log("  nullform workflow gate-pass --gate <name> [--detail \"...\"]           # record a passed gate");
+  console.log("  nullform workflow stage --id <T-01> [--verified]                      # advance a plan ticket");
   console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
   console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
   console.log("  node workflow.mjs check-ci --push --base-ref <previous-commit>");

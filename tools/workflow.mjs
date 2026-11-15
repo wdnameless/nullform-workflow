@@ -48,6 +48,8 @@ import { printWorkflowHelp as printCoreWorkflowHelp } from "./installation/capab
 import { runWorkspaceCommand } from "./workflow/workspaces.mjs";
 import { runClaimCommand } from "./workflow/claims.mjs";
 import { doctorLite } from "./doctor-lite.mjs";
+import { releaseHeldReservation } from "./review/budget.mjs";
+import { cmdArtifact as recordArtifact } from "./workflow/artifact.mjs";
 import { recordGate } from "./gate-counter.mjs";
 function printWorkflowHelp() {
   printCoreWorkflowHelp();
@@ -78,6 +80,8 @@ import {
   validatePlanCoverage,
   validateManifestRows,
   validateArtifacts,
+  declaresSkipSpecs,
+  changeScopeProblem,
   markOracleVerified,
   createArtifactRecord,
   statePath,
@@ -85,6 +89,8 @@ import {
   isPlainObject,
   loadBudgets,
   load,
+  refuseOnCorruptState,
+  stateCorruption,
   save,
   refreshSnapshot,
   assertWorkflowDirOwned,
@@ -109,7 +115,7 @@ import {
   checkHandoffFile,
   resolveSessionFile,
 } from "./workflow-core.mjs";
-export { ACCEPTANCE_RE, REQUIREMENTS, requiredFor, openspecDirProblems, openspecFileProblems, runOpenspecValidate, validateOpenspecArtifact, isChangeScopedKind, changeDirOf, parsePlanTickets, missingPlanDep, planCycleFrom, validatePlanCoverage, validateManifestRows, validateArtifacts, markOracleVerified, createArtifactRecord };
+export { ACCEPTANCE_RE, REQUIREMENTS, requiredFor, openspecDirProblems, openspecFileProblems, runOpenspecValidate, validateOpenspecArtifact, isChangeScopedKind, changeDirOf, parsePlanTickets, missingPlanDep, planCycleFrom, validatePlanCoverage, validateManifestRows, validateArtifacts, declaresSkipSpecs, changeScopeProblem, markOracleVerified, createArtifactRecord };
 /* ----------------------------------------------------------------------- cli */
 
 function parse(argv) {
@@ -177,12 +183,42 @@ function autoOpenDashboard(root, flags) {
 const ALLOWED_MODES = ["full", "semi", "interview", "manual"];
 const ALLOWED_DEPTHS = ["strict", "normal", "deep"];
 
+/**
+ * Guarded auto mode: only T0 may run unattended, the allow pattern and diff bound are
+ * mandatory, and a refusal is recorded so the operator can see why the lane did not open.
+ * Returns `{ config }` on success or `{ error }` for the caller to print.
+ */
+function resolveAutoConfig({ root, tier, mode, depth, flags, load, save }) {
+  if (tier !== "T0") {
+    let st = load(root);
+    if (!st) {
+      st = { version: 1, tier, mode, depth, task: String(flags.task || "(untitled)"), startedAt: new Date().toISOString(), status: "refused", artifacts: {} };
+    } else {
+      st.mode = mode;
+      st.depth = depth;
+    }
+    st.autoRefusal = { at: new Date().toISOString(), tier, reason: `Guarded auto-mode refused: tier ${tier} exceeds maximum allowable tier T0` };
+    save(root, st);
+    return { error: `guarded auto mode refused for ${tier} (only T0 allowed)` };
+  }
+  if (!flags.allow || typeof flags.allow !== "string" || !flags.allow.trim()) {
+    return { error: '--auto requires --allow "<pattern>" (e.g. --allow "src/**")' };
+  }
+  const maxDiff = flags["max-diff"] !== undefined ? Number(flags["max-diff"]) : NaN;
+  if (Number.isNaN(maxDiff) || maxDiff < 1 || maxDiff > 20) {
+    return { error: "--auto requires --max-diff <N> where 1 <= N <= 20" };
+  }
+  return { config: { allow: String(flags.allow).trim(), maxDiff } };
+}
+
 function cmdStart(root, flags) {
   const doc = doctorLite(root);
   if (!doc.ok) {
     console.error(`workflow doctor-lite WARN: ${doc.warns.join("; ")}`);
   }
   return withStateLock(root, () => {
+    // An unreadable state file is not an empty project: refuse before anything is written.
+    if (refuseOnCorruptState(root)) return 1;
     reconcileMetrics(root, { lockHeld: true });
     const tier = String(flags.tier || "").toUpperCase();
     if (!LADDER.includes(tier)) {
@@ -205,50 +241,9 @@ function cmdStart(root, flags) {
     const isAuto = Boolean(flags.auto);
     let autoConfig = null;
     if (isAuto) {
-      // Guarded auto validation: tier must be T0; refuse T1+
-      if (tier !== "T0") {
-        const refusal = {
-          at: new Date().toISOString(),
-          tier,
-          reason: `Guarded auto-mode refused: tier ${tier} exceeds maximum allowable tier T0`,
-        };
-        let st = load(root);
-        if (!st) {
-          st = {
-            version: 1,
-            tier,
-            mode,
-            depth,
-            task: String(flags.task || "(untitled)"),
-            startedAt: new Date().toISOString(),
-            status: "refused",
-            artifacts: {},
-          };
-        } else {
-          st.mode = mode;
-          st.depth = depth;
-        }
-        st.autoRefusal = refusal;
-        save(root, st);
-        console.error(`workflow: guarded auto mode refused for ${tier} (only T0 allowed)`);
-        return 1;
-      }
-
-      if (!flags.allow || typeof flags.allow !== "string" || !flags.allow.trim()) {
-        console.error("workflow: --auto requires --allow \"<pattern>\" (e.g. --allow \"src/**\")");
-        return 1;
-      }
-
-      const maxDiffNum = flags["max-diff"] !== undefined ? Number(flags["max-diff"]) : NaN;
-      if (Number.isNaN(maxDiffNum) || maxDiffNum < 1 || maxDiffNum > 20) {
-        console.error("workflow: --auto requires --max-diff <N> where 1 <= N <= 20");
-        return 1;
-      }
-
-      autoConfig = {
-        allow: String(flags.allow).trim(),
-        maxDiff: maxDiffNum,
-      };
+      const auto = resolveAutoConfig({ root, tier, mode, depth, flags, load, save });
+      if (auto.error) { console.error(`workflow: ${auto.error}`); return 1; }
+      autoConfig = auto.config;
     }
 
     const prev = load(root);
@@ -344,122 +339,6 @@ function parseRenamePaths(filePath) {
 }
 
 
-function cmdArtifact(root, flags) {
-  return withStateLock(root, () => {
-    const st = load(root);
-    if (!st || st.status !== "open") { console.error("workflow: no open task. Run `start` first."); return 2; }
-    const kind = String(flags.kind || "");
-    const reqs = requiredFor(st.tier);
-    const req = reqs.find((r) => r.kind === kind);
-    if (!req) {
-      console.error(`workflow: '${kind}' is not required by ${st.tier}.`);
-      console.error(`  required: ${reqs.map((r) => r.kind).join(', ')}`);
-      return 2;
-    }
-    const path = flags.path ? String(flags.path).trim() : null;
-    if (req.requiresPath && !path) {
-      console.error(`workflow: ${kind} requires a file path (--path <file>).`);
-      return 1;
-    }
-
-    if (path) {
-      if (!isPathInsideRoot(root, path)) {
-        console.error(`workflow: ${kind} -> '${path}' must be a relative path inside project root.`);
-        return 1;
-      }
-      const fullPath = join(root, path);
-      if (!existsSync(fullPath)) {
-        console.error(`workflow: ${kind} -> '${path}' does not exist on disk.`);
-        if (kind === "openspec") console.error(`  create it: openspec new change <name>   then  openspec validate <name>`);
-        return 1;
-      }
-      if (!isRealPathInsideRoot(root, path)) {
-        console.error(`workflow: ${kind} -> '${path}' real path must stay inside project root.`);
-        return 1;
-      }
-      const stFile = statSync(fullPath);
-      if (kind === "openspec") {
-        if (!stFile.isDirectory()) {
-          console.error(`workflow: ${kind} -> '${path}' must be a directory.`);
-          return 1;
-        }
-        const entries = readdirSync(fullPath);
-        if (entries.length === 0) {
-          console.error(`workflow: ${kind} -> directory '${path}' is empty.`);
-          return 1;
-        }
-        for (const entry of entries) {
-          const entryPath = join(path, entry);
-          if (!isRealPathInsideRoot(root, entryPath)) {
-            console.error(`workflow: ${kind} -> entry '${entryPath}' real path must stay inside project root.`);
-            return 1;
-          }
-        }
-        const propPath = join(fullPath, "proposal.md");
-        if (!existsSync(propPath) || !statSync(propPath).isFile() || readFileSync(propPath, "utf8").trim().length === 0) {
-          console.error(`workflow: ${kind} -> missing non-empty proposal.md in '${path}'.`);
-          return 1;
-        }
-        const specsPath = join(fullPath, "specs");
-        if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) {
-          console.error(`workflow: ${kind} -> missing non-empty specs/ directory in '${path}'.`);
-          return 1;
-        }
-      } else {
-        if (!stFile.isFile()) {
-          console.error(`workflow: ${kind} -> '${path}' must be a file.`);
-          return 1;
-        }
-        const body = readFileSync(fullPath, "utf8");
-        if (body.trim().length === 0) {
-          console.error(`workflow: ${kind} -> '${path}' is empty.`);
-          return 1;
-        }
-        if (req.mustContain && !req.mustContain.test(body)) {
-          console.error(`workflow: ${path} does not contain requirement rows (expected ${req.mustContain}).`);
-          console.error(`  a manifest lists R01..Rnn, each with the verbatim quote it came from.`);
-          return 1;
-        }
-        if (kind === "interfaces" && body.trim().length < 10) {
-          console.error(`workflow: ${kind} -> '${path}' is too short to be a valid interfaces specification.`);
-          return 1;
-        }
-      }
-    }
-    const detail = flags.detail ? String(flags.detail) : null;
-
-    if (req.minDetail && (!detail || detail.trim().length < req.minDetail)) {
-      console.error(`workflow: ${kind} needs a real description (>= ${req.minDetail} chars).`);
-      console.error(`  got: ${detail ? JSON.stringify(detail) : "(nothing)"}`);
-      console.error(`  record it: --detail "<what you actually did/verified>"`);
-      return 1;
-    }
-    // `mustContain` describes the ARTIFACT's file body (e.g. a manifest holds R## rows),
-    // never the free-text note. Testing the note rejected valid submissions whenever the
-    // operator described the work in prose instead of echoing the pattern.
-    if (req.minDetail && detail && req.mustContain && /ACCEPT|REJECT/i.test(String(req.mustContain)) && !req.mustContain.test(detail)) {
-      console.error(`workflow: ${kind} must state the outcome — expected ${req.mustContain}.`);
-      console.error(`  e.g. --detail "ACCEPT: verified X and Y, no gaps"`);
-      return 1;
-    }
-    // For a note whose contract is "acceptance check", the free text IS the artifact:
-    // there is no file to test. 39 of 65 historical recon notes listed files and never
-    // said how completion would be proven, which is what made the T1 gate decorative.
-    if (req.detailMustContain && detail && !req.detailMustContain.test(detail)) {
-      console.error(`workflow: ${kind} must name how the work is checked — got no acceptance evidence.`);
-      console.error(`  e.g. --detail "files a.mjs,b.mjs; acceptance: node --test tools/tests/x.test.mjs passes"`);
-      return 1;
-    }
-
-    const record = createArtifactRecord(root, st, kind, path, detail);
-    st.artifacts[kind] = record;
-    save(root, st);
-    const done = Object.keys(st.artifacts).length;
-    logEvent(root, "artifact", `${kind}${flags.detail ? ": " + String(flags.detail).slice(0, 120) : ""}`);
-    console.log(`workflow: ${kind} recorded${path ? ` (${path})` : ""} — ${done}/${reqs.length} for ${st.tier}`);
-    return 0;
-  });
-}
 
 function cmdEscalate(root, flags) {
   return withStateLock(root, () => {
@@ -517,13 +396,35 @@ function recordCheckGate(root, ok) {
   recordGate({ gate: "workflow-check", result: ok ? "pass" : "fail", root });
 }
 
+/** The operator-facing "what is still missing and how to record it" block, or '' when complete. */
+function incompleteArtifactReport(st, reqs, missing, invalid) {
+  const blocks = [];
+  if (missing.length) {
+    const lines = [`\n${missing.length} artifact(s) missing for ${st.tier}.`];
+    for (const m of missing) {
+      const r = reqs.find((req) => req.kind === m);
+      lines.push(`  record it: node workflow.mjs artifact --kind ${m}${r?.path ? " --path <file>" : ""}`);
+    }
+    blocks.push(lines.join("\n"));
+  }
+  if (invalid.length) {
+    blocks.push([`\n${invalid.length} artifact(s) invalid for ${st.tier}:`, ...invalid.map((inv) => `  - ${inv}`)].join("\n"));
+  }
+  return blocks.join("");
+}
+
 function cmdCheck(root) {
   const doc = doctorLite(root);
   if (!doc.ok) {
     console.error(`workflow doctor-lite WARN: ${doc.warns.join("; ")}`);
   }
   const st = load(root);
-  if (!st) { console.error("workflow: no task state. Run `start --tier <T> --task \"...\"`."); return 1; }
+  if (!st) {
+    const reason = stateCorruption(root);
+    if (reason) { console.error(`workflow: ${reason}`); return 1; }
+    console.error("workflow: no task state. Run `start --tier <T> --task \"...\"`.");
+    return 1;
+  }
   const { reqs, missing, invalid, ok } = validateArtifacts(root, st);
 
   console.log(`workflow: ${st.tier} "${st.task}" — ${ok ? "COMPLETE" : "INCOMPLETE"}`);
@@ -534,17 +435,8 @@ function cmdCheck(root) {
   }
   recordCheckGate(root, ok);
   if (!ok) {
-    if (missing.length) {
-      console.log(`\n${missing.length} artifact(s) missing for ${st.tier}.`);
-      for (const m of missing) {
-        const r = reqs.find((req) => req.kind === m);
-        console.log(`  record it: node workflow.mjs artifact --kind ${m}${r?.path ? " --path <file>" : ""}`);
-      }
-    }
-    if (invalid.length) {
-      console.log(`\n${invalid.length} artifact(s) invalid for ${st.tier}:`);
-      for (const inv of invalid) console.log(`  - ${inv}`);
-    }
+    const report = incompleteArtifactReport(st, reqs, missing, invalid);
+    if (report) console.log(report);
     return 1;
   }
   return 0;
@@ -643,7 +535,16 @@ function printStatusCost(root, st, flags, soft) {
 
 function cmdStatus(root, flags = {}) {
   const st = load(root);
-  if (!st) { console.log("workflow: no active task."); return 0; }
+  if (!st) {
+    const reason = stateCorruption(root);
+    if (reason) {
+      console.error(`workflow: ${reason}`);
+      console.error(`  the lane is unreadable, not absent; inspect .workflow/state.json before starting a new one.`);
+      return 1;
+    }
+    console.log("workflow: no active task.");
+    return 0;
+  }
   const reqs = requiredFor(st.tier);
   const budgets = loadBudgets(root);
   const tierBudget = budgets[st.tier] ?? DEFAULT_BUDGETS[st.tier] ?? 45;
@@ -1058,6 +959,42 @@ import {
 } from "./workflow-ci.mjs";
 export { checkQualityGates } from "./workflow-ci.mjs";
 
+/**
+ * `budget-release --reservation <id> --nano-usd <n> --reason "..."`.
+ *
+ * The held state is intentionally unescapable by default: its spend is unknown, so admitting
+ * more work would spend against an unmeasured balance. This command is the one audited way
+ * out — it demands the real amount and a reason, and records both on the reservation.
+ */
+function cmdBudgetRelease(root, flags) {
+  const reservationId = String(flags.reservation || flags["reservation-id"] || "").trim();
+  if (!reservationId) { console.error('workflow: budget-release requires --reservation <id> (see `budget-inspect`)'); return 2; }
+  const raw = flags["nano-usd"] ?? flags.nanoUsd;
+  const settledNanoUsd = Number(raw);
+  if (raw === undefined || !Number.isSafeInteger(settledNanoUsd) || settledNanoUsd < 0) {
+    console.error('workflow: budget-release requires --nano-usd <integer nanoUSD> (the amount actually spent)');
+    return 2;
+  }
+  try {
+    const result = releaseHeldReservation({ root, reservationId, settledNanoUsd, reason: flags.reason });
+    console.log(`workflow: released held reservation ${result.reservationId} -> settled ${result.settledNanoUsd} nanoUSD (total ${result.totalSettledNanoUsd})`);
+    console.log(`  reason recorded: ${result.reason}`);
+    return 0;
+  } catch (error) {
+    console.error(`workflow: budget-release refused — ${error.message}`);
+    return 1;
+  }
+}
+
+/** Bound to this module's state lock and file-system primitives; see workflow/artifact.mjs. */
+function cmdArtifact(root, flags) {
+  return recordArtifact(root, flags, {
+    withStateLock, load, save, requiredFor, createArtifactRecord, logEvent,
+    declaresSkipSpecs, changeScopeProblem,
+    isPathInsideRoot, isRealPathInsideRoot, existsSync, statSync, readdirSync, join, readFileSync,
+  });
+}
+
 export function runWorkflowCli(argv = [], options = {}) {
   const args = parse(argv);
   const root = args.flags.root ? String(args.flags.root) : (options.cwd || process.cwd());
@@ -1086,6 +1023,7 @@ export function runWorkflowCli(argv = [], options = {}) {
     case "ask":          code = cmdAsk(root, args.flags, args._.slice(1)); break;
     case "answered":     code = cmdAnswered(root, args.flags); break;
     case "check-budget": code = cmdCheckBudget(root, args.flags); break;
+    case "budget-release": code = cmdBudgetRelease(root, args.flags); break;
     case "close":        code = cmdClose(root, args.flags); break;
     case "escalate":     code = cmdEscalate(root, args.flags); break;
     case "metrics":      code = cmdMetrics(root); break;

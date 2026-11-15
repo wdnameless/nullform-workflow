@@ -34,8 +34,8 @@
       "reason": "Autopilot parity (R12): embedSnapshot + detectCollision + isOwnServer helpers"
     },
     "tools/doctor-checks.mjs": {
-      "lines": 975,
-      "reason": ""
+      "lines": 981,
+      "reason": "audit fix (2026-11-15): stale-install message names the remedy"
     },
     "tools/oracle-model.mjs": {
       "lines": 791,
@@ -74,12 +74,12 @@
       "reason": "split #16 (2026-11-04) + adoption A1 safe settle target resolution and protected refs (2026-11-05) + R06 shebang no-op"
     },
     "tools/workflow-core.mjs": {
-      "lines": 1098,
-      "reason": "split #16 (2026-11-04) + adoption B2 experience fresh cue/lesson/evidence validation (2026-11-05)"
+      "lines": 1183,
+      "reason": "split #16 (2026-11-04) + adoption B2 experience fresh cue/lesson/evidence validation (2026-11-05) + audit fix (2026-11-15): single state reader, corrupt-state quarantine, change-scope + skip_specs helpers"
     },
     "tools/review/evidence.mjs": {
-      "lines": 704,
-      "reason": "product-command goes through the gatekeeper pre-call authorization"
+      "lines": 738,
+      "reason": "product-command goes through the gatekeeper pre-call authorization + audit fix (2026-11-15): unknown tier refused instead of ok:true; legacy marker requires a stated reason + unknown-tier rejection and legacy-marker reason check (2026-11-15)"
     }
   },
   "functions": {
@@ -196,11 +196,11 @@
       "reason": ""
     },
     "tools/workflow.mjs:cmdStart": {
-      "lines": 145,
+      "lines": 147,
       "file": "tools/workflow.mjs",
       "name": "cmdStart",
       "line": 183,
-      "reason": "split #16 (2026-11-04)"
+      "reason": "split #16 (2026-11-04) + corrupt-state refusal guard (2026-11-15)"
     }
   }
 }

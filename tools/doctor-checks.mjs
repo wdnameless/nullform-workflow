@@ -390,7 +390,13 @@ export function checkToolsSyntax(ctx) {
 
     if (missingCore.length > 0 || syntaxErrors.length > 0) {
       const details = [];
-      if (missingCore.length > 0) details.push(`отсутствуют обязательные инструменты: ${missingCore.join(", ")}`);
+      if (missingCore.length > 0) {
+        details.push(`отсутствуют обязательные инструменты: ${missingCore.join(", ")}`);
+        // Core files exist in the shipped package, so their absence here is a stale
+        // installation, not a broken release. Say which, or the operator reads this as
+        // corruption and starts editing an install that only needs resyncing.
+        details.push(`это устаревшая установка (файлы есть в пакете): обновите её — nullform update  (или nullform setup --yes)`);
+      }
       if (syntaxErrors.length > 0) details.push(`синтаксические ошибки в: ${syntaxErrors.join(", ")}`);
       checks.push({ id, status: "fail", detail: details.join("; ") });
     } else {

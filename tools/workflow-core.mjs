@@ -45,21 +45,67 @@ export function loadBudgets(root) {
   }
 }
 
-export function load(root) {
+/**
+ * The single state reader. Returns `{ value, reason }`: `value` is the parsed state or null,
+ * `reason` says why it failed (`null` when absent, so "no task" stays distinguishable from
+ * "unreadable").
+ */
+function readState(root) {
   const p = statePath(root);
-  if (!existsSync(p)) return null;
+  if (!existsSync(p)) return { value: null, reason: null };
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
-    if (!isPlainObject(parsed) || !LADDER.includes(parsed.tier)) return null;
-    return {
-      mode: parsed.mode || "semi",
-      depth: parsed.depth || "normal",
-      ...parsed,
-      artifacts: isPlainObject(parsed.artifacts) ? parsed.artifacts : {},
-    };
-  } catch {
-    return null;
+    parsed = JSON.parse(readFileSync(p, "utf8").replace(/^\uFEFF/, ""));
+  } catch (error) {
+    return { value: null, reason: `state.json is not valid JSON (${error.message})` };
   }
+  if (!isPlainObject(parsed) || !LADDER.includes(parsed.tier)) {
+    return { value: null, reason: "state.json is not a workflow state object (missing or unknown tier)" };
+  }
+  return { value: parsed, reason: null };
+}
+
+/** Why the stored state could not be read, or null when it is usable or absent. */
+export function stateCorruption(root) { return readState(root).reason; }
+
+/**
+ * Preserve a state file that cannot be parsed, then report it. A truncated write and a
+ * missing file used to look identical — `load()` returned null for both — so an open T2
+ * lane silently became "no active task" and the next `start` overwrote it. Renaming keeps
+ * the evidence and makes the next command fail loudly instead of quietly discarding work.
+ */
+function quarantineCorruptState(root) {
+  const reason = stateCorruption(root);
+  if (!reason) return null;
+  const p = statePath(root);
+  const kept = `${p}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  try { renameSync(p, kept); } catch { return { reason, kept: null }; }
+  return { reason, kept };
+}
+
+/**
+ * Refuse to touch a lane whose state file cannot be parsed, after preserving the file.
+ * `cmdStart` calls this first: an unreadable state must never be silently replaced by a
+ * fresh lane, because that discards the open task's name, tier and artifact records.
+ */
+export function refuseOnCorruptState(root) {
+  const corrupt = quarantineCorruptState(root);
+  if (!corrupt) return false;
+  console.error(`workflow: ${corrupt.reason}`);
+  if (corrupt.kept) console.error(`  preserved at: ${corrupt.kept}`);
+  console.error(`  refusing to open a new lane over unreadable state; inspect the file, then re-run start.`);
+  return true;
+}
+
+export function load(root) {
+  const { value } = readState(root);
+  if (!value) return null;
+  return {
+    mode: value.mode || "semi",
+    depth: value.depth || "normal",
+    ...value,
+    artifacts: isPlainObject(value.artifacts) ? value.artifacts : {},
+  };
 }
 
 export function assertWorkflowDirOwned(root) {
@@ -71,10 +117,16 @@ export function assertWorkflowDirOwned(root) {
 
 export function refreshSnapshot(root) {
   if (process.env.NF_NO_DASHBOARD === "1") return;
+  // Both names were guesses that never existed: `collectDashboardState` and the
+  // re-exported `writeSnapshot` are undefined on dashboard.mjs, so the `?:` guard silently
+  // made this a no-op and the on-disk dashboard snapshot never refreshed. Use the real
+  // pair and report a failure instead of swallowing it.
   import("./dashboard.mjs").then((dash) => {
     try {
-      const data = dash.collectDashboardState ? dash.collectDashboardState(root) : null;
-      if (data) dash.writeSnapshot(root, data);
+      const data = dash.collectDashboardData(root);
+      if (data) {
+        import("./dashboard-routes.mjs").then((routes) => routes.writeSnapshot(root, data)).catch(() => {});
+      }
     } catch {}
   }).catch(() => {});
 }
@@ -866,11 +918,47 @@ export function openspecFileProblems(a, fullPath) {
   const nonEmpty = (p) => existsSync(p) && statSync(p).isFile() && readFileSync(p, "utf8").trim().length > 0;
   if (!nonEmpty(join(fullPath, "proposal.md"))) problems.push(`openspec: missing proposal.md in '${a.path}'`);
   if (!nonEmpty(join(fullPath, "tasks.md"))) problems.push(`openspec: missing tasks.md in '${a.path}'`);
-  const specsPath = join(fullPath, "specs");
-  if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) {
-    problems.push(`openspec: missing specs/ directory in '${a.path}'`);
+  // A change that declares no spec-level behaviour change (pure tooling/docs) is allowed to
+  // omit specs/ when it says so in .openspec.yaml. The openspec CLI honours this marker and
+  // accepts the change; re-deriving "specs/ must exist" here rejected changes the tool
+  // itself called valid.
+  if (!declaresSkipSpecs(fullPath)) {
+    const specsPath = join(fullPath, "specs");
+    if (!existsSync(specsPath) || !statSync(specsPath).isDirectory() || readdirSync(specsPath).length === 0) {
+      problems.push(`openspec: missing specs/ directory in '${a.path}'`);
+    }
   }
   return problems;
+}
+
+/** True when .openspec.yaml opts out of spec deltas (`skip_specs: true`). */
+export function declaresSkipSpecs(changeDir) {
+  const marker = join(changeDir, ".openspec.yaml");
+  if (!existsSync(marker) || !statSync(marker).isFile()) return false;
+  try {
+    return /^\s*skip_specs\s*:\s*true\s*$/im.test(readFileSync(marker, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The one rule for "this artifact must live inside the change directory". Both the
+ * recorder and the validator call it, so a path accepted at `artifact` time can never be
+ * rejected later at `check`/`close` time as "belongs to another change".
+ * Returns null when the path is acceptable, or the operator-facing reason.
+ */
+export function changeScopeProblem(root, st, kind, fullPath) {
+  if (!isChangeScopedKind(kind)) return null;
+  const boundChange = changeDirOf(st);
+  if (!boundChange) {
+    return `${kind} must live inside the change directory, but no openspec change is recorded yet; record \`openspec\` first`;
+  }
+  const relFromChange = relative(join(root, boundChange), fullPath).replace(/\\/g, "/");
+  if (relFromChange.startsWith("..") || isAbsolute(relFromChange)) {
+    return `${kind}: '${relative(root, fullPath).replace(/\\/g, "/")}' is outside the change directory '${boundChange}'; put it at ${boundChange}/<name>.md`;
+  }
+  return null;
 }
 
 export function runOpenspecValidate(root, fullPath) {
@@ -1039,13 +1127,10 @@ export function validateArtifacts(root, st) {
           invalid.push(`${r.kind}: file '${a.path}' is too short (< 10 chars)`);
           continue;
         }
-        const boundChange = changeDirOf(st);
-        if (boundChange && isChangeScopedKind(r.kind)) {
-          const relFromChange = relative(join(root, boundChange), fullPath).replace(/\\/g, "/");
-          if (relFromChange.startsWith("..") || isAbsolute(relFromChange)) {
-            invalid.push(`${r.kind}: '${a.path}' belongs to another change, not '${boundChange}'`);
-            continue;
-          }
+        const scopeProblem = changeScopeProblem(root, st, r.kind, fullPath);
+        if (scopeProblem) {
+          invalid.push(scopeProblem);
+          continue;
         }
         if (r.kind === "manifest") {
           const rowProblem = validateManifestRows(body);

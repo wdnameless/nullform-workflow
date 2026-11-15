@@ -1,0 +1,5 @@
+- [x] T-01 Run all six gates and record their verdicts
+- [x] T-02 Inventory modules, tests and entry points
+- [x] T-03 Reproduce review/ budget and evidence defects
+- [x] T-04 Reproduce state-machine defects
+- [x] T-05 Score five dimensions with a stated basis each

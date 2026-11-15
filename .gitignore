@@ -35,3 +35,5 @@ jev-events.jsonl
 
 # Python virtualenv used only for the local pylint analyzer
 .venv/
+# Generated architecture map state (can be hundreds of MB)
+.archmap/
