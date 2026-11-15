@@ -215,6 +215,7 @@ export function printWorkflowHelp() {
   console.log("  nullform workflow answered [--text \"...\"]                            # close the wait");
   console.log("  nullform workflow gate-pass --gate <name> [--detail \"...\"]           # record a passed gate");
   console.log("  nullform workflow stage --id <T-01> [--verified]                      # advance a plan ticket");
+  console.log("  nullform workflow budget-release --reservation <id> --nano-usd <n> --reason \"...\"  # settle a held reservation");
   console.log("\nTiers: T0 lane · T1 +recon · T2 +manifest/openspec/interfaces/oracle · T3 +worktree");
   console.log("  node workflow.mjs check-ci --tier T2 --change <name>");
   console.log("  node workflow.mjs check-ci --push --base-ref <previous-commit>");
