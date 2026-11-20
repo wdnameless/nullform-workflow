@@ -74,7 +74,7 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Download certified candidate tarball from certified CI run
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: candidate-tarball
           run-id: ${{ inputs.run_id }}
@@ -82,7 +82,7 @@ jobs:
           path: .tmp
 
       - name: Download candidate checksums from certified CI run
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: candidate-checksums
           run-id: ${{ inputs.run_id }}
@@ -90,7 +90,7 @@ jobs:
           path: .tmp
 
       - name: Download all platform certificates from certified CI run
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cert-*
           merge-multiple: true
