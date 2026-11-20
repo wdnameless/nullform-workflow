@@ -34,8 +34,6 @@
  * State: .workflow/state.json (gitignored). Exit 0 ok, 1 unmet, 2 cannot run.
  * Budgets: .workflow/budgets.json (optional, defaults {T0:10, T1:25, T2:45, T3:45}).
  * Zero dependencies. Node 18+ / Bun.
- *
- * defer: workflow monolithic cli with ci gates | ceiling: 2500 lines | upgrade: split into workflow-ci and workflow-core modules
  */
 import { readFileSync, existsSync, statSync, readdirSync, realpathSync } from "node:fs";
 import { spawnSync, execFileSync } from "node:child_process";

@@ -413,6 +413,9 @@
     "rel": "tools/workflow/workspaces.mjs"
   },
   {
+    "rel": "tools/workflow/settle.mjs"
+  },
+  {
     "rel": "tools/worktree-doctor.mjs"
   },
   {

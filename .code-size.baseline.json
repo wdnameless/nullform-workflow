@@ -66,8 +66,8 @@
       "reason": "Committed fixture grows (d8ccafb) + omh-model-routing T2: 4 reported/verified gate tests (2026-10-30) + experience close-gate T1: 5 tests (2026-11-04) + split #16 (2026-11-04) + adoption A1 settle & B2 experience validation tests (2026-11-05) + CI-env isolation for changed-scope fallback test (2026-11-07)"
     },
     "tools/workflow.mjs": {
-      "lines": 1038,
-      "reason": "split #16 (2026-11-04)"
+      "lines": 1060,
+      "reason": "settle split to tools/workflow/settle.mjs, issue #16 closed (2026-11-20); stale monolith defer marker removed"
     },
     "tools/workflow-ci.mjs": {
       "lines": 1253,

@@ -207,7 +207,14 @@ const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const {validateReviewEvidence}=await import(${JSON.stringify(evidenceModule)});
 process.stdout.write(JSON.stringify({gate:validateReviewEvidence({root:input.root,changeId:input.changeId,tier:'T2'})}));\n`);
   // Release-gate view of the CURRENT on-disk evidence, without running a review.
-  const gate = () => { try { const out = spawnSync(process.execPath, [gateProbe], { cwd: root, env, input: JSON.stringify({ root, changeId: 'http' }), encoding: 'utf8', timeout: 45000 }).stdout; return JSON.parse(out).gate; } catch { return { ok: false, errors: ['gate probe failed'] }; } };
+  // A crashed probe throws: returning {ok:false} here would let every rejection test pass
+  // for the wrong reason, since they assert exactly that shape.
+  const gate = () => {
+    const result = spawnSync(process.execPath, [gateProbe], { cwd: root, env, input: JSON.stringify({ root, changeId: 'http' }), encoding: 'utf8', timeout: 45000 });
+    if (result.error) throw result.error;
+    assert.equal(result.status, 0, `gate probe crashed: ${(result.stderr || '').slice(0, 400)}`);
+    return JSON.parse(result.stdout).gate;
+  };
   return { root, changeDir, policy, server, invoke, invokeAsync, probeBudget, gate, writePolicy: changes => writeFileSync(policyPath, JSON.stringify({ ...policy, ...changes })),
     requests: () => lines(join(scratch, 'requests.jsonl')),
     children: () => existsSync(childMarker) ? readFileSync(childMarker, 'utf8').trim().split('\n').length : 0,
@@ -546,6 +553,6 @@ test('controlled HTTP: tampered retained evidence adds an integrity error instea
   writeFileSync(join(f.changeDir, 'review-evidence.json'), JSON.stringify(published));
   const gate = f.gate();
   assert.equal(gate.ok, false);
-  assert.ok(gate.errors.length > 0, 'a tampered verdict must produce an integrity error');
+  assert.ok(gate.errors.some(e => /REJECT verdict in/.test(e)), `a tampered verdict must produce an integrity error, got: ${JSON.stringify(gate.errors)}`);
   assert.equal(first.record.executionId, record.executionId);
 });
