@@ -1,0 +1,5 @@
+- [x] T-01 Move the settle block to tools/workflow/settle.mjs with re-exports
+- [x] T-02 Pair settle target checks with isRealPathInsideRoot
+- [x] T-03 Make gate() throw on probe crash; pin the tamper assertion
+- [x] T-04 Remove the stale defer marker; reseed the baseline with reason
+- [x] T-05 Verify: task-claim, tamper, sync-manifest suites; eslint, code-size, COCO
