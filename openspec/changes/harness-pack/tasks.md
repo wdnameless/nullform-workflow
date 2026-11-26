@@ -1,0 +1,4 @@
+- [ ] T-01 Pack manifest format: `pack.json` schema + loader with hash verification (`tools/pack-format.mjs`)
+- [ ] T-02 `pack install` command: resolve target paths via adapter ctx, copy allow-listed modules, journal everything (`tools/pack-install.mjs`, CLI wiring)
+- [ ] T-03 Post-install verification: run pack `tests/` + doctor subset; fail closed with journaled rollback pointer
+- [ ] T-04 Tests: install happy path, out-of-allow-list refusal, idempotent reinstall, corrupt-manifest refusal

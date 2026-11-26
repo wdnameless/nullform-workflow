@@ -104,7 +104,7 @@ function translateParseError(err) {
  * surface instead of two that can drift apart. `quality` needs this for --stack,
  * --changed and --baseline; `workflow` has always worked this way.
  */
-const PASSTHROUGH = { workflow: "workflowArgs", quality: "qualityArgs" };
+const PASSTHROUGH = { workflow: "workflowArgs", quality: "qualityArgs", pack: "packArgs" };
 
 const INIT_COMMANDS = ["init", "inspect", "doctor", "update", "capabilities", "evidence", "setup", "heal"];
 
@@ -1062,6 +1062,94 @@ export async function runQualityCommand(qualityArgs = [], deps = {}) {
   }
 }
 
+function parsePackInstallArgs(args) {
+  const options = {
+    help: { type: "boolean", short: "h" },
+    harness: { type: "string" },
+    root: { type: "string" },
+    "dry-run": { type: "boolean" },
+    yes: { type: "boolean", short: "y" },
+    json: { type: "boolean" },
+    "user-home": { type: "string" },
+  };
+  const parsed = parseArgs({ args, options, allowPositionals: true, strict: true });
+  const packDir = parsed.positionals[0];
+  if (!packDir) throw new Error("missing required argument <pack>");
+  if (!parsed.values.harness) throw new Error("missing required option --harness");
+  if (!parsed.values.root) throw new Error("missing required option --root");
+  return {
+    packDir,
+    harness: parsed.values.harness,
+    root: parsed.values.root,
+    dryRun: Boolean(parsed.values["dry-run"]),
+    yes: Boolean(parsed.values.yes),
+    json: Boolean(parsed.values.json),
+    userHome: parsed.values["user-home"] || null,
+    help: Boolean(parsed.values.help),
+  };
+}
+
+function emitPackInstallResult(receipt, isJson, output) {
+  if (isJson) {
+    output.write(JSON.stringify(receipt, null, 2) + "\n");
+    return;
+  }
+  if (receipt.status === "already installed") {
+    output.write(`Pack ${receipt.name}@${receipt.version} is already installed.\n`);
+    return;
+  }
+  if (receipt.dryRun) {
+    output.write(`[dry-run] Pack ${receipt.name}@${receipt.version} would be installed into ${receipt.root}\n`);
+    return;
+  }
+  output.write(`Successfully installed ${receipt.name}@${receipt.version}\n`);
+}
+
+/**
+ * `nullform pack install <pack> --harness <name> --root <dir> [--dry-run] [--yes] [--json]`
+ */
+export async function runPackCommand(packArgs = [], deps = {}) {
+  const output = deps.stdout || process.stdout;
+  const errOut = deps.stderr || process.stderr;
+
+  if (!packArgs.length || packArgs[0] === "-h" || packArgs[0] === "--help") {
+    output.write("Usage:\n  nullform pack install <pack> --harness <name> --root <dir> [--dry-run] [--yes] [--json]\n");
+    return 0;
+  }
+
+  if (packArgs[0] !== "install") {
+    errOut.write(`Error: Unknown pack subcommand "${packArgs[0]}". Expected "pack install".\n`);
+    return 2;
+  }
+
+  let parsed;
+  try {
+    parsed = parsePackInstallArgs(packArgs.slice(1));
+  } catch (err) {
+    errOut.write(`Error: ${sanitizeError(err.message)}\n`);
+    return 2;
+  }
+
+  if (parsed.help) {
+    output.write("Usage:\n  nullform pack install <pack> --harness <name> --root <dir> [--dry-run] [--yes] [--json]\n");
+    return 0;
+  }
+
+  try {
+    const installPackFn = deps.installPack || (await import("../tools/pack-install.mjs")).installPack;
+    const receipt = await installPackFn(parsed);
+    emitPackInstallResult(receipt, parsed.json, output);
+    return 0;
+  } catch (err) {
+    if (parsed.json) {
+      errOut.write(JSON.stringify({ error: sanitizeError(err.message) }) + "\n");
+    } else {
+      errOut.write(`Error: ${sanitizeError(err.message)}\n`);
+    }
+    return 1;
+  }
+}
+
 export async function runEvidenceCommand(options = {}, deps = {}) {
   const output = deps.stdout || process.stdout;
   const errOut = deps.stderr || process.stderr;
@@ -1148,6 +1236,7 @@ Usage:
   nullform quality <command> [args...]
   nullform capabilities [options]
   nullform evidence [options]
+  nullform pack install <pack> --harness <name> --root <dir> [--dry-run] [--yes] [--json]
   nullform --version
   nullform --help
 
@@ -1162,6 +1251,7 @@ Commands:
   capabilities  Inspect supported configuration adapters, core workflow runtime, and execution boundaries
   quality       Stack-aware static analysis: detect, plan, install, check, baseline (cognitive-complexity ratchet)
   evidence      Report verifiable development quality evidence and historical limitations
+  pack          Install harness-agnostic install pack into target harness (--harness, --root)
 
 Init Options:
   --harness <name>   Target harness: ${HARNESS_CHOICES.join(", ")}
@@ -1230,6 +1320,7 @@ const COMMANDS = {
   update: runUpdateCommand,
   capabilities: runCapabilitiesCommand,
   evidence: runEvidenceCommand,
+  pack: (o, d) => runPackCommand(o.packArgs, d),
 };
 
 export async function main(argv = process.argv.slice(2), deps = {}) {

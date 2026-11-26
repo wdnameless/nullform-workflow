@@ -272,6 +272,12 @@
     "rel": "tools/oracle-model.mjs"
   },
   {
+    "rel": "tools/pack-format.mjs"
+  },
+  {
+    "rel": "tools/pack-install.mjs"
+  },
+  {
     "rel": "tools/preflight-env.mjs"
   },
   {
