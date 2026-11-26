@@ -676,7 +676,7 @@ export function validateReviewEvidence({ root = '.', changeId, tier, baseRef = n
         try { reason = readFileSync(marker, "utf8").trim(); } catch { reason = ''; }
         const words = reason.split(/\s+/).filter(Boolean);
         if (words.length < 5) {
-          return { ok: false, errors: [`${LEGACY_MARKER} exists but states no reason (${words.length} word(s)); write why this change predates native review evidence, e.g. "accepted 2026-10-01 before review-evidence.json existed"`] };
+          return { ok: false, errors: [`${LEGACY_MARKER} exists but states no reason (${words.length} word(s)); write why native review evidence cannot be produced for this change (it predates the mechanism, or this environment has no provider credentials) and what was verified instead`] };
         }
         return { ok: true, errors: [], legacy: true };
       }
